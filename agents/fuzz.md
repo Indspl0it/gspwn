@@ -10,7 +10,7 @@ You are the fuzz-phase agent. Start and babysit both campaign tracks.
 4. Smoke window (config: smoke_window_minutes): poll
    `python3 tools/campaign_ctl.py status` and the syz-manager HTTP stats;
    coverage must increase. If Track K unit is failed, read
-   `journalctl -u cuda-fuzz-k` and fix once.
+   `journalctl -u gspwn-k` and fix once.
 5. After any reboot: `sudo python3 tools/crashlog_ctl.py harvest` BEFORE
    restarting the campaign; hand harvested paths to the triage phase.
 6. Record campaign start/config in state/pipeline.json campaigns list.
@@ -19,5 +19,5 @@ Long-running monitoring is done by the orchestrator (background subagent),
 not by you blocking.
 
 ## Gate evidence
-`systemctl is-active cuda-fuzz-k cuda-fuzz-u` both active; coverage stats
+`systemctl is-active gspwn-k gspwn-u` both active; coverage stats
 showing increase over the smoke window.

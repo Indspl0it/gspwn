@@ -15,11 +15,11 @@ import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
 CFG_PATH = os.path.join(REPO_ROOT, "config", "campaign.yaml")
-UNIT_K = "/etc/systemd/system/cuda-fuzz-k.service"
-UNIT_U = "/etc/systemd/system/cuda-fuzz-u.service"
+UNIT_K = "/etc/systemd/system/gspwn-k.service"
+UNIT_U = "/etc/systemd/system/gspwn-u.service"
 
 UNIT_K_TMPL = """[Unit]
-Description=CUDA-Fuzzing Track K (syzkaller)
+Description=gspwn Track K (syzkaller)
 After=multi-user.target
 
 [Service]
@@ -35,13 +35,13 @@ WantedBy=multi-user.target
 """
 
 UNIT_U_TMPL = """[Unit]
-Description=CUDA-Fuzzing Track U (NCT userspace fuzzers)
+Description=gspwn Track U (NCT userspace fuzzers)
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/docker run --rm --name cuda-fuzz-u \\
+ExecStart=/usr/bin/docker run --rm --name gspwn-u \\
   --memory={memory_max} \\
   --pids-limit=512 \\
   -v {root}/artifacts:/artifacts {image} \\
@@ -77,20 +77,20 @@ def cmd_install_k():
     syzkaller = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller")
     write_unit(UNIT_K, UNIT_K_TMPL.format(
         root=REPO_ROOT, syzkaller=syzkaller, memory_max=c["memory_max"]))
-    sh(["systemctl", "enable", "cuda-fuzz-k"])
-    print("installed cuda-fuzz-k.service (MemoryMax=%s)" % c["memory_max"])
+    sh(["systemctl", "enable", "gspwn-k"])
+    print("installed gspwn-k.service (MemoryMax=%s)" % c["memory_max"])
 
 
 def cmd_install_u():
     c = cfg()["track_u"]
     write_unit(UNIT_U, UNIT_U_TMPL.format(
         root=REPO_ROOT, image=c["docker_image"], memory_max=c["memory_max"]))
-    sh(["systemctl", "enable", "cuda-fuzz-u"])
-    print("installed cuda-fuzz-u.service (MemoryMax=%s)" % c["memory_max"])
+    sh(["systemctl", "enable", "gspwn-u"])
+    print("installed gspwn-u.service (MemoryMax=%s)" % c["memory_max"])
 
 
 def unit(track):
-    return {"k": "cuda-fuzz-k", "u": "cuda-fuzz-u"}[track]
+    return {"k": "gspwn-k", "u": "gspwn-u"}[track]
 
 
 def cmd_start_stop(verb, track):

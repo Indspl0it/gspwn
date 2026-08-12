@@ -194,7 +194,7 @@ eval:
 - [ ] **Step 7: Write `README.md`**
 
 ```markdown
-# CUDA-Fuzzing
+# gspwn
 
 Agentic fuzzing workflow for the NVIDIA GPU kernel driver (Track K, Syzkaller)
 and NVIDIA Container Toolkit (Track U), driven by Kimi Code agents.
@@ -365,7 +365,7 @@ def cmd_setup():
     with open(GRUB_DEFAULT) as f:
         grub = f.read()
     if "crashkernel=" not in grub:
-        shutil.copy(GRUB_DEFAULT, GRUB_DEFAULT + ".bak-cuda-fuzzing")
+        shutil.copy(GRUB_DEFAULT, GRUB_DEFAULT + ".bak-gspwn")
         grub = grub.replace(
             'GRUB_CMDLINE_LINUX_DEFAULT="',
             'GRUB_CMDLINE_LINUX_DEFAULT="crashkernel=256M ')
@@ -582,7 +582,7 @@ git add tools/build_kernel.sh && git commit -m "feat: instrumented kernel+module
 
 **Interfaces:**
 - Consumes: `config/campaign.yaml`; `tools/pipeline_state.py` (`load`, `save`).
-- Produces: CLI subcommands `install-k`, `install-u`, `start <k|u>`, `stop <k|u>`, `status`. Writes systemd units `cuda-fuzz-k.service` / `cuda-fuzz-u.service`; `status` prints one line per track: `active|inactive|failed`, plus latest syz-manager stats if present.
+- Produces: CLI subcommands `install-k`, `install-u`, `start <k|u>`, `stop <k|u>`, `status`. Writes systemd units `gspwn-k.service` / `gspwn-u.service`; `status` prints one line per track: `active|inactive|failed`, plus latest syz-manager stats if present.
 
 - [ ] **Step 1: Write `tools/campaign_ctl.py`** (complete file)
 
@@ -604,11 +604,11 @@ import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
 CFG_PATH = os.path.join(REPO_ROOT, "config", "campaign.yaml")
-UNIT_K = "/etc/systemd/system/cuda-fuzz-k.service"
-UNIT_U = "/etc/systemd/system/cuda-fuzz-u.service"
+UNIT_K = "/etc/systemd/system/gspwn-k.service"
+UNIT_U = "/etc/systemd/system/gspwn-u.service"
 
 UNIT_K_TMPL = """[Unit]
-Description=CUDA-Fuzzing Track K (syzkaller)
+Description=gspwn Track K (syzkaller)
 After=multi-user.target
 
 [Service]
@@ -624,13 +624,13 @@ WantedBy=multi-user.target
 """
 
 UNIT_U_TMPL = """[Unit]
-Description=CUDA-Fuzzing Track U (NCT userspace fuzzers)
+Description=gspwn Track U (NCT userspace fuzzers)
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/docker run --rm --name cuda-fuzz-u \\
+ExecStart=/usr/bin/docker run --rm --name gspwn-u \\
   --memory={memory_max} \\
   --pids-limit=512 \\
   -v {root}/artifacts:/artifacts {image} \\
@@ -666,20 +666,20 @@ def cmd_install_k():
     syzkaller = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller")
     write_unit(UNIT_K, UNIT_K_TMPL.format(
         root=REPO_ROOT, syzkaller=syzkaller, memory_max=c["memory_max"]))
-    sh(["systemctl", "enable", "cuda-fuzz-k"])
-    print("installed cuda-fuzz-k.service (MemoryMax=%s)" % c["memory_max"])
+    sh(["systemctl", "enable", "gspwn-k"])
+    print("installed gspwn-k.service (MemoryMax=%s)" % c["memory_max"])
 
 
 def cmd_install_u():
     c = cfg()["track_u"]
     write_unit(UNIT_U, UNIT_U_TMPL.format(
         root=REPO_ROOT, image=c["docker_image"], memory_max=c["memory_max"]))
-    sh(["systemctl", "enable", "cuda-fuzz-u"])
-    print("installed cuda-fuzz-u.service (MemoryMax=%s)" % c["memory_max"])
+    sh(["systemctl", "enable", "gspwn-u"])
+    print("installed gspwn-u.service (MemoryMax=%s)" % c["memory_max"])
 
 
 def unit(track):
-    return {"k": "cuda-fuzz-k", "u": "cuda-fuzz-u"}[track]
+    return {"k": "gspwn-k", "u": "gspwn-u"}[track]
 
 
 def cmd_start_stop(verb, track):
@@ -1195,7 +1195,7 @@ git add tools/repro_ctl.py && git commit -m "feat: reproducer extraction + repro
 - [ ] **Step 1: Write `AGENTS.md`** (complete file)
 
 ```markdown
-# CUDA-Fuzzing Orchestrator Contract
+# gspwn Orchestrator Contract
 
 You are the orchestrator of an agentic fuzzing workflow targeting the NVIDIA
 GPU kernel driver (Track K) and NVIDIA Container Toolkit (Track U).
@@ -1278,7 +1278,7 @@ git add AGENTS.md && git commit -m "docs: orchestrator contract"
 - [ ] **Step 1: Write `agents/provision.md`**
 
 ```markdown
-You are the provision-phase agent for the CUDA-Fuzzing pipeline. You run ON
+You are the provision-phase agent for the gspwn pipeline. You run ON
 the SUT (Debian-family, dedicated fuzzing laptop). Prepare the machine for
 instrumented kernel fuzzing.
 
@@ -1503,7 +1503,7 @@ You are the fuzz-phase agent. Start and babysit both campaign tracks.
 4. Smoke window (config: smoke_window_minutes): poll
    `python3 tools/campaign_ctl.py status` and the syz-manager HTTP stats;
    coverage must increase. If Track K unit is failed, read
-   `journalctl -u cuda-fuzz-k` and fix once.
+   `journalctl -u gspwn-k` and fix once.
 5. After any reboot: `sudo python3 tools/crashlog_ctl.py harvest` BEFORE
    restarting the campaign; hand harvested paths to the triage phase.
 6. Record campaign start/config in state/pipeline.json campaigns list.
@@ -1512,7 +1512,7 @@ Long-running monitoring is done by the orchestrator (background subagent),
 not by you blocking.
 
 ## Gate evidence
-`systemctl is-active cuda-fuzz-k cuda-fuzz-u` both active; coverage stats
+`systemctl is-active gspwn-k gspwn-u` both active; coverage stats
 showing increase over the smoke window.
 ```
 

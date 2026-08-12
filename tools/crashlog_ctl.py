@@ -62,7 +62,7 @@ def cmd_setup(env):
     with open(GRUB_DEFAULT) as f:
         grub = f.read()
     if "crashkernel=" not in grub:
-        shutil.copy(GRUB_DEFAULT, GRUB_DEFAULT + ".bak-cuda-fuzzing")
+        shutil.copy(GRUB_DEFAULT, GRUB_DEFAULT + ".bak-gspwn")
         grub = grub.replace(
             'GRUB_CMDLINE_LINUX_DEFAULT="',
             'GRUB_CMDLINE_LINUX_DEFAULT="crashkernel=256M ')
