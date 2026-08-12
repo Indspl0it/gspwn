@@ -14,6 +14,8 @@ JOBS="${JOBS:-$(nproc)}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOGDIR="$REPO_ROOT/artifacts/logs"
 mkdir -p "$LOGDIR"
+LINUX_SRC="$(cd "$LINUX_SRC" && pwd)"
+NVIDIA_SRC="$(cd "$NVIDIA_SRC" && pwd)"
 
 [[ "$RUNG" =~ ^[123]$ ]] || { echo "RUNG must be 1, 2 or 3"; exit 2; }
 
