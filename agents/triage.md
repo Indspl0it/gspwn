@@ -4,7 +4,7 @@ registry.
 ## Do
 1. python3 tools/crash_parse.py                 # syz workdir + Track U dir
 2. For each harvested pstore/kdump dir from the fuzz phase:
-   python3 tools/crash_parse.py --dmesg <path>/dmesg-ramoops-*
+   for f in <path>/dmesg-ramoops-*; do python3 tools/crash_parse.py --dmesg "$f"; done
 3. Review every FLAG line from crash_parse output (title/stack collisions in
    either direction): read both reports, decide duplicate vs distinct,
    correct the registry in state/pipeline.json (set duplicate_of, or keep
