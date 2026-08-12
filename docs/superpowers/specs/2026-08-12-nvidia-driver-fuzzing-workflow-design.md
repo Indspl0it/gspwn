@@ -30,6 +30,13 @@ The repo is self-contained: `git clone` onto the target laptop, run Kimi Code lo
 - Orchestrator (Kimi Code session) runs on the same machine that panics → all state on disk; the fuzzer runs independently of any agent (§7).
 - **Secure Boot:** provision must detect SB state; if enabled, either disable it or enroll a MOK and sign the custom kernel/modules. Unsigned modules will not load otherwise. Day-one blocker if skipped.
 
+### Cloud deployment (current target)
+
+- The SUT is now an AWS EC2 g4dn.2xlarge spot instance (8 vCPU, 32 GB RAM, NVIDIA T4/Turing, GSP-based → open-gpu-kernel-modules supported) running the official Debian 12 AMI. The bare-metal laptop is retired. Setup details: `docs/cloud-setup.md`.
+- Crash capture on EC2 uses kdump plus EC2 console output instead of pstore; `tools/crashlog_ctl.py` auto-detects the environment (`--env` overrides) and harvests `aws ec2 get-console-output` alongside `/var/crash` dumps. Hard hangs are captured via console output, so the IAM instance profile allowing `ec2:GetConsoleOutput` is required.
+- Cost guardrails: `tools/cost_ctl.py` idle auto-stop watchdog (systemd timer, `IDLE_MINUTES` threshold, `state/KEEP_ALIVE` override) plus AWS Budgets alerts at $50 and $150 against a $200/month ceiling.
+- The bare-metal path (pstore, Secure Boot handling) is retained in the tooling as a fallback.
+
 ## 3. Threat Model (explicit, per track)
 
 **Track K — kernel driver.** Attacker is an unprivileged process with access to `/dev/nvidiactl`, `/dev/nvidiaX`, `/dev/nvidia-uvm[-tools]`, and `/dev/dri/*` — exactly what a GPU-enabled container tenant receives. Syzkaller `sandbox: namespace` approximates container privileges; it is NOT identical (real containers add seccomp profiles, dropped capabilities, device cgroups). This approximation is stated in the paper, and confirmed PoCs are optionally re-verified inside a real container with GPU devices passed through.
