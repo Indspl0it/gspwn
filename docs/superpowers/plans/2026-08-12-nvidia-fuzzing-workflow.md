@@ -1513,9 +1513,9 @@ You are the triage-phase agent. Convert raw crash artifacts into a deduped
 registry.
 
 ## Do
-1. python3 tools/crash_parse.py scan            # syz workdir + Track U dir
+1. python3 tools/crash_parse.py                 # syz workdir + Track U dir
 2. For each harvested pstore/kdump dir from the fuzz phase:
-   python3 tools/crash_parse.py scan --dmesg <path>/dmesg-ramoops-*
+   python3 tools/crash_parse.py --dmesg <path>/dmesg-ramoops-*
 3. Review every FLAG line from crash_parse output (title/stack collisions in
    either direction): read both reports, decide duplicate vs distinct,
    correct the registry in state/pipeline.json (set duplicate_of, or keep
