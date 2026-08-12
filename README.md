@@ -88,8 +88,8 @@ Full runbook: [docs/cloud-setup.md](docs/cloud-setup.md). The short version:
 
 Cost guardrails come before campaigns: an idle watchdog
 (`tools/cost_ctl.py install-watchdog`) auto-stops the instance when no fuzzer
-is running, and AWS Budgets alerts fire at $50 and $150 against a $200/month
-ceiling. At spot prices a 24-hour campaign day costs roughly $6.
+is running, and AWS Budgets alerts fire at $50 and $150 against a $TBD/month
+ceiling.
 
 ## Threat model
 
