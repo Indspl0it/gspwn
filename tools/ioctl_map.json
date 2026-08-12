@@ -1,0 +1,4 @@
+{
+  "comment": "Populated on the SUT by the seeds agent: maps ioctl request numbers (hex string keys) to syzkaller description names from artifacts/descriptions/. Example entry below.",
+  "0xc020462a": "ioctl$NV_ESC_RM_ALLOC"
+}
