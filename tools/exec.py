@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Logged local command runner with retries. Stdlib only.
+
+Usage: python3 tools/exec.py --log NAME [--retries N] [--timeout S] -- CMD [ARGS...]
+"""
+import argparse
+import os
+import subprocess
+import sys
+import time
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOGDIR = os.path.join(REPO_ROOT, "artifacts", "logs")
+
+
+def run(cmd, log_name, retries=0, timeout=None):
+    os.makedirs(LOGDIR, exist_ok=True)
+    logpath = os.path.join(LOGDIR, log_name + ".log")
+    attempt = 0
+    while True:
+        attempt += 1
+        with open(logpath, "a") as log:
+            log.write("\n=== %s attempt %d: %s\n"
+                      % (time.strftime("%Y-%m-%dT%H:%M:%S"), attempt,
+                         " ".join(cmd)))
+            log.flush()
+            try:
+                proc = subprocess.run(cmd, stdout=log,
+                                      stderr=subprocess.STDOUT,
+                                      timeout=timeout)
+                rc = proc.returncode
+            except subprocess.TimeoutExpired:
+                log.write("TIMEOUT after %ss\n" % timeout)
+                rc = 124
+        if rc == 0 or attempt > retries:
+            return rc
+        time.sleep(2)
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--log", required=True)
+    p.add_argument("--retries", type=int, default=0)
+    p.add_argument("--timeout", type=int, default=None)
+    p.add_argument("cmd", nargs=argparse.REMAINDER)
+    a = p.parse_args()
+    cmd = a.cmd[1:] if a.cmd and a.cmd[0] == "--" else a.cmd
+    if not cmd:
+        p.error("no command given")
+    sys.exit(run(cmd, a.log, a.retries, a.timeout))
+
+
+if __name__ == "__main__":
+    main()
