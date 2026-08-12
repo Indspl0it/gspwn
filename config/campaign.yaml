@@ -1,0 +1,19 @@
+track_k:
+  enabled_syscalls:
+    - "openat$nvidia*"
+    - "mmap$nvidia*"
+    - "ioctl$NV_*"
+    - "ioctl$UVM_*"
+    - "ioctl$DRM_IOCTL_NVIDIA_*"
+  sandbox: "namespace"
+  procs: 2                 # capped to protect 32GB RAM budget
+  memory_max: "12G"        # systemd cgroup MemoryMax for syz-manager
+  http: "127.0.0.1:56744"
+  smoke_window_minutes: 30 # coverage must increase within this window
+track_u:
+  docker_image: "aflplusplus/aflplusplus:latest"
+  memory_max: "8G"
+  targets: []              # filled by harness phase: names of harness binaries
+eval:
+  runs_per_config: 3
+  run_hours: 24

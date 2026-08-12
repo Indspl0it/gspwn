@@ -1,0 +1,11 @@
+# Filled in by the provision phase on the SUT. All paths are local to the SUT.
+distro: ""              # from /etc/os-release ID (e.g. kali, debian)
+gpu_model: ""           # from nvidia-smi --query-gpu=name --format=csv,noheader
+secure_boot: ""         # enabled | disabled (mokutil --sb-state)
+kernel_version: ""      # upstream kernel built in the build phase
+driver_branch: ""       # open-gpu-kernel-modules branch/commit
+gsp_firmware: ""        # from nvidia-smi -q | grep -i firmware
+syzkaller_commit: ""
+instrumentation_rung: 0 # 0=undecided, 1=full KASAN+KCOV, 2=KCOV-only modules, 3=uninstrumented modules
+paths:
+  workdir: "artifacts"  # repo-relative

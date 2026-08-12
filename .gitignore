@@ -1,0 +1,6 @@
+artifacts/
+!artifacts/.gitkeep
+!artifacts/*/.gitkeep
+state/pipeline.json
+__pycache__/
+*.pyc
