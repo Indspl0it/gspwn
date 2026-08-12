@@ -23,7 +23,9 @@ instrumented kernel fuzzing.
    newest supported by open-gpu-kernel-modules), open-gpu-kernel-modules
    (latest production branch), syzkaller (master), nvidia-container-toolkit,
    libnvidia-container. Record all commits in artifacts/builds/manifest.json
-   together with gcc version.
+   together with gcc version. Also write the GSP firmware version (from
+   `nvidia-smi -q`) into the manifest — spec §3 pins it there and report.md
+   consumes it from the manifest.
 6. Build syzkaller (`make` in its dir) so bin/syz-manager exists.
 
 ## Gate evidence to return

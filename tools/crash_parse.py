@@ -20,6 +20,7 @@ REPO_ROOT = ps.REPO_ROOT
 FRAME_RE = re.compile(r"#\d+\s+(?:0x[0-9a-f]+\s+)?(?:in\s+)?([\w.~]+)\s*\+?")
 ASAN_RE = re.compile(r"^(?:==\d+==)?\s*(ERROR: (?:Address|Memory|Leak)?Sanitizer[^\n]*|SUMMARY: [^\n]*)", re.M)
 NVRM_RE = re.compile(r"NVRM: (Xid[^\n]*|GPU at[^\n]*error[^\n]*)", re.I)
+KERN_RE = re.compile(r"(BUG: [^\n]*|KASAN: [^\n]*|Kernel panic[^\n]*|Oops[^\n]*)")
 
 
 def norm_title(t):
@@ -86,6 +87,9 @@ def scan_dmesg(state, path):
     text = open(path, errors="replace").read()
     for m in NVRM_RE.finditer(text):
         register(state, "K", norm_title("NVRM " + m.group(1)),
+                 hashlib.sha1(m.group(1).encode()).hexdigest()[:16], path)
+    for m in KERN_RE.finditer(text):
+        register(state, "K", norm_title("kernel " + m.group(1)),
                  hashlib.sha1(m.group(1).encode()).hexdigest()[:16], path)
 
 

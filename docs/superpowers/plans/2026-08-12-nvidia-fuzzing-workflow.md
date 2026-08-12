@@ -631,6 +631,8 @@ Requires=docker.service
 [Service]
 Type=simple
 ExecStart=/usr/bin/docker run --rm --name cuda-fuzz-u \\
+  --memory={memory_max} \\
+  --pids-limit=512 \\
   -v {root}/artifacts:/artifacts {image} \\
   /artifacts/harnesses/run_all.sh
 Restart=always
@@ -771,6 +773,7 @@ REPO_ROOT = ps.REPO_ROOT
 FRAME_RE = re.compile(r"#\d+\s+(?:0x[0-9a-f]+\s+)?(?:in\s+)?([\w.~]+)\s*\+?")
 ASAN_RE = re.compile(r"^(?:==\d+==)?\s*(ERROR: (?:Address|Memory|Leak)?Sanitizer[^\n]*|SUMMARY: [^\n]*)", re.M)
 NVRM_RE = re.compile(r"NVRM: (Xid[^\n]*|GPU at[^\n]*error[^\n]*)", re.I)
+KERN_RE = re.compile(r"(BUG: [^\n]*|KASAN: [^\n]*|Kernel panic[^\n]*|Oops[^\n]*)")
 
 
 def norm_title(t):
@@ -837,6 +840,9 @@ def scan_dmesg(state, path):
     text = open(path, errors="replace").read()
     for m in NVRM_RE.finditer(text):
         register(state, "K", norm_title("NVRM " + m.group(1)),
+                 hashlib.sha1(m.group(1).encode()).hexdigest()[:16], path)
+    for m in KERN_RE.finditer(text):
+        register(state, "K", norm_title("kernel " + m.group(1)),
                  hashlib.sha1(m.group(1).encode()).hexdigest()[:16], path)
 
 
@@ -1297,7 +1303,9 @@ instrumented kernel fuzzing.
    newest supported by open-gpu-kernel-modules), open-gpu-kernel-modules
    (latest production branch), syzkaller (master), nvidia-container-toolkit,
    libnvidia-container. Record all commits in artifacts/builds/manifest.json
-   together with gcc version.
+   together with gcc version. Also write the GSP firmware version (from
+   `nvidia-smi -q`) into the manifest — spec §3 pins it there and report.md
+   consumes it from the manifest.
 6. Build syzkaller (`make` in its dir) so bin/syz-manager exists.
 
 ## Gate evidence to return
@@ -1518,6 +1526,8 @@ registry.
 1. python3 tools/crash_parse.py                 # syz workdir + Track U dir
 2. For each harvested pstore/kdump dir from the fuzz phase:
    for f in <path>/dmesg-ramoops-*; do python3 tools/crash_parse.py --dmesg "$f"; done
+   Also parse kdump captures:
+   for f in <path>/kdump-*/dmesg.* <path>/kdump-*/dump/dmesg.*; do [ -e "$f" ] && python3 tools/crash_parse.py --dmesg "$f"; done
 3. Review every FLAG line from crash_parse output (title/stack collisions in
    either direction): read both reports, decide duplicate vs distinct,
    correct the registry in state/pipeline.json (set duplicate_of, or keep

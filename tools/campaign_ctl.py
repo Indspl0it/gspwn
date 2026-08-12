@@ -42,6 +42,8 @@ Requires=docker.service
 [Service]
 Type=simple
 ExecStart=/usr/bin/docker run --rm --name cuda-fuzz-u \\
+  --memory={memory_max} \\
+  --pids-limit=512 \\
   -v {root}/artifacts:/artifacts {image} \\
   /artifacts/harnesses/run_all.sh
 Restart=always
