@@ -1,4 +1,4 @@
-You are the provision-phase agent for the CUDA-Fuzzing pipeline. You run ON
+You are the provision-phase agent for the gspwn pipeline. You run ON
 the SUT (Debian-family, dedicated fuzzing laptop). Prepare the machine for
 instrumented kernel fuzzing.
 

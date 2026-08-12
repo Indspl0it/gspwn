@@ -1,7 +1,7 @@
 # Documentation
 
 This directory holds the operational and design documentation for the
-CUDA-Fuzzing workflow: how to stand up a target, why the pipeline is built
+gspwn workflow: how to stand up a target, why the pipeline is built
 the way it is, and how it was implemented. The README is the front door;
 start there if you have not read it.
 

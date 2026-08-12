@@ -1,4 +1,4 @@
-# CUDA-Fuzzing Orchestrator Contract
+# gspwn Orchestrator Contract
 
 You are the orchestrator of an agentic fuzzing workflow targeting the NVIDIA
 GPU kernel driver (Track K) and NVIDIA Container Toolkit (Track U).

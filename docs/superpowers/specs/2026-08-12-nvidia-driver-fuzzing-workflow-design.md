@@ -58,7 +58,7 @@ Top-level orchestrator (Kimi Code session driven by repo `AGENTS.md`) walks a re
 ## 5. Repository Layout
 
 ```
-CUDA-Fuzzing/
+gspwn/
 ├── AGENTS.md                  # orchestrator contract: phases, gates, conventions
 ├── agents/
 │   ├── provision.md           # target prep: deps, Secure Boot/MOK, crash-log capture, clones

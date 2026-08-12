@@ -23,7 +23,7 @@ except ValueError:
     IDLE_MINUTES = 120
 
 TIMER_UNIT = """[Unit]
-Description=CUDA-Fuzzing idle auto-stop
+Description=gspwn idle auto-stop
 
 [Timer]
 OnBootSec=30min
@@ -33,7 +33,7 @@ OnUnitActiveSec=30min
 WantedBy=timers.target
 """
 SERVICE_UNIT = """[Unit]
-Description=CUDA-Fuzzing idle auto-stop check
+Description=gspwn idle auto-stop check
 
 [Service]
 Type=oneshot
@@ -43,7 +43,7 @@ ExecStart=/usr/bin/python3 {root}/tools/cost_ctl.py check-idle
 
 
 def is_idle():
-    for unit in ("cuda-fuzz-k", "cuda-fuzz-u"):
+    for unit in ("gspwn-k", "gspwn-u"):
         r = subprocess.run(["systemctl", "is-active", unit],
                            capture_output=True, text=True)
         if r.stdout.strip() == "active":
@@ -79,17 +79,17 @@ def cmd_check_idle():
 def cmd_install_watchdog():
     if os.geteuid() != 0:
         sys.exit("install-watchdog must run as root")
-    with open("/etc/systemd/system/cuda-fuzz-idlestop.service", "w") as f:
+    with open("/etc/systemd/system/gspwn-idlestop.service", "w") as f:
         f.write(SERVICE_UNIT.format(root=REPO_ROOT, idle=IDLE_MINUTES))
-    with open("/etc/systemd/system/cuda-fuzz-idlestop.timer", "w") as f:
+    with open("/etc/systemd/system/gspwn-idlestop.timer", "w") as f:
         f.write(TIMER_UNIT)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now",
-                    "cuda-fuzz-idlestop.timer"], check=True)
+                    "gspwn-idlestop.timer"], check=True)
     print("idle watchdog installed (every 30 min, threshold %d min baked "
           "into the unit)" % IDLE_MINUTES)
     print("to change the threshold later: systemctl edit "
-          "cuda-fuzz-idlestop.service")
+          "gspwn-idlestop.service")
 
 
 def main():

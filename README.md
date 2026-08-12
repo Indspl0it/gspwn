@@ -1,4 +1,4 @@
-# CUDA-Fuzzing
+# gspwn
 
 Agentic fuzzing of the NVIDIA GPU kernel driver and NVIDIA Container Toolkit, orchestrated by Kimi Code agents.
 
