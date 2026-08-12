@@ -7,15 +7,31 @@ instrumented kernel fuzzing.
 - tools/exec.py, tools/crashlog_ctl.py
 
 ## Do
+0. Determine environment: query
+   http://169.254.169.254/latest/meta-data/instance-id with a 2s timeout;
+   if it responds you are on EC2. (Equivalent:
+   `python3 tools/crashlog_ctl.py --env auto ...` auto-detects the same
+   way.) On EC2:
+   - Skip the Secure Boot step below (Nitro has no Secure Boot by default).
+   - Install the baseline NVIDIA driver from Debian non-free repos FIRST
+     (before step 5's cloning) — needed for the nvidia-smi GPU/model/GSP
+     facts in step 1.
+   - After the crashlog setup in step 3, also run
+     `sudo python3 tools/cost_ctl.py install-watchdog` (idle auto-stop;
+     see docs/cloud-setup.md).
 1. Record facts into config/machine.yaml: distro (`/etc/os-release` ID),
    GPU (`nvidia-smi --query-gpu=name --format=csv,noheader`),
    Secure Boot (`mokutil --sb-state`), GSP firmware (`nvidia-smi -q`).
+   On EC2, record environment=ec2 and skip the Secure Boot fact.
 2. If Secure Boot is enabled: STOP and report — the user must either disable
-   it in firmware or enroll a MOK; do not improvise.
+   it in firmware or enroll a MOK; do not improvise. (Bare metal only.)
 3. `sudo python3 tools/crashlog_ctl.py setup` (persistent crash capture —
    this is the pipeline's hard prerequisite), then reboot, then
    `sudo python3 tools/crashlog_ctl.py verify`. Guide the user through the
    sysrq test panic and confirm `crashlog_ctl.py harvest` produces a dump.
+   On EC2 the tool auto-detects the environment: setup skips pstore, and
+   harvest also saves the EC2 console output (requires the IAM instance
+   profile from docs/cloud-setup.md).
 4. Install build deps via apt (use the Debian/Kali name mapping; never PPAs):
    build-essential bc flex bison libssl-dev libelf-dev dwarves rsync git
    python3-yaml docker.io kdump-tools pstore-tools.
