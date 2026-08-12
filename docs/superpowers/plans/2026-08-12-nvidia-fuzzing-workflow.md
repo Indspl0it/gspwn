@@ -1162,7 +1162,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: Verify (dev machine)**
 
 Run: `python3 tools/repro_ctl.py verify crash-9999`
-Expected: prints `unknown crash id: crash-9999`, exits non-zero.
+Expected: exits non-zero with an error message (`no repro.c in .../artifacts/pocs/crash-9999 (run extract first)` — verify checks for the PoC dir before validating the id; `extract crash-9999` is the path that prints `unknown crash id: crash-9999`).
 
 Run: `python3 -c "import ast; ast.parse(open('tools/repro_ctl.py').read())"`
 Expected: no output.
