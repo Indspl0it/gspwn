@@ -7,6 +7,8 @@ registry.
    for f in <path>/dmesg-ramoops-*; do python3 tools/crash_parse.py --dmesg "$f"; done
    Also parse kdump captures:
    for f in <path>/kdump-*/dmesg.* <path>/kdump-*/dump/dmesg.*; do [ -e "$f" ] && python3 tools/crash_parse.py --dmesg "$f"; done
+   On EC2 harvests, also parse the console log when present:
+   [ -e <path>/console-output.log ] && python3 tools/crash_parse.py --dmesg <path>/console-output.log
 3. Review every FLAG line from crash_parse output (title/stack collisions in
    either direction): read both reports, decide duplicate vs distinct,
    correct the registry in state/pipeline.json (set duplicate_of, or keep

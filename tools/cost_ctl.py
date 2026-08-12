@@ -17,7 +17,10 @@ import time
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEEP_ALIVE = os.path.join(REPO_ROOT, "state", "KEEP_ALIVE")
 IDLE_FILE = os.path.join(REPO_ROOT, "state", "idle_since")
-IDLE_MINUTES = int(os.environ.get("IDLE_MINUTES", "120"))
+try:
+    IDLE_MINUTES = int(os.environ.get("IDLE_MINUTES", "120"))
+except ValueError:
+    IDLE_MINUTES = 120
 
 TIMER_UNIT = """[Unit]
 Description=CUDA-Fuzzing idle auto-stop
@@ -34,6 +37,7 @@ Description=CUDA-Fuzzing idle auto-stop check
 
 [Service]
 Type=oneshot
+Environment=IDLE_MINUTES={idle}
 ExecStart=/usr/bin/python3 {root}/tools/cost_ctl.py check-idle
 """
 
@@ -76,14 +80,16 @@ def cmd_install_watchdog():
     if os.geteuid() != 0:
         sys.exit("install-watchdog must run as root")
     with open("/etc/systemd/system/cuda-fuzz-idlestop.service", "w") as f:
-        f.write(SERVICE_UNIT.format(root=REPO_ROOT))
+        f.write(SERVICE_UNIT.format(root=REPO_ROOT, idle=IDLE_MINUTES))
     with open("/etc/systemd/system/cuda-fuzz-idlestop.timer", "w") as f:
         f.write(TIMER_UNIT)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now",
                     "cuda-fuzz-idlestop.timer"], check=True)
-    print("idle watchdog installed (every 30 min, threshold %d min)"
-          % IDLE_MINUTES)
+    print("idle watchdog installed (every 30 min, threshold %d min baked "
+          "into the unit)" % IDLE_MINUTES)
+    print("to change the threshold later: systemctl edit "
+          "cuda-fuzz-idlestop.service")
 
 
 def main():

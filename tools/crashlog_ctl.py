@@ -110,7 +110,7 @@ def cmd_verify(env):
         print("  3. after boot: crashlog_ctl.py harvest")
         if env == "ec2":
             print("     (must produce a /var/crash kdump dump; hard hangs "
-                  "are captured via console-<timestamp>.log)")
+                  "are captured via console-output.log in the harvest dir)")
         else:
             print("     (must produce a dmesg/ramoops dump containing the "
                   "panic)")
@@ -123,18 +123,21 @@ def cmd_harvest(env):
     os.makedirs(dest, exist_ok=True)
     found = False
     if env == "ec2":
-        instance_id = get_instance_id()
-        r = sh(["aws", "ec2", "get-console-output",
-                "--instance-id", instance_id,
-                "--latest", "--output", "text"], check=False, capture=True)
-        console_log = os.path.join(CRASHES_DIR, "console-" + stamp + ".log")
-        if r.returncode == 0 and r.stdout.strip():
-            with open(console_log, "w") as f:
-                f.write(r.stdout)
-            found = True
-            print("saved console output: " + console_log)
-        else:
-            print("WARN: get-console-output failed: " + r.stderr.strip())
+        console_log = os.path.join(dest, "console-output.log")
+        try:
+            instance_id = get_instance_id()
+            r = sh(["aws", "ec2", "get-console-output",
+                    "--instance-id", instance_id,
+                    "--latest", "--output", "text"], check=False, capture=True)
+            if r.returncode == 0 and r.stdout.strip():
+                with open(console_log, "w") as f:
+                    f.write(r.stdout)
+                found = True
+                print("saved console output: " + console_log)
+            else:
+                print("WARN: get-console-output failed: " + r.stderr.strip())
+        except Exception as e:
+            print("WARN: console-output harvest failed: %s" % e)
     else:
         for src in glob.glob("/sys/fs/pstore/*"):
             shutil.copy(src, dest)
