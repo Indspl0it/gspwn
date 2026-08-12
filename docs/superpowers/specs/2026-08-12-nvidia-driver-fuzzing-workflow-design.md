@@ -215,7 +215,7 @@ Out of scope (YAGNI):
 1. **LLM-agent-driven Syzlang synthesis** from driver source, with a compile+execute+audit validation methodology; evaluated against hand-refined descriptions.
 2. **Trace-to-seed generation** for stateful ioctl fuzzing (strace → syz-programs with valid RM object chains); ablated against seedless runs.
 3. **Agentic triage/RCA with execution-backed ground truth** — every claim backed by a replayable PoC; agent failure modes measured and reported.
-4. **Methodology:** bare-metal single-SUT kernel fuzzing with persistent crash capture and an LLM orchestrator, reproducible via released artifacts (manifest-pinned versions, descriptions, seeds, harnesses).
+4. **Methodology:** cloud (EC2 GPU spot) single-SUT kernel fuzzing with persistent crash capture (kdump + console output) and an LLM orchestrator, reproducible via released artifacts (manifest-pinned versions, descriptions, seeds, harnesses). The bare-metal path is retained as a fallback.
 
 Related-work positioning to develop in the paper: existing Syzkaller DRM/ioctl descriptions; DIFUZE-style interface recovery; MoonShine-style seed distillation from traces (2 is the agentic-era counterpart); GPU-driver security analyses and NCT CVE history.
 
