@@ -270,7 +270,7 @@ class TestTrace2Seed(unittest.TestCase):
 
 class TestReproHelpers(unittest.TestCase):
     def test_dmesg_delta_simple_append(self):
-        self.assertEqual(repro_ctl.dmesg_delta("aaa", "aaabbb"), "bbb")
+        self.assertEqual(repro_ctl.dmesg_delta("aaa", "aaabbb"), ("bbb", False))
 
     def test_dmesg_delta_survives_evicted_head(self):
         """Ring buffer dropped its head: anchor on the tail of `before`.
@@ -280,13 +280,16 @@ class TestReproHelpers(unittest.TestCase):
         """
         before = "head-noise " * 40 + "T" * 800   # tail exceeds the anchor
         after = before[200:] + "NEW CRASH TEXT"   # first 200 chars evicted
-        self.assertEqual(repro_ctl.dmesg_delta(before, after), "NEW CRASH TEXT")
+        self.assertEqual(repro_ctl.dmesg_delta(before, after),
+                         ("NEW CRASH TEXT", False))
         self.assertNotEqual(after[len(before):], "NEW CRASH TEXT")
 
-    def test_dmesg_delta_full_wrap_is_conservative(self):
-        # Nothing of `before` survives: return everything rather than miss it.
-        self.assertEqual(repro_ctl.dmesg_delta("old" * 400, "totally new"),
-                         "totally new")
+    def test_dmesg_delta_full_wrap_is_reported_not_guessed(self):
+        # Nothing of `before` survives, so there is no honest delta. The
+        # remaining buffer holds *earlier* runs' crash reports: scanning it
+        # would score a hit on every later run.
+        delta, wrapped = repro_ctl.dmesg_delta("old" * 400, "totally new")
+        self.assertTrue(wrapped)
 
     def test_matched_signature_agrees_with_hit_counting(self):
         # The bug this guards: counting a hit on a generic pattern while the
@@ -301,12 +304,28 @@ class TestReproHelpers(unittest.TestCase):
 class TestReproVerifyBookkeeping(StateTempMixin, unittest.TestCase):
     """cmd_verify's durable progress accounting (no kernel involved)."""
 
+    BOOT = "boot-current"
+
     def setUp(self):
         super().setUp()
         self._orig_root = repro_ctl.REPO_ROOT
         repro_ctl.REPO_ROOT = self.tmp.name
         self.addCleanup(lambda: setattr(repro_ctl, "REPO_ROOT",
                                         self._orig_root))
+        # Stub the kernel-facing helpers: this suite must not depend on a real
+        # dmesg (absent in containers, and a host emitting BUG:/KASAN: lines
+        # would flip these assertions).
+        self._orig_dmesg = repro_ctl.dmesg_text
+        self._orig_boot = repro_ctl.boot_id
+        self.addCleanup(lambda: setattr(repro_ctl, "dmesg_text",
+                                        self._orig_dmesg))
+        self.addCleanup(lambda: setattr(repro_ctl, "boot_id", self._orig_boot))
+        self.log = "quiet boot\n"
+        self.crashing = False      # every run reproduces
+        self.wrapping = False      # ring buffer wraps past the anchor
+        self.calls = 0
+        repro_ctl.dmesg_text = self._fake_dmesg
+        repro_ctl.boot_id = lambda: self.BOOT
         self.cid = "crash-0001"
         pocs = os.path.join(self.tmp.name, "artifacts", "pocs", self.cid)
         os.makedirs(pocs)
@@ -320,9 +339,19 @@ class TestReproVerifyBookkeeping(StateTempMixin, unittest.TestCase):
                                "dir": "/tmp"})
         ps.save(st)
 
+    def _fake_dmesg(self):
+        """Called twice per run: once before the repro, once after."""
+        self.calls += 1
+        is_after = self.calls % 2 == 0
+        if is_after and self.wrapping:
+            return "a totally different buffer %d\n" % self.calls
+        if is_after and self.crashing:
+            self.log += "KASAN: use-after-free in nv_zzz\n"
+        return self.log
+
     def run_verify(self, runs, restart=False):
         with redirect_stdout(io.StringIO()) as out:
-            repro_ctl.cmd_verify(self.cid, runs, restart)
+            self.rc = repro_ctl.cmd_verify(self.cid, runs, restart)
         return out.getvalue()
 
     def test_clean_runs_classify_unreproducible(self):
@@ -338,21 +367,89 @@ class TestReproVerifyBookkeeping(StateTempMixin, unittest.TestCase):
         self.assertFalse(ps.load()["crashes"][self.cid]["repro_progress"]
                          ["in_flight"])
 
-    def test_interrupted_run_is_recovered_as_a_reproduction(self):
+    def test_interrupted_run_after_reboot_is_a_reproduction(self):
         """A run that panicked the box must not be silently lost."""
         with ps.transaction() as st:
             st["crashes"][self.cid]["repro_progress"] = {
-                "runs_done": 1, "hits": 0, "in_flight": True}
+                "runs_done": 1, "hits": 0, "in_flight": True,
+                "boot_id": "boot-before-the-panic"}
         out = self.run_verify(2)
-        self.assertIn("machine went down mid-run", out)
+        self.assertIn("rebooted mid-run", out)
         c = ps.load()["crashes"][self.cid]
         self.assertEqual(c["repro_progress"]["hits"], 1)  # recovered run counts
         self.assertEqual(c["status"], "flaky")            # 1/2, not 0/2
 
+    def test_interrupted_run_on_the_same_boot_is_void(self):
+        """Ctrl-C, an OOM kill, or a repro that will not exec leaves the same
+        in_flight marker as a panic — but the machine never went down, so it
+        is not evidence of a bug and must not inflate the rate."""
+        with ps.transaction() as st:
+            st["crashes"][self.cid]["repro_progress"] = {
+                "runs_done": 1, "hits": 0, "in_flight": True,
+                "boot_id": self.BOOT}          # same boot: no panic happened
+        out = self.run_verify(2)
+        self.assertIn("VOID", out)
+        c = ps.load()["crashes"][self.cid]
+        self.assertEqual(c["repro_progress"]["hits"], 0)
+        self.assertEqual(c["repro_progress"]["inconclusive"], 1)
+        self.assertEqual(c["status"], "unreproducible")
+        self.assertEqual(c["repro_rate"], 0.0)
+
+    def test_rerun_with_fewer_runs_cannot_exceed_100_percent(self):
+        """A 10-run pass re-verified with --runs 3 must not report 300%.
+
+        The rate is the disclosure gate; dividing accumulated hits by a
+        smaller requested run count wrote a rate the tool's own validate()
+        rejects.
+        """
+        with ps.transaction() as st:
+            st["crashes"][self.cid]["repro_progress"] = {
+                "runs_done": 10, "hits": 9, "inconclusive": 0,
+                "in_flight": False, "boot_id": self.BOOT}
+        self.run_verify(3)
+        st = ps.load()
+        c = st["crashes"][self.cid]
+        self.assertEqual(c["repro_rate"], 0.9)            # 9/10, not 9/3
+        self.assertEqual(c["repro_progress"]["runs_done"], 10)  # never shrinks
+        self.assertEqual(ps.validate(st), [])
+
+    def test_ring_wrap_voids_the_run_instead_of_scoring_a_hit(self):
+        self.wrapping = True
+        out = self.run_verify(2)
+        c = ps.load()["crashes"][self.cid]
+        self.assertIn("VOID", out)
+        self.assertEqual(c["repro_progress"]["hits"], 0)
+        self.assertGreater(c["repro_progress"]["inconclusive"], 0)
+
+    def test_all_void_records_no_rate(self):
+        self.wrapping = True
+        out = self.run_verify(1)
+        self.assertIn("no rate recorded", out)
+        self.assertEqual(self.rc, 1)
+        self.assertIsNone(ps.load()["crashes"][self.cid]["repro_rate"])
+
+    def test_repro_that_cannot_exec_is_void_not_a_crash(self):
+        os.chmod(os.path.join(self.tmp.name, "artifacts", "pocs", self.cid,
+                              "repro"), 0o644)
+        out = self.run_verify(2)
+        self.assertIn("would not run", out)
+        self.assertEqual(self.rc, 1)          # no rate from zero counted runs
+        c = ps.load()["crashes"][self.cid]
+        self.assertEqual(c["repro_progress"]["hits"], 0)
+        self.assertIsNone(c["repro_rate"])
+
+    def test_reproducing_repro_is_reliable(self):
+        self.crashing = True
+        self.run_verify(3)
+        c = ps.load()["crashes"][self.cid]
+        self.assertEqual(c["repro_rate"], 1.0)
+        self.assertEqual(c["status"], "reliable")
+
     def test_restart_discards_partial_progress(self):
         with ps.transaction() as st:
             st["crashes"][self.cid]["repro_progress"] = {
-                "runs_done": 1, "hits": 1, "in_flight": True}
+                "runs_done": 1, "hits": 1, "in_flight": True,
+                "boot_id": "boot-before-the-panic"}
         self.run_verify(2, restart=True)
         c = ps.load()["crashes"][self.cid]
         self.assertEqual(c["repro_progress"]["hits"], 0)
@@ -656,6 +753,48 @@ class TestPipelineCtlCLI(unittest.TestCase):
         ps.update_phase(st, "report", "done")
         ps.save(st, self.state)
         self.assertIn("PROBLEM", self.ctl("validate", expect=1))
+
+    def test_clearing_a_duplicate_link_returns_the_crash_to_the_queue(self):
+        """Undoing a triage mistake has to be one command.
+
+        Clearing only the link left status=duplicate with nothing to duplicate
+        — validate called that consistent and the crash stayed out of the
+        unique/RCA queue permanently.
+        """
+        self.ctl("init")
+        st = ps.load(self.state)
+        for h in ("h1", "h2"):
+            ps.register_crash(st, {"track": "K", "title": "KASAN: UAF in nv",
+                                   "stack_hash": h, "status": "unique",
+                                   "dir": "/tmp"})
+        ps.save(st, self.state)
+        self.ctl("crash-set", "crash-0002", "--duplicate-of", "crash-0001")
+        self.ctl("crash-set", "crash-0002", "--duplicate-of", "none")
+        c = ps.load(self.state)["crashes"]["crash-0002"]
+        self.assertIsNone(c["duplicate_of"])
+        self.assertEqual(c["status"], "unique")
+        self.assertIn("crash-0002", self.ctl("crash-list", "--status",
+                                             "unique"))
+        # An explicit --status in the same command still wins.
+        self.ctl("crash-set", "crash-0002", "--duplicate-of", "crash-0001")
+        self.ctl("crash-set", "crash-0002", "--duplicate-of", "none",
+                 "--status", "flagged")
+        self.assertEqual(ps.load(self.state)["crashes"]["crash-0002"]["status"],
+                         "flagged")
+
+    def test_crash_list_rejects_an_unknown_status(self):
+        # A typo used to print "no crashes match" and exit 0, which reads as
+        # "there are no unique crashes".
+        self.ctl("init")
+        self.ctl("crash-list", "--status", "uniqe", expect=2)
+
+    def test_phase_notes_do_not_survive_the_next_status(self):
+        self.ctl("init")
+        self.ctl("set-phase", "provision", "done", "--notes", "gate ok")
+        self.ctl("set-phase", "provision", "failed")
+        show = self.ctl("show")
+        self.assertIn("failed", show)
+        self.assertNotIn("gate ok", show)
 
 
 if __name__ == "__main__":

@@ -252,6 +252,12 @@ def cmd_crash_set(a):
         if a.duplicate_of is not None:
             if a.duplicate_of.lower() in ("none", ""):
                 c["duplicate_of"] = None
+                # Clearing the link has to clear the verdict too, or the crash
+                # keeps status=duplicate with nothing to duplicate and stays
+                # excluded from the unique/RCA queue forever. An explicit
+                # --status in the same command still wins.
+                if c["status"] == "duplicate" and not a.status:
+                    c["status"] = "unique"
             else:
                 if a.duplicate_of == a.crash_id:
                     sys.exit("error: a crash cannot duplicate itself")
@@ -321,7 +327,7 @@ def build_parser():
     p.set_defaults(fn=cmd_set_phase)
 
     p = sub.add_parser("crash-list", help="list registered crashes")
-    p.add_argument("--status")
+    p.add_argument("--status", choices=sorted(ps.CRASH_STATUS))
     p.add_argument("--track", choices=sorted(ps.TRACKS))
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_crash_list)

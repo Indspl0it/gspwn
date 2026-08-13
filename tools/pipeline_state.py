@@ -177,11 +177,14 @@ def update_phase(state, phase, status, notes=""):
     if status not in PHASE_STATUS:
         raise ValueError("unknown phase status: %s (expected one of %s)"
                          % (status, ", ".join(sorted(PHASE_STATUS))))
-    prev = state["phases"].get(phase, DEFAULT_PHASE)
+    # Notes describe *this* status change, so they are replaced, not inherited:
+    # carrying "gate ok" forward onto a later `failed` produces a state file
+    # that reads as the opposite of what happened, and leaves no way to clear
+    # a stale note.
     state["phases"][phase] = {
         "status": status,
         "updated": _now(),
-        "notes": notes if notes else prev.get("notes", ""),
+        "notes": notes or "",
     }
 
 

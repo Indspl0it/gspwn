@@ -19,7 +19,9 @@ registry.
      python3 tools/pipeline_ctl.py crash-set <id> --duplicate-of <other-id>
      python3 tools/pipeline_ctl.py crash-set <id> --notes "<why distinct>"
    Every FLAG must end in one of those two calls; an unreviewed flag is an
-   open gate item, not a default-distinct crash.
+   open gate item, not a default-distinct crash. To undo a duplicate call
+   made in error, `crash-set <id> --duplicate-of none` clears the link and
+   returns the crash to the unique queue.
 4. Prioritize unique crashes for RCA: KASAN UAF/OOB-write and Track U ASan
    heap-corruption first; then other KASAN; then NVRM Xid signals; panics
    without sanitizer reports last.

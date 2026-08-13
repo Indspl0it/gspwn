@@ -67,8 +67,13 @@ def cmd_check_idle():
                     since = float(f.read().strip())
             except (ValueError, OSError):
                 # Corrupt marker (e.g. truncated by a panic): restart the clock
-                # rather than crash the watchdog or stop the box early.
-                os.remove(IDLE_FILE)
+                # rather than crash the watchdog or stop the box early. The
+                # removal is best-effort — the file may already be gone, and
+                # raising here would be the very traceback this guards against.
+                try:
+                    os.remove(IDLE_FILE)
+                except OSError:
+                    pass
                 print("idle marker unreadable; timer restarted")
                 return
             idle_min = (time.time() - since) / 60
