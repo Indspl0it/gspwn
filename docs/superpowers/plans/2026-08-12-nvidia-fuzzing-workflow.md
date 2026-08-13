@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note added after this document was written:** the orchestrator is any `AGENTS.md`-aware coding agent — "Kimi Code" below names the agent in use when this plan was executed, not a dependency. Kept as the dated implementation record; `tools/pipeline_ctl.py` and `tools/selftest.py` were added after it was written.
+
 **Goal:** Build the self-contained Kimi Code agent repo (tools, agent prompts, orchestrator contract, configs) that implements the fuzzing workflow in the approved spec.
 
 **Architecture:** Stage-pipeline orchestrator with blackboard coordination. Deterministic Python/Bash tools in `tools/` do all mechanical work; Kimi Code subagents (prompt files in `agents/`) do reasoning; `AGENTS.md` turns any Kimi session in the repo into the orchestrator; state lives in `state/pipeline.json` + `artifacts/`. Everything runs locally on the Debian-family SUT — no SSH.

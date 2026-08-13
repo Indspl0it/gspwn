@@ -5,6 +5,11 @@ Status: Approved architecture; critique revisions applied
 Origin: Extends https://www.interruptlabs.co.uk/articles/fuzzing-the-nvidia-gpu-drivers
 Intended output: working fuzzing pipeline + technical paper (approach, evaluation, findings)
 
+> **Note added after this document was written:** the orchestrator is any
+> `AGENTS.md`-aware coding agent — "Kimi Code" below names the agent in use
+> when the design was approved, not a dependency. This document is kept as the
+> dated design record; the README is the current front door.
+
 ## 1. Goal
 
 A portable, agentic fuzzing workflow, packaged as a Kimi Code agent repository, that:

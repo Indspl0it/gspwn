@@ -1,6 +1,7 @@
 artifacts/*
 !artifacts/.gitkeep
 !artifacts/**/.gitkeep
-state/pipeline.json
+state/*
+!state/.gitkeep
 __pycache__/
 *.pyc

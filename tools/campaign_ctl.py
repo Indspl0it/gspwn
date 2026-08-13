@@ -97,9 +97,9 @@ def cmd_start_stop(verb, track):
     if os.geteuid() != 0:
         sys.exit("start/stop must run as root")
     sh(["systemctl", verb, unit(track)])
-    st = ps.load()
-    st["campaigns"].append({"track": track, "action": verb})
-    ps.save(st)
+    with ps.transaction() as st:
+        st["campaigns"].append({"track": track, "action": verb,
+                                "at": ps._now()})
     print("%s %s" % (verb, unit(track)))
 
 

@@ -22,5 +22,14 @@ You are the eval-phase agent. Produce publication-grade measurements.
 artifacts/eval/: coverage CSVs, plots, metrics table, ablation results,
 rca-audit.md.
 
+## State
+`python3 tools/pipeline_ctl.py set-phase eval in_progress|done|blocked`.
+Ablation runs that need their own registry can redirect state with the
+GSPWN_STATE env var instead of overwriting the main pipeline.json:
+`GSPWN_STATE=artifacts/eval/<run>/pipeline.json python3 tools/...`
+
 ## Gate evidence
 file listing of artifacts/eval/ with one-line description of each artifact.
+State explicitly which configurations reached the configured runs_per_config
+and which did not — an under-powered ablation is reported as such, not
+presented alongside complete ones.

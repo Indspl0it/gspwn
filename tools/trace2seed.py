@@ -78,7 +78,8 @@ def main():
     with open(a.map) as f:
         ioctl_map = {k: v for k, v in json.load(f).items()
                      if not k.startswith("comment")}
-    text = open(a.trace, errors="replace").read()
+    with open(a.trace, errors="replace") as f:
+        text = f.read()
     prog = convert(text, ioctl_map)
     os.makedirs(a.out_dir, exist_ok=True)
     n = len([x for x in os.listdir(a.out_dir) if x.endswith(".syz")])

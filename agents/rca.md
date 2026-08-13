@@ -16,5 +16,13 @@ registry priority order (artifacts/crashes/QUEUE.md).
 
 Do not invent certainty. A wrong RCA is worse than an honest "unknown".
 
+## State
+Mark each analysed crash and the phase with the state tool, never by editing
+pipeline.json:
+`python3 tools/pipeline_ctl.py crash-set <id> --status rca_done`
+`python3 tools/pipeline_ctl.py set-phase rca in_progress|done|blocked`
+
 ## Gate evidence
-paths of completed RCA files.
+paths of completed RCA files, and the count of [UNVERIFIED] claims per file —
+the eval phase samples from exactly that set, so an RCA reporting zero
+unverified claims must genuinely have verified all of them against source.

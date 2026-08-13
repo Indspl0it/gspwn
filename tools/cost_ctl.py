@@ -15,8 +15,9 @@ import sys
 import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-KEEP_ALIVE = os.path.join(REPO_ROOT, "state", "KEEP_ALIVE")
-IDLE_FILE = os.path.join(REPO_ROOT, "state", "idle_since")
+STATE_DIR = os.path.join(REPO_ROOT, "state")
+KEEP_ALIVE = os.path.join(STATE_DIR, "KEEP_ALIVE")
+IDLE_FILE = os.path.join(STATE_DIR, "idle_since")
 try:
     IDLE_MINUTES = int(os.environ.get("IDLE_MINUTES", "120"))
 except ValueError:
@@ -53,12 +54,23 @@ def is_idle():
 
 
 def cmd_check_idle():
+    # The watchdog runs from a systemd timer on a machine that reboots after
+    # panics; state/ may not exist yet on a fresh clone.
+    os.makedirs(STATE_DIR, exist_ok=True)
     if os.path.exists(KEEP_ALIVE):
         print("KEEP_ALIVE present; not stopping")
         return
     if is_idle():
         if os.path.exists(IDLE_FILE):
-            since = float(open(IDLE_FILE).read().strip())
+            try:
+                with open(IDLE_FILE) as f:
+                    since = float(f.read().strip())
+            except (ValueError, OSError):
+                # Corrupt marker (e.g. truncated by a panic): restart the clock
+                # rather than crash the watchdog or stop the box early.
+                os.remove(IDLE_FILE)
+                print("idle marker unreadable; timer restarted")
+                return
             idle_min = (time.time() - since) / 60
             if idle_min >= IDLE_MINUTES:
                 print("idle %.0f min >= %d; stopping instance"

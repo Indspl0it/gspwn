@@ -18,6 +18,12 @@ runtime traces of real CUDA workloads using tools/trace2seed.py.
 artifacts/seeds/*.syz, populated tools/ioctl_map.json (commit it — it is
 data, not runtime state), trace kept at artifacts/seeds/trace.txt.
 
+## State
+Record progress with the state tool, never by editing pipeline.json:
+`python3 tools/pipeline_ctl.py set-phase seeds in_progress|done|blocked
+ --notes "<seed count>"`
+
 ## Gate evidence
 seed count, mapped/unmapped ioctl counts, smoke-run log excerpt showing no
-seed parse errors.
+seed parse errors. Report the unmapped count honestly — a high unmapped ratio
+means the ioctl_map is incomplete and the seeds cover less than they appear to.

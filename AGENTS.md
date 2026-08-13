@@ -12,17 +12,43 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
   per phase using the prompt file in `agents/<phase>.md`.
 - Subagents reason, tools act. Phase work goes through `tools/*.py` /
   `tools/*.sh`, never hand-typed command sequences.
+- **All state changes go through `tools/pipeline_ctl.py`.** Never hand-edit
+  `state/pipeline.json` — the tool validates, locks, and writes atomically,
+  and parallel subagents will otherwise lose each other's updates.
 - Phases run in dependency order (below). `describe`, `seeds`, `harness` may
   run in parallel with each other after `build`.
-- After any interruption (session restart, kernel panic, reboot): read
-  `state/pipeline.json`, run `python3 tools/crashlog_ctl.py harvest`, then
-  resume at the first phase not marked `done`.
+- After any interruption (session restart, kernel panic, reboot):
+  1. `python3 tools/crashlog_ctl.py harvest`
+  2. `python3 tools/pipeline_ctl.py show` (and `validate`)
+  3. resume at the phase reported by `python3 tools/pipeline_ctl.py next`
+
+## State commands
+
+| Need | Command |
+|---|---|
+| Create the state file (once, provision) | `python3 tools/pipeline_ctl.py init` |
+| See where the pipeline stands | `python3 tools/pipeline_ctl.py show` |
+| Which phase to run next | `python3 tools/pipeline_ctl.py next` |
+| Advance / block a phase | `python3 tools/pipeline_ctl.py set-phase <phase> <status> --notes "..."` |
+| Inspect the crash registry | `python3 tools/pipeline_ctl.py crash-list [--status S] [--track K\|U]` |
+| Fix a triage decision | `python3 tools/pipeline_ctl.py crash-set <id> --duplicate-of <id>` |
+| Record disclosure status | `python3 tools/pipeline_ctl.py crash-set <id> --disclosure submitted` |
+| Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
+
+Phase statuses: `pending`, `in_progress`, `done`, `blocked`, `failed`. Mark a
+phase `in_progress` when you dispatch it and `done` only once you have seen
+the gate evidence yourself — never on the subagent's assertion alone.
+
+Before trusting the tools after any change to them, run
+`python3 tools/selftest.py` (offline, no hardware needed).
 
 ## Phase order and gates
 
 Advance only when the gate holds. On gate failure, consult the phase's
-agent file error-handling section; after one agent retry, mark the phase
-`blocked` in pipeline.json and stop.
+agent file error-handling section; after one agent retry, run
+`python3 tools/pipeline_ctl.py set-phase <phase> blocked --notes "<why>"`
+and stop. A blocked phase is a stopping point, not something to work around:
+do not skip ahead to a later phase to keep making progress.
 
 | Phase | Agent file | Gate to advance |
 |---|---|---|
@@ -45,6 +71,11 @@ For each phase, spawn a subagent whose prompt is: the full contents of
 `config/campaign.yaml`, and the paths of any artifacts it needs. Tell it to
 write its outputs to the artifact paths the contract defines and to return
 a one-paragraph summary plus gate evidence.
+
+Subagents are isolated and hand off paths, not transcripts — so the gate
+evidence they return is a claim about files on disk. Check the artifacts
+exist and say what the subagent reports before marking a phase `done`. A
+phase whose evidence you could not confirm is `blocked`, not `done`.
 
 Background subagents are allowed for `fuzz` (long-running monitor) and for
 parallel `describe`/`seeds`/`harness`. Resume timed-out subagents rather
