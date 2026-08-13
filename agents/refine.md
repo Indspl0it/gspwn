@@ -73,13 +73,18 @@ description for, and supplying valid object-chain seeds it cannot invent.
   instrumented. Never present an edge count as total driver coverage.
 
 ## State
-Record the round outcome so the orchestrator can make the loop decision:
+Record the round outcome so the orchestrator can make the loop decision. Let
+the tool measure it from the run's coverage.csv — do not transcribe the
+numbers by hand. `--run-hours` is the spend ceiling the loop enforces, and a
+typo in it is a typo in a budget:
 ```
-python3 tools/pipeline_ctl.py round-end \
-  --coverage-verdict growing|plateaued|unknown \
-  --edges-start N --edges-end N --new-crashes N --run-hours H
+python3 tools/pipeline_ctl.py round-end --from-run <run-id>
 python3 tools/pipeline_ctl.py set-phase refine done --notes "<gap count>"
 ```
+Passing an explicit flag still overrides the measurement, so use one only when
+you can say why the recorded curve is wrong, and say so in the notes. If the
+run has no coverage samples the verdict is `unknown`, which stops the loop by
+design — fix the sampler and re-run rather than supplying a verdict yourself.
 
 ## Gate evidence
 gaps.md and worklist.md paths, the plateau verdict with its detail line, the

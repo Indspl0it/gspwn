@@ -12,7 +12,6 @@ import argparse
 import json
 import os
 import re
-import sys
 
 OPEN_RE = re.compile(r'openat\([^,]+,\s*"((?:/dev/nvidia|/dev/dri)[^"]*)"[^)]*\)\s*=\s*(\d+)')
 IOCTL_RE = re.compile(r"ioctl\((\d+),\s*(0x[0-9a-fA-F]+|\w+)")

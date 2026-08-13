@@ -22,6 +22,27 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
   2. `python3 tools/pipeline_ctl.py show` (and `validate`)
   3. resume at the phase reported by `python3 tools/pipeline_ctl.py next`
 
+## Configuration (the only thing a human keys in)
+
+Every cap, budget and duration lives in `config/campaign.yaml`. Nothing is
+hardcoded in a tool, and no tool asks a human anything once these are set.
+Before the first campaign, confirm what actually took effect:
+
+```
+python3 tools/gspwn_config.py
+```
+
+It prints the effective configuration and the resulting spend ceiling, and
+exits non-zero on a bad value. An unknown key is an error, not a warning — a
+typo in a cap must never fall back to a default while the operator believes
+the cap took effect. If it exits non-zero, stop and report; do not proceed on
+defaults.
+
+The caps that bound an unattended run: `loop.max_rounds`,
+`loop.max_total_run_hours`, `loop.campaign_hours` (each campaign self-stops
+after this long), `cost.idle_stop_minutes` (the box stops itself when no
+fuzzer is running), and `cost.monthly_budget_usd`.
+
 ## State commands
 
 | Need | Command |
@@ -36,7 +57,7 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
 | Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
 | Round history + loop budget | `python3 tools/pipeline_ctl.py round-show` |
 | Attach a run to this round | `python3 tools/pipeline_ctl.py round-add-run --run-id <id>` |
-| Close a round | `python3 tools/pipeline_ctl.py round-end --coverage-verdict ... --run-hours ...` |
+| Close a round | `python3 tools/pipeline_ctl.py round-end --from-run <run-id>` (measures the outcome) |
 | Continue or stop the loop | `python3 tools/pipeline_ctl.py round-decide` |
 | Open the next round | `python3 tools/pipeline_ctl.py round-advance` |
 
@@ -109,6 +130,14 @@ spend ceiling, so never raise them mid-loop to keep a campaign alive):
 
 `round-decide` computes this for you. Override only with an explicit reason
 (`--decision stop --reason "..."`), and never override a budget stop.
+
+The numbers those conditions read are measured, not reported: each campaign
+self-stops after `loop.campaign_hours` (a deadline on disk, enforced by the
+sampler's timer, so it survives the panics this pipeline expects), and
+`round-end --from-run <run-id>` derives the coverage verdict, edge counts,
+run-hours and new-crash count from the run's `coverage.csv` and the registry.
+Do not hand-type those values: `run_hours` *is* the budget, and a run that
+died after three hours must not bill the configured twenty-four.
 
 Run isolation is mandatory, not optional: every campaign gets its own
 `--run-id` and workdir via `campaign_ctl.py`. Runs that share a workdir share

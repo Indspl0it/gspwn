@@ -11,9 +11,15 @@ Corpus policy for the round comes from `loop.corpus_policy` in
 config/campaign.yaml:
 - `carry` — build on the previous round: `--corpus carry --from-run <prev>`
 - `fresh` — start empty (required for the vanilla-baseline ablation arm)
-Seeded runs additionally pass `--seeds artifacts/seeds`. An ablation arm
-testing "without seeds" must omit `--seeds` *and* use `--corpus fresh`, or it
-is not testing what it claims.
+Seeded runs additionally pass `--seeds artifacts/seeds`, which packs the bank
+into the run's corpus.db (merging anything carried). An ablation arm testing
+"without seeds" must omit `--seeds` *and* use `--corpus fresh`, or it is not
+testing what it claims.
+
+Every campaign carries a deadline of `loop.campaign_hours`, written to disk at
+install time and enforced by the sampler's timer, so the run ends on schedule
+even if this session is gone. Do not stop a campaign early by hand unless a
+gate failed — the round accounting reads the actual elapsed time.
 
 ## Do
 1. Generate the run config (do not hand-write it):

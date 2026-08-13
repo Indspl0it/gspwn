@@ -17,18 +17,43 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stdout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import campaign_ctl
 import corpus_ctl
 import coverage_ctl
 import crash_parse
+import gspwn_config
 import repro_ctl
 import pipeline_state as ps
 import trace2seed
+
+# A stand-in for syz-db: pack/unpack a directory of programs through a JSON
+# blob. Lets the seed-injection path be tested without a syzkaller build.
+FAKE_SYZ_DB = r'''#!/usr/bin/env python3
+import json, os, sys
+mode, a, b = sys.argv[1], sys.argv[2], sys.argv[3]
+if mode == "pack":                     # pack <dir> <db>
+    out = {}
+    for n in sorted(os.listdir(a)):
+        with open(os.path.join(a, n)) as f:
+            out[n] = f.read()
+    with open(b, "w") as f:
+        json.dump(out, f)
+elif mode == "unpack":                 # unpack <db> <dir>
+    os.makedirs(b, exist_ok=True)
+    with open(a) as f:
+        for n, text in json.load(f).items():
+            with open(os.path.join(b, n), "w") as g:
+                g.write(text)
+else:
+    sys.exit("bad mode " + mode)
+'''
 
 
 class StateTempMixin:
@@ -795,6 +820,263 @@ class TestPipelineCtlCLI(unittest.TestCase):
         show = self.ctl("show")
         self.assertIn("failed", show)
         self.assertNotIn("gate ok", show)
+
+
+class TestConfig(unittest.TestCase):
+    """config/campaign.yaml is the only place a cap lives."""
+
+    def write(self, text):
+        p = os.path.join(self.tmp.name, "campaign.yaml")
+        with open(p, "w") as f:
+            f.write(text)
+        return p
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_shipped_config_is_valid(self):
+        cfg = gspwn_config.load(os.path.join(os.path.dirname(HERE), "config",
+                                             "campaign.yaml"))
+        self.assertEqual(cfg["loop"]["corpus_policy"], "carry")
+        self.assertGreater(cfg["loop"]["campaign_hours"], 0)
+
+    def test_defaults_fill_omitted_keys(self):
+        cfg = gspwn_config.load(self.write("loop:\n  max_rounds: 7\n"))
+        self.assertEqual(cfg["loop"]["max_rounds"], 7)
+        self.assertEqual(cfg["loop"]["campaign_hours"],
+                         gspwn_config.DEFAULTS["loop"]["campaign_hours"])
+        self.assertEqual(cfg["cost"]["idle_stop_minutes"], 120)
+
+    def test_a_typo_in_a_cap_is_rejected_not_defaulted(self):
+        # The failure this prevents: operator sets `max_rouds: 10`, believes
+        # the cap took effect, and the loop silently runs on the default.
+        with self.assertRaises(gspwn_config.ConfigError) as cm:
+            gspwn_config.load(self.write("loop:\n  max_rouds: 10\n"))
+        self.assertIn("max_rouds", str(cm.exception))
+
+    def test_nonsense_caps_are_rejected(self):
+        for bad in ("loop:\n  max_rounds: 0\n",
+                    "loop:\n  max_total_run_hours: -5\n",
+                    "loop:\n  plateau_min_growth: 40\n",
+                    "loop:\n  corpus_policy: sometimes\n",
+                    "cost:\n  idle_stop_minutes: 0\n"):
+            with self.assertRaises(gspwn_config.ConfigError, msg=bad):
+                gspwn_config.load(self.write(bad))
+
+    def test_campaign_longer_than_the_budget_is_rejected(self):
+        with self.assertRaises(gspwn_config.ConfigError) as cm:
+            gspwn_config.load(self.write(
+                "loop:\n  campaign_hours: 400\n  max_total_run_hours: 100\n"))
+        self.assertIn("campaign_hours", str(cm.exception))
+
+    def test_plateau_window_must_hold_enough_samples(self):
+        # < 3 samples in the window always yields 'unknown', which stops the
+        # loop — a config that guarantees that is a misconfiguration.
+        with self.assertRaises(gspwn_config.ConfigError):
+            gspwn_config.load(self.write(
+                "loop:\n  plateau_window_min: 10\n  coverage_sample_min: 10\n"))
+
+    def test_manager_url_follows_the_configured_port(self):
+        p = self.write('track_k:\n  http: "127.0.0.1:9999"\n')
+        self.assertEqual(gspwn_config.manager_url(p), "http://127.0.0.1:9999")
+
+
+class TestSeedInjection(unittest.TestCase):
+    """Seeds must land in corpus.db — syz-manager reads nothing else."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        fake = os.path.join(self.tmp.name, "syz-db")
+        with open(fake, "w") as f:
+            f.write(FAKE_SYZ_DB)
+        os.chmod(fake, 0o755)
+        self._orig_db = corpus_ctl.SYZ_DB
+        corpus_ctl.SYZ_DB = fake
+        self.addCleanup(lambda: setattr(corpus_ctl, "SYZ_DB", self._orig_db))
+        self.seeds = os.path.join(self.tmp.name, "seeds")
+        os.makedirs(self.seeds)
+        for n in ("a", "b"):
+            with open(os.path.join(self.seeds, "%s.syz" % n), "w") as f:
+                f.write("ioctl$NV_%s(r0)\n" % n)
+        self.db = os.path.join(self.tmp.name, "corpus.db")
+
+    def packed(self):
+        with open(self.db) as f:
+            return json.load(f)
+
+    def test_seeds_are_packed_into_the_corpus_db(self):
+        with redirect_stdout(io.StringIO()):
+            n = campaign_ctl.install_seeds(self.db, self.seeds)
+        self.assertEqual(n, 2)
+        self.assertTrue(os.path.exists(self.db))
+        self.assertEqual(len(self.packed()), 2)
+        self.assertIn("ioctl$NV_a(r0)", "".join(self.packed().values()))
+
+    def test_packing_seeds_preserves_a_carried_corpus(self):
+        """Round N+1 carries the corpus AND adds the seed bank; neither wins."""
+        with open(self.db, "w") as f:
+            json.dump({"carried-0001": "ioctl$NV_carried(r0)\n"}, f)
+        with redirect_stdout(io.StringIO()):
+            campaign_ctl.install_seeds(self.db, self.seeds)
+        blob = self.packed()
+        self.assertEqual(len(blob), 3)
+        self.assertIn("ioctl$NV_carried(r0)", "".join(blob.values()))
+
+    def test_empty_seed_bank_warns_and_packs_nothing(self):
+        empty = os.path.join(self.tmp.name, "empty")
+        os.makedirs(empty)
+        with redirect_stdout(io.StringIO()) as out:
+            n = campaign_ctl.install_seeds(self.db, empty)
+        self.assertEqual(n, 0)
+        self.assertIn("NOT seeded", out.getvalue())
+        self.assertFalse(os.path.exists(self.db))
+
+
+class TestCampaignDeadline(StateTempMixin, unittest.TestCase):
+    """A campaign has to end on its own for the loop to be unattended."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_runs = campaign_ctl.RUNS_DIR
+        campaign_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(campaign_ctl, "RUNS_DIR",
+                                        self._orig_runs))
+        self.calls = []
+
+    class Args:
+        def __init__(self, run_id):
+            self.run_id = run_id
+
+    def fake_systemctl(self, active):
+        """Swap the module reference, never mutate the real subprocess module:
+        patching subprocess.run in place would leak into every other test."""
+        calls = self.calls
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return types.SimpleNamespace(
+                stdout="active\n" if active else "inactive\n",
+                stderr="", returncode=0)
+        real = campaign_ctl.subprocess
+        campaign_ctl.subprocess = types.SimpleNamespace(run=run)
+        self.addCleanup(lambda: setattr(campaign_ctl, "subprocess", real))
+
+    def test_deadline_roundtrips_as_an_absolute_time(self):
+        at = campaign_ctl.write_deadline("r1-k1", 24)
+        self.assertAlmostEqual(campaign_ctl.read_deadline("r1-k1"), at, delta=1)
+
+    def test_before_the_deadline_nothing_is_stopped(self):
+        campaign_ctl.write_deadline("r1-k1", 5)
+        self.fake_systemctl(True)
+        with redirect_stdout(io.StringIO()) as out:
+            campaign_ctl.cmd_check_deadline(self.Args("r1-k1"))
+        self.assertIn("left of its campaign window", out.getvalue())
+        self.assertEqual(self.calls, [])
+
+    def test_past_the_deadline_the_campaign_is_stopped_and_recorded(self):
+        campaign_ctl.write_deadline("r1-k1", -1)     # already elapsed
+        self.fake_systemctl(True)
+        with redirect_stdout(io.StringIO()) as out:
+            campaign_ctl.cmd_check_deadline(self.Args("r1-k1"))
+        self.assertIn("window elapsed", out.getvalue())
+        self.assertIn(["systemctl", "stop", "gspwn-k"], self.calls)
+        events = ps.load()["campaigns"]
+        self.assertTrue(any(e.get("note") == "campaign window elapsed"
+                            for e in events), events)
+
+    def test_a_run_with_no_deadline_is_left_alone(self):
+        with redirect_stdout(io.StringIO()) as out:
+            campaign_ctl.cmd_check_deadline(self.Args("r9-k9"))
+        self.assertIn("no deadline recorded", out.getvalue())
+
+
+class TestDerivedRoundEnd(StateTempMixin, unittest.TestCase):
+    """round-end measures the loop's numbers instead of being told them."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_runs = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR",
+                                        self._orig_runs))
+        ps.save(ps.default_state())
+
+    def write_curve(self, run_id, points):
+        d = os.path.join(coverage_ctl.RUNS_DIR, run_id)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "coverage.csv"), "w") as f:
+            f.write(",".join(coverage_ctl.FIELDS) + "\n")
+            for ts, edges in points:
+                f.write("%d,,%d,,,,json:/stats\n" % (ts, edges))
+
+    class Args:
+        def __init__(self, **kw):
+            for k in ("from_run", "coverage_verdict", "new_crashes",
+                      "edges_start", "edges_end", "run_hours", "notes"):
+                setattr(self, k, kw.get(k))
+
+    def test_growing_curve_is_measured_from_the_csv(self):
+        base = 1_700_000_000
+        # 10 h of samples, edges climbing steadily -> still growing.
+        self.write_curve("r1-k1", [(base + i * 3600, 1000 + i * 300)
+                                   for i in range(11)])
+        with ps.transaction() as st:
+            ps.register_crash(st, {"track": "K", "title": "t", "stack_hash": "h",
+                                   "status": "unique", "dir": "/tmp"})
+        with redirect_stdout(io.StringIO()) as out:
+            pipeline_ctl_cmd_round_end(self.Args(from_run="r1-k1"))
+        r = ps.load()["rounds"][-1]
+        self.assertEqual(r["coverage_verdict"], "growing")
+        self.assertEqual(r["edges_start"], 1000)
+        self.assertEqual(r["edges_end"], 4000)
+        self.assertEqual(r["run_hours"], 10.0)     # measured, not the config
+        self.assertEqual(r["new_crashes"], 1)
+        self.assertIn("measured from run", out.getvalue())
+
+    def test_flat_curve_is_measured_as_plateaued(self):
+        base = 1_700_000_000
+        self.write_curve("r1-k1", [(base + i * 3600, 5000 + i)
+                                   for i in range(11)])
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(self.Args(from_run="r1-k1"))
+        self.assertEqual(ps.load()["rounds"][-1]["coverage_verdict"],
+                         "plateaued")
+
+    def test_a_run_that_died_early_bills_only_what_it_used(self):
+        """The budget cap is only real if run_hours reflects the actual run."""
+        base = 1_700_000_000
+        self.write_curve("r1-k1", [(base, 100), (base + 3600, 120),
+                                   (base + 7200, 130)])
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(self.Args(from_run="r1-k1"))
+        self.assertEqual(ps.load()["rounds"][-1]["run_hours"], 2.0)
+
+    def test_missing_curve_yields_unknown_which_stops_the_loop(self):
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(self.Args(from_run="never-ran"))
+        st = ps.load()
+        self.assertEqual(st["rounds"][-1]["coverage_verdict"], "unknown")
+        decision, reason = ps.loop_decision(st, max_rounds=5,
+                                            max_total_run_hours=100)
+        self.assertEqual(decision, "stop")
+
+    def test_an_explicit_flag_still_overrides_the_measurement(self):
+        base = 1_700_000_000
+        self.write_curve("r1-k1", [(base + i * 3600, 1000 + i * 300)
+                                   for i in range(11)])
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(
+                self.Args(from_run="r1-k1", coverage_verdict="plateaued"))
+        self.assertEqual(ps.load()["rounds"][-1]["coverage_verdict"],
+                         "plateaued")
+
+
+def pipeline_ctl_cmd_round_end(args):
+    """Import lazily: pipeline_ctl reads config at parser-build time only."""
+    import pipeline_ctl
+    return pipeline_ctl.cmd_round_end(args)
 
 
 if __name__ == "__main__":

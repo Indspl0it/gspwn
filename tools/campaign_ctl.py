@@ -14,13 +14,23 @@ Corpus policy is therefore explicit per run:
                             start from a previous run's corpus (the outer
                             improvement loop: round N+1 builds on round N)
 
+Seeds are packed into the run's corpus.db with `syz-db pack`, because that
+database is syz-manager's only corpus input.
+
+Each campaign carries a deadline (loop.campaign_hours) written to disk, so an
+unattended round ends on time even across the panics this pipeline expects.
+`check-deadline` enforces it and is driven by the coverage sampler's timer.
+
 Subcommands:
-  gen-config --run-id ID [--seeds DIR]   write the run's syz-manager.cfg
+  gen-config --run-id ID                 write the run's syz-manager.cfg
   install-k --run-id ID [--corpus fresh|carry] [--from-run ID] [--seeds DIR]
+            [--hours H]
   install-u --run-id ID
+  check-deadline --run-id ID             stop the campaign if its window is up
   start <k|u> | stop <k|u>
   status [--run-id ID]
-Requires root for install/start/stop. Reads config/campaign.yaml.
+Requires root for install/start/stop. All tunables come from
+config/campaign.yaml via tools/gspwn_config.py.
 """
 import argparse
 import json
@@ -28,14 +38,16 @@ import os
 import shutil
 import subprocess
 import sys
-
-import yaml  # python3-yaml (apt)
+import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import corpus_ctl
+import gspwn_config
 import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
-CFG_PATH = os.path.join(REPO_ROOT, "config", "campaign.yaml")
+CFG_PATH = gspwn_config.CONFIG_PATH
 RUNS_DIR = os.path.join(REPO_ROOT, "artifacts", "runs")
 UNIT_K = "/etc/systemd/system/gspwn-k.service"
 UNIT_U = "/etc/systemd/system/gspwn-u.service"
@@ -79,8 +91,11 @@ WantedBy=multi-user.target
 
 
 def cfg():
-    with open(CFG_PATH) as f:
-        return yaml.safe_load(f)
+    """Effective configuration — defaults merged with config/campaign.yaml."""
+    try:
+        return gspwn_config.load()
+    except gspwn_config.ConfigError as e:
+        sys.exit("error: %s" % e)
 
 
 def sh(cmd, check=True, capture=False):
@@ -139,6 +154,41 @@ def cmd_gen_config(a):
     return 0
 
 
+def install_seeds(dest_db, seeds_dir):
+    """Pack the seed bank INTO the run's corpus.db, merging what is there.
+
+    syz-manager's only corpus input is workdir/corpus.db. Copying .syz files
+    into a directory beside it does nothing — the programs are never loaded,
+    the run silently starts empty, and the seeded/unseeded ablation compares
+    two identical arms. Seeds have to go through `syz-db pack`.
+    """
+    files = sorted(f for f in os.listdir(seeds_dir) if f.endswith(".syz"))
+    if not files:
+        print("WARN: --seeds %s holds no .syz files — this run is NOT seeded. "
+              "That is an ablation arm, not a seeded run; fix the seed bank "
+              "before treating it as one." % seeds_dir)
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        staged = os.path.join(tmp, "progs")
+        os.makedirs(staged)
+        carried = 0
+        if os.path.exists(dest_db):
+            # Merge: unpack what the corpus already holds so packing the seeds
+            # in does not discard a carried corpus.
+            carried = len(corpus_ctl.unpack_corpus(dest_db, staged))
+        for i, name in enumerate(files):
+            shutil.copy(os.path.join(seeds_dir, name),
+                        os.path.join(staged, "seed-%04d-%s" % (i, name)))
+        r = subprocess.run([corpus_ctl.SYZ_DB, "pack", staged, dest_db],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit("syz-db pack failed: %s"
+                     % (r.stderr.strip() or r.stdout.strip()))
+    print("packed %d seed program(s) from %s into %s (%d carried program(s) "
+          "preserved)" % (len(files), seeds_dir, dest_db, carried))
+    return len(files)
+
+
 def seed_corpus(run_id, corpus, from_run, seeds):
     """Apply the corpus policy before the campaign starts."""
     wd = workdir(run_id)
@@ -163,25 +213,18 @@ def seed_corpus(run_id, corpus, from_run, seeds):
     if seeds:
         if not os.path.isdir(seeds):
             sys.exit("seed dir not found: " + seeds)
-        dest = os.path.join(wd, "seeds")
-        os.makedirs(dest, exist_ok=True)
-        n = 0
-        for name in sorted(os.listdir(seeds)):
-            if name.endswith(".syz"):
-                shutil.copy(os.path.join(seeds, name), dest)
-                n += 1
-        print("staged %d seed program(s) from %s into %s" % (n, seeds, dest))
-        if n == 0:
-            print("WARN: --seeds given but no .syz files found — the run will "
-                  "start from an empty corpus, which is an ablation arm, not "
-                  "a seeded run. Fix this before treating it as seeded.")
+        install_seeds(dest_db, seeds)
     return dest_db
 
 
 def cmd_install_k(a):
     require_root("install")
-    c = cfg()["track_k"]
+    conf = cfg()
+    c = conf["track_k"]
     seed_corpus(a.run_id, a.corpus, a.from_run, a.seeds)
+    hours = a.hours if a.hours is not None else conf["loop"]["campaign_hours"]
+    at = write_deadline(a.run_id, hours)
+    print("campaign window: %s h (stops at epoch %d)" % (hours, int(at)))
     cmd_gen_config(a)
     syzkaller = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller")
     write_unit(UNIT_K, UNIT_K_TMPL.format(
@@ -208,6 +251,68 @@ def cmd_install_u(a):
 
 def unit(track):
     return {"k": "gspwn-k", "u": "gspwn-u"}[track]
+
+
+def deadline_path(run_id):
+    return os.path.join(run_dir(run_id), "deadline")
+
+
+def write_deadline(run_id, hours):
+    """Record when this campaign must stop, as an absolute epoch second.
+
+    A deadline on disk (rather than a one-shot timer) is what makes the stop
+    survive the panics this pipeline expects: after a reboot the check picks
+    up the same deadline and still stops on time. Without it nothing ever ends
+    a campaign — the units are Restart=always — and an unattended loop would
+    fuzz until the budget alert or the instance bill noticed.
+    """
+    os.makedirs(run_dir(run_id), exist_ok=True)
+    at = time.time() + hours * 3600.0
+    with open(deadline_path(run_id), "w") as f:
+        f.write("%d\n" % int(at))
+        f.flush()
+        os.fsync(f.fileno())
+    return at
+
+
+def read_deadline(run_id):
+    path = deadline_path(run_id)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return float(f.read().strip())
+    except (ValueError, OSError):
+        return None
+
+
+def cmd_check_deadline(a):
+    """Stop the campaign if its configured hours are up. Idempotent."""
+    at = read_deadline(a.run_id)
+    if at is None:
+        print("run %s: no deadline recorded; nothing to enforce" % a.run_id)
+        return 0
+    left_h = (at - time.time()) / 3600.0
+    if left_h > 0:
+        print("run %s: %.1f h left of its campaign window" % (a.run_id, left_h))
+        return 0
+    stopped = []
+    for track in ("k", "u"):
+        r = subprocess.run(["systemctl", "is-active", unit(track)],
+                           capture_output=True, text=True)
+        if r.stdout.strip() != "active":
+            continue
+        subprocess.run(["systemctl", "stop", unit(track)], check=False)
+        stopped.append(track)
+    if stopped:
+        with ps.transaction() as st:
+            for track in stopped:
+                st["campaigns"].append({"track": track, "action": "stop",
+                                        "run_id": a.run_id, "at": ps._now(),
+                                        "note": "campaign window elapsed"})
+    print("run %s: campaign window elapsed; stopped %s"
+          % (a.run_id, ", ".join(stopped) or "nothing (already inactive)"))
+    return 0
 
 
 def cmd_start_stop(a):
@@ -250,8 +355,15 @@ def build_parser():
     p.add_argument("--run-id", required=True)
     p.add_argument("--corpus", choices=["fresh", "carry"], default="fresh")
     p.add_argument("--from-run", help="source run id for --corpus carry")
-    p.add_argument("--seeds", help="seed dir to stage (e.g. artifacts/seeds)")
+    p.add_argument("--seeds", help="seed dir to pack in (e.g. artifacts/seeds)")
+    p.add_argument("--hours", type=float,
+                   help="campaign window; default loop.campaign_hours")
     p.set_defaults(fn=cmd_install_k)
+
+    p = sub.add_parser("check-deadline",
+                       help="stop the campaign if its window has elapsed")
+    p.add_argument("--run-id", required=True)
+    p.set_defaults(fn=cmd_check_deadline)
 
     p = sub.add_parser("install-u")
     p.add_argument("--run-id", required=True)
