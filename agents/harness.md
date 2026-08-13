@@ -46,6 +46,13 @@ reach them:
 4. Write artifacts/harnesses/run_all.sh that runs every harness with its
    seeds under the fuzzer for $FUZZ_HOURS (default 24) and copies crashes
    to /artifacts/harnesses/crashes/.
+   **Each harness must write its fuzzer output to
+   `/artifacts/runs/$RUN_ID/u/<harness-name>/`** (AFL++ `-o`, or the
+   libFuzzer corpus dir). That is where the coverage sampler looks: AFL++
+   `fuzzer_stats` there gives Track U its edge curve, and without it Track U
+   contributes nothing to the round's coverage verdict — the loop then decides
+   on Track K alone and can stop while these harnesses are still growing.
+   `$RUN_ID` is already in the container environment.
 5. Every harness file header states the threat model above.
 6. Build all harnesses in the container; run each 60s against seeds; confirm
    coverage output is produced.

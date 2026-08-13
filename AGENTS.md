@@ -57,6 +57,7 @@ fuzzer is running), and `cost.monthly_budget_usd`.
 | Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
 | Round history + loop budget | `python3 tools/pipeline_ctl.py round-show` |
 | Attach a run to this round | `python3 tools/pipeline_ctl.py round-add-run --run-id <id>` |
+| This round's input worklist | `python3 tools/pipeline_ctl.py worklist` |
 | Close a round | `python3 tools/pipeline_ctl.py round-end --from-run <run-id>` (measures the outcome) |
 | Continue or stop the loop | `python3 tools/pipeline_ctl.py round-decide` |
 | Open the next round | `python3 tools/pipeline_ctl.py round-advance` |
@@ -106,10 +107,13 @@ provision → build → ┌─ describe / seeds / harness → fuzz → triage
 ```
 
 Each round: fuzz a fresh or carried corpus, triage what it found, measure
-coverage, then `refine` works out what was *not* covered and writes
-`artifacts/eval/<run-id>/worklist.md`. The next round's `describe` and `seeds`
-agents are prompted with that worklist — that is the learning step. Coverage
-growth across rounds is the measure of whether it is working.
+coverage on both tracks, then `refine` works out what was *not* covered and
+writes `artifacts/eval/<run-id>/worklist.md`, recording it with
+`round-end --worklist <path>`. `round-advance` carries that path into the new
+round, where `describe` and `seeds` read it back with `pipeline_ctl.py
+worklist` — that is the learning step, and it travels through state rather
+than through a filename the prompts have to agree on. Coverage growth across
+rounds is the measure of whether it is working.
 
 Ask `python3 tools/pipeline_ctl.py next` what to do; it returns a phase, or
 `decide`, or `advance-round`, or `complete`. The loop transition is:

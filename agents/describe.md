@@ -36,8 +36,18 @@ the character-device `unlocked_ioctl` entry points) so that direction, size,
 and the handler's own validation agree with what you model.
 
 ## Rounds after the first
-From round 2 on you are given `artifacts/eval/<prev-run-id>/worklist.md` from
-the refine phase. Its describe section is your primary input: it lists the
+From round 2 on, get your input worklist from state — do not guess the
+previous run id or the path:
+
+```
+python3 tools/pipeline_ctl.py worklist
+```
+
+It prints the path the last round's refine recorded, or exits non-zero if
+there is none (round 1) or the file is missing. A non-zero exit in round 2+
+is a blocked gate, not a licence to re-run round 1's work from scratch.
+
+Its describe section is your primary input: it lists the
 ioctls that got no coverage and whether each is unmodeled (author one) or
 mismodeled (fix the existing description). Work that list first, and report
 per item whether coverage actually moved — an item that stays uncovered after

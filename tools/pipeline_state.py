@@ -53,6 +53,12 @@ DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  "ended": None, "run_ids": [], "coverage_verdict": "unknown",
                  "edges_start": None, "edges_end": None, "new_crashes": 0,
                  "run_hours": 0.0, "decision": None, "decision_reason": "",
+                 # worklist: what this round's refine produced.
+                 # worklist_in: what this round's describe/seeds must execute,
+                 # carried from the previous round. The learning handoff is
+                 # state, not a filename convention two prompts have to agree
+                 # on — otherwise the next agent has to guess the run id.
+                 "worklist": None, "worklist_in": None,
                  "notes": ""}
 
 
@@ -242,7 +248,7 @@ def next_action(state):
 
 
 def end_round(state, verdict=None, new_crashes=None, edges_start=None,
-              edges_end=None, run_hours=None, notes=None):
+              edges_end=None, run_hours=None, notes=None, worklist=None):
     """Record the measured outcome of the current round."""
     r = current_round(state)
     if verdict is not None:
@@ -253,7 +259,7 @@ def end_round(state, verdict=None, new_crashes=None, edges_start=None,
         r["coverage_verdict"] = verdict
     for key, val in (("new_crashes", new_crashes), ("edges_start", edges_start),
                      ("edges_end", edges_end), ("run_hours", run_hours),
-                     ("notes", notes)):
+                     ("notes", notes), ("worklist", worklist)):
         if val is not None:
             r[key] = val
     r["ended"] = _now()
@@ -305,8 +311,11 @@ def advance_round(state):
                          % r["decision"])
     for p in ROUND_PHASES:
         state["phases"][p] = dict(DEFAULT_PHASE)
+    # Carry the worklist forward: it is the only thing the new round inherits
+    # from the last one besides the corpus, and it is what makes the loop a
+    # learning loop rather than a repeat.
     state["rounds"].append(dict(DEFAULT_ROUND, round=r["round"] + 1,
-                                started=_now()))
+                                started=_now(), worklist_in=r.get("worklist")))
     return current_round(state)
 
 

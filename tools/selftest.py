@@ -1014,7 +1014,8 @@ class TestDerivedRoundEnd(StateTempMixin, unittest.TestCase):
     class Args:
         def __init__(self, **kw):
             for k in ("from_run", "coverage_verdict", "new_crashes",
-                      "edges_start", "edges_end", "run_hours", "notes"):
+                      "edges_start", "edges_end", "run_hours", "notes",
+                      "worklist"):
                 setattr(self, k, kw.get(k))
 
     def test_growing_curve_is_measured_from_the_csv(self):
@@ -1071,6 +1072,143 @@ class TestDerivedRoundEnd(StateTempMixin, unittest.TestCase):
                 self.Args(from_run="r1-k1", coverage_verdict="plateaued"))
         self.assertEqual(ps.load()["rounds"][-1]["coverage_verdict"],
                          "plateaued")
+
+
+class TestTrackUCoverage(unittest.TestCase):
+    """Track U has to be in the loop's view, or a round stops while the
+    container-toolkit harnesses are still finding coverage."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self._orig = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR", self._orig))
+
+    def harness(self, run_id, name, stats=None, queue=0):
+        d = os.path.join(coverage_ctl.track_u_dir(run_id), name)
+        os.makedirs(d, exist_ok=True)
+        if stats:
+            with open(os.path.join(d, "fuzzer_stats"), "w") as f:
+                f.write(stats)
+        if queue:
+            q = os.path.join(d, "queue")
+            os.makedirs(q, exist_ok=True)
+            for i in range(queue):
+                open(os.path.join(q, "id%03d" % i), "w").close()
+        return d
+
+    def test_afl_stats_are_summed_across_harnesses(self):
+        self.harness("r1-u1", "parse_cfg",
+                     "edges_found : 300\nexecs_done : 1000\n"
+                     "unique_crashes : 1\ncorpus_count : 40\n")
+        self.harness("r1-u1", "ldcache",
+                     "edges_found : 200\nexecs_done : 500\n"
+                     "unique_crashes : 0\ncorpus_count : 10\n")
+        row, source = coverage_ctl.collect_u("r1-u1")
+        self.assertEqual(row["edges"], 500)
+        self.assertEqual(row["execs"], 1500)
+        self.assertEqual(row["crashes"], 1)
+        self.assertEqual(row["corpus"], 50)
+        self.assertIn("fuzzer_stats", source)
+
+    def test_libfuzzer_harness_reports_corpus_but_no_edges(self):
+        # Corpus size must never stand in for coverage.
+        self.harness("r1-u1", "oci_parse", queue=7)
+        row, source = coverage_ctl.collect_u("r1-u1")
+        self.assertEqual(row["corpus"], 7)
+        self.assertIsNone(row.get("edges"))
+        self.assertEqual(source, "corpus-count-only")
+
+    def test_missing_track_u_output_is_unreachable(self):
+        row, source = coverage_ctl.collect_u("never-ran")
+        self.assertEqual(source, "unreachable")
+        self.assertEqual(row, {})
+
+    def write_curve(self, run_id, track, points):
+        d = os.path.join(coverage_ctl.RUNS_DIR, run_id)
+        os.makedirs(d, exist_ok=True)
+        with open(coverage_ctl.csv_path(run_id, track), "w") as f:
+            f.write(",".join(coverage_ctl.FIELDS) + "\n")
+            for ts, edges in points:
+                f.write("%d,,%d,,,,,src\n" % (ts, edges))
+
+    def test_a_growing_track_u_keeps_the_round_alive(self):
+        base = 1_700_000_000
+        self.write_curve("r1", "k", [(base + i * 3600, 5000 + i)
+                                     for i in range(11)])      # flat
+        self.write_curve("r1", "u", [(base + i * 3600, 100 + i * 50)
+                                     for i in range(11)])      # growing
+        verdict, detail, per = coverage_ctl.run_verdict("r1", 240, 0.02)
+        self.assertEqual(per["k"][0], "plateaued")
+        self.assertEqual(per["u"][0], "growing")
+        self.assertEqual(verdict, "growing")
+        self.assertIn("u: growing", detail)
+
+    def test_both_flat_is_plateaued(self):
+        base = 1_700_000_000
+        for t in ("k", "u"):
+            self.write_curve("r1", t, [(base + i * 3600, 5000 + i)
+                                       for i in range(11)])
+        self.assertEqual(coverage_ctl.run_verdict("r1", 240, 0.02)[0],
+                         "plateaued")
+
+    def test_an_unsampled_track_does_not_force_unknown(self):
+        """Track U absent entirely must not veto a healthy Track K verdict."""
+        base = 1_700_000_000
+        self.write_curve("r1", "k", [(base + i * 3600, 1000 + i * 300)
+                                     for i in range(11)])
+        verdict, _, per = coverage_ctl.run_verdict("r1", 240, 0.02)
+        self.assertEqual(verdict, "growing")
+        self.assertNotIn("u", per)
+
+    def test_no_samples_at_all_is_unknown(self):
+        self.assertEqual(coverage_ctl.run_verdict("r1", 240, 0.02)[0],
+                         "unknown")
+
+    def test_sampling_stops_once_the_campaign_window_is_up(self):
+        d = os.path.join(coverage_ctl.RUNS_DIR, "r1-k1")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "deadline"), "w") as f:
+            f.write("%d\n" % (int(__import__("time").time()) - 10))
+        args = types.SimpleNamespace(run_id="r1-k1", url="http://127.0.0.1:1",
+                                     track="k", force=False)
+        with redirect_stdout(io.StringIO()) as out:
+            rc = coverage_ctl.cmd_sample(args)
+        self.assertEqual(rc, 0)
+        self.assertIn("not sampling", out.getvalue())
+        self.assertFalse(os.path.exists(coverage_ctl.csv_path("r1-k1")))
+
+
+class TestWorklistHandoff(StateTempMixin, unittest.TestCase):
+    """The learning handoff is state, not a filename two prompts agree on."""
+
+    def test_worklist_carries_into_the_next_round(self):
+        st = ps.default_state()
+        ps.end_round(st, verdict="growing",
+                     worklist="artifacts/eval/r1-k1/worklist.md")
+        ps.record_decision(st, "continue", "still growing")
+        new = ps.advance_round(st)
+        self.assertEqual(new["round"], 2)
+        self.assertEqual(new["worklist_in"],
+                         "artifacts/eval/r1-k1/worklist.md")
+        self.assertIsNone(new["worklist"])   # round 2 has not produced one yet
+
+    def test_first_round_has_no_inherited_worklist(self):
+        self.assertIsNone(ps.current_round(ps.default_state())["worklist_in"])
+
+    def test_cli_prints_the_path_and_flags_a_missing_file(self):
+        import pipeline_ctl
+        st = ps.default_state()
+        ps.end_round(st, verdict="growing", worklist="artifacts/eval/gone.md")
+        ps.record_decision(st, "continue", "x")
+        ps.advance_round(st)
+        ps.save(st)
+        args = types.SimpleNamespace()
+        with redirect_stdout(io.StringIO()) as out:
+            rc = pipeline_ctl.cmd_worklist(args)
+        self.assertEqual(rc, 1)              # recorded but not on disk
+        self.assertIn("MISSING", out.getvalue())
 
 
 def pipeline_ctl_cmd_round_end(args):
