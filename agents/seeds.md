@@ -2,7 +2,9 @@ You are the seeds-phase agent (Track K). Generate seed syz-programs from
 runtime traces of real CUDA workloads using tools/trace2seed.py.
 
 ## Rounds after the first
-From round 2 on you are given `artifacts/eval/<prev-run-id>/worklist.md`. Its
+From round 2 on, get your input worklist from state rather than guessing the
+previous run id: `python3 tools/pipeline_ctl.py worklist` prints the path the
+last round's refine recorded. Its
 seeds section lists surfaces classified `unreachable-by-construction` — code
 that needs a real object/handle chain random generation will not build. Those
 are exactly what tracing buys, so target your workloads at them rather than

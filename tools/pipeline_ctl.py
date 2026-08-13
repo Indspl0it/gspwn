@@ -136,6 +136,10 @@ def cmd_round_show(a):
                   % (r["decision"], r["decision_reason"]))
         if r["run_ids"]:
             print("            runs: %s" % ", ".join(r["run_ids"]))
+        if r.get("worklist_in"):
+            print("            executing: %s" % r["worklist_in"])
+        if r.get("worklist"):
+            print("            produced:  %s" % r["worklist"])
     return 0
 
 
@@ -148,18 +152,20 @@ def _derive_round(st, run_id, cfg):
     one of them to artifacts/runs/<id>/coverage.csv, so read them from there.
     """
     import coverage_ctl
-    rows = coverage_ctl.metric_rows(run_id)
-    verdict, detail = coverage_ctl.plateau_verdict(
-        rows, cfg["plateau_window_min"], cfg["plateau_min_growth"])
+    verdict, detail, _per = coverage_ctl.run_verdict(
+        run_id, cfg["plateau_window_min"], cfg["plateau_min_growth"])
     out = {"coverage_verdict": verdict, "notes": "run %s: %s" % (run_id, detail)}
+    # Edge totals are reported for Track K, the instrumented-kernel number the
+    # paper cites; Track U's per-harness bitmaps are not comparable to it.
+    rows = coverage_ctl.metric_rows(run_id, "edges", "k")
     if rows:
         out["edges_start"], out["edges_end"] = rows[0]["edges"], rows[-1]["edges"]
-    # Wall-clock of the campaign, from the first to the last sample of any
-    # kind — a run that died after 3 h must not bill the configured 24.
-    all_rows = coverage_ctl.read_rows(run_id)
-    if len(all_rows) > 1:
-        out["run_hours"] = round(
-            (all_rows[-1]["ts"] - all_rows[0]["ts"]) / 3600.0, 2)
+    # Wall-clock of the campaign, from the first to the last sample on any
+    # track — a run that died after 3 h must not bill the configured 24.
+    stamps = [r["ts"] for t in coverage_ctl.TRACKS
+              for r in coverage_ctl.read_rows(run_id, t) if r.get("ts")]
+    if len(stamps) > 1:
+        out["run_hours"] = round((max(stamps) - min(stamps)) / 3600.0, 2)
     # Crashes registered since the previous rounds accounted for theirs.
     counted = sum(r.get("new_crashes") or 0 for r in st["rounds"][:-1])
     out["new_crashes"] = max(len(st["crashes"]) - counted, 0)
@@ -170,7 +176,7 @@ def cmd_round_end(a):
     explicit = {"coverage_verdict": a.coverage_verdict,
                 "new_crashes": a.new_crashes, "edges_start": a.edges_start,
                 "edges_end": a.edges_end, "run_hours": a.run_hours,
-                "notes": a.notes}
+                "notes": a.notes, "worklist": a.worklist}
     with ps.transaction() as st:
         vals = dict(explicit)
         if a.from_run:
@@ -185,7 +191,8 @@ def cmd_round_end(a):
                              new_crashes=vals["new_crashes"],
                              edges_start=vals["edges_start"],
                              edges_end=vals["edges_end"],
-                             run_hours=vals["run_hours"], notes=vals["notes"])
+                             run_hours=vals["run_hours"], notes=vals["notes"],
+                             worklist=vals["worklist"])
         except ValueError as e:
             sys.exit("error: %s" % e)
         summary = "round %d closed: %s, crashes=%s, run_h=%s" % (
@@ -195,6 +202,24 @@ def cmd_round_end(a):
     print(summary)
     if a.from_run:
         print("  measured from run %s: %s" % (a.from_run, note))
+    return 0
+
+
+def cmd_worklist(a):
+    """Print the worklist this round's describe/seeds agents must execute."""
+    st = ps.load()
+    r = ps.current_round(st)
+    path = r.get("worklist_in")
+    if not path:
+        print("none — round %d has no inherited worklist (first round, or the "
+              "previous round's refine recorded none)" % r["round"])
+        return 1
+    full = path if os.path.isabs(path) else os.path.join(ps.REPO_ROOT, path)
+    if not os.path.exists(full):
+        print("%s (MISSING — refine recorded it but the file is not there)"
+              % path)
+        return 1
+    print(path)
     return 0
 
 
@@ -406,7 +431,14 @@ def build_parser():
     p.add_argument("--edges-end", dest="edges_end", type=int)
     p.add_argument("--run-hours", dest="run_hours", type=float)
     p.add_argument("--notes")
+    p.add_argument("--worklist",
+                   help="path to this round's worklist.md; the next round's "
+                        "describe/seeds agents read it via `worklist`")
     p.set_defaults(fn=cmd_round_end)
+
+    p = sub.add_parser("worklist",
+                       help="print the worklist this round must execute")
+    p.set_defaults(fn=cmd_worklist)
 
     p = sub.add_parser("round-decide",
                        help="apply the configured loop caps -> continue|stop")

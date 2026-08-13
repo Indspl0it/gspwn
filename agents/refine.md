@@ -23,9 +23,13 @@ syzkaller cannot do for itself, which are modeling ioctls it has no
 description for, and supplying valid object-chain seeds it cannot invent.
 
 ## Do
-1. Read the curve: `python3 tools/coverage_ctl.py series --run-id <id>` and
-   `plateau --run-id <id>`. Record the verdict; you will hand it to the
-   orchestrator for the loop decision.
+1. Read the curve for both tracks: `python3 tools/coverage_ctl.py series
+   --run-id <id>` and `series --run-id <id> --track u`, then
+   `plateau --run-id <id>` for the combined verdict the loop acts on. A round
+   counts as still learning if either track is still finding edges, so check
+   which one is carrying the round before concluding anything about the
+   other. `round-end --from-run` records the same verdict, so you do not
+   transcribe it.
 2. Identify what did not get covered, and be specific. Useful sources:
    - enabled syscalls in the campaign config that show little or no execution
    - ioctl command numbers present in the driver's dispatch switches but
@@ -78,9 +82,14 @@ the tool measure it from the run's coverage.csv — do not transcribe the
 numbers by hand. `--run-hours` is the spend ceiling the loop enforces, and a
 typo in it is a typo in a budget:
 ```
-python3 tools/pipeline_ctl.py round-end --from-run <run-id>
+python3 tools/pipeline_ctl.py round-end --from-run <run-id> \
+  --worklist artifacts/eval/<run-id>/worklist.md
 python3 tools/pipeline_ctl.py set-phase refine done --notes "<gap count>"
 ```
+`--worklist` is how the next round finds your output: `round-advance` carries
+it into the new round, where describe and seeds read it back with
+`pipeline_ctl.py worklist`. Omit it and the next round starts blind, which
+turns the loop back into running the same campaign twice.
 Passing an explicit flag still overrides the measurement, so use one only when
 you can say why the recorded curve is wrong, and say so in the notes. If the
 run has no coverage samples the verdict is `unknown`, which stops the loop by
