@@ -1,6 +1,6 @@
 # gspwn
 
-Agentic fuzzing of the NVIDIA GPU kernel driver and NVIDIA Container Toolkit, orchestrated by Kimi Code agents.
+Agentic fuzzing of the NVIDIA GPU kernel driver and NVIDIA Container Toolkit, orchestrated by an AGENTS.md-aware coding agent.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3](https://img.shields.io/badge/python-3-blue.svg)](https://www.python.org/)
@@ -17,8 +17,10 @@ An agentic fuzzing workflow that goes after two attack surfaces:
 
 The workflow extends Interrupt Labs' internship research on
 [fuzzing the NVIDIA GPU drivers](https://www.interruptlabs.co.uk/articles/fuzzing-the-nvidia-gpu-drivers).
-Instead of a human driving each step, a Kimi Code session acts as the
-orchestrator and dispatches one subagent per pipeline phase.
+Instead of a human driving each step, a coding-agent session acts as the
+orchestrator and dispatches one subagent per pipeline phase. Any agent that
+reads `AGENTS.md` and can spawn subagents works; the contract is the repo, not
+a particular vendor.
 
 The goal is CVE-grade findings and a technical paper. Every reported claim is
 backed by a replayable PoC with a measured reproduction rate from a clean boot.
@@ -34,22 +36,26 @@ provision → build → describe / seeds / harness → fuzz → triage → rca �
 
 Architecture, in short:
 
-- Orchestrator: a Kimi Code session in the repo root. `AGENTS.md` is the
+- Orchestrator: a coding-agent session in the repo root. `AGENTS.md` is the
   contract that turns the session into the orchestrator; it walks
-  `state/pipeline.json` and advances only when each phase's gate holds.
+  `state/pipeline.json` (via `tools/pipeline_ctl.py`) and advances only when
+  each phase's gate holds.
 - Subagents: one per phase, prompted from `agents/<phase>.md`. Subagents are
   isolated, with no peer messaging, and hand off paths rather than transcripts.
 - Tools: subagents reason, but deterministic tools in `tools/` do the acting
   (builds, campaign control, crash parsing, repro verification).
 - Blackboard state: everything lives on disk in `state/pipeline.json` and
-  `artifacts/`. Nothing pipeline-relevant is held in conversation.
+  `artifacts/`. Nothing pipeline-relevant is held in conversation. All writes
+  go through `tools/pipeline_ctl.py`, which validates, locks against parallel
+  subagents, and writes atomically with fsync so a panic mid-write cannot
+  corrupt the pipeline.
 - Panic-proof fuzzing: the fuzzer runs as systemd units with auto-restart.
   The orchestrator runs on the same machine that panics, so a crash kills the
   session but not the campaign. Reboot, harvest the crash logs, resume.
 
 ```
                          ┌───────────────────────────┐
-                         │  Kimi Code session        │
+                         │  coding-agent session     │
                          │  (orchestrator, AGENTS.md)│
                          └────────────┬──────────────┘
                                       │ dispatches
@@ -70,6 +76,21 @@ Architecture, in short:
               (syz-manager Track K, Track U harness container)
 ```
 
+## Tests
+
+The deterministic tools have an offline self-test that needs no GPU, no kernel
+build, and no root:
+
+```
+python3 tools/selftest.py
+```
+
+It covers state durability and locking, crash dedup and flagging, the
+strace→syz-program conversion, and the `pipeline_ctl.py` CLI end to end. It
+deliberately does not cover anything that touches the SUT (kernel builds,
+systemd units, pstore/kdump harvest, real reproduction) — those are exercised
+by the phase gates on the target machine.
+
 ## Quickstart (EC2)
 
 Full runbook: [docs/cloud-setup.md](docs/cloud-setup.md). The short version:
@@ -78,7 +99,7 @@ Full runbook: [docs/cloud-setup.md](docs/cloud-setup.md). The short version:
    GSP-based, so open-gpu-kernel-modules is supported) from the official
    Debian 12 AMI.
 2. `git clone` this repo on the instance.
-3. Open a Kimi Code session in the repo root. `AGENTS.md` makes the session
+3. Open a coding-agent session in the repo root. `AGENTS.md` makes the session
    the orchestrator.
 4. Say "run the pipeline". The provision phase installs the baseline driver,
    crash capture, and build deps; the build phase swaps in the instrumented

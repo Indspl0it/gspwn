@@ -44,6 +44,12 @@ instrumented kernel fuzzing.
    consumes it from the manifest.
 6. Build syzkaller (`make` in its dir) so bin/syz-manager exists.
 
+## State
+Run `python3 tools/pipeline_ctl.py init` first — it creates
+state/pipeline.json, which every later phase reads. Then record progress with
+`python3 tools/pipeline_ctl.py set-phase provision in_progress|done|blocked
+ --notes "<one line>"`. Never edit pipeline.json by hand.
+
 ## Gate evidence to return
 manifest.json path, `crashlog_ctl.py verify` output, harvest output path.
 

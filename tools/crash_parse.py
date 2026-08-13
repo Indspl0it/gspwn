@@ -66,9 +66,8 @@ def scan_syz(state, workdir):
         report = os.path.join(cdir, "report")
         if not os.path.exists(desc):
             continue
-        title = norm_title(open(desc, errors="replace").read())
-        rtext = open(report, errors="replace").read() \
-            if os.path.exists(report) else ""
+        title = norm_title(read_text(desc))
+        rtext = read_text(report) if os.path.exists(report) else ""
         register(state, "K", title, stack_hash(rtext), cdir)
 
 
@@ -76,15 +75,20 @@ def scan_track_u(state, udir):
     for f in sorted(glob.glob(os.path.join(udir, "*"))):
         if not os.path.isfile(f):
             continue
-        text = open(f, errors="replace").read()
+        text = read_text(f)
         m = ASAN_RE.search(text)
         title = norm_title(m.group(1)) if m else \
             "libfuzzer-crash:" + os.path.basename(f)
         register(state, "U", title, stack_hash(text), f)
 
 
+def read_text(path):
+    with open(path, errors="replace") as f:
+        return f.read()
+
+
 def scan_dmesg(state, path):
-    text = open(path, errors="replace").read()
+    text = read_text(path)
     for m in NVRM_RE.finditer(text):
         register(state, "K", norm_title("NVRM " + m.group(1)),
                  hashlib.sha1(m.group(1).encode()).hexdigest()[:16], path)
@@ -102,15 +106,17 @@ def main():
                                          "crashes"))
     ap.add_argument("--dmesg", default=None)
     a = ap.parse_args()
-    state = ps.load()
-    if os.path.isdir(os.path.join(a.syz_workdir, "crashes")):
-        scan_syz(state, a.syz_workdir)
-    if os.path.isdir(a.track_u_dir):
-        scan_track_u(state, a.track_u_dir)
-    if a.dmesg and os.path.exists(a.dmesg):
-        scan_dmesg(state, a.dmesg)
-    ps.save(state)
-    print("registry now holds %d crashes" % len(state["crashes"]))
+    # One locked read-modify-write: triage may run while the fuzz monitor and
+    # other phase agents are also touching the registry.
+    with ps.transaction() as state:
+        if os.path.isdir(os.path.join(a.syz_workdir, "crashes")):
+            scan_syz(state, a.syz_workdir)
+        if os.path.isdir(a.track_u_dir):
+            scan_track_u(state, a.track_u_dir)
+        if a.dmesg and os.path.exists(a.dmesg):
+            scan_dmesg(state, a.dmesg)
+        total = len(state["crashes"])
+    print("registry now holds %d crashes" % total)
 
 
 if __name__ == "__main__":
