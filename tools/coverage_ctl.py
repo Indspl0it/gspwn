@@ -39,6 +39,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gspwn_config
 import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
@@ -279,13 +280,19 @@ def cmd_compare(a):
     return 0
 
 
+# The sampler is the run's heartbeat, so it also enforces the campaign
+# deadline: one timer that survives reboots covers both, and a campaign can
+# never outlive its configured window just because the agent session died.
+# `-` prefixes mean a failure in one step does not suppress the other.
 SERVICE_UNIT = """[Unit]
 Description=gspwn coverage sampler ({run_id})
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
+ExecStart=-/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
   --run-id {run_id} --url {url}
+ExecStart=-/usr/bin/python3 {root}/tools/campaign_ctl.py check-deadline \\
+  --run-id {run_id}
 """
 TIMER_UNIT = """[Unit]
 Description=gspwn coverage sampler
@@ -336,7 +343,15 @@ def build_parser():
     ap = argparse.ArgumentParser(prog="coverage_ctl.py",
                                  description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    default_url = "http://127.0.0.1:56744"
+    # Derived from track_k.http rather than repeated here: a sampler holding
+    # its own copy of the address kept polling the old port after the config
+    # changed and recorded the whole campaign as unreachable.
+    try:
+        conf = gspwn_config.load()
+    except gspwn_config.ConfigError as e:
+        sys.exit("error: %s" % e)
+    default_url = gspwn_config.manager_url()
+    loop_cfg = conf["loop"]
 
     p = sub.add_parser("sample")
     p.add_argument("--run-id", required=True)
@@ -346,7 +361,8 @@ def build_parser():
     p = sub.add_parser("install-timer")
     p.add_argument("--run-id", required=True)
     p.add_argument("--url", default=default_url)
-    p.add_argument("--interval-min", type=int, default=10)
+    p.add_argument("--interval-min", type=int,
+                   default=loop_cfg["coverage_sample_min"])
     p.set_defaults(fn=cmd_install_timer)
 
     p = sub.add_parser("remove-timer")
@@ -358,11 +374,14 @@ def build_parser():
 
     p = sub.add_parser("plateau")
     p.add_argument("--run-id", required=True)
-    p.add_argument("--window-min", type=int, default=240,
-                   help="trailing window to measure growth over (default 4h)")
-    p.add_argument("--min-growth", type=float, default=0.02,
+    p.add_argument("--window-min", type=int,
+                   default=loop_cfg["plateau_window_min"],
+                   help="trailing window to measure growth over "
+                        "(default loop.plateau_window_min)")
+    p.add_argument("--min-growth", type=float,
+                   default=loop_cfg["plateau_min_growth"],
                    help="fractional edge growth below which the run has "
-                        "plateaued (default 0.02 = 2%%)")
+                        "plateaued (default loop.plateau_min_growth)")
     p.set_defaults(fn=cmd_plateau)
 
     p = sub.add_parser("compare")

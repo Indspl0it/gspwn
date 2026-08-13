@@ -24,6 +24,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gspwn_config
 import pipeline_state as ps
 
 STATUS_MARK = {"done": "+", "in_progress": ">", "blocked": "!",
@@ -86,21 +87,16 @@ def cmd_show(a):
 
 
 def _loop_cfg():
-    """Loop caps from config/campaign.yaml, with conservative defaults."""
-    path = os.path.join(ps.REPO_ROOT, "config", "campaign.yaml")
-    loop = {}
+    """Loop caps from config/campaign.yaml (validated, defaults applied).
+
+    A bad cap stops the pipeline rather than falling back to a default: this
+    loop spends money unattended, so 'the config was wrong and we guessed' is
+    not an acceptable outcome.
+    """
     try:
-        import yaml
-        with open(path) as f:
-            loop = (yaml.safe_load(f) or {}).get("loop") or {}
-    except Exception as e:                       # missing file or no pyyaml
-        print("WARN: could not read loop config from %s (%s); using defaults"
-              % (path, e), file=sys.stderr)
-    return {
-        "max_rounds": int(loop.get("max_rounds", 3)),
-        "max_total_run_hours": loop.get("max_total_run_hours", 216),
-        "stop_on_plateau": bool(loop.get("stop_on_plateau", True)),
-    }
+        return gspwn_config.loop()
+    except gspwn_config.ConfigError as e:
+        sys.exit("error: %s" % e)
 
 
 def cmd_next(a):
@@ -143,19 +139,62 @@ def cmd_round_show(a):
     return 0
 
 
+def _derive_round(st, run_id, cfg):
+    """Measure this round's outcome from the recorded curve and the registry.
+
+    These four numbers decide whether the loop spends another campaign, and
+    run_hours is the spend ceiling itself. Typing them in by hand puts a
+    transcription step in front of a budget: the sampler already wrote every
+    one of them to artifacts/runs/<id>/coverage.csv, so read them from there.
+    """
+    import coverage_ctl
+    rows = coverage_ctl.metric_rows(run_id)
+    verdict, detail = coverage_ctl.plateau_verdict(
+        rows, cfg["plateau_window_min"], cfg["plateau_min_growth"])
+    out = {"coverage_verdict": verdict, "notes": "run %s: %s" % (run_id, detail)}
+    if rows:
+        out["edges_start"], out["edges_end"] = rows[0]["edges"], rows[-1]["edges"]
+    # Wall-clock of the campaign, from the first to the last sample of any
+    # kind — a run that died after 3 h must not bill the configured 24.
+    all_rows = coverage_ctl.read_rows(run_id)
+    if len(all_rows) > 1:
+        out["run_hours"] = round(
+            (all_rows[-1]["ts"] - all_rows[0]["ts"]) / 3600.0, 2)
+    # Crashes registered since the previous rounds accounted for theirs.
+    counted = sum(r.get("new_crashes") or 0 for r in st["rounds"][:-1])
+    out["new_crashes"] = max(len(st["crashes"]) - counted, 0)
+    return out
+
+
 def cmd_round_end(a):
+    explicit = {"coverage_verdict": a.coverage_verdict,
+                "new_crashes": a.new_crashes, "edges_start": a.edges_start,
+                "edges_end": a.edges_end, "run_hours": a.run_hours,
+                "notes": a.notes}
     with ps.transaction() as st:
+        vals = dict(explicit)
+        if a.from_run:
+            derived = _derive_round(st, a.from_run, _loop_cfg())
+            # An explicit flag still wins, so a measurement can be overridden
+            # when the operator knows better — but never silently.
+            for k, v in derived.items():
+                if vals.get(k) is None:
+                    vals[k] = v
         try:
-            r = ps.end_round(st, verdict=a.coverage_verdict,
-                             new_crashes=a.new_crashes,
-                             edges_start=a.edges_start, edges_end=a.edges_end,
-                             run_hours=a.run_hours, notes=a.notes)
+            r = ps.end_round(st, verdict=vals["coverage_verdict"],
+                             new_crashes=vals["new_crashes"],
+                             edges_start=vals["edges_start"],
+                             edges_end=vals["edges_end"],
+                             run_hours=vals["run_hours"], notes=vals["notes"])
         except ValueError as e:
             sys.exit("error: %s" % e)
         summary = "round %d closed: %s, crashes=%s, run_h=%s" % (
             r["round"], r["coverage_verdict"], r["new_crashes"],
             r["run_hours"])
+        note = r["notes"]
     print(summary)
+    if a.from_run:
+        print("  measured from run %s: %s" % (a.from_run, note))
     return 0
 
 
@@ -356,6 +395,9 @@ def build_parser():
     p.set_defaults(fn=cmd_round_add_run)
 
     p = sub.add_parser("round-end", help="record this round's measured outcome")
+    p.add_argument("--from-run", dest="from_run",
+                   help="measure verdict/edges/run-hours/crashes from this "
+                        "run's coverage.csv instead of passing them by hand")
     p.add_argument("--coverage-verdict", dest="coverage_verdict",
                    choices=sorted(ps.COVERAGE_VERDICT),
                    help="from: coverage_ctl.py plateau --run-id ID")

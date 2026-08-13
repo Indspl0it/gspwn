@@ -14,21 +14,36 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gspwn_config
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DIR = os.path.join(REPO_ROOT, "state")
 KEEP_ALIVE = os.path.join(STATE_DIR, "KEEP_ALIVE")
 IDLE_FILE = os.path.join(STATE_DIR, "idle_since")
+
+
+def _cost_cfg():
+    try:
+        return gspwn_config.cost()
+    except gspwn_config.ConfigError as e:
+        sys.exit("error: %s" % e)
+
+
+# The installed unit pins the value it was installed with (below), so an
+# already-running watchdog keeps its cap until reinstalled; a bare run falls
+# back to the configured one.
 try:
-    IDLE_MINUTES = int(os.environ.get("IDLE_MINUTES", "120"))
-except ValueError:
-    IDLE_MINUTES = 120
+    IDLE_MINUTES = int(os.environ["IDLE_MINUTES"])
+except (KeyError, ValueError):
+    IDLE_MINUTES = int(_cost_cfg()["idle_stop_minutes"])
 
 TIMER_UNIT = """[Unit]
 Description=gspwn idle auto-stop
 
 [Timer]
-OnBootSec=30min
-OnUnitActiveSec=30min
+OnBootSec={every}min
+OnUnitActiveSec={every}min
 
 [Install]
 WantedBy=timers.target
@@ -96,17 +111,18 @@ def cmd_check_idle():
 def cmd_install_watchdog():
     if os.geteuid() != 0:
         sys.exit("install-watchdog must run as root")
+    every = int(_cost_cfg()["idle_check_minutes"])
     with open("/etc/systemd/system/gspwn-idlestop.service", "w") as f:
         f.write(SERVICE_UNIT.format(root=REPO_ROOT, idle=IDLE_MINUTES))
     with open("/etc/systemd/system/gspwn-idlestop.timer", "w") as f:
-        f.write(TIMER_UNIT)
+        f.write(TIMER_UNIT.format(every=every))
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now",
                     "gspwn-idlestop.timer"], check=True)
-    print("idle watchdog installed (every 30 min, threshold %d min baked "
-          "into the unit)" % IDLE_MINUTES)
-    print("to change the threshold later: systemctl edit "
-          "gspwn-idlestop.service")
+    print("idle watchdog installed (checks every %d min, threshold %d min "
+          "baked into the unit)" % (every, IDLE_MINUTES))
+    print("to change either, edit config/campaign.yaml (cost:) and re-run "
+          "install-watchdog")
 
 
 def main():

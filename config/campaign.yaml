@@ -1,3 +1,9 @@
+# Every tunable in the pipeline. Key these in once; the loop then runs
+# unattended until a cap trips. Check what actually took effect with:
+#   python3 tools/gspwn_config.py
+# Unknown keys are rejected, so a typo in a cap fails loudly instead of
+# silently reverting to a default.
+
 track_k:
   enabled_syscalls:
     - "openat$nvidia*"
@@ -8,21 +14,25 @@ track_k:
   sandbox: "namespace"
   procs: 2                 # capped to protect 32GB RAM budget
   memory_max: "12G"        # systemd cgroup MemoryMax for syz-manager
-  http: "127.0.0.1:56744"
+  http: "127.0.0.1:56744"  # syz-manager stats; the coverage sampler reads this
   smoke_window_minutes: 30 # coverage must increase within this window
+
 track_u:
   docker_image: "aflplusplus/aflplusplus:latest"
   memory_max: "8G"
   targets: []              # filled by harness phase: names of harness binaries
+
 eval:
-  runs_per_config: 3
-  run_hours: 24
+  runs_per_config: 3       # independent runs per configuration (variance)
+  run_hours: 24            # length of each eval/ablation run
+
 loop:
   # Caps on the autonomous improvement loop. These are the spend ceiling: the
   # loop runs unattended until one of them trips, so set them before starting a
   # campaign, not after. AWS Budgets alerts remain the backstop for real money.
   max_rounds: 3              # hard cap on rounds, whatever coverage does
   max_total_run_hours: 216   # 3 rounds x 3 runs x 24h; counts every campaign
+  campaign_hours: 24         # each campaign self-stops after this long
   stop_on_plateau: true      # stop early when coverage growth flattens
   # Plateau test, applied to the trailing window of the coverage curve.
   plateau_window_min: 240    # measure growth over the last 4h
@@ -30,3 +40,10 @@ loop:
   coverage_sample_min: 10    # sampler interval (systemd timer)
   corpus_policy: carry       # fresh | carry — carry builds each round on the last
   promote_seeds: true        # add coverage-advancing programs to the seed bank
+
+cost:
+  # EC2 guardrails. The idle watchdog is what stops a forgotten instance.
+  idle_stop_minutes: 120     # stop the box after this long with no fuzzer
+  idle_check_minutes: 30     # how often the watchdog checks
+  monthly_budget_usd: 0      # 0 = unset; record your ceiling here
+  budget_alerts_usd: [50, 150]
