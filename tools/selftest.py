@@ -23,6 +23,8 @@ from contextlib import redirect_stdout
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import corpus_ctl
+import coverage_ctl
 import crash_parse
 import repro_ctl
 import pipeline_state as ps
@@ -355,6 +357,225 @@ class TestReproVerifyBookkeeping(StateTempMixin, unittest.TestCase):
         c = ps.load()["crashes"][self.cid]
         self.assertEqual(c["repro_progress"]["hits"], 0)
         self.assertEqual(c["status"], "unreproducible")
+
+
+class TestRoundModel(StateTempMixin, unittest.TestCase):
+    def finish_round_phases(self, st):
+        for p in ps.SETUP_PHASES + ps.ROUND_PHASES:
+            ps.update_phase(st, p, "done")
+
+    def test_new_state_starts_in_round_one(self):
+        st = ps.default_state()
+        self.assertEqual(ps.round_number(st), 1)
+        self.assertEqual(ps.next_action(st), ("phase", "provision"))
+
+    def test_v1_state_migrates_to_round_one(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
+            json.dump({"version": 1, "phases": {}, "crashes": {}}, f)
+        st = ps.load()
+        self.assertEqual(st["version"], ps.SCHEMA_VERSION)
+        self.assertEqual(ps.round_number(st), 1)
+        self.assertEqual(ps.validate(st), [])
+
+    def test_round_phases_precede_the_decision(self):
+        st = ps.default_state()
+        self.finish_round_phases(st)
+        self.assertEqual(ps.next_action(st), ("decide", None))
+
+    def test_continue_then_advance_resets_round_phases(self):
+        st = ps.default_state()
+        self.finish_round_phases(st)
+        ps.end_round(st, verdict="growing", run_hours=24)
+        ps.record_decision(st, "continue", "still growing")
+        self.assertEqual(ps.next_action(st), ("advance-round", None))
+        ps.advance_round(st)
+        self.assertEqual(ps.round_number(st), 2)
+        # setup stays done, round phases reset, crash registry untouched
+        self.assertEqual(st["phases"]["provision"]["status"], "done")
+        self.assertEqual(st["phases"]["describe"]["status"], "pending")
+        self.assertEqual(ps.next_action(st), ("phase", "describe"))
+
+    def test_stop_routes_to_report(self):
+        st = ps.default_state()
+        self.finish_round_phases(st)
+        ps.end_round(st, verdict="plateaued")
+        ps.record_decision(st, "stop", "plateaued")
+        self.assertEqual(ps.next_action(st), ("phase", "report"))
+        ps.update_phase(st, "report", "done")
+        self.assertEqual(ps.next_action(st), ("done", None))
+
+    def test_cannot_advance_without_a_continue_decision(self):
+        st = ps.default_state()
+        self.finish_round_phases(st)
+        with self.assertRaises(ValueError):
+            ps.advance_round(st)
+        ps.record_decision(st, "stop", "done here")
+        with self.assertRaises(ValueError):
+            ps.advance_round(st)
+
+    def test_end_round_rejects_bad_verdict(self):
+        st = ps.default_state()
+        with self.assertRaises(ValueError):
+            ps.end_round(st, verdict="probably-fine")
+
+    def test_run_hours_accumulate_across_rounds(self):
+        st = ps.default_state()
+        self.finish_round_phases(st)
+        ps.end_round(st, verdict="growing", run_hours=72)
+        ps.record_decision(st, "continue", "growing")
+        ps.advance_round(st)
+        self.finish_round_phases(st)
+        ps.end_round(st, verdict="growing", run_hours=72)
+        self.assertEqual(ps.total_run_hours(st), 144)
+
+
+class TestLoopDecision(StateTempMixin, unittest.TestCase):
+    def state_at(self, rnd, verdict="growing", hours=0.0):
+        st = ps.default_state()
+        for _ in range(rnd - 1):
+            ps.current_round(st)["decision"] = "continue"
+            st["rounds"].append(dict(ps.DEFAULT_ROUND,
+                                     round=len(st["rounds"]) + 1))
+        r = ps.current_round(st)
+        r["coverage_verdict"] = verdict
+        r["run_hours"] = hours
+        return st
+
+    def test_continues_while_growing_under_caps(self):
+        d, why = ps.loop_decision(self.state_at(1), max_rounds=3)
+        self.assertEqual(d, "continue", why)
+
+    def test_round_cap_stops(self):
+        d, why = ps.loop_decision(self.state_at(3), max_rounds=3)
+        self.assertEqual(d, "stop")
+        self.assertIn("round cap", why)
+
+    def test_plateau_stops(self):
+        d, why = ps.loop_decision(self.state_at(1, verdict="plateaued"),
+                                  max_rounds=5)
+        self.assertEqual(d, "stop")
+        self.assertIn("plateau", why)
+
+    def test_unknown_verdict_stops_rather_than_spending_blind(self):
+        d, why = ps.loop_decision(self.state_at(1, verdict="unknown"),
+                                  max_rounds=5)
+        self.assertEqual(d, "stop")
+        self.assertIn("no coverage verdict", why)
+
+    def test_budget_beats_growing_coverage(self):
+        st = self.state_at(1, verdict="growing", hours=300)
+        d, why = ps.loop_decision(st, max_rounds=9, max_total_run_hours=216)
+        self.assertEqual(d, "stop")
+        self.assertIn("budget", why)
+
+    def test_plateau_can_be_disabled(self):
+        d, _ = ps.loop_decision(self.state_at(1, verdict="plateaued"),
+                                max_rounds=5, stop_on_plateau=False)
+        self.assertEqual(d, "continue")
+
+
+class TestCoverage(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self._orig = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = self.tmp.name
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR", self._orig))
+
+    def write_csv(self, run_id, points):
+        """points: [(ts_offset_min, edges)]"""
+        d = os.path.join(self.tmp.name, run_id)
+        os.makedirs(d, exist_ok=True)
+        base = 1_700_000_000
+        with open(os.path.join(d, "coverage.csv"), "w") as f:
+            f.write(",".join(coverage_ctl.FIELDS) + "\n")
+            for off, edges in points:
+                f.write("%d,,%d,,,,test\n" % (base + off * 60, edges))
+
+    def verdict(self, points, window=240, growth=0.02):
+        self.write_csv("r1", points)
+        return coverage_ctl.plateau_verdict(
+            coverage_ctl.metric_rows("r1"), window, growth)[0]
+
+    def test_growing_curve(self):
+        pts = [(i * 60, 1000 + i * 200) for i in range(8)]
+        self.assertEqual(self.verdict(pts), "growing")
+
+    def test_flat_curve_is_plateaued(self):
+        pts = [(i * 60, 5000 + i) for i in range(8)]
+        self.assertEqual(self.verdict(pts), "plateaued")
+
+    def test_too_few_samples_is_unknown(self):
+        self.assertEqual(self.verdict([(0, 100), (60, 200)]), "unknown")
+
+    def test_short_span_is_unknown_not_plateaued(self):
+        """A run that just started must never read as plateaued."""
+        pts = [(0, 100), (10, 101), (20, 102)]
+        self.assertEqual(self.verdict(pts, window=240), "unknown")
+
+    def test_early_growth_then_flat_tail_is_plateaued(self):
+        # Big early gains must not mask a flat trailing window.
+        pts = [(0, 100), (60, 5000), (120, 9000)] + \
+              [(180 + i * 60, 9000 + i) for i in range(5)]
+        self.assertEqual(self.verdict(pts, window=240), "plateaued")
+
+    def test_missing_edges_column_is_unknown(self):
+        d = os.path.join(self.tmp.name, "r2")
+        os.makedirs(d)
+        with open(os.path.join(d, "coverage.csv"), "w") as f:
+            f.write(",".join(coverage_ctl.FIELDS) + "\n")
+            for i in range(6):
+                f.write("%d,,,,,,unreachable\n" % (1_700_000_000 + i * 3600))
+        rows = coverage_ctl.metric_rows("r2")
+        self.assertEqual(coverage_ctl.plateau_verdict(rows, 240, 0.02)[0],
+                         "unknown")
+
+    def test_parses_nested_json_stats(self):
+        data = {"stats": [{"name": "corpus", "value": 421},
+                          {"name": "coverage", "value": "12,345"}]}
+        self.assertEqual(coverage_ctl._dig(data, {"corpus"}), 421)
+        self.assertEqual(coverage_ctl._dig(data, {"coverage"}), 12345)
+
+    def test_scrapes_dashboard_html(self):
+        html = "<tr><td>corpus</td><td>1,234</td></tr><b>coverage</b>: 5678"
+        got = coverage_ctl.parse_html(html)
+        self.assertEqual(got["corpus"], 1234)
+        self.assertEqual(got["edges"], 5678)
+
+
+class TestCorpusPromotion(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.seeds = os.path.join(self.tmp.name, "seeds")
+        os.makedirs(self.seeds)
+
+    def test_hash_ignores_comments_and_whitespace(self):
+        a = "openat$nvidiactl(0x0)\nioctl$NV(r0)\n"
+        b = "  openat$nvidiactl(0x0)  \n# a comment\nioctl$NV(r0)\n\n"
+        self.assertEqual(corpus_ctl.prog_hash(a), corpus_ctl.prog_hash(b))
+
+    def test_hash_distinguishes_real_differences(self):
+        self.assertNotEqual(corpus_ctl.prog_hash("ioctl$A(r0)"),
+                            corpus_ctl.prog_hash("ioctl$B(r0)"))
+
+    def test_existing_hashes_picks_up_untracked_files(self):
+        with open(os.path.join(self.seeds, "seed-0001.syz"), "w") as f:
+            f.write("ioctl$NV_ESC_RM_ALLOC(r0)\n")
+        known = corpus_ctl.existing_hashes(self.seeds, {"hashes": {}})
+        self.assertEqual(len(known), 1)
+        self.assertEqual(list(known.values())[0]["source"], "pre-existing")
+
+    def test_ledger_roundtrip_and_corruption_recovery(self):
+        corpus_ctl.save_ledger(self.seeds, {"hashes": {"h1": {"file": "a"}}})
+        self.assertEqual(corpus_ctl.load_ledger(self.seeds)["hashes"]["h1"]
+                         ["file"], "a")
+        with open(os.path.join(self.seeds, corpus_ctl.LEDGER), "w") as f:
+            f.write("{corrupt")
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(corpus_ctl.load_ledger(self.seeds),
+                             {"hashes": {}})
 
 
 class TestPipelineCtlCLI(unittest.TestCase):

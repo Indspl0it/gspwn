@@ -28,11 +28,34 @@ Nothing makes it into the report on an agent's say-so.
 
 ## How it works
 
-The pipeline runs as a resumable state machine:
+The pipeline runs as a resumable state machine, and it is a loop rather than a
+line. `provision` and `build` run once for the machine; the round phases run
+once per improvement round; `report` runs once, after the loop stops.
 
 ```
-provision → build → describe / seeds / harness → fuzz → triage → rca → poc → eval → report + disclosure
+provision → build → ┌─ describe / seeds / harness → fuzz → triage
+                    │        ↑                              ↓
+                    │        └── refine ← eval ← poc ← rca ──┘
+                    │              │
+                    └── continue ──┘   (stop) → report + disclosure
 ```
+
+Each round fuzzes, triages what it found, and measures the coverage curve.
+`refine` then works out what was *not* covered and why — unmodeled ioctl,
+mismodeled description, or a surface unreachable without a real object chain —
+and writes a worklist that the next round's `describe` and `seeds` agents are
+prompted with. Coverage-advancing programs are promoted from the run's corpus
+into a persistent seed bank, so each round starts ahead of the last.
+
+syzkaller already runs the inner coverage-guided loop (mutate, measure via
+KCOV, keep what finds new edges). This is the outer loop around it: the parts
+syzkaller cannot do for itself, which are modeling ioctls it has no
+description for and supplying valid object-chain seeds it cannot invent.
+
+The loop is autonomous within caps set in `config/campaign.yaml` before a
+campaign starts — `max_rounds`, `max_total_run_hours`, and stop-on-plateau.
+A missing or broken coverage sampler yields an `unknown` verdict, which stops
+the loop rather than authorising another blind campaign.
 
 Architecture, in short:
 
@@ -43,7 +66,12 @@ Architecture, in short:
 - Subagents: one per phase, prompted from `agents/<phase>.md`. Subagents are
   isolated, with no peer messaging, and hand off paths rather than transcripts.
 - Tools: subagents reason, but deterministic tools in `tools/` do the acting
-  (builds, campaign control, crash parsing, repro verification).
+  (builds, campaign control, crash parsing, repro verification, coverage
+  sampling, corpus promotion, loop control).
+- Run isolation: every campaign gets its own `--run-id`, workdir and corpus
+  under `artifacts/runs/<id>/`, with an explicit `fresh` or `carry` corpus
+  policy. Runs sharing a workdir share an evolved corpus, which would make the
+  eval's independent-runs protocol invalid and contaminate every ablation arm.
 - Blackboard state: everything lives on disk in `state/pipeline.json` and
   `artifacts/`. Nothing pipeline-relevant is held in conversation. All writes
   go through `tools/pipeline_ctl.py`, which validates, locks against parallel
@@ -85,8 +113,9 @@ build, and no root:
 python3 tools/selftest.py
 ```
 
-It covers state durability and locking, crash dedup and flagging, the
-strace→syz-program conversion, and the `pipeline_ctl.py` CLI end to end. It
+It covers state durability and locking, the round/loop state machine and its
+stop conditions, plateau detection, crash dedup and flagging, the
+strace→syz-program conversion, corpus promotion, and the CLI end to end. It
 deliberately does not cover anything that touches the SUT (kernel builds,
 systemd units, pstore/kdump harvest, real reproduction) — those are exercised
 by the phase gates on the target machine.

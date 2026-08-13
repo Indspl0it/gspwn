@@ -49,7 +49,11 @@ def cmd_show(a):
         json.dump(st, sys.stdout, indent=2, sort_keys=True)
         print()
         return 0
+    cfg = _loop_cfg()
     print("pipeline: %s" % ps.STATE_PATH)
+    print("round %d of max %d (%.1f run-hours of %s used)"
+          % (ps.round_number(st), cfg["max_rounds"], ps.total_run_hours(st),
+             cfg["max_total_run_hours"]))
     for p in ps.PHASES:
         ph = st["phases"][p]
         line = "  %s %-10s %-12s" % (STATUS_MARK.get(ph["status"], "?"), p,
@@ -59,8 +63,11 @@ def cmd_show(a):
         if ph["notes"]:
             line += "  %s" % ph["notes"]
         print(line)
-    nxt = ps.next_phase(st)
-    print("next phase: %s" % (nxt or "complete — all phases done"))
+    kind, val = ps.next_action(st)
+    print("next: %s" % {"phase": lambda: "run phase %s" % val,
+                        "decide": lambda: "round-decide (round phases done)",
+                        "advance-round": lambda: "round-advance",
+                        "done": lambda: "complete — all phases done"}[kind]())
     crashes = st["crashes"]
     if crashes:
         by_status = {}
@@ -78,9 +85,120 @@ def cmd_show(a):
     return 0
 
 
+def _loop_cfg():
+    """Loop caps from config/campaign.yaml, with conservative defaults."""
+    path = os.path.join(ps.REPO_ROOT, "config", "campaign.yaml")
+    loop = {}
+    try:
+        import yaml
+        with open(path) as f:
+            loop = (yaml.safe_load(f) or {}).get("loop") or {}
+    except Exception as e:                       # missing file or no pyyaml
+        print("WARN: could not read loop config from %s (%s); using defaults"
+              % (path, e), file=sys.stderr)
+    return {
+        "max_rounds": int(loop.get("max_rounds", 3)),
+        "max_total_run_hours": loop.get("max_total_run_hours", 216),
+        "stop_on_plateau": bool(loop.get("stop_on_plateau", True)),
+    }
+
+
 def cmd_next(a):
-    nxt = ps.next_phase(ps.load())
-    print(nxt or "complete")
+    st = ps.load()
+    kind, val = ps.next_action(st)
+    if kind == "phase":
+        print(val)
+    elif kind == "decide":
+        print("decide  (round %d phases are done — run: pipeline_ctl.py "
+              "round-decide)" % ps.round_number(st))
+    elif kind == "advance-round":
+        print("advance-round  (run: pipeline_ctl.py round-advance)")
+    else:
+        print("complete")
+    return 0
+
+
+def cmd_round_show(a):
+    st = ps.load()
+    cfg = _loop_cfg()
+    if a.json:
+        json.dump(st["rounds"], sys.stdout, indent=2, sort_keys=True)
+        print()
+        return 0
+    print("rounds: %d of max %d   run-hours: %.1f of %s"
+          % (ps.round_number(st), cfg["max_rounds"], ps.total_run_hours(st),
+             cfg["max_total_run_hours"]))
+    for r in st["rounds"]:
+        edges = ""
+        if r["edges_start"] is not None and r["edges_end"] is not None:
+            edges = "  edges %s->%s" % (r["edges_start"], r["edges_end"])
+        print("  round %-3d %-10s %-10s crashes=%-4s run_h=%-6.1f%s"
+              % (r["round"], r["status"], r["coverage_verdict"],
+                 r["new_crashes"], r["run_hours"] or 0.0, edges))
+        if r["decision"]:
+            print("            decision: %s — %s"
+                  % (r["decision"], r["decision_reason"]))
+        if r["run_ids"]:
+            print("            runs: %s" % ", ".join(r["run_ids"]))
+    return 0
+
+
+def cmd_round_end(a):
+    with ps.transaction() as st:
+        try:
+            r = ps.end_round(st, verdict=a.coverage_verdict,
+                             new_crashes=a.new_crashes,
+                             edges_start=a.edges_start, edges_end=a.edges_end,
+                             run_hours=a.run_hours, notes=a.notes)
+        except ValueError as e:
+            sys.exit("error: %s" % e)
+        summary = "round %d closed: %s, crashes=%s, run_h=%s" % (
+            r["round"], r["coverage_verdict"], r["new_crashes"],
+            r["run_hours"])
+    print(summary)
+    return 0
+
+
+def cmd_round_add_run(a):
+    with ps.transaction() as st:
+        r = ps.current_round(st)
+        if a.run_id not in r["run_ids"]:
+            r["run_ids"].append(a.run_id)
+        rnd, n = r["round"], len(r["run_ids"])
+    print("round %d now has %d run(s); added %s" % (rnd, n, a.run_id))
+    return 0
+
+
+def cmd_round_decide(a):
+    cfg = _loop_cfg()
+    with ps.transaction() as st:
+        if a.decision:
+            decision, reason = a.decision, (a.reason or "set explicitly")
+        else:
+            decision, reason = ps.loop_decision(
+                st, max_rounds=cfg["max_rounds"],
+                max_total_run_hours=cfg["max_total_run_hours"],
+                stop_on_plateau=cfg["stop_on_plateau"])
+        try:
+            ps.record_decision(st, decision, reason)
+        except ValueError as e:
+            sys.exit("error: %s" % e)
+        rnd = ps.round_number(st)
+    print("round %d: %s — %s" % (rnd, decision, reason))
+    print("next: %s" % ("pipeline_ctl.py round-advance"
+                        if decision == "continue" else "run the report phase"))
+    return 0
+
+
+def cmd_round_advance(a):
+    with ps.transaction() as st:
+        try:
+            r = ps.advance_round(st)
+        except ValueError as e:
+            sys.exit("error: %s" % e)
+        n = r["round"]
+    print("opened round %d; round phases reset to pending (setup and crash "
+          "registry kept)" % n)
     return 0
 
 
@@ -222,6 +340,35 @@ def build_parser():
     p.add_argument("--track", required=True, choices=["k", "u"])
     p.add_argument("--note", required=True)
     p.set_defaults(fn=cmd_campaign_add)
+
+    p = sub.add_parser("round-show", help="round history and loop budget")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_round_show)
+
+    p = sub.add_parser("round-add-run", help="attach a run id to this round")
+    p.add_argument("--run-id", required=True, dest="run_id")
+    p.set_defaults(fn=cmd_round_add_run)
+
+    p = sub.add_parser("round-end", help="record this round's measured outcome")
+    p.add_argument("--coverage-verdict", dest="coverage_verdict",
+                   choices=sorted(ps.COVERAGE_VERDICT),
+                   help="from: coverage_ctl.py plateau --run-id ID")
+    p.add_argument("--new-crashes", dest="new_crashes", type=int)
+    p.add_argument("--edges-start", dest="edges_start", type=int)
+    p.add_argument("--edges-end", dest="edges_end", type=int)
+    p.add_argument("--run-hours", dest="run_hours", type=float)
+    p.add_argument("--notes")
+    p.set_defaults(fn=cmd_round_end)
+
+    p = sub.add_parser("round-decide",
+                       help="apply the configured loop caps -> continue|stop")
+    p.add_argument("--decision", choices=sorted(ps.ROUND_DECISION),
+                   help="override the computed decision (states the reason)")
+    p.add_argument("--reason", default="")
+    p.set_defaults(fn=cmd_round_decide)
+
+    p = sub.add_parser("round-advance", help="open the next round")
+    p.set_defaults(fn=cmd_round_advance)
 
     p = sub.add_parser("validate", help="check state integrity")
     p.set_defaults(fn=cmd_validate)

@@ -17,3 +17,16 @@ track_u:
 eval:
   runs_per_config: 3
   run_hours: 24
+loop:
+  # Caps on the autonomous improvement loop. These are the spend ceiling: the
+  # loop runs unattended until one of them trips, so set them before starting a
+  # campaign, not after. AWS Budgets alerts remain the backstop for real money.
+  max_rounds: 3              # hard cap on rounds, whatever coverage does
+  max_total_run_hours: 216   # 3 rounds x 3 runs x 24h; counts every campaign
+  stop_on_plateau: true      # stop early when coverage growth flattens
+  # Plateau test, applied to the trailing window of the coverage curve.
+  plateau_window_min: 240    # measure growth over the last 4h
+  plateau_min_growth: 0.02   # < 2% new edges in that window = plateaued
+  coverage_sample_min: 10    # sampler interval (systemd timer)
+  corpus_policy: carry       # fresh | carry — carry builds each round on the last
+  promote_seeds: true        # add coverage-advancing programs to the seed bank
