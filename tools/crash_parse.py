@@ -97,10 +97,26 @@ def scan_dmesg(state, path):
                  hashlib.sha1(m.group(1).encode()).hexdigest()[:16], path)
 
 
+def resolve_workdir(a, state):
+    """Per-run workdir: explicit path, else --run-id, else this round's last run."""
+    if a.syz_workdir:
+        return a.syz_workdir
+    rid = a.run_id
+    if not rid:
+        run_ids = ps.current_round(state)["run_ids"]
+        rid = run_ids[-1] if run_ids else None
+    if not rid:
+        return None
+    return os.path.join(REPO_ROOT, "artifacts", "runs", rid, "workdir")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--syz-workdir",
-                    default=os.path.join(REPO_ROOT, "artifacts", "syz-workdir"))
+    ap.add_argument("--run-id", dest="run_id",
+                    help="scan artifacts/runs/<id>/workdir (default: the last "
+                         "run registered in the current round)")
+    ap.add_argument("--syz-workdir", default=None,
+                    help="explicit workdir path, overriding --run-id")
     ap.add_argument("--track-u-dir",
                     default=os.path.join(REPO_ROOT, "artifacts", "harnesses",
                                          "crashes"))
@@ -109,10 +125,21 @@ def main():
     # One locked read-modify-write: triage may run while the fuzz monitor and
     # other phase agents are also touching the registry.
     with ps.transaction() as state:
-        if os.path.isdir(os.path.join(a.syz_workdir, "crashes")):
-            scan_syz(state, a.syz_workdir)
+        wd = resolve_workdir(a, state)
+        if wd is None:
+            print("WARN: no run id given and none registered in this round — "
+                  "skipping the syzkaller workdir. Pass --run-id, or register "
+                  "the run with pipeline_ctl.py round-add-run.")
+        elif not os.path.isdir(os.path.join(wd, "crashes")):
+            print("WARN: no crashes dir under %s — nothing scanned for Track "
+                  "K. Check the run id." % wd)
+        else:
+            scan_syz(state, wd)
         if os.path.isdir(a.track_u_dir):
             scan_track_u(state, a.track_u_dir)
+        elif not a.dmesg:
+            print("WARN: %s missing — nothing scanned for Track U."
+                  % a.track_u_dir)
         if a.dmesg and os.path.exists(a.dmesg):
             scan_dmesg(state, a.dmesg)
         total = len(state["crashes"])

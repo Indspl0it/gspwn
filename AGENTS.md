@@ -34,6 +34,11 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
 | Fix a triage decision | `python3 tools/pipeline_ctl.py crash-set <id> --duplicate-of <id>` |
 | Record disclosure status | `python3 tools/pipeline_ctl.py crash-set <id> --disclosure submitted` |
 | Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
+| Round history + loop budget | `python3 tools/pipeline_ctl.py round-show` |
+| Attach a run to this round | `python3 tools/pipeline_ctl.py round-add-run --run-id <id>` |
+| Close a round | `python3 tools/pipeline_ctl.py round-end --coverage-verdict ... --run-hours ...` |
+| Continue or stop the loop | `python3 tools/pipeline_ctl.py round-decide` |
+| Open the next round | `python3 tools/pipeline_ctl.py round-advance` |
 
 Phase statuses: `pending`, `in_progress`, `done`, `blocked`, `failed`. Mark a
 phase `in_progress` when you dispatch it and `done` only once you have seen
@@ -62,7 +67,53 @@ do not skip ahead to a later phase to keep making progress.
 | rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC |
 | poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json |
 | eval | agents/eval.md | `artifacts/eval/` contains metrics for all configured runs/ablations |
+| refine | agents/refine.md | gaps.md + worklist.md written; round outcome recorded via `round-end` |
 | report | agents/report.md | report + PSIRT packages exist; disclosure status recorded |
+
+## The improvement loop
+
+The pipeline is a loop, not a line. `provision` and `build` run once for the
+machine; `describe` through `refine` run once per **round**; `report` runs
+once, after the loop stops.
+
+```
+provision → build → ┌─ describe / seeds / harness → fuzz → triage
+                    │        ↑                              ↓
+                    │        └── refine ← eval ← poc ← rca ──┘
+                    │              │
+                    └── continue ──┘   (stop) → report
+```
+
+Each round: fuzz a fresh or carried corpus, triage what it found, measure
+coverage, then `refine` works out what was *not* covered and writes
+`artifacts/eval/<run-id>/worklist.md`. The next round's `describe` and `seeds`
+agents are prompted with that worklist — that is the learning step. Coverage
+growth across rounds is the measure of whether it is working.
+
+Ask `python3 tools/pipeline_ctl.py next` what to do; it returns a phase, or
+`decide`, or `advance-round`, or `complete`. The loop transition is:
+
+```
+python3 tools/pipeline_ctl.py round-decide     # applies the caps -> continue|stop
+python3 tools/pipeline_ctl.py round-advance    # only if the decision was continue
+```
+
+**Stop conditions** (from `loop:` in config/campaign.yaml — these are the
+spend ceiling, so never raise them mid-loop to keep a campaign alive):
+
+- `max_rounds` reached
+- `max_total_run_hours` spent across all campaigns
+- coverage plateaued (`stop_on_plateau`)
+- coverage verdict `unknown` — a missing or broken sampler stops the loop
+  rather than authorising another blind campaign
+
+`round-decide` computes this for you. Override only with an explicit reason
+(`--decision stop --reason "..."`), and never override a budget stop.
+
+Run isolation is mandatory, not optional: every campaign gets its own
+`--run-id` and workdir via `campaign_ctl.py`. Runs that share a workdir share
+an evolved corpus, which makes the eval's independent-runs protocol invalid
+and contaminates every ablation arm.
 
 ## Dispatching
 

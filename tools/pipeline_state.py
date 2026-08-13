@@ -24,15 +24,23 @@ STATE_DIR = os.path.join(REPO_ROOT, "state")
 STATE_PATH = os.environ.get("GSPWN_STATE") or os.path.join(STATE_DIR,
                                                            "pipeline.json")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-PHASES = ["provision", "build", "describe", "seeds", "harness", "fuzz",
-          "triage", "rca", "poc", "eval", "report"]
+# Setup runs once for the machine; the round phases re-run every round of the
+# improvement loop; report runs once, after the loop stops.
+SETUP_PHASES = ["provision", "build"]
+ROUND_PHASES = ["describe", "seeds", "harness", "fuzz", "triage", "rca",
+                "poc", "eval", "refine"]
+FINAL_PHASES = ["report"]
+PHASES = SETUP_PHASES + ROUND_PHASES + FINAL_PHASES
+
 PHASE_STATUS = {"pending", "in_progress", "done", "blocked", "failed"}
 CRASH_STATUS = {"unique", "duplicate", "flagged", "reliable", "flaky",
                 "unreproducible", "rca_done", "reported"}
 DISCLOSURE_STATUS = {"pending", "submitted", "resolved", "not_applicable"}
 TRACKS = {"K", "U"}
+COVERAGE_VERDICT = {"growing", "plateaued", "unknown"}
+ROUND_DECISION = {"continue", "stop"}
 
 # Phases that may run concurrently once `build` is done (AGENTS.md).
 PARALLEL_AFTER_BUILD = {"describe", "seeds", "harness"}
@@ -41,6 +49,11 @@ DEFAULT_PHASE = {"status": "pending", "updated": None, "notes": ""}
 DEFAULT_CRASH = {"track": "K", "title": "", "stack_hash": "",
                  "status": "unique", "dir": "", "repro_rate": None,
                  "duplicate_of": None, "disclosure": "pending", "notes": ""}
+DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
+                 "ended": None, "run_ids": [], "coverage_verdict": "unknown",
+                 "edges_start": None, "edges_end": None, "new_crashes": 0,
+                 "run_hours": 0.0, "decision": None, "decision_reason": "",
+                 "notes": ""}
 
 
 def _now():
@@ -53,6 +66,7 @@ def default_state():
         "phases": {p: dict(DEFAULT_PHASE) for p in PHASES},
         "crashes": {},
         "campaigns": [],
+        "rounds": [dict(DEFAULT_ROUND, round=1, started=_now())],
         "manifest": "artifacts/builds/manifest.json",
     }
 
@@ -79,6 +93,12 @@ def normalize(state):
                       for cid, c in crashes.items()}
     if not isinstance(out.get("campaigns"), list):
         out["campaigns"] = []
+    # v1 -> v2: pre-loop state files have no rounds; treat their work as round 1.
+    rounds = out.get("rounds")
+    if not isinstance(rounds, list) or not rounds:
+        rounds = [dict(DEFAULT_ROUND, round=1, started=_now())]
+    out["rounds"] = [dict(DEFAULT_ROUND, **(r or {})) for r in rounds]
+    out["version"] = SCHEMA_VERSION
     return out
 
 
@@ -177,6 +197,116 @@ def next_phase(state):
     return None
 
 
+def current_round(state):
+    return state["rounds"][-1]
+
+
+def round_number(state):
+    return current_round(state)["round"]
+
+
+def total_run_hours(state):
+    return sum(r.get("run_hours") or 0.0 for r in state["rounds"])
+
+
+def next_action(state):
+    """What the orchestrator should do next, as (kind, value).
+
+    kind is one of:
+      "phase"          -> run this phase
+      "decide"         -> round phases are done; record a loop decision
+      "advance-round"  -> decision was continue; open the next round
+      "done"           -> pipeline complete
+    """
+    def pending(p):
+        return state["phases"][p]["status"] != "done"
+
+    for p in SETUP_PHASES:
+        if pending(p):
+            return ("phase", p)
+    for p in ROUND_PHASES:
+        if pending(p):
+            return ("phase", p)
+    r = current_round(state)
+    if r["decision"] is None:
+        return ("decide", None)
+    if r["decision"] == "continue":
+        return ("advance-round", None)
+    for p in FINAL_PHASES:
+        if pending(p):
+            return ("phase", p)
+    return ("done", None)
+
+
+def end_round(state, verdict=None, new_crashes=None, edges_start=None,
+              edges_end=None, run_hours=None, notes=None):
+    """Record the measured outcome of the current round."""
+    r = current_round(state)
+    if verdict is not None:
+        if verdict not in COVERAGE_VERDICT:
+            raise ValueError("unknown coverage verdict: %s (expected one of "
+                             "%s)" % (verdict, ", ".join(sorted(
+                                 COVERAGE_VERDICT))))
+        r["coverage_verdict"] = verdict
+    for key, val in (("new_crashes", new_crashes), ("edges_start", edges_start),
+                     ("edges_end", edges_end), ("run_hours", run_hours),
+                     ("notes", notes)):
+        if val is not None:
+            r[key] = val
+    r["ended"] = _now()
+    r["status"] = "complete"
+    return r
+
+
+def record_decision(state, decision, reason=""):
+    if decision not in ROUND_DECISION:
+        raise ValueError("unknown round decision: %s (expected one of %s)"
+                         % (decision, ", ".join(sorted(ROUND_DECISION))))
+    r = current_round(state)
+    r["decision"] = decision
+    r["decision_reason"] = reason
+    return r
+
+
+def loop_decision(state, max_rounds, max_total_run_hours=None,
+                  stop_on_plateau=True):
+    """Apply the configured caps to the current round -> (decision, reason).
+
+    Caps are checked before the coverage verdict: a plateau is a reason to
+    stop, but so is running out of the budget the user authorised, and the
+    budget must win even while coverage is still growing.
+    """
+    r = current_round(state)
+    if r["round"] >= max_rounds:
+        return ("stop", "round cap reached (%d of %d)"
+                % (r["round"], max_rounds))
+    if max_total_run_hours is not None:
+        spent = total_run_hours(state)
+        if spent >= max_total_run_hours:
+            return ("stop", "run-hour budget spent (%.1f of %.1f h)"
+                    % (spent, max_total_run_hours))
+    if stop_on_plateau and r["coverage_verdict"] == "plateaued":
+        return ("stop", "coverage plateaued in round %d" % r["round"])
+    if r["coverage_verdict"] == "unknown":
+        return ("stop", "no coverage verdict recorded for round %d — refusing "
+                        "to spend another campaign blind" % r["round"])
+    return ("continue", "coverage still growing after round %d" % r["round"])
+
+
+def advance_round(state):
+    """Open the next round: reset the round phases, keep setup and crashes."""
+    r = current_round(state)
+    if r["decision"] != "continue":
+        raise ValueError("current round decision is %r, not 'continue' — "
+                         "record a continue decision before advancing"
+                         % r["decision"])
+    for p in ROUND_PHASES:
+        state["phases"][p] = dict(DEFAULT_PHASE)
+    state["rounds"].append(dict(DEFAULT_ROUND, round=r["round"] + 1,
+                                started=_now()))
+    return current_round(state)
+
+
 def next_crash_id(state):
     n = len(state["crashes"]) + 1
     while "crash-%04d" % n in state["crashes"]:
@@ -238,4 +368,21 @@ def validate(state):
         if rate is not None and not (isinstance(rate, (int, float))
                                      and 0.0 <= rate <= 1.0):
             problems.append("%s has out-of-range repro_rate %r" % (cid, rate))
+    for i, r in enumerate(state.get("rounds", []), start=1):
+        if r.get("round") != i:
+            problems.append("round %d is numbered %r (rounds must be "
+                            "sequential from 1)" % (i, r.get("round")))
+        if r.get("coverage_verdict") not in COVERAGE_VERDICT:
+            problems.append("round %d has invalid coverage verdict %r"
+                            % (i, r.get("coverage_verdict")))
+        if r.get("decision") is not None and r["decision"] not in ROUND_DECISION:
+            problems.append("round %d has invalid decision %r"
+                            % (i, r.get("decision")))
+    # Every round but the last must be closed out, or the history is unusable
+    # for the eval write-up.
+    for r in state.get("rounds", [])[:-1]:
+        if r.get("decision") != "continue":
+            problems.append("round %d was superseded but its decision is %r "
+                            "(expected 'continue')"
+                            % (r.get("round"), r.get("decision")))
     return problems

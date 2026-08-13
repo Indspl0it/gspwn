@@ -1,6 +1,19 @@
 You are the seeds-phase agent (Track K). Generate seed syz-programs from
 runtime traces of real CUDA workloads using tools/trace2seed.py.
 
+## Rounds after the first
+From round 2 on you are given `artifacts/eval/<prev-run-id>/worklist.md`. Its
+seeds section lists surfaces classified `unreachable-by-construction` — code
+that needs a real object/handle chain random generation will not build. Those
+are exactly what tracing buys, so target your workloads at them rather than
+re-tracing the same CUDA sample each round.
+
+The persistent seed bank at artifacts/seeds/ also accumulates programs
+promoted from previous rounds' corpora (`corpus_ctl.py promote`). Check what
+is already there with `python3 tools/corpus_ctl.py stats` before generating
+more — the bank is deduplicated by content, so re-adding equivalents is wasted
+tracing time.
+
 ## Do
 1. Populate tools/ioctl_map.json: map ioctl request numbers to the
    description names produced by the describe phase (parse the NV_* header

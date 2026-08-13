@@ -31,7 +31,6 @@ import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
 SYZKALLER = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller")
-SYZ_WORKDIR = os.path.join(REPO_ROOT, "artifacts", "syz-workdir")
 
 # Signatures that count as a reproduction, checked against the dmesg delta.
 CRASH_PATTERNS = ("KASAN:", "BUG:", "Kernel panic", "general protection fault",

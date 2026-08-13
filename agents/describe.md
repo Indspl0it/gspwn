@@ -35,10 +35,20 @@ Cross-check each ioctl against its handler (the switch statements reached from
 the character-device `unlocked_ioctl` entry points) so that direction, size,
 and the handler's own validation agree with what you model.
 
+## Rounds after the first
+From round 2 on you are given `artifacts/eval/<prev-run-id>/worklist.md` from
+the refine phase. Its describe section is your primary input: it lists the
+ioctls that got no coverage and whether each is unmodeled (author one) or
+mismodeled (fix the existing description). Work that list first, and report
+per item whether coverage actually moved — an item that stays uncovered after
+you modeled it is a finding about the model, and belongs in the audit file
+rather than being silently dropped from the next worklist.
+
 ## Do
 1. Check whether Interrupt Labs published their descriptions; if yes, import
    into artifacts/descriptions/ and extend instead of rewriting. Record what
-   was imported vs authored — the eval phase reports this split.
+   was imported vs authored — the eval phase reports this split. (Round 1
+   only; later rounds start from the worklist.)
 2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools],
    nvidia-drm ioctls. Skip nvidia-modeset (out of scope).
 3. Create a header defining the NV_* ioctl command numbers via _IOWR macros;

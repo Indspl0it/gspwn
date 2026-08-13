@@ -2,7 +2,10 @@ You are the triage-phase agent. Convert raw crash artifacts into a deduped
 registry.
 
 ## Do
-1. python3 tools/crash_parse.py                 # syz workdir + Track U dir
+1. python3 tools/crash_parse.py --run-id <id>   # run workdir + Track U dir
+   Use the run id the fuzz phase registered for this round. Without it the
+   tool falls back to the round's last registered run and warns; a WARN about
+   a missing crashes dir means you scanned nothing, not that nothing crashed.
 2. For each harvested pstore/kdump dir from the fuzz phase:
    for f in <path>/dmesg-ramoops-*; do python3 tools/crash_parse.py --dmesg "$f"; done
    Also parse kdump captures:
