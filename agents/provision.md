@@ -22,7 +22,8 @@ instrumented kernel fuzzing.
 1. Record facts into config/machine.yaml: distro (`/etc/os-release` ID),
    GPU (`nvidia-smi --query-gpu=name --format=csv,noheader`),
    Secure Boot (`mokutil --sb-state`), GSP firmware (`nvidia-smi -q`).
-   On EC2, record environment=ec2 and skip the Secure Boot fact.
+   Record environment (ec2|baremetal) from step 0's detection. On EC2, skip
+   the Secure Boot fact.
 2. If Secure Boot is enabled: STOP and report — the user must either disable
    it in firmware or enroll a MOK; do not improvise. (Bare metal only.)
 3. `sudo python3 tools/crashlog_ctl.py setup` (persistent crash capture —

@@ -1,0 +1,11 @@
+# This repo runs on Linux only: systemd units, kernel builds, shell scripts.
+# A CRLF checkout breaks them outright — a script with a \r in its shebang
+# fails as "bad interpreter: /bin/bash^M", and bash cannot even parse it.
+# Normalise everything to LF regardless of the platform edits are made on.
+* text=auto eol=lf
+
+# Never touched by the newline filter.
+*.png binary
+*.jpg binary
+*.gz binary
+*.zip binary

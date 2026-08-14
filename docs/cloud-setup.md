@@ -13,24 +13,30 @@ we care about, so fuzzing on EC2 is representative rather than a compromise.
 - 200 GB gp3 root volume with delete-on-termination set to false. Artifacts
   survive stop and accidental termination.
 - Security group: SSH inbound only, from the operator's IP. Nothing else.
-- IAM instance profile allowing `ec2:GetConsoleOutput` and
-  `ec2:StopInstances` on the instance itself. The first is how hard hangs
-  get captured; the second lets the idle watchdog stop the machine.
+- IAM instance profile allowing `ec2:GetConsoleOutput` on the instance
+  itself. That is how hard hangs get captured. The idle watchdog needs no
+  IAM permission — it stops the machine with a local `shutdown -h`, and
+  nothing in the repo calls the EC2 stop API.
 
 ## Golden image flow
 
-Provision once, then never again:
+Build once, then never again:
 
-1. Launch from the Debian 12 AMI and run the pipeline's provision phase.
-   This installs the baseline NVIDIA driver from Debian non-free (provides
-   `nvidia-smi`, GSP firmware, and the CUDA userspace) plus the crash
-   capture tooling. The pipeline's build phase swaps in the instrumented
-   kernel and modules on top of this baseline.
-2. Create an AMI from the provisioned instance.
+1. Launch from the Debian 12 AMI and run the pipeline's provision and build
+   phases. Provision installs the baseline NVIDIA driver from Debian
+   non-free (provides `nvidia-smi`, GSP firmware, and the CUDA userspace)
+   plus the crash capture tooling; build swaps in the instrumented kernel
+   and modules on top of that baseline.
+2. Create an AMI from the instance once `build` is done — booted into the
+   instrumented kernel with `nvidia-smi` working. The kernel build is the
+   multi-hour part, so the image is taken after it, not after provision.
 3. Launch every campaign and eval instance from that AMI.
 
-Re-provisioning cost after the first build is zero. If the golden image
-rots (driver branch moves, Debian point release), rebuild it the same way.
+Every later instance boots straight into the instrumented kernel, so the
+per-instance setup cost after the first build is a `git clone` of this repo
+and the config caps — re-running provision and build is not needed. If the
+golden image rots (driver branch moves, Debian point release), rebuild it
+the same way.
 
 ## Cost guardrails
 
@@ -44,12 +50,21 @@ guardrails come before campaigns:
   `IDLE_MINUTES` (default 120, override via the environment). Stopping uses
   `shutdown -h`, which for an EBS-backed instance stops rather than
   terminates, so the volume and artifacts survive.
-- `touch state/KEEP_ALIVE` suppresses the watchdog during long interactive
-  agent sessions. Delete the file when the session ends.
+- `python3 tools/cost_ctl.py keepalive --hours 8` suppresses the watchdog
+  during long interactive agent sessions (default 4 hours; `--clear` ends
+  the hold immediately). The hold is an expiry timestamp in
+  `state/KEEP_ALIVE`, so it lapses on its own — a forgotten keepalive
+  cannot permanently disable the only automated stop.
 - Stop the instance manually whenever leaving it idle without a campaign
   running. The watchdog is a backstop, not the primary control.
-- Spot interruptions: with delete-on-termination=false the root volume
-  survives, and the campaign resumes via systemd on the next boot.
+- Spot interruptions: a one-time spot request is **terminated** on
+  interruption — there is no next boot of that instance, whatever
+  delete-on-termination says about the volume. Recovery is: relaunch from
+  the golden AMI, re-attach the surviving root volume if its artifacts
+  matter, run `crashlog_ctl.py harvest`, then resume the pipeline from
+  `state/pipeline.json`. Automatic resume after interruption exists only
+  with a *persistent* spot request configured for stop/hibernate
+  interruption behavior, which this runbook does not use.
 
 ## Costs
 
@@ -72,15 +87,28 @@ campaign counts as a valid independent run for variance reporting. Two
 instances running 12 campaigns of 24h each cost roughly $144 at spot
 prices, which fits the budget if the rest of the month is quiet.
 
+Mind the run-hour cap when sizing that matrix: 12 campaigns of 24h is 288
+run-hours, and `campaign_ctl.py install-k`/`install-u` hard-refuse any
+campaign whose projected hours would push the spend ledger past
+`loop.max_total_run_hours` (default 216) — campaign #10 onward would be
+refused. The ledger is per instance, so each eval box enforces its own cap.
+Raise `max_total_run_hours` in `config/campaign.yaml` to cover the eval
+matrix *before* the eval campaigns start: the orchestrator contract forbids
+raising caps mid-loop, so sizing the cap for the eval is a deliberate
+pre-launch decision, not a patch applied when a campaign is refused.
+
 ## Crash capture on EC2
 
 There is no pstore on EC2. Crash capture is kdump plus the EC2 console
 output: `crashlog_ctl.py harvest` auto-detects EC2 via the instance
-metadata service (override with `--env ec2|baremetal`), saves
-`aws ec2 get-console-output` to `artifacts/crashes/console-<timestamp>.log`,
-and still collects `/var/crash` kdump dumps. Console output is also the
-only record of a hard hang where kdump itself cannot run, which is why the
-IAM profile is not optional.
+metadata service (`--env auto` is the explicit default; `--env
+ec2|baremetal` forces the mode), saves `aws ec2 get-console-output` to
+`artifacts/crashes/pstore-<timestamp>/console-output.log` — harvest
+directories are named `pstore-*` on both platforms — and still collects
+`/var/crash` kdump dumps. A clean reboot with nothing new to collect exits
+0, so harvesting after every boot is safe to script. Console output is also
+the only record of a hard hang where kdump itself cannot run, which is why
+the IAM profile is not optional.
 
 ## Learning-phase advice
 

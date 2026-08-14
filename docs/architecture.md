@@ -36,6 +36,15 @@ flowchart TB
 verdicts, and *paths into* `artifacts/`. Bulk output never goes in the state
 file. That keeps the file small enough to rewrite atomically on every update.
 
+A second state file sits beside it: `state/spend.json`, the run-hour ledger,
+keyed by run id and written under its own lock. `pipeline.json` follows the
+`GSPWN_STATE` redirect so an ablation can keep its own registry, but the
+budget belongs to the machine rather than to whichever registry is in use,
+so the ledger ignores that redirect. It also fails closed: if the state file
+records billed hours and no ledger is present, every command that reads
+spend refuses instead of presenting a spent budget as untouched.
+`pipeline_ctl.py spend-init` rebuilds it from the state file.
+
 ### Phase statuses
 
 `pending` → `in_progress` → `done`, or `blocked` / `failed`.
@@ -155,11 +164,29 @@ narrow:
 - Void runs are excluded from both sides of the ratio and re-run. If every run
   is void, no rate is recorded and the tool exits non-zero.
 
+**Track U** verification replays the extracted input through a caller-supplied
+command template: `repro_ctl.py verify <id> --track u --cmd '<template with
+{input}>'` runs the harness once per run with the input path substituted, and
+`--crash-exit N` names a harness exit code that also counts as a
+reproduction. `--track` only cross-checks the registry entry; the registry is
+authoritative.
+
+`verify` exits 0 with a recorded rate, 2 when the attempt cap left fewer runs
+counted than requested (the rate is still recorded, on a short denominator,
+and stdout says so), and 1 when no run could be counted at all.
+
 ## Run directory layout
 
 Every campaign is isolated. The eval reports variance across independent
 runs, and two runs sharing a workdir share an evolved corpus, so they are not
 independent and every ablation arm drawn from them is contaminated.
+
+Only one run's campaign may be live at a time. `install-k` / `install-u`
+refuse while another run's units are active or its deadline timer is still
+installed — installing over a live run would repoint the global unit names
+and retire its deadline enforcement. `--replace` retires the old run first
+(stops and disables its units and its deadline timer), then installs the new
+one.
 
 ```
 artifacts/runs/<run-id>/
@@ -175,7 +202,11 @@ artifacts/runs/<run-id>/
         └── queue/           corpus entries
 ```
 
-Run ids are `r<round>-<track><n>`, e.g. `r2-k1`. They are never reused.
+Run ids follow the convention `r<round>-<track><n>`, e.g. `r2-k1`, and are
+never reused. The tools enforce this only in one direction: `--corpus fresh`
+refuses to install over an existing `corpus.db`, but `--corpus carry` copies
+over it — a reused id would destroy the earlier run's corpus, and with it the
+run independence the eval protocol depends on.
 
 ### Corpus policy
 
@@ -193,17 +224,29 @@ round stopped learning.
 
 ## Coverage sampling
 
-A single systemd timer (`gspwn-coverage.timer`) does three jobs on each tick,
-at `loop.coverage_sample_min` intervals:
+Two systemd timers run for each campaign, installed by different tools and
+ticking on independent cadences.
+
+**Sampling** — `gspwn-coverage.timer`, installed by `coverage_ctl.py
+install-timer`, ticks at `loop.coverage_sample_min` intervals and does two
+jobs:
 
 1. Sample Track K from syz-manager's HTTP stats endpoint.
 2. Sample Track U by summing AFL++ `fuzzer_stats` across the run's harness
    dirs.
-3. Check the campaign deadline and stop the campaign if it has elapsed.
 
-One timer covers all three because it is the run's heartbeat, and it survives
-reboots — so a campaign cannot outlive its window just because the agent
-session died.
+**Deadline enforcement** — `gspwn-deadline@<run-id>.timer`, a template
+instance installed per run by `campaign_ctl.py install-k` / `install-u`,
+runs `campaign_ctl.py check-deadline --run-id <run-id>` on a fixed 2-minute
+cadence. When the campaign's window is up it stops **and disables** the
+campaign units, so they cannot come back on the next panic/reboot. Two
+properties are deliberate: the cadence is decoupled from
+`coverage_sample_min` so raising the sampling interval cannot delay the
+deadline stop past the campaign window, and the timer is per-run so
+installing run B never retires run A's enforcement.
+
+Both timers survive reboots, so a campaign cannot outlive its window just
+because the agent session died.
 
 **Track K sources, in order of preference:** the JSON stats endpoint, then
 scraped dashboard HTML, then `corpus.db` size. The source used is written into

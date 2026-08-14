@@ -18,8 +18,11 @@ are listed in an appendix, one paragraph each, labeled as unverified.
 ## Disclosure
 Per confirmed (reliable or flaky) finding, assemble
 artifacts/report/disclosure/<id>/ containing the PoC, RCA, affected
-versions, and a short impact statement — PSIRT-ready. Record disclosure status
-per crash with the state tool, never by editing pipeline.json:
+versions, and a short impact statement — PSIRT-ready. Once a crash's package
+is assembled, mark it in the registry before any disclosure transition:
+`python3 tools/pipeline_ctl.py crash-set <id> --status reported`
+Then record disclosure status per crash with the state tool, never by editing
+pipeline.json:
 `python3 tools/pipeline_ctl.py crash-set <id> --disclosure
  pending|submitted|resolved|not_applicable`
 Nothing leaves this machine before the user explicitly approves submission.

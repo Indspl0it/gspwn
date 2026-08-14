@@ -2,9 +2,13 @@
 """Harvest crashes from both tracks and dedup into state/pipeline.json.
 
 Dedup (spec Phase 4): primary key = normalized report title (syzkaller
-'description' file / ASan summary line). Secondary = stack hash (sha1 of
-top-3 function frames). Collisions in either direction are flagged for
-manual review.
+'description' file / ASan summary line / kernel report-start line).
+Secondary = stack hash (sha1 of the top-3 function frames, addresses and
+offsets stripped). Both keys are normalized identically across sources, so
+the same bug found in the syz workdir and again in a harvested dmesg/pstore
+log collides instead of double-registering. A collision in only one key is
+flagged for manual review; an empty stack hash is *no evidence* and never
+drives a stack-based decision.
 """
 import argparse
 import glob
@@ -17,28 +21,93 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
-FRAME_RE = re.compile(r"#\d+\s+(?:0x[0-9a-f]+\s+)?(?:in\s+)?([\w.~]+)\s*\+?")
-ASAN_RE = re.compile(r"^(?:==\d+==)?\s*(ERROR: (?:Address|Memory|Leak)?Sanitizer[^\n]*|SUMMARY: [^\n]*)", re.M)
+# Syzkaller/ASan style:    "#0 0x1 in nv_uvm_free" / "#1 0x... in foo /s.c:3"
+SYZ_FRAME_RE = re.compile(r"#\d+\s+(?:0x[0-9a-f]+\s+)?(?:in\s+)?([\w.~]+)\s*\+?")
+# Kernel call-trace style: "nv_uvm_free+0x12/0x34 [nvidia_uvm]" (also matches
+# the RIP line, which carries the innermost frame).
+TRACE_FRAME_RE = re.compile(r"(?:^|[\s?!:])([\w.~]+)\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+")
+# Sanitizer signatures a Track U artifact must carry to be a crash at all.
+SAN_TITLE_RES = [
+    re.compile(r"^(?:==\d+==\s*)?(ERROR: (?:Address|Memory|Leak|Thread|"
+               r"UndefinedBehavior)?Sanitizer[^\n]*)", re.M),
+    re.compile(r"^(?:==\d+==\s*)?(SUMMARY: [^\n]*)", re.M),
+    re.compile(r"^([^\n:]*:\d+(?::\d+)?: runtime error:[^\n]*)", re.M),
+    re.compile(r"^(?:==\d+==\s*)?(SEGV on unknown address[^\n]*)", re.M),
+]
 NVRM_RE = re.compile(r"NVRM: (Xid[^\n]*|GPU at[^\n]*error[^\n]*)", re.I)
-KERN_RE = re.compile(r"(BUG: [^\n]*|KASAN: [^\n]*|Kernel panic[^\n]*|Oops[^\n]*)")
+# Volatile Xid fields: the same recurring Xid must dedup across pids/channels.
+XID_VOLATILE_RE = re.compile(r"\s*,?\s*(?:pid=[^,\s]+|ch(?:annel)?\s*[= ]\s*"
+                             r"[0-9a-fA-Fx]+)", re.I)
+REPORT_START_RE = re.compile(
+    r"(BUG: [^\n]*|KASAN: [^\n]*|Kernel panic[^\n]*|Oops[^\n]*)")
+END_TRACE_RE = re.compile(r"---\[ end ")
+TS_RE = re.compile(r"^\s*(?:\[\s*\d+\.\d+\]\s*)+")
+TITLE_PREFIX_RE = re.compile(r"^(?:kernel|NVRM)\s+", re.I)
+HEX_RE = re.compile(r"0x[0-9a-fA-F]+|\b[0-9a-fA-F]{8,}\b")
 
 
 def norm_title(t):
     return re.sub(r"\s+", " ", t.strip())
 
 
+def canon_title(t):
+    """Source-independent title: same bug, same title, wherever it was seen.
+
+    Strips the source prefixes scan_dmesg used to need ('kernel '/'NVRM '),
+    folds 'BUG: KASAN: ...' into syzkaller's 'KASAN: ...' form, and blanks
+    out hex addresses/pc values so the same ASan or paging-fault report at a
+    different address still collides.
+    """
+    t = TITLE_PREFIX_RE.sub("", norm_title(t))
+    t = re.sub(r"^BUG:\s+(?=(?:KASAN|UBSAN):)", "", t)
+    return norm_title(HEX_RE.sub("0xADDR", t))
+
+
+def stack_frames(text):
+    """Function names in log order, addresses/offsets/modules stripped.
+
+    Reads both syzkaller's '#N in func' reports and raw kernel call traces
+    ('func+0xoff/0xsize'), so a syz 'report' file and the dmesg block of the
+    same crash yield the same sequence.
+    """
+    frames = []
+    for line in text.splitlines():
+        m = SYZ_FRAME_RE.search(line) or TRACE_FRAME_RE.search(line)
+        if m:
+            frames.append(m.group(1))
+    return frames
+
+
 def stack_hash(report_text):
-    frames = FRAME_RE.findall(report_text)[:3]
+    """sha1 of the top-3 frames; '' when the text carries no frames at all.
+
+    '' means 'no evidence': register() never lets it drive a FLAG/DUP stack
+    decision, so report-less syz crashes and signature-only Track U inputs
+    can no longer alias each other through a constant hash.
+    """
+    frames = stack_frames(report_text)[:3]
+    if not frames:
+        return ""
     return hashlib.sha1("|".join(frames).encode()).hexdigest()[:16]
 
 
 def existing_keys(state):
-    """-> (title->cid, hash->cid)"""
-    by_title, by_hash = {}, {}
+    """-> (title->cid, hash->cid, (title, hash, dir)->cid)
+
+    Duplicates stay out of the title/hash indexes so later sightings link
+    against the surviving finding, not against an absorbed duplicate. The
+    full (title, hash, dir) key is what makes re-scans idempotent: the same
+    sighting read again from the same source is a DUP, not a new entry.
+    """
+    by_title, by_hash, seen = {}, {}, {}
     for cid, c in state["crashes"].items():
-        by_title[c["title"]] = cid
-        by_hash.setdefault(c["stack_hash"], cid)
-    return by_title, by_hash
+        seen[(c["title"], c["stack_hash"], c["dir"])] = cid
+        if c.get("status") == "duplicate":
+            continue
+        by_title.setdefault(c["title"], cid)
+        if c["stack_hash"]:
+            by_hash.setdefault(c["stack_hash"], cid)
+    return by_title, by_hash, seen
 
 
 def register(state, track, title, shash, srcdir):
@@ -49,19 +118,53 @@ def register(state, track, title, shash, srcdir):
     Such a crash is registered as `flagged`, so it persists in the registry
     and `crash-list --status flagged` serves as the review queue. A crash
     reported only in log output would not be addressable once that output is
-    gone.
+    gone. When neither side carries a stack there is no evidence to confirm
+    identity, so even an exact title match is flagged rather than silently
+    DUPed — unless it is the identical sighting re-read from the identical
+    source (a re-scan), which stays a plain DUP.
     """
-    by_title, by_hash = existing_keys(state)
+    title = canon_title(title)
+    by_title, by_hash, seen = existing_keys(state)
+    prior = seen.get((title, shash, srcdir))
+    if prior:
+        # Identical title AND identical evidence from the identical source:
+        # the same sighting scanned again. Re-scans must be idempotent —
+        # harvest runs after every reboot.
+        print("DUP %s -> %s" % (title, prior))
+        return None
     other_cid = None
+    reason = None
     if title in by_title:
         other_cid = by_title[title]
-        if state["crashes"][other_cid]["stack_hash"] == shash:
-            # Same title AND same stack: the same crash, already registered.
-            # Re-scans must be idempotent — harvest runs after every reboot.
-            print("DUP %s -> %s" % (title, other_cid))
-            return None
-        reason = "same title as %s, different stack" % other_cid
-    elif shash in by_hash:
+        other = state["crashes"][other_cid]
+        if shash and shash == other["stack_hash"]:
+            # Same title AND same stack from a new source: the same bug
+            # sighted again (e.g. syz workdir + harvested dmesg of the same
+            # panic). Keep one finding; register this sighting as its
+            # duplicate so both sources stay addressable and the link is
+            # durable state, not just stdout.
+            cid = ps.register_crash(state, {
+                "track": track, "title": title, "stack_hash": shash,
+                "status": "duplicate", "dir": srcdir, "repro_rate": None,
+                "duplicate_of": other_cid, "disclosure": "pending",
+                "notes": "same crash as %s, sighted via %s"
+                         % (other_cid, srcdir)})
+            link = "also sighted via %s (%s)" % (srcdir, cid)
+            if link not in other["notes"]:
+                other["notes"] = "; ".join(
+                    x for x in (other["notes"], link) if x)
+            print("DUP %s -> %s (registered %s as duplicate; sources linked)"
+                  % (title, other_cid, cid))
+            return cid
+        if not shash and not other["stack_hash"]:
+            reason = ("same title as %s, neither sighting has a stack — "
+                      "cannot confirm it is the same bug" % other_cid)
+        elif not shash or not other["stack_hash"]:
+            reason = ("same title as %s, only one sighting has a stack"
+                      % other_cid)
+        else:
+            reason = "same title as %s, different stack" % other_cid
+    elif shash and shash in by_hash:
         other_cid = by_hash[shash]
         reason = "same stack as %s, different title" % other_cid
     status = "flagged" if other_cid else "unique"
@@ -90,14 +193,29 @@ def scan_syz(state, workdir):
         register(state, "K", title, stack_hash(rtext), cdir)
 
 
+def sanitizer_title(text):
+    """Title from the artifact's sanitizer signature, or None if it has none.
+
+    A file with no signature is not a crash — logs, manifests and READMEs in
+    the crash dir must not become phantom 'libfuzzer-crash:' uniques.
+    """
+    for rx in SAN_TITLE_RES:
+        m = rx.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
 def scan_track_u(state, udir):
     for f in sorted(glob.glob(os.path.join(udir, "*"))):
         if not os.path.isfile(f):
             continue
         text = read_text(f)
-        m = ASAN_RE.search(text)
-        title = norm_title(m.group(1)) if m else \
-            "libfuzzer-crash:" + os.path.basename(f)
+        title = sanitizer_title(text)
+        if title is None:
+            print("WARN: %s carries no sanitizer signature — skipped, not "
+                  "registered" % f)
+            continue
         register(state, "U", title, stack_hash(text), f)
 
 
@@ -106,14 +224,74 @@ def read_text(path):
         return f.read()
 
 
+def strip_ts(line):
+    return TS_RE.sub("", line)
+
+
+def report_blocks(text):
+    """Yield (start_line, block_text): one kernel report per block.
+
+    A block runs from a report-start line (BUG:/KASAN:/Oops/Kernel panic)
+    through the end of its call trace, so one KASAN report is one registry
+    entry rather than one per matching line. Oops/panic lines before the
+    first frame (the BUG: -> Oops: -> panic prologue of one oops) and a
+    Kernel panic trailing a traced report are part of the report they belong
+    to; a fresh BUG:/KASAN: line always starts the next report.
+    """
+    blocks, cur, state = [], [], "closed"
+    for raw in text.splitlines():
+        s = strip_ts(raw)
+        m = REPORT_START_RE.search(s)
+        if m:
+            # 'bug' introduces a report; 'oops'/'panic' can also be the
+            # prologue tail or death rattle of the report already open.
+            kind = ("panic" if s.startswith("Kernel panic")
+                    else "oops" if s.startswith("Oops") else "bug")
+            if not cur or (state == "open" and kind == "bug") \
+                    or (state in ("traced", "ended") and kind != "panic"):
+                if cur:
+                    blocks.append(cur)
+                cur, state = [], "closed"
+            cur.append(raw)
+            state = "open" if state == "closed" else state
+            continue
+        if END_TRACE_RE.search(s):
+            if cur:
+                cur.append(raw)
+                state = "ended"
+            continue
+        if cur:
+            cur.append(raw)
+            if state == "open" and (TRACE_FRAME_RE.search(s)
+                                    or SYZ_FRAME_RE.search(s)):
+                state = "traced"
+    if cur:
+        blocks.append(cur)
+    for block in blocks:
+        yield strip_ts(block[0]), "\n".join(block)
+
+
+def block_signature(block):
+    """Title+context hash for a report block with no usable frames.
+
+    Generic prologue lines (a lone 'BUG: unable to handle ...', a trace-less
+    panic) carry no stack, so the distinguishing evidence is the normalized
+    wording around the start line — timestamps, hex and pids blanked out.
+    """
+    lines = [strip_ts(l) for l in block.splitlines()[:5]]
+    ctx = re.sub(r"\bpid=\S+", "", HEX_RE.sub("0xADDR", " ".join(lines)))
+    return hashlib.sha1(norm_title(ctx)[:300].encode()).hexdigest()[:16]
+
+
 def scan_dmesg(state, path):
     text = read_text(path)
     for m in NVRM_RE.finditer(text):
-        register(state, "K", norm_title("NVRM " + m.group(1)),
-                 hashlib.sha1(m.group(1).encode()).hexdigest()[:16], path)
-    for m in KERN_RE.finditer(text):
-        register(state, "K", norm_title("kernel " + m.group(1)),
-                 hashlib.sha1(m.group(1).encode()).hexdigest()[:16], path)
+        body = norm_title(XID_VOLATILE_RE.sub("", m.group(1))).strip(" ,")
+        register(state, "K", "NVRM " + body,
+                 hashlib.sha1(body.encode()).hexdigest()[:16], path)
+    for start_line, block in report_blocks(text):
+        shash = stack_hash(block) or block_signature(block)
+        register(state, "K", start_line, shash, path)
 
 
 def resolve_workdir(a, state):
@@ -156,11 +334,15 @@ def main():
             scan_syz(state, wd)
         if os.path.isdir(a.track_u_dir):
             scan_track_u(state, a.track_u_dir)
-        elif not a.dmesg:
+        else:
             print("WARN: %s missing — nothing scanned for Track U."
                   % a.track_u_dir)
-        if a.dmesg and os.path.exists(a.dmesg):
-            scan_dmesg(state, a.dmesg)
+        if a.dmesg:
+            if os.path.exists(a.dmesg):
+                scan_dmesg(state, a.dmesg)
+            else:
+                print("WARN: --dmesg %s not found — nothing scanned from "
+                      "kernel logs." % a.dmesg)
         total = len(state["crashes"])
         flagged = sum(1 for c in state["crashes"].values()
                       if c["status"] == "flagged")

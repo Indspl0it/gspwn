@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Note added after this document was written:** the orchestrator is any `AGENTS.md`-aware coding agent — "Kimi Code" below names the agent in use when this plan was executed, not a dependency. Kept as the dated implementation record; `tools/pipeline_ctl.py` and `tools/selftest.py` were added after it was written.
+> **Note added after this document was written:** the orchestrator is any `AGENTS.md`-aware coding agent — "Kimi Code" below names the agent in use when this plan was executed, not a dependency. Kept as the dated implementation record; the loop/cost layer (`tools/pipeline_ctl.py`, `gspwn_config.py`, `coverage_ctl.py`, `corpus_ctl.py`, `cost_ctl.py`, `selftest.py`) and the `refine` phase were added after it was written, and the SUT later pivoted from the Debian-family laptop to EC2 (`docs/cloud-setup.md`). `docs/architecture.md` is the current architecture reference.
 
 **Goal:** Build the self-contained Kimi Code agent repo (tools, agent prompts, orchestrator contract, configs) that implements the fuzzing workflow in the approved spec.
 
