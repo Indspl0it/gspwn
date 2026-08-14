@@ -22,9 +22,9 @@ recovered run counts as a reproduction only if the boot id changed, i.e. the
 machine actually went down; a verification process that merely died on the
 same boot is void.
 
-The rate is hits / counted runs, where void runs (no honest verdict) are
-excluded from both. Every number here feeds the disclosure gate, so the tool
-never guesses in the direction that makes a finding look stronger.
+The rate is hits / counted runs. Void runs — those that produced no usable
+verdict — are excluded from both the numerator and the denominator, and are
+re-run rather than resolved by assumption.
 """
 import argparse
 import os
@@ -86,10 +86,10 @@ def dmesg_delta(before, after):
     dmesg is a ring buffer: under KASAN spam the old head gets evicted, so a
     plain length-slice can silently return the wrong window and miss the
     reproduction. Anchor on the tail of `before` instead. If that anchor is
-    gone the ring wrapped and no honest delta exists — the remaining buffer
+    gone, the ring wrapped and no delta can be computed — the remaining buffer
     holds crash reports from *earlier* runs, so scanning it would score a hit
     on every subsequent run and turn an unreproducible crash into a 10/10.
-    Report the wrap so the caller can void the run instead of guessing.
+    Report the wrap so the caller can void the run.
     """
     if after.startswith(before):
         return after[len(before):], False
@@ -220,7 +220,7 @@ def cmd_verify(cid, runs, restart):
             verdict = "VOID (repro would not run: %s)" % exec_failed
         elif wrapped:
             inconclusive += 1
-            verdict = "VOID (dmesg ring wrapped; no honest delta)"
+            verdict = "VOID (dmesg ring wrapped; delta not computable)"
         elif sig:
             hits += 1
             verdict = "CRASH (%s)" % sig

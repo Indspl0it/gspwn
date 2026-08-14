@@ -45,7 +45,7 @@ description for, and supplying valid object-chain seeds it cannot invent.
    - **unreachable-by-construction** — needs a handle or object chain random
      generation will not build. Fix: a seed from a real workload (seeds).
    - **out of scope / firmware** — lives behind GSP, or is modeset. Fix:
-     nothing; record it so the report's coverage claims stay honest.
+     nothing; record it so the report's coverage claims stay correctly scoped.
 4. Write artifacts/eval/<run-id>/gaps.md: one row per gap with the ioctl or
    subsystem, the evidence it is uncovered, the classification, and the
    specific next action. No action may be "investigate further" — say what to
@@ -64,7 +64,7 @@ description for, and supplying valid object-chain seeds it cannot invent.
    add crashes but no coverage, or coverage but no crashes, are both worth
    noting explicitly in gaps.md.
 
-## Honesty requirements
+## Reporting requirements
 - If coverage data is missing or the sampler was not running, the verdict is
   `unknown`. Say so and do not infer a plateau from corpus size alone — the
   loop treats `unknown` as a stop precisely so a broken sampler cannot

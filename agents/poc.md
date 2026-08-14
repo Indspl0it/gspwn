@@ -31,7 +31,7 @@ the failure mode that makes the most severe bugs look unreproducible.
 
 ## Reading the rate
 The rate is hits / counted runs. Void runs (an interrupted run on the same
-boot, or a dmesg ring buffer that wrapped past the anchor so no honest delta
+boot, or a dmesg ring buffer that wrapped past the anchor so no reliable delta
 exists) are excluded from both sides and re-run, and the summary line says how
 many were excluded. `--runs N` means N counted runs, so resuming with a
 smaller N never rewrites an earlier, larger measurement — it reports the

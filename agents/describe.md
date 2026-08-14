@@ -119,5 +119,5 @@ A description that compiles but never reaches the driver is a failure, not a
 partial success — say so plainly. If the ioctl surface cannot be modeled for a
 device node after one retry, record what blocked you in
 artifacts/descriptions/BLOCKED.md, mark the phase blocked, and stop. Partial
-coverage that is honestly scoped is more useful than a green gate that
+coverage that is accurately scoped is more useful than a green gate that
 overstates what was modeled.

@@ -12,7 +12,7 @@ we care about, so fuzzing on EC2 is representative rather than a compromise.
 - Official Debian 12 AMI.
 - 200 GB gp3 root volume with delete-on-termination set to false. Artifacts
   survive stop and accidental termination.
-- Security group: SSH inbound only, from your IP. Nothing else.
+- Security group: SSH inbound only, from the operator's IP. Nothing else.
 - IAM instance profile allowing `ec2:GetConsoleOutput` and
   `ec2:StopInstances` on the instance itself. The first is how hard hangs
   get captured; the second lets the idle watchdog stop the machine.
@@ -22,7 +22,7 @@ we care about, so fuzzing on EC2 is representative rather than a compromise.
 Provision once, then never again:
 
 1. Launch from the Debian 12 AMI and run the pipeline's provision phase.
-   This installs the baseline NVIDIA driver from Debian non-free (gives you
+   This installs the baseline NVIDIA driver from Debian non-free (provides
    `nvidia-smi`, GSP firmware, and the CUDA userspace) plus the crash
    capture tooling. The pipeline's build phase swaps in the instrumented
    kernel and modules on top of this baseline.
@@ -45,8 +45,8 @@ guardrails come before campaigns:
   `shutdown -h`, which for an EBS-backed instance stops rather than
   terminates, so the volume and artifacts survive.
 - `touch state/KEEP_ALIVE` suppresses the watchdog during long interactive
-  agent sessions. Delete the file when you are done.
-- Stop the instance manually whenever you step away without a campaign
+  agent sessions. Delete the file when the session ends.
+- Stop the instance manually whenever leaving it idle without a campaign
   running. The watchdog is a backstop, not the primary control.
 - Spot interruptions: with delete-on-termination=false the root volume
   survives, and the campaign resumes via systemd on the next boot.

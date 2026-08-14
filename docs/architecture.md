@@ -1,9 +1,9 @@
 # Architecture reference
 
 The [README](../README.md) explains what the pipeline does and why. This
-document is the level below that: the data model, the on-disk layout, and the
-lifecycle of a crash. Read it if you are modifying the tools or trying to
-work out where a number in the report came from.
+document covers the level below that: the data model, the on-disk layout, and
+the lifecycle of a crash. It is the reference for modifying the tools or
+tracing a number in the report back to its source.
 
 ## The blackboard
 
@@ -102,8 +102,7 @@ leaves the file untouched.
 
 ## The lifecycle of a crash
 
-This is the path every finding takes, and the point where each claim becomes
-checkable.
+The path every finding takes, from raw log to disclosure package.
 
 ```mermaid
 flowchart TD
@@ -141,8 +140,8 @@ open gate item, not a default-distinct crash.
 
 ### What `verify` actually counts
 
-Reproduction rate is `hits / counted runs`, and the tool is deliberately
-pessimistic about what counts:
+Reproduction rate is `hits / counted runs`. What counts is deliberately
+narrow:
 
 - A run that leaves the machine up and shows a matching crash signature in the
   dmesg delta is a **hit**.
