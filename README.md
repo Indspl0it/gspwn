@@ -6,28 +6,27 @@ Container Toolkit, driven by AI agents instead of a human operator.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3](https://img.shields.io/badge/python-3-blue.svg)](https://www.python.org/)
 
-You start a coding-agent session in this repo on a cloud GPU box and tell it to
-run the pipeline. It provisions the machine, builds an instrumented kernel,
-writes the fuzzing grammar for NVIDIA's undocumented driver interface, fuzzes
-both attack surfaces for days, triages the crashes, root-causes them, builds
-working reproducers, measures how often each one actually reproduces, and
-writes the report. It stops itself when it hits a cap you set or when it stops
-finding anything new.
+A coding-agent session in this repo, running on a cloud GPU instance,
+executes the pipeline: it provisions the machine, builds an instrumented
+kernel, writes the fuzzing grammar for NVIDIA's undocumented driver interface,
+fuzzes both attack surfaces for days, triages the crashes, root-causes them,
+builds reproducers, measures the reproduction rate of each, and writes the
+report. It halts on the first configured cap that trips, or when coverage
+growth flattens.
 
-Everything it claims is backed by a reproducer that runs. Nothing gets into the
-report because an agent said so.
+Every reported finding carries a replayable reproducer and a measured
+reproduction rate from a clean boot.
 
 ---
 
 ## Contents
 
 - [What it attacks](#what-it-attacks)
-- [Why this is hard](#why-this-is-hard-and-what-the-research-bet-is)
+- [Why this surface is hard to fuzz](#why-this-surface-is-hard-to-fuzz)
 - [The pipeline](#the-pipeline)
 - [Architecture](#architecture)
 - [The improvement loop](#the-improvement-loop)
 - [Surviving kernel panics](#surviving-kernel-panics)
-- [Why so much of this repo is about not lying](#why-so-much-of-this-repo-is-about-not-lying)
 - [Repo layout](#repo-layout)
 - [Configuration and cost control](#configuration-and-cost-control)
 - [Quickstart](#quickstart-ec2)
@@ -63,22 +62,21 @@ flowchart LR
     end
 ```
 
-**Track K** is the GPU driver itself. Any program that uses your GPU opens a
+**Track K** is the GPU driver itself. Any program that uses the GPU opens a
 device node like `/dev/nvidia0` and drives it with `ioctl()` calls — "here's a
 command number and a blob of data, go do something." That code runs in the
 kernel, so a memory-safety bug there is a privilege escalation. The attacker
 model is a tenant inside a GPU-enabled container, who gets exactly those device
 nodes and nothing else.
 
-**Track U** is the glue that sets GPU containers up. It matters because it runs
-**as root** during container initialization, before isolation is fully in
-place, and it parses input the attacker controls. Parsing hostile data as root
-is a classic bug farm — CVE-2024-0132 lived in this exact area. The C library
-`libnvidia-container` is the memory-safety target; the Go components are fuzzed
-for panics and DoS only, since Go is memory-safe and claiming otherwise would
-be dishonest.
+**Track U** is the glue that sets GPU containers up. It runs **as root**
+during container initialization, before isolation is fully in place, and it
+parses input the attacker controls — CVE-2024-0132 was in this area. The C
+library `libnvidia-container` is the memory-safety target. The Go components
+are fuzzed for panics and DoS only: Go is memory-safe, so memory-corruption
+coverage does not apply to them.
 
-## Why this is hard, and what the research bet is
+## Why this surface is hard to fuzz
 
 The technique is **fuzzing**: generate millions of malformed inputs, feed them
 to the target, watch for crashes. For the kernel this uses
@@ -87,17 +85,18 @@ fuzzer. The kernel is rebuilt with two features turned on:
 
 | Instrumentation | What it does | Why it's needed |
 |---|---|---|
-| **KCOV** | Reports which kernel code each input reached | The fitness signal. Inputs that reach new code get kept and mutated further — this is what makes fuzzing smarter than random |
-| **KASAN** | Detects memory errors at the moment they happen | Without it a heap overflow corrupts memory silently and crashes minutes later somewhere unrelated, and you can't tell what happened |
+| **KCOV** | Reports which kernel code each input reached | The fitness signal. Inputs that reach new code are kept and mutated further, directing generation toward unexplored paths |
+| **KASAN** | Detects memory errors at the moment they happen | Without it a heap overflow corrupts memory silently and crashes minutes later somewhere unrelated, and the crash site no longer indicates the cause |
 
-Two problems stand between you and actually fuzzing this driver.
+Two problems stand in the way of fuzzing this driver.
 
 **Problem 1: syzkaller can't fuzz what it can't describe.** It needs a grammar
 — written in a language called *syzlang* — declaring what each ioctl takes:
 struct layout, field types, which arguments are handles produced by earlier
 calls. NVIDIA's driver exposes hundreds of ioctls with no public descriptions.
 Writing them means reading driver headers and source and translating by hand.
-It is slow, expert work, and it is the reason this surface stays under-fuzzed.
+Writing them is slow specialist work, and the main reason this surface
+remains under-fuzzed.
 
 **Problem 2: random input never gets deep.** Real GPU work is a chain — open
 the control device, allocate a client object, allocate a device under it, then
@@ -105,7 +104,7 @@ a memory context, then a channel. Each step needs a handle returned by the
 previous one. Random bytes never build a valid chain, so the fuzzer bounces off
 the entry points and never reaches the interesting code.
 
-This repo's bet is that an agent can do both jobs:
+Both jobs are done by phase agents:
 
 - **`describe`** reads the open-source driver headers and writes the syzlang
   descriptions.
@@ -113,13 +112,13 @@ This repo's bet is that an agent can do both jobs:
   ioctl sequence, and converts it into seed programs that hand the fuzzer a
   valid object chain to start mutating from.
 
-Whether that actually works is the thing being measured — see
-[not lying](#why-so-much-of-this-repo-is-about-not-lying).
+The `eval` phase ablates both contributions: agent-authored descriptions
+against manually refined ones, and trace-derived seeds against seedless runs.
 
 ## The pipeline
 
 Twelve phases. Two run once per machine, nine run once per **round**, and the
-report runs once at the very end.
+report runs once at the end.
 
 ```mermaid
 flowchart TD
@@ -160,7 +159,7 @@ flowchart TD
 parallel once `build` is done. Everything after `fuzz` is strictly sequential.
 
 Each phase has a **gate** — a concrete, checkable condition — and the
-orchestrator refuses to advance until it has seen the evidence itself:
+orchestrator advances only after confirming that evidence:
 
 | Phase | Gate to advance |
 |---|---|
@@ -171,9 +170,9 @@ orchestrator refuses to advance until it has seen the evidence itself:
 | harness | Track U harnesses build and produce coverage on their seeds |
 | fuzz | both campaigns active; coverage increases within the smoke window |
 | triage | every raw crash registered as unique, duplicate or flagged |
-| rca | a root-cause writeup exists for every crash selected for a PoC |
+| rca | a root-cause writeup exists for every crash selected for a PoC; claims not verified against source are tagged `[UNVERIFIED]` |
 | poc | every unique crash has a measured reproduction rate and a classification |
-| eval | metrics exist for all configured runs and ablations |
+| eval | metrics exist for all configured runs and ablations, including an audit sample of `[UNVERIFIED]` RCA claims re-checked against source |
 | refine | gap list and next-round worklist written; round outcome recorded |
 | report | report and PSIRT packages exist; disclosure status recorded |
 
@@ -230,13 +229,13 @@ right subagent, checks the gate, records the result.
 
 **Subagents.** One per phase, prompted from `agents/<phase>.md`. They are
 isolated — no talking to each other — and they hand off *paths*, not
-conversation transcripts. That is what keeps the pipeline resumable: any agent
-can be replaced mid-run and the next one picks up from disk.
+conversation transcripts. Because the handoff is on disk, any agent can be
+replaced mid-run and the next one resumes from the same state.
 
 **Tools.** Every action that touches the build, the campaign, the crash data or
 the state file goes through Python in `tools/`. An agent decides *which* ioctl
-to model; a script does the building, parsing and verifying. This is why the
-results are reproducible rather than dependent on what some agent improvised.
+to model; a script does the building, parsing and verifying. Results
+therefore depend on the tools rather than on commands composed at runtime.
 
 **Blackboard.** `state/pipeline.json` plus the `artifacts/` tree. Nothing
 pipeline-relevant lives in the conversation. Writes are atomic, fsync'd, and
@@ -249,8 +248,7 @@ with KCOV, keep whatever reaches new code. That loop is good at exploring
 *within* what it has been told about. It cannot notice "there is an entire
 ioctl family nobody wrote a description for."
 
-So there is an outer loop around it, and that outer loop is the point of the
-project.
+An outer loop wraps it.
 
 ```mermaid
 flowchart LR
@@ -285,7 +283,7 @@ Each round ends by asking what *didn't* get covered and sorting every gap by
 - **unreachable-by-construction** — needs an object chain random generation
   won't build, so it needs a traced seed
 - **out of scope** — lives behind GSP firmware, which can't be instrumented at
-  all; recorded so the coverage claims stay honest
+  all; recorded so the coverage claims stay correctly scoped
 
 That becomes a worklist, which is carried into the next round **through the
 state file**, not by filename convention, so the next round's agents read it
@@ -302,8 +300,8 @@ as still learning if **either** track is still finding edges.
 
 ## Surviving kernel panics
 
-The whole point is crashing the kernel. When the fuzzer finds a good bug the
-machine panics and reboots — and since the orchestrator runs on that same
+Crashing the kernel is the expected outcome. When the fuzzer finds a bug the
+machine panics and reboots, and since the orchestrator runs on that same
 machine, the agent session dies with it.
 
 ```mermaid
@@ -326,55 +324,12 @@ sequenceDiagram
     A->>A: resume at the first phase not done
 ```
 
-Concretely, that means: fuzzers run as systemd units with `Restart=always` so
-they outlive the session; crash logs land in persistent storage that survives
+Fuzzers run as systemd units with `Restart=always` so they outlive the
+session; crash logs land in persistent storage that survives
 the reboot; state writes are tempfile + fsync + atomic rename, so a panic
 mid-write leaves the previous good file rather than a truncated one; and the
-campaign carries a **deadline on disk**, so a run that was supposed to last 24
-hours still ends on time even if it rebooted four times and nobody was
-watching.
-
-## Why so much of this repo is about not lying
-
-This is the part that would surprise you reading the source. A large fraction
-of the code exists to stop the system from overstating its own results, because
-an agent that confidently reports a use-after-free it cannot reproduce is worse
-than useless.
-
-**Every finding needs a reproducer that actually runs.** `repro_ctl.py` compiles
-it, runs it N times from a clean boot, and records a measured rate: `reliable`
-at 80% or better, `flaky` below that, `unreproducible` at zero. Flaky is a
-legitimate, reportable outcome — races and use-after-frees land there — and it
-is reported as flaky, never rounded up.
-
-**The measurement refuses to flatter itself.** Runs that produce no honest
-verdict are voided rather than guessed: an interrupted run only counts as a
-reproduction if the boot ID changed, meaning the machine really went down, and
-a dmesg ring buffer that wrapped past the anchor voids the run instead of
-matching an *earlier* run's crash report. If every run comes back void, no rate
-is recorded at all and the tool exits non-zero.
-
-**Gates are checked, not asserted.** The orchestrator marks a phase done only
-after seeing the evidence on disk. A phase whose evidence can't be confirmed is
-`blocked`, not `done`.
-
-**Agent errors are treated as data.** The `rca` phase tags claims it hasn't
-verified against source as `[UNVERIFIED]`, and the `eval` phase re-checks a
-sample of them and logs how often the agent was wrong. That number is a result
-worth publishing, not something to bury.
-
-**Known blind spot, stated everywhere.** On modern GSP-based GPUs a large part
-of the driver's logic runs in closed-source firmware that KASAN and KCOV cannot
-instrument. Coverage is therefore reported as *kernel-side reachable code only*
-— never as total driver coverage — and firmware errors are harvested as a
-secondary signal.
-
-**The experiments are built to be able to fail.** The ablations compare
-agent-written descriptions against manually refined ones, trace-derived seeds
-against no seeds, and the whole thing against vanilla syzkaller. Each arm runs
-in its own workdir with its own corpus, because two arms sharing a corpus
-aren't independent and the comparison would be meaningless. A flat result is
-reported as a flat result.
+campaign carries a **deadline on disk**, so a run configured for 24 hours ends
+on time across any number of reboots, with no session attached.
 
 ## Repo layout
 
@@ -406,9 +361,9 @@ The tools, briefly:
 
 ## Configuration and cost control
 
-This thing runs unattended, on a paid GPU instance, and deliberately crashes
-the machine. So every limit lives in one file — `config/campaign.yaml` — and
-you set it before you start:
+The pipeline runs unattended on a paid GPU instance and crashes the machine
+by design. Every limit lives in one file — `config/campaign.yaml` — set before
+a campaign starts:
 
 ```yaml
 loop:
@@ -418,7 +373,7 @@ loop:
   stop_on_plateau: true
 cost:
   idle_stop_minutes: 120     # stop the box when no fuzzer is running
-  monthly_budget_usd: 0      # record your ceiling
+  monthly_budget_usd: 0      # 0 = unset; record the ceiling here
   budget_alerts_usd: [50, 150]
 ```
 
@@ -428,15 +383,14 @@ Check what actually took effect before launching anything:
 python3 tools/gspwn_config.py
 ```
 
-An unknown key is a hard error, not a warning — a typo in a cap must never
-silently fall back to the default while you believe the cap took effect. Values
-are range-checked, and combinations that would quietly break the loop (a
-campaign longer than the total budget; a plateau window too short to ever hold
-enough samples) are rejected outright.
+An unknown key is a hard error rather than a warning, so a typo in a cap
+fails loudly instead of falling back to the default. Values are range-checked,
+and combinations that would break the loop — a campaign longer than the total
+budget, a plateau window too short to hold enough samples — are rejected.
 
-Once those are set, nothing asks you anything. Campaigns stop themselves on
-their deadline, round outcomes are measured from the recorded curve rather than
-typed in by an agent, and the loop halts on the first cap that trips.
+Once set, the pipeline requires no further input. Campaigns stop on their
+deadline, round outcomes are measured from the recorded curve rather than
+supplied by an agent, and the loop halts on the first cap that trips.
 
 ## Quickstart (EC2)
 
@@ -445,7 +399,7 @@ Full runbook: [docs/cloud-setup.md](docs/cloud-setup.md). The short version:
 1. Launch a spot `g4dn.2xlarge` — 8 vCPU, 32 GB, one T4. Turing is GSP-based,
    so `open-gpu-kernel-modules` is supported. Use the official Debian 12 AMI.
 2. `git clone` this repo on the instance.
-3. Set your caps in `config/campaign.yaml` and confirm them with
+3. Set the caps in `config/campaign.yaml` and confirm them with
    `python3 tools/gspwn_config.py`.
 4. Install the cost guardrail: `sudo python3 tools/cost_ctl.py install-watchdog`.
 5. Open a coding-agent session in the repo root and say **"run the pipeline"**.
@@ -467,10 +421,9 @@ stop conditions, plateau detection across both tracks, crash dedup and
 flagging, the strace→syz-program conversion, seed packing, reproduction
 bookkeeping, the config contract, and the CLI end to end.
 
-It deliberately does **not** cover anything touching the system under test —
-kernel builds, systemd units, crash harvesting, real reproduction. Those are
-exercised by the phase gates on the target machine, and pretending otherwise
-would be the same dishonesty the rest of the repo is built to avoid.
+It does **not** cover anything touching the system under test — kernel
+builds, systemd units, crash harvesting, real reproduction. Those are exercised
+by the phase gates on the target machine.
 
 ## Threat model
 
@@ -503,9 +456,9 @@ package — reproducer, root-cause analysis, affected versions — is assembled 
 finding, and disclosure status is tracked in `state/pipeline.json`. Nothing is
 published before that process completes.
 
-This is authorized-security-research tooling. Run it only on systems you own or
-have explicit permission to test. Kernel panics are an expected outcome. That
-is the point.
+This is authorized-security-research tooling. Run it only on systems the
+operator owns or has explicit permission to test. Kernel panics are an expected
+outcome of normal operation.
 
 ## Status
 
@@ -514,11 +467,12 @@ prompts, the tools and the config templates. The syzlang descriptions, seeds
 and harnesses are generated by the agents at runtime on the target machine and
 land in the gitignored `artifacts/` tree.
 
-The work extends Interrupt Labs' internship research on
+The work extends Interrupt Labs' published research on
 [fuzzing the NVIDIA GPU drivers](https://www.interruptlabs.co.uk/articles/fuzzing-the-nvidia-gpu-drivers).
-The contribution here is the agentic layer: an agent writing the interface
-descriptions and trace-derived seeds that this surface has always been short
-of, and an honest measurement of whether that works.
+The contribution here is the agentic layer: agent-authored interface
+descriptions and trace-derived seeds for a surface that has lacked both, and an
+evaluation of that approach against manually refined descriptions, seedless
+runs, and vanilla syzkaller.
 
 ## License
 

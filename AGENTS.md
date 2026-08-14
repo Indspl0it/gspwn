@@ -25,7 +25,7 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
 ## Configuration (the only thing a human keys in)
 
 Every cap, budget and duration lives in `config/campaign.yaml`. Nothing is
-hardcoded in a tool, and no tool asks a human anything once these are set.
+hardcoded in a tool, and no further input is required once these are set.
 Before the first campaign, confirm what actually took effect:
 
 ```
@@ -33,10 +33,9 @@ python3 tools/gspwn_config.py
 ```
 
 It prints the effective configuration and the resulting spend ceiling, and
-exits non-zero on a bad value. An unknown key is an error, not a warning — a
-typo in a cap must never fall back to a default while the operator believes
-the cap took effect. If it exits non-zero, stop and report; do not proceed on
-defaults.
+exits non-zero on a bad value. An unknown key is an error rather than a
+warning, so a misspelled key fails loudly instead of leaving the default in
+force. If it exits non-zero, stop and report; do not proceed on defaults.
 
 The caps that bound an unattended run: `loop.max_rounds`,
 `loop.max_total_run_hours`, `loop.campaign_hours` (each campaign self-stops
@@ -111,9 +110,8 @@ coverage on both tracks, then `refine` works out what was *not* covered and
 writes `artifacts/eval/<run-id>/worklist.md`, recording it with
 `round-end --worklist <path>`. `round-advance` carries that path into the new
 round, where `describe` and `seeds` read it back with `pipeline_ctl.py
-worklist` — that is the learning step, and it travels through state rather
-than through a filename the prompts have to agree on. Coverage growth across
-rounds is the measure of whether it is working.
+worklist`. Coverage growth across rounds measures whether the loop is
+improving.
 
 Ask `python3 tools/pipeline_ctl.py next` what to do; it returns a phase, or
 `decide`, or `advance-round`, or `complete`. The loop transition is:
@@ -136,8 +134,9 @@ spend ceiling, so never raise them mid-loop to keep a campaign alive):
 (`--decision stop --reason "..."`), and never override a budget stop.
 
 The numbers those conditions read are measured, not reported: each campaign
-self-stops after `loop.campaign_hours` (a deadline on disk, enforced by the
-sampler's timer, so it survives the panics this pipeline expects), and
+self-stops after `loop.campaign_hours` (a deadline on disk, enforced by
+`gspwn-deadline.timer`, which `install-k` installs, so it survives the panics
+this pipeline expects), and
 `round-end --from-run <run-id>` derives the coverage verdict, edge counts,
 run-hours and new-crash count from the run's `coverage.csv` and the registry.
 Do not hand-type those values: `run_hours` *is* the budget, and a run that

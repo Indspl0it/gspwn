@@ -2,11 +2,10 @@
 """Install/manage fuzz campaigns as systemd units (survive panics/reboots).
 
 Every campaign runs in its own directory under artifacts/runs/<run-id>/ with
-its own workdir, corpus and generated syz-manager config. That isolation is
-not cosmetic: the eval protocol reports variance across independent runs, and
-runs that share a workdir share an evolved corpus, which makes them not
-independent and the variance meaningless. The same applies to ablation arms —
-a "without seeds" arm sharing a workdir is still fuzzing the seeded corpus.
+its own workdir, corpus and generated syz-manager config. The eval protocol
+reports variance across independent runs, and runs sharing a workdir share an
+evolved corpus, so they are not independent. The same applies to ablation
+arms: a "without seeds" arm sharing a workdir fuzzes the seeded corpus.
 
 Corpus policy is therefore explicit per run:
   --corpus fresh            empty corpus; seeds imported only if --seeds given
@@ -19,7 +18,7 @@ database is syz-manager's only corpus input.
 
 Each campaign carries a deadline (loop.campaign_hours) written to disk, so an
 unattended round ends on time even across the panics this pipeline expects.
-`check-deadline` enforces it and is driven by the coverage sampler's timer.
+`install-k` installs `gspwn-deadline.timer`, which runs `check-deadline`.
 
 Subcommands:
   gen-config --run-id ID                 write the run's syz-manager.cfg
@@ -157,16 +156,15 @@ def cmd_gen_config(a):
 def install_seeds(dest_db, seeds_dir):
     """Pack the seed bank INTO the run's corpus.db, merging what is there.
 
-    syz-manager's only corpus input is workdir/corpus.db. Copying .syz files
-    into a directory beside it does nothing — the programs are never loaded,
-    the run silently starts empty, and the seeded/unseeded ablation compares
-    two identical arms. Seeds have to go through `syz-db pack`.
+    syz-manager's only corpus input is workdir/corpus.db, so seeds must be
+    packed into it with `syz-db pack`. Programs placed in a directory beside
+    the database are never loaded: the run starts empty, and a seeded and an
+    unseeded arm become the same configuration.
     """
     files = sorted(f for f in os.listdir(seeds_dir) if f.endswith(".syz"))
     if not files:
-        print("WARN: --seeds %s holds no .syz files — this run is NOT seeded. "
-              "That is an ablation arm, not a seeded run; fix the seed bank "
-              "before treating it as one." % seeds_dir)
+        print("WARN: --seeds %s holds no .syz files — this run is NOT seeded "
+              "and is equivalent to an unseeded ablation arm." % seeds_dir)
         return 0
     with tempfile.TemporaryDirectory() as tmp:
         staged = os.path.join(tmp, "progs")
@@ -230,7 +228,7 @@ def check_budget(hours, cap):
     if spent + hours > cap:
         sys.exit("refusing to start: %.1f h already recorded + %.1f h for this "
                  "campaign exceeds loop.max_total_run_hours (%s). Raise the "
-                 "cap in config/campaign.yaml if that is what you want."
+                 "cap in config/campaign.yaml to allow it."
                  % (spent, hours, cap))
     return spent
 
@@ -306,7 +304,7 @@ def install_deadline_timer(run_id, every_min):
 
     The spend ceiling must not depend on a separate command being run
     afterwards: the fuzz units are Restart=always, so a campaign whose
-    deadline nothing checks simply never ends. install-k owns this because
+    deadline nothing checks never ends. install-k owns this because
     install-k is what starts the clock.
     """
     with open("/etc/systemd/system/%s.service" % DEADLINE_NAME, "w") as f:
@@ -320,9 +318,9 @@ def install_deadline_timer(run_id, every_min):
 def write_deadline(run_id, hours):
     """Record when this campaign must stop, as an absolute epoch second.
 
-    A deadline on disk (rather than a one-shot timer) is what makes the stop
-    survive the panics this pipeline expects: after a reboot the check picks
-    up the same deadline and still stops on time. Without it nothing ever ends
+    A deadline on disk, rather than a one-shot timer, survives the panics this
+    pipeline expects: after a reboot the check reads the same deadline and
+    still stops on time. Without it nothing ever ends
     a campaign — the units are Restart=always — and an unattended loop would
     fuzz until the budget alert or the instance bill noticed.
     """

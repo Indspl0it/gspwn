@@ -26,12 +26,12 @@ down; a verification process that died on the same boot (Ctrl-C, OOM kill, a
 repro that would not exec) is recorded as void instead — not a hit, not a
 clean run. Re-run the same command to resume; use --restart only when you
 deliberately want to discard the partial count. Do not treat a crash that
-killed the box as a lost run, and never restart the count silently — that is
-the failure mode that makes the most severe bugs look unreproducible.
+killed the box as a lost run, and never restart the count silently: doing so
+discards recorded reproductions and understates the rate.
 
 ## Reading the rate
 The rate is hits / counted runs. Void runs (an interrupted run on the same
-boot, or a dmesg ring buffer that wrapped past the anchor so no honest delta
+boot, or a dmesg ring buffer that wrapped past the anchor so no reliable delta
 exists) are excluded from both sides and re-run, and the summary line says how
 many were excluded. `--runs N` means N counted runs, so resuming with a
 smaller N never rewrites an earlier, larger measurement — it reports the
