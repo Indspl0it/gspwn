@@ -14,7 +14,7 @@ registry priority order (artifacts/crashes/QUEUE.md).
 4. Flag every claim about code behavior that you could not verify against
    source with [UNVERIFIED] — the eval phase samples these for manual audit.
 
-Do not invent certainty. A wrong RCA is worse than an honest "unknown".
+Do not invent certainty. A wrong RCA is worse than recording "unknown".
 
 ## State
 Mark each analysed crash and the phase with the state tool, never by editing

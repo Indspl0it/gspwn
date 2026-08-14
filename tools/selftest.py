@@ -315,7 +315,7 @@ class TestReproHelpers(unittest.TestCase):
         self.assertNotEqual(after[len(before):], "NEW CRASH TEXT")
 
     def test_dmesg_delta_full_wrap_is_reported_not_guessed(self):
-        # Nothing of `before` survives, so there is no honest delta. The
+        # Nothing of `before` survives, so no delta can be computed. The
         # remaining buffer holds *earlier* runs' crash reports: scanning it
         # would score a hit on every later run.
         delta, wrapped = repro_ctl.dmesg_delta("old" * 400, "totally new")
