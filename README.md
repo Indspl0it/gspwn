@@ -402,7 +402,7 @@ The tools, briefly:
 | `trace2seed.py` | Converts an strace of a CUDA workload into seed programs |
 | `build_kernel.sh` | Builds the KASAN/KCOV kernel and the open-source driver modules |
 | `cost_ctl.py` | Idle watchdog that stops the cloud instance when nothing is fuzzing |
-| `selftest.py` | 104 offline tests for all of the above |
+| `selftest.py` | The offline test suite for all of the above |
 
 ## Configuration and cost control
 

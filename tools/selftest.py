@@ -238,14 +238,19 @@ class TestCrashParse(StateTempMixin, unittest.TestCase):
         st = ps.default_state()
         self.reg(st, "K", "title A", "same-hash")
         out = self.reg(st, "K", "title B", "same-hash")
-        self.assertIn("FLAG same-stack-different-title", out)
+        self.assertIn("FLAG", out)
+        self.assertIn("same stack", out)
         self.assertEqual(len(st["crashes"]), 2)
+        # The flag lives in the registry, not only in this output.
+        self.assertEqual(st["crashes"]["crash-0002"]["status"], "flagged")
 
     def test_flags_same_title_different_stack(self):
         st = ps.default_state()
         self.reg(st, "K", "same title", "hash-1")
         out = self.reg(st, "K", "same title", "hash-2")
-        self.assertIn("FLAG same-title-different-stack", out)
+        self.assertIn("FLAG", out)
+        self.assertIn("same title", out)
+        self.assertEqual(st["crashes"]["crash-0002"]["status"], "flagged")
 
     def test_scan_dmesg_picks_up_kernel_and_nvrm_signals(self):
         st = ps.default_state()
@@ -1178,6 +1183,75 @@ class TestTrackUCoverage(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("not sampling", out.getvalue())
         self.assertFalse(os.path.exists(coverage_ctl.csv_path("r1-k1")))
+
+
+class TestFlaggedCrashesReachTheRegistry(StateTempMixin, unittest.TestCase):
+    """A collision in one dedup key but not the other must survive as a
+    registry entry, not just a line of stdout."""
+
+    def setUp(self):
+        super().setUp()
+        self.st = ps.default_state()
+        with redirect_stdout(io.StringIO()):
+            crash_parse.register(self.st, "K", "KASAN: UAF in nv_a", "hash-a",
+                                 "/tmp/a")
+
+    def test_same_title_different_stack_is_registered_flagged(self):
+        # This used to print FLAG and then drop the crash entirely: a second
+        # bug behind a generic title vanished when the output scrolled away.
+        with redirect_stdout(io.StringIO()) as out:
+            cid = crash_parse.register(self.st, "K", "KASAN: UAF in nv_a",
+                                       "hash-DIFFERENT", "/tmp/b")
+        self.assertIsNotNone(cid)
+        c = self.st["crashes"][cid]
+        self.assertEqual(c["status"], "flagged")
+        self.assertIn("same title", c["notes"])
+        self.assertIn("FLAG", out.getvalue())
+
+    def test_same_stack_different_title_is_registered_flagged(self):
+        with redirect_stdout(io.StringIO()):
+            cid = crash_parse.register(self.st, "K", "KASAN: UAF in nv_b",
+                                       "hash-a", "/tmp/c")
+        self.assertEqual(self.st["crashes"][cid]["status"], "flagged")
+        self.assertIn("same stack", self.st["crashes"][cid]["notes"])
+
+    def test_identical_crash_is_not_re_registered(self):
+        """Harvest runs after every reboot, so re-scans must be idempotent."""
+        before = len(self.st["crashes"])
+        with redirect_stdout(io.StringIO()) as out:
+            cid = crash_parse.register(self.st, "K", "KASAN: UAF in nv_a",
+                                       "hash-a", "/tmp/a")
+        self.assertIsNone(cid)
+        self.assertEqual(len(self.st["crashes"]), before)
+        self.assertIn("DUP", out.getvalue())
+
+    def test_flagged_entries_are_findable_and_valid(self):
+        with redirect_stdout(io.StringIO()):
+            crash_parse.register(self.st, "K", "KASAN: UAF in nv_a", "hash-x",
+                                 "/tmp/b")
+        self.assertEqual(ps.validate(self.st), [])
+        flagged = [c for c in self.st["crashes"].values()
+                   if c["status"] == "flagged"]
+        self.assertEqual(len(flagged), 1)
+
+
+class TestBudgetGuard(StateTempMixin, unittest.TestCase):
+    """eval and ablation campaigns never pass through round-decide, so the
+    run-hour ceiling has to be checked where a campaign starts."""
+
+    def test_campaign_within_budget_is_allowed(self):
+        st = ps.default_state()
+        st["rounds"][-1]["run_hours"] = 100.0
+        ps.save(st)
+        self.assertEqual(campaign_ctl.check_budget(24, 216), 100.0)
+
+    def test_campaign_over_budget_is_refused(self):
+        st = ps.default_state()
+        st["rounds"][-1]["run_hours"] = 200.0
+        ps.save(st)
+        with self.assertRaises(SystemExit) as cm:
+            campaign_ctl.check_budget(24, 216)
+        self.assertIn("max_total_run_hours", str(cm.exception))
 
 
 class TestPlateauAcrossRestarts(unittest.TestCase):

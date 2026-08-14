@@ -24,7 +24,7 @@ track_u:
 
 eval:
   runs_per_config: 3       # independent runs per configuration (variance)
-  run_hours: 24            # length of each eval/ablation run
+  # Run length comes from loop.campaign_hours below — one duration, one place.
 
 loop:
   # Caps on the autonomous improvement loop. These are the spend ceiling: the

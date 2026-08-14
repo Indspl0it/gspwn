@@ -38,8 +38,9 @@ DEFAULTS = {
         "targets": [],
     },
     "eval": {
+        # Run length is loop.campaign_hours, not a second knob here: two
+        # places to set one duration is two places to drift.
         "runs_per_config": 3,
-        "run_hours": 24,
     },
     "loop": {
         "max_rounds": 3,
@@ -68,7 +69,6 @@ _RULES = [
     ("track_k", "procs", _POSITIVE),
     ("track_k", "smoke_window_minutes", _POSITIVE),
     ("eval", "runs_per_config", _POSITIVE),
-    ("eval", "run_hours", _POSITIVE),
     ("loop", "max_rounds", _POSITIVE),
     ("loop", "max_total_run_hours", _POSITIVE),
     ("loop", "campaign_hours", _POSITIVE),

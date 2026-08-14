@@ -12,13 +12,18 @@ registry.
    for f in <path>/kdump-*/dmesg.* <path>/kdump-*/dump/dmesg.*; do [ -e "$f" ] && python3 tools/crash_parse.py --dmesg "$f"; done
    On EC2 harvests, also parse the console log when present:
    [ -e <path>/console-output.log ] && python3 tools/crash_parse.py --dmesg <path>/console-output.log
-3. Review every FLAG line from crash_parse output (title/stack collisions in
-   either direction): read both reports, decide duplicate vs distinct, then
+3. Work the flagged queue. A title/stack collision in either direction is
+   registered with status `flagged`, so the queue is durable and does not
+   depend on crash_parse's output still being on screen:
+     python3 tools/pipeline_ctl.py crash-list --status flagged
+   For each one, read both reports and decide duplicate vs distinct, then
    correct the registry with the state tool — never by hand-editing
    pipeline.json:
      python3 tools/pipeline_ctl.py crash-set <id> --duplicate-of <other-id>
-     python3 tools/pipeline_ctl.py crash-set <id> --notes "<why distinct>"
-   Every FLAG must end in one of those two calls; an unreviewed flag is an
+     python3 tools/pipeline_ctl.py crash-set <id> --status unique \
+       --notes "<why distinct>"
+   Every flagged crash must end in one of those two calls; the gate is
+   `crash-list --status flagged` returning nothing. An unreviewed flag is an
    open gate item, not a default-distinct crash. To undo a duplicate call
    made in error, `crash-set <id> --duplicate-of none` clears the link and
    returns the crash to the unique queue.
