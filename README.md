@@ -85,7 +85,7 @@ fuzzer. The kernel is rebuilt with two features turned on:
 
 | Instrumentation | What it does | Why it's needed |
 |---|---|---|
-| **KCOV** | Reports which kernel code each input reached | The fitness signal. Inputs that reach new code get kept and mutated further — this is what makes fuzzing smarter than random |
+| **KCOV** | Reports which kernel code each input reached | The fitness signal. Inputs that reach new code are kept and mutated further, directing generation toward unexplored paths |
 | **KASAN** | Detects memory errors at the moment they happen | Without it a heap overflow corrupts memory silently and crashes minutes later somewhere unrelated, and the crash site no longer indicates the cause |
 
 Two problems stand in the way of fuzzing this driver.
@@ -95,7 +95,8 @@ Two problems stand in the way of fuzzing this driver.
 struct layout, field types, which arguments are handles produced by earlier
 calls. NVIDIA's driver exposes hundreds of ioctls with no public descriptions.
 Writing them means reading driver headers and source and translating by hand.
-It is slow, expert work, and it is the reason this surface stays under-fuzzed.
+Writing them is slow specialist work, and the main reason this surface
+remains under-fuzzed.
 
 **Problem 2: random input never gets deep.** Real GPU work is a chain — open
 the control device, allocate a client object, allocate a device under it, then
@@ -117,7 +118,7 @@ against manually refined ones, and trace-derived seeds against seedless runs.
 ## The pipeline
 
 Twelve phases. Two run once per machine, nine run once per **round**, and the
-report runs once at the very end.
+report runs once at the end.
 
 ```mermaid
 flowchart TD
@@ -228,13 +229,13 @@ right subagent, checks the gate, records the result.
 
 **Subagents.** One per phase, prompted from `agents/<phase>.md`. They are
 isolated — no talking to each other — and they hand off *paths*, not
-conversation transcripts. That is what keeps the pipeline resumable: any agent
-can be replaced mid-run and the next one picks up from disk.
+conversation transcripts. Because the handoff is on disk, any agent can be
+replaced mid-run and the next one resumes from the same state.
 
 **Tools.** Every action that touches the build, the campaign, the crash data or
 the state file goes through Python in `tools/`. An agent decides *which* ioctl
-to model; a script does the building, parsing and verifying. This is why the
-results are reproducible rather than dependent on what some agent improvised.
+to model; a script does the building, parsing and verifying. Results
+therefore depend on the tools rather than on commands composed at runtime.
 
 **Blackboard.** `state/pipeline.json` plus the `artifacts/` tree. Nothing
 pipeline-relevant lives in the conversation. Writes are atomic, fsync'd, and
@@ -299,8 +300,8 @@ as still learning if **either** track is still finding edges.
 
 ## Surviving kernel panics
 
-The whole point is crashing the kernel. When the fuzzer finds a good bug the
-machine panics and reboots — and since the orchestrator runs on that same
+Crashing the kernel is the expected outcome. When the fuzzer finds a bug the
+machine panics and reboots, and since the orchestrator runs on that same
 machine, the agent session dies with it.
 
 ```mermaid
@@ -323,8 +324,8 @@ sequenceDiagram
     A->>A: resume at the first phase not done
 ```
 
-Concretely, that means: fuzzers run as systemd units with `Restart=always` so
-they outlive the session; crash logs land in persistent storage that survives
+Fuzzers run as systemd units with `Restart=always` so they outlive the
+session; crash logs land in persistent storage that survives
 the reboot; state writes are tempfile + fsync + atomic rename, so a panic
 mid-write leaves the previous good file rather than a truncated one; and the
 campaign carries a **deadline on disk**, so a run configured for 24 hours ends

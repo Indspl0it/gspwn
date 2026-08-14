@@ -1,18 +1,15 @@
 """Single source of truth for every tunable in the pipeline.
 
-The loop runs unattended: once the caps here are keyed in, no tool asks a
-human anything. That only holds if there is exactly one place the caps live,
-so every tool reads them from here rather than carrying its own default. A
-constant duplicated into a tool is a constant that will drift from the config
-file and silently point a sampler at the wrong port or spend past a ceiling.
+Every tool reads its tunables from here rather than defining its own, so a
+value cannot drift between the config file and the code that uses it.
 
 Read the effective configuration (defaults merged with config/campaign.yaml,
 fully validated) before starting a campaign:
 
     python3 tools/gspwn_config.py
 
-Unknown keys are rejected rather than ignored: a typo in a spend cap must not
-silently fall back to the default while the operator believes it took effect.
+Unknown keys are rejected rather than ignored, so a misspelled key fails
+loudly instead of leaving the default value in force.
 """
 import os
 import sys
@@ -38,8 +35,7 @@ DEFAULTS = {
         "targets": [],
     },
     "eval": {
-        # Run length is loop.campaign_hours, not a second knob here: two
-        # places to set one duration is two places to drift.
+        # Run length is loop.campaign_hours; it is not duplicated here.
         "runs_per_config": 3,
     },
     "loop": {
@@ -108,8 +104,7 @@ def _merge(defaults, given, path=""):
     unknown = sorted(set(given) - set(defaults))
     if unknown:
         raise ConfigError(
-            "unknown key(s) in %s: %s. Valid keys here: %s. (A typo in a cap "
-            "must not silently fall back to the default.)"
+            "unknown key(s) in %s: %s. Valid keys here: %s"
             % (path.rstrip(".") or "campaign.yaml", ", ".join(
                 path + u for u in unknown), ", ".join(sorted(defaults))))
     return out
@@ -188,9 +183,9 @@ def cost(path=None):
 def manager_url(path=None):
     """syz-manager HTTP base URL, derived from track_k.http.
 
-    The coverage sampler used to carry its own copy of this address; when the
-    port changed in config the sampler kept polling the old one and recorded
-    an entire campaign as 'unreachable'.
+    Derived here rather than duplicated into the sampler, so a port change in
+    config cannot leave the sampler polling a stale address and recording the
+    campaign as 'unreachable'.
     """
     http = str(load(path)["track_k"]["http"])
     return http if http.startswith("http") else "http://" + http

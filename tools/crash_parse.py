@@ -44,12 +44,12 @@ def existing_keys(state):
 def register(state, track, title, shash, srcdir):
     """Add a crash to the registry, or explain why it was not added.
 
-    A collision in one key but not the other might be a second bug or the same
-    bug reported twice, and only a human-grade read of both reports can say.
-    Such a crash is registered as `flagged` so it survives in the registry and
-    `crash-list --status flagged` is a durable queue. Printing a FLAG line and
-    dropping the crash — which is what this did for same-title-different-stack
-    — loses a potential finding the moment the output scrolls away.
+    A collision in one key but not the other may be a second bug or the same
+    bug reported twice; distinguishing them requires reading both reports.
+    Such a crash is registered as `flagged`, so it persists in the registry
+    and `crash-list --status flagged` serves as the review queue. A crash
+    reported only in log output would not be addressable once that output is
+    gone.
     """
     by_title, by_hash = existing_keys(state)
     other_cid = None

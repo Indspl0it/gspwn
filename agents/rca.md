@@ -25,4 +25,4 @@ pipeline.json:
 ## Gate evidence
 paths of completed RCA files, and the count of [UNVERIFIED] claims per file —
 the eval phase samples from exactly that set, so an RCA reporting zero
-unverified claims must genuinely have verified all of them against source.
+unverified claims must have verified all of them against source.

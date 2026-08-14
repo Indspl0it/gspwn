@@ -311,9 +311,8 @@ def advance_round(state):
                          % r["decision"])
     for p in ROUND_PHASES:
         state["phases"][p] = dict(DEFAULT_PHASE)
-    # Carry the worklist forward: it is the only thing the new round inherits
-    # from the last one besides the corpus, and it is what makes the loop a
-    # learning loop rather than a repeat.
+    # Carry the worklist forward: besides the corpus, it is the only state the
+    # new round inherits from the last one.
     state["rounds"].append(dict(DEFAULT_ROUND, round=r["round"] + 1,
                                 started=_now(), worklist_in=r.get("worklist")))
     return current_round(state)

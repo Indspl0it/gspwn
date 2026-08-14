@@ -157,9 +157,9 @@ narrow:
 
 ## Run directory layout
 
-Every campaign is isolated. This is not cosmetic: the eval reports variance
-across independent runs, and two runs sharing a workdir share an evolved
-corpus, which makes them not independent and contaminates every ablation arm.
+Every campaign is isolated. The eval reports variance across independent
+runs, and two runs sharing a workdir share an evolved corpus, so they are not
+independent and every ablation arm drawn from them is contaminated.
 
 ```
 artifacts/runs/<run-id>/
