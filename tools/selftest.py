@@ -1104,6 +1104,40 @@ class TestDerivedRoundEnd(StateTempMixin, unittest.TestCase):
                                             max_total_run_hours=100)
         self.assertEqual(decision, "stop")
 
+    def two_hour_curve(self, run_id="r1-k1"):
+        base = 1_700_000_000
+        self.write_curve(run_id, [(base, 100), (base + 3600, 120),
+                                  (base + 7200, 130)])
+
+    def test_hours_entered_by_hand_reach_the_ledger_the_budget_reads(self):
+        """A round total the budget cannot see is not a spend ceiling.
+
+        --run-hours belongs to no single run, so it bills under the round's
+        own key. A measured run alongside it is the case that used to fail
+        silently: the ledger existed and looked healthy, holding the derived
+        2 h while the round recorded 7, so no guard ever fired and the
+        difference simply went unspent on paper.
+        """
+        self.two_hour_curve()
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(self.Args(from_run="r1-k1",
+                                                 run_hours=5.0))
+        self.assertEqual(ps.load()["rounds"][-1]["run_hours"], 7.0)
+        self.assertEqual(ps.spend_for_budget(), 7.0)
+
+    def test_re_running_round_end_does_not_double_bill_manual_hours(self):
+        """The ledger takes the round's unattributed total, not the
+        increment, so the round history and the budget cannot drift apart
+        when round-end is retried. Re-measuring the same run bills it once;
+        the hand-entered hours accumulate."""
+        self.two_hour_curve()
+        for hours in (5.0, 3.0):
+            with redirect_stdout(io.StringIO()):
+                pipeline_ctl_cmd_round_end(self.Args(from_run="r1-k1",
+                                                     run_hours=hours))
+        self.assertEqual(ps.load()["rounds"][-1]["run_hours"], 10.0)
+        self.assertEqual(ps.spend_for_budget(), 10.0)
+
     def test_an_explicit_flag_still_overrides_the_measurement(self):
         base = 1_700_000_000
         self.write_curve("r1-k1", [(base + i * 3600, 1000 + i * 300)
@@ -1306,6 +1340,31 @@ class TestBudgetGuard(StateTempMixin, unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             campaign_ctl.check_budget(24, 216)
         self.assertIn("max_total_run_hours", str(cm.exception))
+
+    def test_an_ablation_redirect_cannot_seed_the_ledger_from_its_own_state(
+            self):
+        """Seeding must read the same file spend_for_budget does.
+
+        The shape that broke: 100 h on the machine's record, no ledger yet,
+        and an ablation run with its own registry billing first. Seeding from
+        STATE_PATH built the ledger out of the ablation's empty registry and
+        all 100 h dropped off the budget — the bypass the ledger exists to
+        close, reopened one function below the guard.
+        """
+        st = ps.default_state()
+        st["rounds"][-1]["run_ids"] = ["r1-k1"]
+        st["rounds"][-1]["run_hours"] = 100.0
+        st["rounds"][-1]["run_hours_by_run"] = {"r1-k1": 100.0}
+        ps.save(st, ps.DEFAULT_STATE_PATH)
+        # The ablation run redirects its registry; the ledger must not follow.
+        # StateTempMixin's cleanup restores STATE_PATH afterwards.
+        ps.STATE_PATH = os.path.join(self.tmp.name, "state", "ablation.json")
+        ps.save(ps.default_state(), ps.STATE_PATH)
+
+        ps.record_run_hours("ablation-1", 2.0)
+
+        self.assertEqual(ps.spend_for_budget(), 102.0)
+        self.assertEqual(ps._read_ledger(self.spend_path)["r1-k1"], 100.0)
 
     def test_a_lost_ledger_refuses_rather_than_reading_as_unspent(self):
         # Fail closed: hours on record with no ledger means the ledger was
