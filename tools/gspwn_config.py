@@ -139,8 +139,10 @@ def validate(cfg):
             "no round could finish inside the budget"
             % (cfg["loop"]["campaign_hours"],
                cfg["loop"]["max_total_run_hours"]))
-    if cfg["loop"]["plateau_window_min"] < cfg["loop"][
-            "coverage_sample_min"] * 3:
+    if (_num(cfg["loop"]["plateau_window_min"])
+            and _num(cfg["loop"]["coverage_sample_min"])
+            and cfg["loop"]["plateau_window_min"] < cfg["loop"][
+                "coverage_sample_min"] * 3):
         problems.append(
             "loop.plateau_window_min (%s) is under 3 sampling intervals of "
             "%s min — the plateau test needs >= 3 samples in the window and "

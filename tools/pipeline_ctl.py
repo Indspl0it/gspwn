@@ -159,7 +159,11 @@ def _derive_round(st, run_id, cfg):
     # paper cites; Track U's per-harness bitmaps are not comparable to it.
     rows = coverage_ctl.metric_rows(run_id, "edges", "k")
     if rows:
-        out["edges_start"], out["edges_end"] = rows[0]["edges"], rows[-1]["edges"]
+        # Peak, not the last sample: a fuzzer restart zeroes the counter, and
+        # recording edges_end below edges_start would show the round losing
+        # coverage in the history the paper's progression table cites.
+        out["edges_start"] = rows[0]["edges"]
+        out["edges_end"] = max(r["edges"] for r in rows)
     # Wall-clock of the campaign, from the first to the last sample on any
     # track — a run that died after 3 h must not bill the configured 24.
     stamps = [r["ts"] for t in coverage_ctl.TRACKS

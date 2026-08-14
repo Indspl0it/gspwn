@@ -224,7 +224,9 @@ def cmd_install_k(a):
     seed_corpus(a.run_id, a.corpus, a.from_run, a.seeds)
     hours = a.hours if a.hours is not None else conf["loop"]["campaign_hours"]
     at = write_deadline(a.run_id, hours)
-    print("campaign window: %s h (stops at epoch %d)" % (hours, int(at)))
+    install_deadline_timer(a.run_id, int(conf["loop"]["coverage_sample_min"]))
+    print("campaign window: %s h (stops at epoch %d, enforced by %s.timer)"
+          % (hours, int(at), DEADLINE_NAME))
     cmd_gen_config(a)
     syzkaller = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller")
     write_unit(UNIT_K, UNIT_K_TMPL.format(
@@ -253,8 +255,45 @@ def unit(track):
     return {"k": "gspwn-k", "u": "gspwn-u"}[track]
 
 
+DEADLINE_NAME = "gspwn-deadline"
+DEADLINE_SERVICE_TMPL = """[Unit]
+Description=gspwn campaign deadline enforcement ({run_id})
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 {root}/tools/campaign_ctl.py check-deadline \\
+  --run-id {run_id}
+"""
+DEADLINE_TIMER_TMPL = """[Unit]
+Description=gspwn campaign deadline enforcement
+
+[Timer]
+OnBootSec={every}min
+OnUnitActiveSec={every}min
+
+[Install]
+WantedBy=timers.target
+"""
+
+
 def deadline_path(run_id):
     return os.path.join(run_dir(run_id), "deadline")
+
+
+def install_deadline_timer(run_id, every_min):
+    """Enforce the campaign window from its own timer.
+
+    The spend ceiling must not depend on a separate command being run
+    afterwards: the fuzz units are Restart=always, so a campaign whose
+    deadline nothing checks simply never ends. install-k owns this because
+    install-k is what starts the clock.
+    """
+    with open("/etc/systemd/system/%s.service" % DEADLINE_NAME, "w") as f:
+        f.write(DEADLINE_SERVICE_TMPL.format(root=REPO_ROOT, run_id=run_id))
+    with open("/etc/systemd/system/%s.timer" % DEADLINE_NAME, "w") as f:
+        f.write(DEADLINE_TIMER_TMPL.format(every=every_min))
+    sh(["systemctl", "daemon-reload"])
+    sh(["systemctl", "enable", "--now", "%s.timer" % DEADLINE_NAME])
 
 
 def write_deadline(run_id, hours):
