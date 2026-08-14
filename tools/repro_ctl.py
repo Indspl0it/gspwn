@@ -14,13 +14,12 @@ Classification (spec Phase 5): reliable >= 80%, flaky = reproduces but < 80%,
 unreproducible = 0/N. Clean-boot verification is orchestrated by the poc agent
 (it reboots between runs); this tool provides the per-run mechanics.
 
-Panic durability: a good kernel reproducer will often take the machine down
+Panic durability: a kernel reproducer will often take the machine down
 mid-verification. Progress is persisted before and after every run, so a run
-that panics the box is recovered on the next invocation instead of being lost
-— which would otherwise make the most severe bugs look unreproducible. The
+that panics the box is recovered on the next invocation rather than lost. The
 recovered run counts as a reproduction only if the boot id changed, i.e. the
-machine actually went down; a verification process that merely died on the
-same boot is void.
+machine actually went down; a verification process that died on the same boot
+is void.
 
 The rate is hits / counted runs. Void runs — those that produced no usable
 verdict — are excluded from both the numerator and the denominator, and are

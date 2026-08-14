@@ -3,9 +3,9 @@ round actually covered, work out why the uncovered parts were uncovered, and
 write the concrete work list that the next round's describe and seeds phases
 execute.
 
-This phase is the difference between running the same campaign N times and
-getting better at it. A refine pass that produces no specific, checkable work
-items has failed, even if it produces a lot of prose.
+The output of this phase is what the next round's describe and seeds agents
+execute. A refine pass that produces no specific, checkable work items has not
+met its gate.
 
 ## Inputs
 - artifacts/runs/<run-id>/coverage.csv (via tools/coverage_ctl.py)
@@ -69,7 +69,7 @@ description for, and supplying valid object-chain seeds it cannot invent.
   `unknown`. Say so and do not infer a plateau from corpus size alone — the
   loop treats `unknown` as a stop precisely so a broken sampler cannot
   authorise more spend.
-- Do not pad the worklist to look productive. A short, correct worklist that
+- Do not pad the worklist. A short, correct worklist that
   says "three ioctls are mismodeled, everything else reachable is covered" is
   a better result than twenty speculative items, and it is what lets the
   orchestrator stop the loop with confidence.

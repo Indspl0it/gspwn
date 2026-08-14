@@ -84,7 +84,7 @@ def cmd_check_idle():
                 # Corrupt marker (e.g. truncated by a panic): restart the clock
                 # rather than crash the watchdog or stop the box early. The
                 # removal is best-effort — the file may already be gone, and
-                # raising here would be the very traceback this guards against.
+                # raising here would produce the traceback this handler prevents.
                 try:
                     os.remove(IDLE_FILE)
                 except OSError:
