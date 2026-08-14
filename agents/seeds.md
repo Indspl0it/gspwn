@@ -40,5 +40,5 @@ Record progress with the state tool, never by editing pipeline.json:
 
 ## Gate evidence
 seed count, mapped/unmapped ioctl counts, smoke-run log excerpt showing no
-seed parse errors. Report the unmapped count honestly — a high unmapped ratio
+seed parse errors. Report the unmapped count — a high unmapped ratio
 means the ioctl_map is incomplete and the seeds cover less than they appear to.

@@ -315,15 +315,15 @@ class TestReproHelpers(unittest.TestCase):
         self.assertNotEqual(after[len(before):], "NEW CRASH TEXT")
 
     def test_dmesg_delta_full_wrap_is_reported_not_guessed(self):
-        # Nothing of `before` survives, so there is no honest delta. The
+        # Nothing of `before` survives, so no delta can be computed. The
         # remaining buffer holds *earlier* runs' crash reports: scanning it
         # would score a hit on every later run.
         delta, wrapped = repro_ctl.dmesg_delta("old" * 400, "totally new")
         self.assertTrue(wrapped)
 
     def test_matched_signature_agrees_with_hit_counting(self):
-        # The bug this guards: counting a hit on a generic pattern while the
-        # log line said "clean" because it only checked the title keyword.
+        # The hit count and the logged verdict come from one predicate, so
+        # they cannot disagree about whether a run reproduced.
         self.assertEqual(repro_ctl.matched_signature("KASAN: bad", "nv_free"),
                          "KASAN:")
         self.assertEqual(repro_ctl.matched_signature("oops nv_free here",
@@ -813,8 +813,8 @@ class TestPipelineCtlCLI(unittest.TestCase):
                          "flagged")
 
     def test_crash_list_rejects_an_unknown_status(self):
-        # A typo used to print "no crashes match" and exit 0, which reads as
-        # "there are no unique crashes".
+        # An unknown status must be a usage error, not an empty result:
+        # "no crashes match" with exit 0 is indistinguishable from success.
         self.ctl("init")
         self.ctl("crash-list", "--status", "uniqe", expect=2)
 
@@ -854,8 +854,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["cost"]["idle_stop_minutes"], 120)
 
     def test_a_typo_in_a_cap_is_rejected_not_defaulted(self):
-        # The failure this prevents: operator sets `max_rouds: 10`, believes
-        # the cap took effect, and the loop silently runs on the default.
+        # An unrecognized key must not fall back to the default value while
+        # appearing to have been applied.
         with self.assertRaises(gspwn_config.ConfigError) as cm:
             gspwn_config.load(self.write("loop:\n  max_rouds: 10\n"))
         self.assertIn("max_rouds", str(cm.exception))
@@ -1197,8 +1197,8 @@ class TestFlaggedCrashesReachTheRegistry(StateTempMixin, unittest.TestCase):
                                  "/tmp/a")
 
     def test_same_title_different_stack_is_registered_flagged(self):
-        # This used to print FLAG and then drop the crash entirely: a second
-        # bug behind a generic title vanished when the output scrolled away.
+        # A collision must produce a registry entry, not only log output:
+        # a second bug behind a generic title has to remain addressable.
         with redirect_stdout(io.StringIO()) as out:
             cid = crash_parse.register(self.st, "K", "KASAN: UAF in nv_a",
                                        "hash-DIFFERENT", "/tmp/b")

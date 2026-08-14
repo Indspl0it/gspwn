@@ -14,7 +14,7 @@ registry priority order (artifacts/crashes/QUEUE.md).
 4. Flag every claim about code behavior that you could not verify against
    source with [UNVERIFIED] — the eval phase samples these for manual audit.
 
-Do not invent certainty. A wrong RCA is worse than an honest "unknown".
+Do not invent certainty. A wrong RCA is worse than recording "unknown".
 
 ## State
 Mark each analysed crash and the phase with the state tool, never by editing
@@ -25,4 +25,4 @@ pipeline.json:
 ## Gate evidence
 paths of completed RCA files, and the count of [UNVERIFIED] claims per file —
 the eval phase samples from exactly that set, so an RCA reporting zero
-unverified claims must genuinely have verified all of them against source.
+unverified claims must have verified all of them against source.

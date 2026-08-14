@@ -17,9 +17,9 @@ into the run's corpus.db (merging anything carried). An ablation arm testing
 testing what it claims.
 
 Every campaign carries a deadline of `loop.campaign_hours`, written to disk at
-install time and enforced by the sampler's timer, so the run ends on schedule
-even if this session is gone. Do not stop a campaign early by hand unless a
-gate failed — the round accounting reads the actual elapsed time.
+install time and enforced by `gspwn-deadline.timer`, so the run ends on
+schedule even if this session is gone. Do not stop a campaign early by hand
+unless a gate failed — the round accounting reads the actual elapsed time.
 
 ## Do
 1. Generate the run config (do not hand-write it):
