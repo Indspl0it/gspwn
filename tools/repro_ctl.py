@@ -658,8 +658,12 @@ def _acquire_lock():
     """Exclusive, non-blocking session lock. Concurrent verifiers share one
     dmesg ring and one machine, so a second session corrupts both runs'
     delta windows. Fail fast instead of queueing — a queued verify would
-    start against a ring full of the other session's crashes anyway."""
-    d = os.path.dirname(ps.STATE_PATH)
+    start against a ring full of the other session's crashes anyway.
+
+    The lock lives in the machine's own state dir and does not follow
+    GSPWN_STATE: what it protects is the one dmesg ring, so two ablation runs
+    with separate registries must still exclude each other."""
+    d = ps.STATE_DIR
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, REPRO_LOCK)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
@@ -673,7 +677,7 @@ def _acquire_lock():
     return fd
 
 
-def _verify_session(cid, entry, runs, restart, run_one, first_before=None):
+def _verify_session(cid, runs, restart, run_one, first_before=None):
     """The durable progress loop shared by both tracks. `run_one` returns a
     dict: verdict (hit|clean|void), detail, evidence (for hits), timed_out.
     """
@@ -792,7 +796,7 @@ def cmd_verify(cid, runs, restart, cmd=None, crash_exit=None, track=None):
             run_one, first_before = _prepare_k(cid, c)
         else:
             run_one, first_before = _prepare_u(cid, c, cmd, crash_exit), None
-        return _verify_session(cid, c, runs, restart, run_one, first_before)
+        return _verify_session(cid, runs, restart, run_one, first_before)
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)

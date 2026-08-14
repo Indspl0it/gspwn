@@ -260,6 +260,15 @@ def cmd_round_end(a):
         # round-end cannot double-count a campaign.
         for rid, hours in billed.items():
             ps.record_run_hours(rid, hours)
+        # Hours entered by hand (--run-hours) belong to no single run, so they
+        # bill under the round's own key. Without this they would raise the
+        # round total while the budget kept reading the ledger and never saw
+        # them. Recording the round's current unattributed total (not the
+        # increment) keeps a repeated round-end idempotent.
+        manual = round(r["run_hours"] - sum(
+            (r.get("run_hours_by_run") or {}).values()), 2)
+        if manual > 0:
+            ps.record_run_hours("round-%d" % r["round"], manual)
         summary = "round %d closed: %s, crashes=%s, run_h=%s" % (
             r["round"], r["coverage_verdict"], r["new_crashes"],
             r["run_hours"])

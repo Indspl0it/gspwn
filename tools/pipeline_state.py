@@ -297,10 +297,15 @@ def _seed_spend_ledger(path):
     fully attributed lands under its single run id, or under a "round-N" key
     when the split across several runs is unknowable — the hours must not be
     lost, but a per-run split must not be invented either.
+
+    Seeds from the DEFAULT state file, never STATE_PATH, for the same reason
+    spend_for_budget() does: an ablation run redirecting GSPWN_STATE would
+    otherwise seed the machine-global ledger from its own empty registry, and
+    every hour recorded before it would drop off the budget.
     """
     if os.path.exists(path):
         return
-    st = load(STATE_PATH)
+    st = load(DEFAULT_STATE_PATH)
     entries = {}
     for r in st.get("rounds", []):
         by_run = r.get("run_hours_by_run") or {}

@@ -308,9 +308,19 @@ def unit(track):
 
 
 def unit_active(name):
+    """Is this campaign unit still running?
+
+    'activating' counts: it is the RestartSec backoff a Restart=always fuzz
+    unit sits in after a syz-manager crash, which this pipeline expects
+    routinely. Reading that as stopped would let check-deadline disable the
+    unit, bill the run and retire its own timer while the restart completes
+    behind it — a campaign left fuzzing with nothing able to stop it. Same
+    reading as cost_ctl.is_idle, which must not disagree about the same
+    units.
+    """
     r = subprocess.run(["systemctl", "is-active", name],
                        capture_output=True, text=True)
-    return r.stdout.strip() == "active"
+    return r.stdout.strip() in ("active", "activating")
 
 
 def unit_run_id(name):
