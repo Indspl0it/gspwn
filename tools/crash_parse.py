@@ -42,22 +42,41 @@ def existing_keys(state):
 
 
 def register(state, track, title, shash, srcdir):
+    """Add a crash to the registry, or explain why it was not added.
+
+    A collision in one key but not the other might be a second bug or the same
+    bug reported twice, and only a human-grade read of both reports can say.
+    Such a crash is registered as `flagged` so it survives in the registry and
+    `crash-list --status flagged` is a durable queue. Printing a FLAG line and
+    dropping the crash — which is what this did for same-title-different-stack
+    — loses a potential finding the moment the output scrolls away.
+    """
     by_title, by_hash = existing_keys(state)
+    other_cid = None
     if title in by_title:
-        other = state["crashes"][by_title[title]]
-        if other["stack_hash"] != shash:
-            print("FLAG same-title-different-stack: %s vs %s"
-                  % (by_title[title], title))
-        print("DUP %s -> %s" % (title, by_title[title]))
-        return
-    if shash in by_hash:
-        print("FLAG same-stack-different-title: %s vs %s"
-              % (title, state["crashes"][by_hash[shash]]["title"]))
+        other_cid = by_title[title]
+        if state["crashes"][other_cid]["stack_hash"] == shash:
+            # Same title AND same stack: the same crash, already registered.
+            # Re-scans must be idempotent — harvest runs after every reboot.
+            print("DUP %s -> %s" % (title, other_cid))
+            return None
+        reason = "same title as %s, different stack" % other_cid
+    elif shash in by_hash:
+        other_cid = by_hash[shash]
+        reason = "same stack as %s, different title" % other_cid
+    status = "flagged" if other_cid else "unique"
     cid = ps.register_crash(state, {
         "track": track, "title": title, "stack_hash": shash,
-        "status": "unique", "dir": srcdir, "repro_rate": None,
-        "duplicate_of": None, "disclosure": "pending"})
-    print("NEW %s %s" % (cid, title))
+        "status": status, "dir": srcdir, "repro_rate": None,
+        "duplicate_of": None, "disclosure": "pending",
+        "notes": reason if other_cid else ""})
+    if other_cid:
+        print("FLAG %s %s (%s) — decide with: pipeline_ctl.py crash-set %s "
+              "--duplicate-of %s | --status unique"
+              % (cid, title, reason, cid, other_cid))
+    else:
+        print("NEW %s %s" % (cid, title))
+    return cid
 
 
 def scan_syz(state, workdir):
@@ -143,7 +162,13 @@ def main():
         if a.dmesg and os.path.exists(a.dmesg):
             scan_dmesg(state, a.dmesg)
         total = len(state["crashes"])
+        flagged = sum(1 for c in state["crashes"].values()
+                      if c["status"] == "flagged")
     print("registry now holds %d crashes" % total)
+    if flagged:
+        print("%d flagged — every one needs a decision before the triage gate "
+              "holds: python3 tools/pipeline_ctl.py crash-list --status flagged"
+              % flagged)
 
 
 if __name__ == "__main__":

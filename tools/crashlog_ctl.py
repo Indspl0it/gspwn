@@ -117,6 +117,14 @@ def cmd_verify(env):
     sys.exit(0 if ok else 1)
 
 
+def harvested_kdumps():
+    """Basenames of /var/crash dumps already copied by a previous harvest."""
+    seen = set()
+    for d in glob.glob(os.path.join(CRASHES_DIR, "*", "kdump-*")):
+        seen.add(os.path.basename(d)[len("kdump-"):])
+    return seen
+
+
 def cmd_harvest(env):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(CRASHES_DIR, "pstore-" + stamp)
@@ -139,17 +147,34 @@ def cmd_harvest(env):
         except Exception as e:
             print("WARN: console-output harvest failed: %s" % e)
     else:
+        copied = []
         for src in glob.glob("/sys/fs/pstore/*"):
             shutil.copy(src, dest)
+            copied.append(src)
             found = True
-    crashes = sorted(glob.glob("/var/crash/*"), key=os.path.getmtime)
-    if crashes:
-        newest = crashes[-1]
-        out = os.path.join(dest, "kdump-" + os.path.basename(newest))
-        shutil.copytree(newest, out, dirs_exist_ok=True)
+        # pstore is a small fixed-size backend that only frees a record when
+        # the file is deleted. Leaving records in place means the NEXT panic
+        # has nowhere to write — on a machine that panics by design, that is
+        # lost findings — and every later harvest re-copies the same records.
+        for src in copied:
+            try:
+                os.unlink(src)
+            except OSError as e:
+                print("WARN: could not clear %s (%s); pstore may fill and drop "
+                      "later panics" % (src, e))
+    # Every unharvested dump, not just the newest: several panics can land
+    # between two harvests, and taking only the last one silently discards the
+    # earlier crashes.
+    already = harvested_kdumps()
+    for src in sorted(glob.glob("/var/crash/*"), key=os.path.getmtime):
+        name = os.path.basename(src)
+        if name in already or not os.path.isdir(src):
+            continue
+        shutil.copytree(src, os.path.join(dest, "kdump-" + name),
+                        dirs_exist_ok=True)
         found = True
     if not found:
-        os.rmdir(dest)
+        shutil.rmtree(dest, ignore_errors=True)
         print("no crash logs found")
         sys.exit(1)
     print(dest)  # last line = artifact path, consumed by callers

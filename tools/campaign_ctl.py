@@ -217,16 +217,37 @@ def seed_corpus(run_id, corpus, from_run, seeds):
     return dest_db
 
 
+def check_budget(hours, cap):
+    """Refuse to start a campaign that the run-hour budget cannot cover.
+
+    round-decide enforces the cap between rounds, but eval and ablation
+    campaigns are started directly by the fuzz phase and never pass through
+    it, so without this check the budget can be overshot by an arbitrary
+    number of extra runs. Raising the cap is a deliberate edit to
+    config/campaign.yaml, not something a tool does to keep a campaign alive.
+    """
+    spent = ps.total_run_hours(ps.load())
+    if spent + hours > cap:
+        sys.exit("refusing to start: %.1f h already recorded + %.1f h for this "
+                 "campaign exceeds loop.max_total_run_hours (%s). Raise the "
+                 "cap in config/campaign.yaml if that is what you want."
+                 % (spent, hours, cap))
+    return spent
+
+
 def cmd_install_k(a):
     require_root("install")
     conf = cfg()
     c = conf["track_k"]
-    seed_corpus(a.run_id, a.corpus, a.from_run, a.seeds)
     hours = a.hours if a.hours is not None else conf["loop"]["campaign_hours"]
+    spent = check_budget(hours, conf["loop"]["max_total_run_hours"])
+    seed_corpus(a.run_id, a.corpus, a.from_run, a.seeds)
     at = write_deadline(a.run_id, hours)
     install_deadline_timer(a.run_id, int(conf["loop"]["coverage_sample_min"]))
-    print("campaign window: %s h (stops at epoch %d, enforced by %s.timer)"
-          % (hours, int(at), DEADLINE_NAME))
+    print("campaign window: %s h (stops at epoch %d, enforced by %s.timer); "
+          "budget %.1f of %s run-hours used before this campaign"
+          % (hours, int(at), DEADLINE_NAME, spent,
+             conf["loop"]["max_total_run_hours"]))
     cmd_gen_config(a)
     syzkaller = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller")
     write_unit(UNIT_K, UNIT_K_TMPL.format(

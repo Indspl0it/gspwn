@@ -11,7 +11,7 @@ You are the eval-phase agent. Produce publication-grade measurements.
    so and exclude it rather than substituting corpus size.
 2. Metrics table: unique crashes, time-to-first-crash, repro rates,
    per-run variance. Protocol: >= config eval.runs_per_config independent
-   runs of eval.run_hours each per configuration; report variance. Single
+   runs of loop.campaign_hours each per configuration; report variance. Single
    runs are not publishable.
    **Independence is a property of the run, not the intent:** each run must
    have had its own --run-id and workdir, and the seeded/unseeded arms must
