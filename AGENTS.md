@@ -18,7 +18,7 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
 - Phases run in dependency order (below). `describe`, `seeds`, `harness` may
   run in parallel with each other after `build`.
 - After any interruption (session restart, kernel panic, reboot):
-  1. `python3 tools/crashlog_ctl.py harvest`
+  1. `sudo python3 tools/crashlog_ctl.py harvest`
   2. `python3 tools/pipeline_ctl.py show` (and `validate`)
   3. resume at the phase reported by `python3 tools/pipeline_ctl.py next`
 
@@ -39,8 +39,21 @@ force. If it exits non-zero, stop and report; do not proceed on defaults.
 
 The caps that bound an unattended run: `loop.max_rounds`,
 `loop.max_total_run_hours`, `loop.campaign_hours` (each campaign self-stops
-after this long), `cost.idle_stop_minutes` (the box stops itself when no
-fuzzer is running), and `cost.monthly_budget_usd`.
+after this long), and `cost.idle_stop_minutes` (the box stops itself when no
+fuzzer is running), and `cost.monthly_budget_usd`. The dollar cap is enforced
+at campaign install: when it is non-zero and `cost.estimated_hourly_usd` is
+set, a campaign whose projected spend would exceed it is refused. Leave
+`estimated_hourly_usd` at 0 and only the run-hour cap applies; the tool warns
+that it cannot price the campaign instead of assuming a rate. AWS Budgets
+remains the real-money backstop, set up per `docs/cloud-setup.md`.
+
+Run-hours are billed to `state/spend.json`, a ledger keyed by run id. It is
+machine-global on purpose: unlike `pipeline.json` it does not follow
+`GSPWN_STATE`, so a run with its own state file still spends the one budget.
+If the ledger goes missing while rounds still record hours, every command
+that reads spend refuses instead of treating the budget as unspent. Clear
+that with `pipeline_ctl.py spend-init`, which rebuilds the ledger from the
+state file and never lowers recorded spend.
 
 ## State commands
 
@@ -55,9 +68,10 @@ fuzzer is running), and `cost.monthly_budget_usd`.
 | Record disclosure status | `python3 tools/pipeline_ctl.py crash-set <id> --disclosure submitted` |
 | Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
 | Round history + loop budget | `python3 tools/pipeline_ctl.py round-show` |
+| Rebuild a lost spend ledger | `python3 tools/pipeline_ctl.py spend-init` |
 | Attach a run to this round | `python3 tools/pipeline_ctl.py round-add-run --run-id <id>` |
 | This round's input worklist | `python3 tools/pipeline_ctl.py worklist` |
-| Close a round | `python3 tools/pipeline_ctl.py round-end --from-run <run-id>` (measures the outcome) |
+| Close a round | `python3 tools/pipeline_ctl.py round-end --from-run <run-id> [--from-run ...]` (measures the outcome) |
 | Continue or stop the loop | `python3 tools/pipeline_ctl.py round-decide` |
 | Open the next round | `python3 tools/pipeline_ctl.py round-advance` |
 
@@ -84,7 +98,7 @@ do not skip ahead to a later phase to keep making progress.
 | seeds | agents/seeds.md | `artifacts/seeds/*.syz` exist; seeds parse under syz-manager |
 | harness | agents/harness.md | Track U harnesses build and produce coverage on seeds |
 | fuzz | agents/fuzz.md | both systemd units active; coverage increases within smoke window |
-| triage | agents/triage.md | every raw crash registered unique/duplicate/flagged |
+| triage | agents/triage.md | every raw crash registered unique/duplicate/flagged; the flagged queue is empty (`crash-list --status flagged` returns nothing) |
 | rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC |
 | poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json |
 | eval | agents/eval.md | `artifacts/eval/` contains metrics for all configured runs/ablations |
@@ -130,13 +144,14 @@ spend ceiling, so never raise them mid-loop to keep a campaign alive):
 - coverage verdict `unknown` — a missing or broken sampler stops the loop
   rather than authorising another blind campaign
 
-`round-decide` computes this for you. Override only with an explicit reason
-(`--decision stop --reason "..."`), and never override a budget stop.
+`round-decide` computes this for you. A budget or round-cap stop cannot be
+overridden — the tool refuses. Overriding a plateau or `unknown` stop requires
+`--decision continue --reason "..."`.
 
 The numbers those conditions read are measured, not reported: each campaign
 self-stops after `loop.campaign_hours` (a deadline on disk, enforced by
-`gspwn-deadline.timer`, which `install-k` installs, so it survives the panics
-this pipeline expects), and
+`gspwn-deadline@<run-id>.timer`, which `install-k`/`install-u` install, so it
+survives the panics this pipeline expects), and
 `round-end --from-run <run-id>` derives the coverage verdict, edge counts,
 run-hours and new-crash count from the run's `coverage.csv` and the registry.
 Do not hand-type those values: `run_hours` *is* the budget, and a run that

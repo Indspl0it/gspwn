@@ -53,6 +53,14 @@ reach them:
    contributes nothing to the round's coverage verdict — the loop then decides
    on Track K alone and can stop while these harnesses are still growing.
    `$RUN_ID` is already in the container environment.
+   Write the harness names (the `<harness-name>` dir names above) into
+   `track_u.targets` in config/campaign.yaml — the key is agent-facing: the
+   fuzz phase reads that list when checking per-harness coverage output.
+   For each harness, record in TARGETS.md the exact command that replays one
+   input against it, with `{input}` where the file path goes — for example
+   `./build/parse_cfg {input}`. The poc phase passes that string to
+   `repro_ctl.py verify --track u --cmd`. Without it, a Track U crash from
+   this harness cannot be scored for reproduction rate at all.
 5. Every harness file header states the threat model above.
 6. Build all harnesses in the container; run each 60s against seeds; confirm
    coverage output is produced.
@@ -81,7 +89,8 @@ Record progress with the state tool, never by editing pipeline.json:
 
 ## Gate evidence
 build logs, per-harness 60s coverage output, run_all.sh path, TARGETS.md with
-the ranked entry points and their reachability justification.
+the ranked entry points, their reachability justification, and the `{input}`
+replay command for each harness.
 
 ## Errors
 A harness that builds but produces no coverage growth on seeds is not done —

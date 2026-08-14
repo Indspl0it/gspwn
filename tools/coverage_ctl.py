@@ -18,9 +18,11 @@ Subcommands:
                                        skipped once the campaign window is up
   install-timer --run-id ID [--url URL] [--interval-min N]
                                        systemd timer that samples both tracks
-                                       and enforces the campaign deadline
                                        (survives panics; sampling must outlive
-                                       the agent session)
+                                       the agent session). The campaign
+                                       deadline is enforced separately by
+                                       gspwn-deadline@<run-id>.timer, which
+                                       campaign_ctl install-k/install-u set up
   remove-timer                         stop and remove the sampling timer
   series --run-id ID [--track k|u]     summary of the recorded curve
   plateau --run-id ID [--track k|u] [--window-min N] [--min-growth F]
@@ -270,7 +272,33 @@ def campaign_finished(run_id):
         return False
 
 
+def registered_runs(state):
+    """Run ids the pipeline knows about.
+
+    campaign_ctl registers a run when its campaign is installed; the fuzz
+    phase additionally attaches it to the round with round-add-run. Sampling
+    an id outside this set is a typo, and the unattended sampler runs as
+    root — it would leave a root-owned artifacts/runs/<id>/ behind that
+    later confuses series/status.
+    """
+    ids = set()
+    for r in state.get("rounds", []):
+        ids.update(r.get("run_ids") or [])
+    for c in state.get("campaigns", []):
+        if c.get("run_id"):
+            ids.add(c["run_id"])
+    return ids
+
+
 def cmd_sample(a):
+    if a.run_id not in registered_runs(ps.load()):
+        print("run %s is not registered in %s (no campaign install or "
+              "round-add-run names it). Refusing to sample: a typo here "
+              "would create a root-owned artifacts/runs/%s/ that later "
+              "confuses series/status. Fix the id or register the run "
+              "first. (Eval/ablation runs: use the same GSPWN_STATE their "
+              "install used.)" % (a.run_id, ps.STATE_PATH, a.run_id))
+        return 1
     d = run_dir(a.run_id)
     os.makedirs(d, exist_ok=True)
     if campaign_finished(a.run_id) and not a.force:
@@ -388,8 +416,9 @@ def plateau_verdict(rows, window_min, min_growth):
         return "unknown", "only %d usable sample(s); need >= 3" % len(rows)
     rows, restarted = since_last_reset(rows)
     if restarted and len(rows) < 3:
-        return "unknown", ("the fuzzer restarted %d sample(s) ago; too few "
-                           "since to measure growth" % len(rows))
+        return "unknown", ("only %d usable sample(s) since the fuzzer last "
+                           "restarted; need >= 3 since the restart to "
+                           "measure growth" % len(rows))
     span_min = (rows[-1]["ts"] - rows[0]["ts"]) / 60.0
     if span_min < window_min:
         return "unknown", ("%s%.0f min of samples, shorter than the %d min "
@@ -465,15 +494,16 @@ def cmd_compare(a):
 
 
 # Samples both tracks on one timer. The campaign deadline is enforced by its
-# own timer, installed by campaign_ctl install-k, so the spend ceiling holds
-# even if the sampler is never installed or is removed mid-run.
+# own per-run timer (gspwn-deadline@<run-id>.timer, installed by campaign_ctl
+# install-k/install-u), so the spend ceiling holds even if the sampler is
+# never installed or is removed mid-run.
 # `-` prefixes mean a failure sampling one track does not suppress the other.
 SERVICE_UNIT = """[Unit]
 Description=gspwn coverage sampler ({run_id})
 
 [Service]
 Type=oneshot
-ExecStart=-/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
+{env}ExecStart=-/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
   --run-id {run_id} --url {url}
 ExecStart=-/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
   --run-id {run_id} --track u
@@ -497,10 +527,21 @@ def _systemctl(*args, check=True):
 def cmd_install_timer(a):
     if os.geteuid() != 0:
         sys.exit("install-timer must run as root")
+    if a.run_id not in registered_runs(ps.load()):
+        sys.exit("run %s is not registered in %s — install the campaign "
+                 "first (campaign_ctl install-k/install-u registers it). A "
+                 "typo here would create a root-owned run dir the sampler "
+                 "then pads with empty rows." % (a.run_id, ps.STATE_PATH))
     os.makedirs(run_dir(a.run_id), exist_ok=True)
+    # An eval/ablation run keeps its own pipeline.json via GSPWN_STATE; the
+    # unattended sampler must validate and record against that same registry,
+    # so the unit carries the setting the install was made with.
+    env = ""
+    if os.environ.get("GSPWN_STATE"):
+        env = "Environment=GSPWN_STATE=%s\n" % ps.STATE_PATH
     with open("/etc/systemd/system/%s.service" % TIMER_NAME, "w") as f:
         f.write(SERVICE_UNIT.format(root=REPO_ROOT, run_id=a.run_id,
-                                    url=a.url))
+                                    url=a.url, env=env))
     with open("/etc/systemd/system/%s.timer" % TIMER_NAME, "w") as f:
         f.write(TIMER_UNIT.format(interval=a.interval_min))
     _systemctl("daemon-reload")

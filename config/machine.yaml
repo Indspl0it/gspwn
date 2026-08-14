@@ -1,5 +1,6 @@
 # Filled in by the provision phase on the SUT. All paths are local to the SUT.
 distro: ""              # from /etc/os-release ID (e.g. kali, debian)
+environment: ""         # ec2 | baremetal (auto-detect: crashlog_ctl.py --env auto)
 gpu_model: ""           # from nvidia-smi --query-gpu=name --format=csv,noheader
 secure_boot: ""         # enabled | disabled (mokutil --sb-state)
 kernel_version: ""      # upstream kernel built in the build phase

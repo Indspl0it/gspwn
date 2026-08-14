@@ -9,6 +9,9 @@ Promotion is deliberately additive and deduplicated by content hash: a program
 already in the bank is never written twice, so repeated promotion across rounds
 converges instead of growing without bound.
 
+Promotion honours loop.promote_seeds in config/campaign.yaml: when the config
+freezes the bank (e.g. to hold an ablation baseline stable), promote refuses.
+
 Subcommands:
   promote --run-id ID [--seeds DIR] [--limit N] [--dry-run]
                                   unpack the run's corpus and add new programs
@@ -26,6 +29,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gspwn_config
 import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
@@ -103,6 +107,15 @@ def unpack_corpus(db, dest):
 
 
 def cmd_promote(a):
+    try:
+        promote_allowed = gspwn_config.load()["loop"]["promote_seeds"]
+    except gspwn_config.ConfigError as e:
+        sys.exit("error: %s" % e)
+    if not promote_allowed:
+        sys.exit("loop.promote_seeds is false in config/campaign.yaml: the "
+                 "seed bank is frozen (e.g. to hold an ablation baseline "
+                 "stable), so promotion is refused. Set it to true to "
+                 "promote this run's corpus.")
     db = corpus_db(a.run_id)
     if not os.path.exists(db):
         sys.exit("no corpus.db for run %s (looked at %s)" % (a.run_id, db))
@@ -155,19 +168,32 @@ def cmd_stats(a):
     if not os.path.isdir(seeds):
         print("no seed bank at %s" % seeds)
         return 1
-    files = [f for f in os.listdir(seeds) if f.endswith(".syz")]
+    files = {f for f in os.listdir(seeds) if f.endswith(".syz")}
     ledger = load_ledger(seeds)
+    # Reconcile the ledger against what is actually on disk: entries whose
+    # file was since deleted must not count toward any source, or the
+    # untracked figure (files minus ledger) goes negative/wrong.
     by_source = {}
+    tracked = set()
+    stale = 0
     for meta in ledger["hashes"].values():
-        by_source[meta.get("source", "?")] = \
-            by_source.get(meta.get("source", "?"), 0) + 1
+        name = meta.get("file")
+        if name not in files:
+            stale += 1
+            continue
+        src = meta.get("source", "?")
+        by_source[src] = by_source.get(src, 0) + 1
+        tracked.add(name)
     print("seed bank %s: %d program(s)" % (seeds, len(files)))
-    untracked = len(files) - sum(by_source.values())
     for src, n in sorted(by_source.items()):
         print("  %-24s %d" % (src, n))
+    untracked = len(files) - len(tracked)
     if untracked > 0:
         print("  %-24s %d (trace-derived or hand-added)"
               % ("untracked", untracked))
+    if stale:
+        print("  (%d ledger entrie(s) reference deleted files; not counted)"
+              % stale)
     return 0
 
 

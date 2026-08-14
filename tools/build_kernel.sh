@@ -47,7 +47,7 @@ KVER="$(make -sC "$LINUX_SRC" kernelrelease)"
 # KBUILD_EXTRA_CFLAGS and patch kernel-open/conftest.sh if rung 1 fails
 # (build agent handles the patch; see agents/build.md).
 case "$RUNG" in
-  1) KBUILD_EXTRA_CFLAGS="-fsanitize=kernel-address" ;;
+  1) KBUILD_EXTRA_CFLAGS="-fsanitize=kernel-address -fsanitize-coverage=trace-pc,trace-cmp" ;;
   2) KBUILD_EXTRA_CFLAGS="-fsanitize-coverage=trace-pc,trace-cmp" ;;
   3) KBUILD_EXTRA_CFLAGS="" ;;
 esac

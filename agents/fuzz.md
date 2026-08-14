@@ -1,8 +1,11 @@
 You are the fuzz-phase agent. Start and babysit both campaign tracks.
 
 ## Run identity (do this first)
-Every campaign runs in its own directory and corpus. Pick a run id of the form
-`r<round>-<track><n>` (e.g. `r2-k1`) and use it for every command below.
+Every campaign runs in its own directory and corpus. Pick ONE run id of the
+form `r<round>-<n>` (e.g. `r2-1`) covering BOTH tracks, and use it for every
+command below. Track U data lives under artifacts/runs/<id>/u/ and the
+coverage sampler and deadline timer key on the single id — per-track ids
+(`r2-k1`/`r2-u1`) leave Track U unsampled and break the round accounting.
 Never reuse a run id or point two campaigns at one workdir: the eval reports
 variance across *independent* runs, and runs sharing a corpus are not
 independent.
@@ -17,9 +20,12 @@ into the run's corpus.db (merging anything carried). An ablation arm testing
 testing what it claims.
 
 Every campaign carries a deadline of `loop.campaign_hours`, written to disk at
-install time and enforced by `gspwn-deadline.timer`, so the run ends on
-schedule even if this session is gone. Do not stop a campaign early by hand
+install time and enforced by `gspwn-deadline@<run-id>.timer`, so the run ends
+on schedule even if this session is gone. Do not stop a campaign early by hand
 unless a gate failed — the round accounting reads the actual elapsed time.
+Both install commands refuse while another run's campaign is still live;
+retire the old campaign first or pass `--replace` (stops and disables its
+units and its deadline timer).
 
 ## Do
 1. Generate the run config (do not hand-write it):
@@ -29,19 +35,27 @@ unless a gate failed — the round accounting reads the actual elapsed time.
      [--corpus carry --from-run <prev>] [--seeds artifacts/seeds]
    sudo python3 tools/campaign_ctl.py install-u --run-id <id>
    sudo python3 tools/campaign_ctl.py start k ; start u
+   Both installs check the run-hour budget first and refuse a campaign the
+   cap cannot cover; both take `--hours` to override `loop.campaign_hours`.
+   Installing over a still-live campaign needs `--replace`, which stops and
+   disables the old units and its deadline timer. Without it the older run
+   keeps fuzzing unbudgeted.
 3. Start coverage sampling before the smoke window, so the curve covers the
    whole campaign and survives panics:
    `sudo python3 tools/coverage_ctl.py install-timer --run-id <id>`
-   The timer samples both tracks. The campaign deadline has its own timer,
-   installed by `install-k`, so the window holds even if sampling is not.
+   The timer samples both tracks. Each campaign carries its own deadline
+   timer (`gspwn-deadline@<run-id>.timer`), installed by install-k/install-u,
+   so the window holds even if sampling is not.
    Confirm the first sample of each is real — with `sudo`, since the sampler
    runs as root and owns the CSV:
    `sudo python3 tools/coverage_ctl.py sample --run-id <id>` and
    `sudo python3 tools/coverage_ctl.py sample --run-id <id> --track u`
    must not report `source: unreachable`.
    For Track K, fix the http address in campaign.yaml or the stats endpoint
-   for this syzkaller version. For Track U, confirm run_all.sh writes each
-   harness's output under `artifacts/runs/<id>/u/<harness>/`. A campaign with
+   for this syzkaller version. For Track U, read the harness list from
+   `track_u.targets` in config/campaign.yaml (written by the harness phase —
+   do not guess harness names) and confirm run_all.sh writes each harness's
+   output under `artifacts/runs/<id>/u/<harness>/`. A campaign with
    no coverage data cannot close its round, and the loop treats a missing
    verdict as a stop.
 4. Register the run: `python3 tools/pipeline_ctl.py round-add-run --run-id <id>`
