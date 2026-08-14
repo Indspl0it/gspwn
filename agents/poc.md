@@ -17,5 +17,32 @@ PoCs. PoCs stop at "reliably triggers the vulnerability" — no weaponization.
    say so in the README and mark the crash unreproducible — do not
    hand-craft one from scratch.
 
+## Panics during verification
+Expected — a good kernel reproducer often takes the machine down mid-run.
+repro_ctl.py persists progress before and after every run, so the run that
+panicked is recovered when you re-invoke `verify` after the reboot. It counts
+as a reproduction only if the boot id changed, i.e. the machine really went
+down; a verification process that died on the same boot (Ctrl-C, OOM kill, a
+repro that would not exec) is recorded as void instead — not a hit, not a
+clean run. Re-run the same command to resume; use --restart only when you
+deliberately want to discard the partial count. Do not treat a crash that
+killed the box as a lost run, and never restart the count silently — that is
+the failure mode that makes the most severe bugs look unreproducible.
+
+## Reading the rate
+The rate is hits / counted runs. Void runs (an interrupted run on the same
+boot, or a dmesg ring buffer that wrapped past the anchor so no honest delta
+exists) are excluded from both sides and re-run, and the summary line says how
+many were excluded. `--runs N` means N counted runs, so resuming with a
+smaller N never rewrites an earlier, larger measurement — it reports the
+accumulated one. If every run comes back void the tool records no rate and
+exits 1: investigate rather than reporting a number.
+
+## State
+repro_ctl.py writes repro_rate and classification itself. Set the phase with
+`python3 tools/pipeline_ctl.py set-phase poc in_progress|done|blocked`, and
+check `python3 tools/pipeline_ctl.py validate` before declaring the gate.
+
 ## Gate evidence
-per-crash classification summary from the registry; PoC README paths.
+per-crash classification summary from
+`python3 tools/pipeline_ctl.py crash-list`; PoC README paths.

@@ -18,9 +18,17 @@ are listed in an appendix, one paragraph each, labeled as unverified.
 ## Disclosure
 Per confirmed (reliable or flaky) finding, assemble
 artifacts/report/disclosure/<id>/ containing the PoC, RCA, affected
-versions, and a short impact statement — PSIRT-ready. Record disclosure
-status per crash in state/pipeline.json (pending/submitted/resolved).
+versions, and a short impact statement — PSIRT-ready. Record disclosure status
+per crash with the state tool, never by editing pipeline.json:
+`python3 tools/pipeline_ctl.py crash-set <id> --disclosure
+ pending|submitted|resolved|not_applicable`
 Nothing leaves this machine before the user explicitly approves submission.
+You do not contact PSIRT or publish anything yourself — you assemble the
+package and stop.
+
+## State
+`python3 tools/pipeline_ctl.py set-phase report in_progress|done|blocked`.
 
 ## Gate evidence
-report path, disclosure package paths, registry disclosure statuses.
+report path, disclosure package paths, and registry disclosure statuses from
+`python3 tools/pipeline_ctl.py crash-list`.

@@ -20,6 +20,11 @@ For RUNG in 1, 2, 3 (stop at the first that passes the gate):
 5. On gate success: set instrumentation_rung in config/machine.yaml and
    artifacts/builds/manifest.json, and stop walking the ladder.
 
+## State
+Record progress with the state tool, never by editing pipeline.json:
+`python3 tools/pipeline_ctl.py set-phase build in_progress|done|blocked
+ --notes "rung N"`
+
 ## Gate evidence to return
 chosen rung, uname -r, dmesg KASAN line, nvidia-smi output.
 
