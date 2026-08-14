@@ -1,0 +1,81 @@
+# AGENTS.md tells agents to run tools/selftest.py before trusting the tools
+# after any change to them. This enforces that on every push and PR, so the
+# rule does not depend on someone remembering.
+#
+# Everything here is deliberately offline: no GPU, no kernel build, no root,
+# no network. Anything that touches the system under test is covered by the
+# phase gates on the target machine, not here.
+name: selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python3 -m pip install --quiet pyyaml pyflakes
+
+      - name: Offline self-test
+        run: python3 tools/selftest.py
+
+      - name: Lint
+        run: python3 -m pyflakes tools/*.py
+
+      - name: Shell syntax
+        run: bash -n tools/build_kernel.sh
+
+      - name: Shipped config is valid
+        run: python3 tools/gspwn_config.py
+
+      - name: Prompts reference commands that exist
+        # The agent prompts are the interface between the orchestrator and the
+        # tools. A renamed subcommand that no prompt was updated for is a
+        # runtime failure on the target, hours into a campaign.
+        run: |
+          python3 - <<'PY'
+          import glob, os, re, subprocess, sys
+          cmds, uses, bad = set(), [], []
+          for f in glob.glob("agents/*.md") + ["AGENTS.md", "README.md",
+                                               "docs/architecture.md"]:
+              txt = open(f).read()
+              for m in re.finditer(
+                      r"tools/(\w+)\.py\s+([a-z][a-z0-9-]*)"
+                      r"((?:\s+--[a-z-]+(?:\s+\S+)?|\s+\\\n\s*)*)", txt):
+                  cmds.add((m.group(1), m.group(2)))
+                  for fl in re.findall(r"--[a-z][a-z-]*", m.group(3)):
+                      uses.append((f, m.group(1), m.group(2), fl))
+          helps = {}
+          for tool, sub in sorted(cmds):
+              path = os.path.join("tools", tool + ".py")
+              if not os.path.exists(path):
+                  bad.append("%s does not exist" % path)
+                  continue
+              r = subprocess.run([sys.executable, path, "--help"],
+                                 capture_output=True, text=True)
+              m = re.search(r"\{([a-z0-9,\-]+)\}", r.stdout + r.stderr)
+              if m and sub not in set(m.group(1).split(",")):
+                  bad.append("%s has no subcommand %r" % (path, sub))
+          for f, tool, sub, fl in uses:
+              key = (tool, sub)
+              if key not in helps:
+                  r = subprocess.run(
+                      [sys.executable, os.path.join("tools", tool + ".py"),
+                       sub, "--help"], capture_output=True, text=True)
+                  helps[key] = r.stdout + r.stderr
+              if fl not in helps[key]:
+                  bad.append("%s: %s.py %s has no %s" % (f, tool, sub, fl))
+          print("checked %d subcommands, %d flag uses" % (len(cmds), len(uses)))
+          for b in sorted(set(bad)):
+              print("PROBLEM: " + b)
+          sys.exit(1 if bad else 0)
+          PY

@@ -12,7 +12,6 @@ import argparse
 import json
 import os
 import re
-import sys
 
 OPEN_RE = re.compile(r'openat\([^,]+,\s*"((?:/dev/nvidia|/dev/dri)[^"]*)"[^)]*\)\s*=\s*(\d+)')
 IOCTL_RE = re.compile(r"ioctl\((\d+),\s*(0x[0-9a-fA-F]+|\w+)")
@@ -78,7 +77,8 @@ def main():
     with open(a.map) as f:
         ioctl_map = {k: v for k, v in json.load(f).items()
                      if not k.startswith("comment")}
-    text = open(a.trace, errors="replace").read()
+    with open(a.trace, errors="replace") as f:
+        text = f.read()
     prog = convert(text, ioctl_map)
     os.makedirs(a.out_dir, exist_ok=True)
     n = len([x for x in os.listdir(a.out_dir) if x.endswith(".syz")])
