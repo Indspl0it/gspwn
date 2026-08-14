@@ -114,6 +114,7 @@ def collect_u(run_id):
         if not os.path.isdir(d):
             continue
         harnesses += 1
+        counted_corpus = False
         stats_path = os.path.join(d, "fuzzer_stats")
         if os.path.exists(stats_path):
             try:
@@ -125,14 +126,20 @@ def collect_u(run_id):
             edges += _to_int(st.get("edges_found")) or 0
             execs += _to_int(st.get("execs_done")) or 0
             crashes += _to_int(st.get("unique_crashes")) or 0
-            corpus += _to_int(st.get("corpus_count")) or 0
-        # libFuzzer harnesses write no fuzzer_stats; the corpus dir is the
-        # only signal, and it gives no edge count.
-        for sub in ("queue", "corpus"):
-            p = os.path.join(d, sub)
-            if os.path.isdir(p):
-                corpus += len([f for f in os.listdir(p)
-                               if os.path.isfile(os.path.join(p, f))])
+            n = _to_int(st.get("corpus_count"))
+            if n is not None:
+                corpus += n
+                counted_corpus = True
+        # libFuzzer harnesses write no fuzzer_stats; the corpus dir is then the
+        # only signal, and it gives no edge count. AFL++ keeps its queue in the
+        # same directory it writes fuzzer_stats to, so counting both would
+        # double every AFL++ harness's corpus.
+        if not counted_corpus:
+            for sub in ("queue", "corpus"):
+                p = os.path.join(d, sub)
+                if os.path.isdir(p):
+                    corpus += len([f for f in os.listdir(p)
+                                   if os.path.isfile(os.path.join(p, f))])
     if not harnesses:
         return {}, "unreachable"
     row = {"corpus": corpus or None, "crashes": crashes or None,
@@ -276,13 +283,22 @@ def cmd_sample(a):
     row["source"] = source
     path = csv_path(a.run_id, a.track)
     new = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS)
-        if new:
-            w.writeheader()
-        w.writerow(row)
-        f.flush()
-        os.fsync(f.fileno())
+    try:
+        with open(path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=FIELDS)
+            if new:
+                w.writeheader()
+            w.writerow(row)
+            f.flush()
+            os.fsync(f.fileno())
+    except PermissionError:
+        # The unattended sampler runs as root and owns the CSV, so a manual
+        # check as a normal user cannot append to it. Say that instead of
+        # dying with a traceback the agent has to interpret.
+        print("cannot write %s — it is owned by the root sampler. Re-run this "
+              "check with sudo, or read the curve with `series` instead."
+              % path)
+        return 1
     print("%s edges=%s corpus=%s crashes=%s (source: %s)"
           % (path, row["edges"], row["corpus"], row["crashes"], source))
     if source == "unreachable":
@@ -343,19 +359,44 @@ def cmd_series(a):
     return 0
 
 
+def since_last_reset(rows):
+    """-> (rows since the fuzzer last restarted, whether it restarted).
+
+    Edge counts only ever climb within one fuzzer process. A drop means the
+    process restarted and its counter went back to zero — which this pipeline
+    causes routinely, since the units are Restart=always and the machine
+    panics by design. Samples either side of that are two different counters:
+    subtracting across the reset produces large negative 'growth', which reads
+    as a plateau and stops a loop that is in fact climbing fast.
+    """
+    start = 0
+    for i in range(1, len(rows)):
+        if rows[i]["edges"] < rows[i - 1]["edges"]:
+            start = i
+    return rows[start:], start > 0
+
+
 def plateau_verdict(rows, window_min, min_growth):
     """-> (verdict, detail). Growth is measured over the trailing window.
 
-    'unknown' is a real answer: too few samples, too short a window, or no
-    edge data means we must not claim a plateau. The loop treats unknown as a
-    stop, so a broken sampler cannot silently authorise more spend.
+    'unknown' is a real answer: too few samples, too short a window, no edge
+    data, or not enough data since a restart means we must not claim a
+    plateau. The loop treats unknown as a stop, so a broken sampler cannot
+    silently authorise more spend.
     """
     if len(rows) < 3:
         return "unknown", "only %d usable sample(s); need >= 3" % len(rows)
+    rows, restarted = since_last_reset(rows)
+    if restarted and len(rows) < 3:
+        return "unknown", ("the fuzzer restarted %d sample(s) ago; too few "
+                           "since to measure growth" % len(rows))
     span_min = (rows[-1]["ts"] - rows[0]["ts"]) / 60.0
     if span_min < window_min:
-        return "unknown", ("samples span %.0f min, shorter than the %d min "
-                           "window" % (span_min, window_min))
+        return "unknown", ("%s%.0f min of samples, shorter than the %d min "
+                           "window"
+                           % ("the fuzzer restarted and there is only "
+                              if restarted else "samples span ",
+                              span_min, window_min))
     cutoff = rows[-1]["ts"] - window_min * 60
     window = [r for r in rows if r["ts"] >= cutoff]
     if len(window) < 2:
@@ -365,7 +406,8 @@ def plateau_verdict(rows, window_min, min_growth):
         return "unknown", "no non-zero edge baseline in the window"
     growth = (end - start) / float(start)
     detail = ("edges %d -> %d over %.0f min = %.3f%% growth (threshold %.3f%%)"
-              % (start, end, window_min, growth * 100, min_growth * 100))
+              "%s" % (start, end, window_min, growth * 100, min_growth * 100,
+                      "; measured since a fuzzer restart" if restarted else ""))
     return ("plateaued" if growth < min_growth else "growing"), detail
 
 
@@ -422,10 +464,10 @@ def cmd_compare(a):
     return 0
 
 
-# The sampler is the run's heartbeat, so it also enforces the campaign
-# deadline: one timer that survives reboots covers both, and a campaign can
-# never outlive its configured window just because the agent session died.
-# `-` prefixes mean a failure in one step does not suppress the other.
+# Samples both tracks on one timer. The campaign deadline is enforced by its
+# own timer, installed by campaign_ctl install-k, so the spend ceiling holds
+# even if the sampler is never installed or is removed mid-run.
+# `-` prefixes mean a failure sampling one track does not suppress the other.
 SERVICE_UNIT = """[Unit]
 Description=gspwn coverage sampler ({run_id})
 
@@ -435,8 +477,6 @@ ExecStart=-/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
   --run-id {run_id} --url {url}
 ExecStart=-/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
   --run-id {run_id} --track u
-ExecStart=-/usr/bin/python3 {root}/tools/campaign_ctl.py check-deadline \\
-  --run-id {run_id}
 """
 TIMER_UNIT = """[Unit]
 Description=gspwn coverage sampler

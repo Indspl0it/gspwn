@@ -1180,6 +1180,109 @@ class TestTrackUCoverage(unittest.TestCase):
         self.assertFalse(os.path.exists(coverage_ctl.csv_path("r1-k1")))
 
 
+class TestPlateauAcrossRestarts(unittest.TestCase):
+    """The fuzzer restarts by design: units are Restart=always and the box
+    panics. Edge counts reset to zero when it does."""
+
+    def rows(self, edges, step=3600):
+        base = 1_700_000_000
+        return [{"ts": base + i * step, "edges": e}
+                for i, e in enumerate(edges)]
+
+    def test_restart_inside_the_window_is_not_a_plateau(self):
+        # Climbing hard, then the fuzzer restarts and climbs again. Comparing
+        # across the reset gave -75% growth -> "plateaued" -> the loop stopped
+        # a campaign that was in fact still finding new edges fast.
+        rows = self.rows([6000, 10000, 14000, 18000, 22000, 24000, 25000,
+                          26000, 500, 2500, 4500, 6500])
+        verdict, detail = coverage_ctl.plateau_verdict(rows, 240, 0.02)
+        self.assertNotEqual(verdict, "plateaued", detail)
+        self.assertNotIn("-", detail.split("=")[-1])   # no negative growth
+
+    def test_growth_after_a_restart_is_measured_from_the_restart(self):
+        rows = self.rows([20000, 24000, 26000,
+                          500, 3000, 6000, 9000, 12000, 15000])
+        verdict, detail = coverage_ctl.plateau_verdict(rows, 240, 0.02)
+        self.assertEqual(verdict, "growing")
+        self.assertIn("since a fuzzer restart", detail)
+
+    def test_a_flat_run_after_a_restart_still_plateaus(self):
+        rows = self.rows([20000, 24000, 26000,
+                          9000, 9010, 9020, 9030, 9040, 9050])
+        self.assertEqual(coverage_ctl.plateau_verdict(rows, 240, 0.02)[0],
+                         "plateaued")
+
+    def test_too_little_data_since_a_restart_is_unknown(self):
+        rows = self.rows([20000, 24000, 26000, 28000, 30000, 500, 900])
+        verdict, detail = coverage_ctl.plateau_verdict(rows, 240, 0.02)
+        self.assertEqual(verdict, "unknown")
+        self.assertIn("restarted", detail)
+
+    def test_a_run_with_no_restart_is_unaffected(self):
+        rows = self.rows([1000, 2000, 3000, 4000, 5000])
+        self.assertEqual(coverage_ctl.plateau_verdict(rows, 240, 0.02)[0],
+                         "growing")
+
+    def test_round_history_never_records_lost_coverage(self):
+        """edges_end below edges_start would read as the round going backwards."""
+        rows = self.rows([1000, 26000, 500, 6500])
+        seg, restarted = coverage_ctl.since_last_reset(rows)
+        self.assertTrue(restarted)
+        self.assertEqual(max(r["edges"] for r in rows), 26000)
+
+
+class TestTrackUCorpusCounting(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self._orig = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR", self._orig))
+
+    def test_afl_queue_is_not_counted_twice(self):
+        """AFL++ writes fuzzer_stats and queue/ into the same directory, so
+        adding both double-counted every AFL++ harness's corpus."""
+        d = os.path.join(coverage_ctl.track_u_dir("r1"), "h1")
+        os.makedirs(os.path.join(d, "queue"))
+        with open(os.path.join(d, "fuzzer_stats"), "w") as f:
+            f.write("edges_found : 100\ncorpus_count : 40\n")
+        for i in range(40):
+            open(os.path.join(d, "queue", "id%03d" % i), "w").close()
+        row, _ = coverage_ctl.collect_u("r1")
+        self.assertEqual(row["corpus"], 40)
+
+    def test_libfuzzer_dir_is_still_counted(self):
+        d = os.path.join(coverage_ctl.track_u_dir("r1"), "h2")
+        os.makedirs(os.path.join(d, "corpus"))
+        for i in range(5):
+            open(os.path.join(d, "corpus", "c%d" % i), "w").close()
+        row, _ = coverage_ctl.collect_u("r1")
+        self.assertEqual(row["corpus"], 5)
+
+
+class TestConfigRobustness(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def write(self, text):
+        p = os.path.join(self.tmp.name, "c.yaml")
+        with open(p, "w") as f:
+            f.write(text)
+        return p
+
+    def test_wrong_typed_values_raise_config_error_not_typeerror(self):
+        """Callers catch ConfigError. A TypeError escaping validate() takes
+        down every tool, including the root sampler, with a raw traceback."""
+        for bad in ('loop:\n  plateau_window_min: "240"\n',
+                    "loop:\n  plateau_window_min: null\n",
+                    'loop:\n  coverage_sample_min: "10"\n',
+                    'loop:\n  campaign_hours: "24"\n',
+                    'cost:\n  idle_stop_minutes: "120"\n'):
+            with self.assertRaises(gspwn_config.ConfigError, msg=bad):
+                gspwn_config.load(self.write(bad))
+
+
 class TestWorklistHandoff(StateTempMixin, unittest.TestCase):
     """The learning handoff is state, not a filename two prompts agree on."""
 

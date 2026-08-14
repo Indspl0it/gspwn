@@ -32,10 +32,13 @@ gate failed — the round accounting reads the actual elapsed time.
 3. Start coverage sampling before the smoke window, so the curve covers the
    whole campaign and survives panics:
    `sudo python3 tools/coverage_ctl.py install-timer --run-id <id>`
-   The timer samples both tracks and enforces the campaign deadline.
-   Confirm the first sample of each is real:
-   `python3 tools/coverage_ctl.py sample --run-id <id>` and
-   `sample --run-id <id> --track u` must not report `source: unreachable`.
+   The timer samples both tracks. The campaign deadline has its own timer,
+   installed by `install-k`, so the window holds even if sampling is not.
+   Confirm the first sample of each is real — with `sudo`, since the sampler
+   runs as root and owns the CSV:
+   `sudo python3 tools/coverage_ctl.py sample --run-id <id>` and
+   `sudo python3 tools/coverage_ctl.py sample --run-id <id> --track u`
+   must not report `source: unreachable`.
    For Track K, fix the http address in campaign.yaml or the stats endpoint
    for this syzkaller version. For Track U, confirm run_all.sh writes each
    harness's output under `artifacts/runs/<id>/u/<harness>/`. A campaign with
