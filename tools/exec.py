@@ -2,6 +2,10 @@
 """Logged local command runner with retries. Stdlib only.
 
 Usage: python3 tools/exec.py --log NAME [--retries N] [--timeout S] -- CMD [ARGS...]
+
+NAME is reduced to its basename so the log always lands in artifacts/logs/.
+Timeout maps to rc 124; a command that does not exist maps to rc 127, with
+the attempt logged like any other failure.
 """
 import argparse
 import os
@@ -15,6 +19,9 @@ LOGDIR = os.path.join(REPO_ROOT, "artifacts", "logs")
 
 def run(cmd, log_name, retries=0, timeout=None):
     os.makedirs(LOGDIR, exist_ok=True)
+    # --log is agent-supplied: strip any path components so '../../x' cannot
+    # escape artifacts/logs/.
+    log_name = os.path.basename(log_name) or "exec"
     logpath = os.path.join(LOGDIR, log_name + ".log")
     attempt = 0
     while True:
@@ -32,6 +39,11 @@ def run(cmd, log_name, retries=0, timeout=None):
             except subprocess.TimeoutExpired:
                 log.write("TIMEOUT after %ss\n" % timeout)
                 rc = 124
+            except FileNotFoundError:
+                # Typo'd/missing binary: record the attempt like any other
+                # failure instead of losing it to an uncaught traceback.
+                log.write("command not found: %s\n" % cmd[0])
+                rc = 127
         if rc == 0 or attempt > retries:
             return rc
         time.sleep(2)

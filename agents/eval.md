@@ -45,6 +45,12 @@ Ablation runs that need their own registry can redirect state with the
 GSPWN_STATE env var instead of overwriting the main pipeline.json:
 `GSPWN_STATE=artifacts/eval/<run>/pipeline.json python3 tools/...`
 
+The redirect covers the registry only. Run-hours still bill the machine-wide
+ledger (`state/spend.json`), which does not follow GSPWN_STATE, so ablation
+campaigns count against `loop.max_total_run_hours` like any other and will be
+refused once the cap is reached. Size the ablation matrix against the budget
+before starting it, not after a campaign is refused mid-sweep.
+
 ## Gate evidence
 file listing of artifacts/eval/ with one-line description of each artifact.
 State explicitly which configurations reached the configured runs_per_config

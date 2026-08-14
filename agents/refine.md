@@ -55,10 +55,12 @@ description for, and supplying valid object-chain seeds it cannot invent.
    section. The next round's agents are prompted with this file, so write it
    for them, not as a report for a human.
 6. Promote the round's corpus into the seed bank so the next round starts
-   ahead: `python3 tools/corpus_ctl.py promote --run-id <id>`. If it reports
-   zero new programs, say so in gaps.md — a corpus that adds nothing new is
-   direct evidence the round stopped learning, and it is a strong input to the
-   stop decision.
+   ahead: `python3 tools/corpus_ctl.py promote --run-id <id>`. The tool
+   honours `loop.promote_seeds` in config/campaign.yaml and refuses when it
+   is false — record that in gaps.md rather than working around it. If it
+   reports zero new programs, say so in gaps.md — a corpus that adds nothing
+   new is direct evidence the round stopped learning, and it is a strong
+   input to the stop decision.
 7. Check the loop is still buying anything: compare this round's edge total
    with the previous round's from `pipeline_ctl.py round-show`. Rounds that
    add crashes but no coverage, or coverage but no crashes, are both worth
@@ -81,8 +83,12 @@ Record the round outcome so the orchestrator can make the loop decision. Let
 the tool measure it from the run's coverage.csv — do not transcribe the
 numbers by hand. `--run-hours` is the spend ceiling the loop enforces, and a
 typo in it is a typo in a budget:
+Pass `--from-run` once for every campaign this round ran, Track K and Track U
+alike. Each is measured and billed separately, so a campaign left off the
+command is never billed:
 ```
-python3 tools/pipeline_ctl.py round-end --from-run <run-id> \
+python3 tools/pipeline_ctl.py round-end --from-run <k-run-id> \
+  --from-run <u-run-id> \
   --worklist artifacts/eval/<run-id>/worklist.md
 python3 tools/pipeline_ctl.py set-phase refine done --notes "<gap count>"
 ```

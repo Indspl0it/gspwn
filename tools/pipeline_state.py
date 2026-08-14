@@ -13,6 +13,7 @@ flock for the whole cycle. Bare load()/save() pairs lose updates and are a bug.
 import fcntl
 import json
 import os
+import shutil
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -21,8 +22,14 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DIR = os.path.join(REPO_ROOT, "state")
 # GSPWN_STATE redirects the state file (used by tools/selftest.py; also lets
 # an ablation run keep its own pipeline.json without touching the main one).
-STATE_PATH = os.environ.get("GSPWN_STATE") or os.path.join(STATE_DIR,
-                                                           "pipeline.json")
+DEFAULT_STATE_PATH = os.path.join(STATE_DIR, "pipeline.json")
+STATE_PATH = os.environ.get("GSPWN_STATE") or DEFAULT_STATE_PATH
+# The spend ledger is machine-global on purpose: it does NOT follow
+# GSPWN_STATE, so an ablation run with its own pipeline.json still bills the
+# one true ledger (redirecting the state file must not redirect the budget).
+# GSPWN_SPEND exists only so tools/selftest.py can point it at a tempdir.
+SPEND_PATH = os.environ.get("GSPWN_SPEND") or os.path.join(STATE_DIR,
+                                                           "spend.json")
 
 SCHEMA_VERSION = 2
 
@@ -59,11 +66,39 @@ DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  # state, not a filename convention two prompts have to agree
                  # on — otherwise the next agent has to guess the run id.
                  "worklist": None, "worklist_in": None,
+                 # Per-run billing for this round: run id -> measured hours.
+                 # run_hours is their sum, accumulated across round-end calls
+                 # (one per campaign), never a single campaign standing in for
+                 # the whole round.
+                 "run_hours_by_run": {},
                  "notes": ""}
 
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _new_round(entry=None, **kw):
+    """A round dict with the defaults filled in and no shared mutables.
+
+    dict(DEFAULT_ROUND) would alias the module-level run_ids list and
+    run_hours_by_run dict into every round created in this process; the copies
+    below keep each round's bookkeeping its own.
+    """
+    if entry is not None and not isinstance(entry, dict):
+        raise ValueError("pipeline state: round entries must be objects, got "
+                         "%s" % type(entry).__name__)
+    r = dict(DEFAULT_ROUND)
+    r["run_ids"] = []
+    r["run_hours_by_run"] = {}
+    for src in (entry or {}, kw):
+        for k, v in src.items():
+            if k == "run_ids":
+                v = list(v or [])
+            elif k == "run_hours_by_run":
+                v = dict(v or {})
+            r[k] = v
+    return r
 
 
 def default_state():
@@ -72,9 +107,21 @@ def default_state():
         "phases": {p: dict(DEFAULT_PHASE) for p in PHASES},
         "crashes": {},
         "campaigns": [],
-        "rounds": [dict(DEFAULT_ROUND, round=1, started=_now())],
+        "rounds": [_new_round(round=1, started=_now())],
         "manifest": "artifacts/builds/manifest.json",
     }
+
+
+def _fill(defaults, entry, what):
+    """defaults overlaid with entry; a non-dict entry is a corrupt state file,
+    so say so as a ValueError (pipeline_ctl.main catches those) rather than
+    letting the raw TypeError from dict(**entry) escape as a traceback."""
+    if entry is None:
+        return dict(defaults)
+    if not isinstance(entry, dict):
+        raise ValueError("pipeline state: %s must be an object, got %s"
+                         % (what, type(entry).__name__))
+    return dict(defaults, **entry)
 
 
 def normalize(state):
@@ -90,12 +137,12 @@ def normalize(state):
     phases = out.get("phases") or {}
     if not isinstance(phases, dict):
         raise ValueError("pipeline state 'phases' must be an object")
-    out["phases"] = {p: dict(DEFAULT_PHASE, **(phases.get(p) or {}))
+    out["phases"] = {p: _fill(DEFAULT_PHASE, phases.get(p), "phase %s" % p)
                      for p in PHASES}
     crashes = out.get("crashes") or {}
     if not isinstance(crashes, dict):
         raise ValueError("pipeline state 'crashes' must be an object")
-    out["crashes"] = {cid: dict(DEFAULT_CRASH, **(c or {}))
+    out["crashes"] = {cid: _fill(DEFAULT_CRASH, c, "crash %s" % cid)
                       for cid, c in crashes.items()}
     if not isinstance(out.get("campaigns"), list):
         out["campaigns"] = []
@@ -103,7 +150,7 @@ def normalize(state):
     rounds = out.get("rounds")
     if not isinstance(rounds, list) or not rounds:
         rounds = [dict(DEFAULT_ROUND, round=1, started=_now())]
-    out["rounds"] = [dict(DEFAULT_ROUND, **(r or {})) for r in rounds]
+    out["rounds"] = [_new_round(r) for r in rounds]
     out["version"] = SCHEMA_VERSION
     return out
 
@@ -129,11 +176,42 @@ def _fsync_dir(path):
         os.close(fd)
 
 
+def _fix_root_ownership(paths):
+    """Undo root poisoning after a sudo run.
+
+    campaign_ctl start/stop run as root and write state through save(); left
+    alone, the state file (mkstemp mode 0600, owner root) and the lock file
+    become root-owned and every subsequent non-root agent command dies with
+    PermissionError. When we are root via sudo, hand the files back to the
+    invoking user.
+    """
+    if os.geteuid() != 0:
+        return
+    user = os.environ.get("SUDO_USER")
+    if not user:
+        return
+    import pwd
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        return
+    for p in paths:
+        try:
+            os.chown(p, pw.pw_uid, pw.pw_gid)
+        except OSError:
+            pass
+
+
 def save(state, path=None):
     """Atomic, panic-durable write."""
     path = path or STATE_PATH
-    d = os.path.dirname(path)
+    d = os.path.dirname(path) or "."
     os.makedirs(d, exist_ok=True)
+    # Keep the previous good file as <path>.bak: the corrupt-state error
+    # message in load() tells the operator to restore from it, so it has to
+    # actually exist.
+    if os.path.exists(path):
+        shutil.copyfile(path, path + ".bak")
     fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
@@ -146,10 +224,11 @@ def save(state, path=None):
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+    _fix_root_ownership([path, path + ".bak"])
 
 
 def _lock_path(path):
-    return os.path.join(os.path.dirname(path), ".pipeline.lock")
+    return os.path.join(os.path.dirname(path) or ".", ".pipeline.lock")
 
 
 @contextmanager
@@ -163,7 +242,7 @@ def transaction(path=None):
     the write, leaving the file untouched.
     """
     path = path or STATE_PATH
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     lock = _lock_path(path)
     fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
     try:
@@ -174,6 +253,161 @@ def transaction(path=None):
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+    _fix_root_ownership([lock])
+
+
+@contextmanager
+def _ledger_transaction(path):
+    """Exclusive read-modify-write on the spend ledger (own lock file, so it
+    is safe to call while a state transaction() is open)."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    lock = path + ".lock"
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    _fix_root_ownership([lock])
+
+
+def _read_ledger(path):
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        try:
+            raw = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError("%s is not valid JSON (%s). Restore it from "
+                             "%s.bak or delete it to re-seed from the state "
+                             "file." % (path, e, path))
+    if not isinstance(raw, dict):
+        raise ValueError("%s must contain a JSON object mapping run id to "
+                         "billed hours" % path)
+    return {str(k): float(v) for k, v in raw.items()}
+
+
+def _seed_spend_ledger(path):
+    """One-time migration: attribute hours the state file already recorded.
+
+    Runs before the first ledger write, so spend billed before the ledger
+    existed still counts against the budget. Per-run hours are taken from
+    run_hours_by_run where present; a round whose aggregate run_hours is not
+    fully attributed lands under its single run id, or under a "round-N" key
+    when the split across several runs is unknowable — the hours must not be
+    lost, but a per-run split must not be invented either.
+
+    Seeds from the DEFAULT state file, never STATE_PATH, for the same reason
+    spend_for_budget() does: an ablation run redirecting GSPWN_STATE would
+    otherwise seed the machine-global ledger from its own empty registry, and
+    every hour recorded before it would drop off the budget.
+    """
+    if os.path.exists(path):
+        return
+    st = load(DEFAULT_STATE_PATH)
+    entries = {}
+    for r in st.get("rounds", []):
+        by_run = r.get("run_hours_by_run") or {}
+        for rid, h in by_run.items():
+            if h:
+                entries[rid] = round(entries.get(rid, 0.0) + h, 2)
+        unattributed = round((r.get("run_hours") or 0.0)
+                             - sum(by_run.values()), 2)
+        if unattributed <= 0:
+            continue
+        ids = r.get("run_ids") or []
+        key = ids[0] if len(ids) == 1 else "round-%s" % r.get("round", "?")
+        entries[key] = round(entries.get(key, 0.0) + unattributed, 2)
+    save(entries, path)
+
+
+def record_run_hours(run_id, hours, path=None):
+    """Bill a run's measured hours to the spend ledger.
+
+    Idempotent per run id: re-recording the same run overwrites its entry, so
+    a retried round-end never double-counts a campaign.
+
+    `path` resolves at call time, not import time: a default of SPEND_PATH
+    would freeze the module value into the signature, so redirecting the
+    ledger (tests, and any future per-machine override) would silently keep
+    writing the real one.
+    """
+    path = path or SPEND_PATH
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("run_id must be a non-empty string")
+    hours = float(hours)
+    if hours < 0:
+        raise ValueError("hours must be >= 0, got %r" % hours)
+    with _ledger_transaction(path):
+        _seed_spend_ledger(path)
+        entries = _read_ledger(path)
+        entries[run_id] = round(hours, 2)
+        save(entries, path)
+
+
+def total_spend_hours(path=None):
+    """Total billed run-hours across every recorded campaign (0.0 if none)."""
+    path = path or SPEND_PATH
+    with _ledger_transaction(path):
+        return round(sum(_read_ledger(path).values()), 2)
+
+
+class SpendLedgerMissing(Exception):
+    """The ledger is gone while billed hours are still on record.
+
+    Carries its own remediation: callers surface `str(e)` to the operator
+    rather than inventing a spend figure.
+    """
+
+
+def seed_spend_ledger(path=None):
+    """Create the ledger from the state file's recorded hours, if absent.
+
+    The explicit remediation for SpendLedgerMissing. No-op when the ledger
+    already exists, so re-running it can never double-bill.
+    """
+    path = path or SPEND_PATH
+    with _ledger_transaction(path):
+        _seed_spend_ledger(path)
+        return round(sum(_read_ledger(path).values()), 2)
+
+
+def spent_hours(state):
+    """Authoritative spend, or raise when it cannot be established.
+
+    The ledger is the authority. When it is absent but the state file still
+    records billed hours, the ledger was lost or predates this version —
+    falling back to zero would silently hand the loop a fresh budget, which
+    on a $200 ceiling is the expensive direction to be wrong in. Refuse, and
+    make re-seeding an explicit act (`pipeline_ctl.py spend-init`).
+
+    A genuinely fresh machine — no ledger, no recorded hours — is 0.0 and
+    starts normally.
+    """
+    if os.path.exists(SPEND_PATH):
+        return total_spend_hours()
+    recorded = total_run_hours(state)
+    if recorded > 0:
+        raise SpendLedgerMissing(
+            "spend ledger %s is missing, but the state file records %.1f "
+            "billed run-hours. Refusing to treat the budget as unspent. "
+            "Re-seed it from the state file with: python3 "
+            "tools/pipeline_ctl.py spend-init" % (SPEND_PATH, recorded))
+    return 0.0
+
+
+def spend_for_budget():
+    """Machine-global spend for the campaign-start guard.
+
+    Falls back to the DEFAULT state file, not STATE_PATH: the ledger is
+    machine-global, so its fallback must be too. Reading the redirected file
+    would let an ablation run with a fresh GSPWN_STATE reopen the very
+    bypass the ledger closes.
+    """
+    if os.path.exists(SPEND_PATH):
+        return total_spend_hours()
+    return spent_hours(load(DEFAULT_STATE_PATH))
 
 
 def update_phase(state, phase, status, notes=""):
@@ -248,8 +482,17 @@ def next_action(state):
 
 
 def end_round(state, verdict=None, new_crashes=None, edges_start=None,
-              edges_end=None, run_hours=None, notes=None, worklist=None):
-    """Record the measured outcome of the current round."""
+              edges_end=None, run_hours=None, notes=None, worklist=None,
+              billed=None):
+    """Record the measured outcome of the current round.
+
+    run_hours ACCUMULATES: a round routinely spans several campaigns, and
+    round-end is called once per run, so each call adds its hours to the
+    round total instead of overwriting it. `billed` is the per-run mapping
+    {run_id: hours} those hours came from; re-billing a run id corrects its
+    entry (and the total by the delta) rather than double-counting. Every
+    other field is last-write-wins.
+    """
     r = current_round(state)
     if verdict is not None:
         if verdict not in COVERAGE_VERDICT:
@@ -258,10 +501,18 @@ def end_round(state, verdict=None, new_crashes=None, edges_start=None,
                                  COVERAGE_VERDICT))))
         r["coverage_verdict"] = verdict
     for key, val in (("new_crashes", new_crashes), ("edges_start", edges_start),
-                     ("edges_end", edges_end), ("run_hours", run_hours),
+                     ("edges_end", edges_end),
                      ("notes", notes), ("worklist", worklist)):
         if val is not None:
             r[key] = val
+    if billed:
+        by_run = r.setdefault("run_hours_by_run", {})
+        for rid, h in billed.items():
+            r["run_hours"] = round((r["run_hours"] or 0.0)
+                                   + (h - by_run.get(rid, 0.0)), 2)
+            by_run[rid] = h
+    if run_hours is not None:
+        r["run_hours"] = round((r["run_hours"] or 0.0) + run_hours, 2)
     r["ended"] = _now()
     r["status"] = "complete"
     return r
@@ -277,6 +528,24 @@ def record_decision(state, decision, reason=""):
     return r
 
 
+def hard_cap_reason(state, max_rounds, max_total_run_hours=None):
+    """The non-overridable stop reason, or None when no hard cap has tripped.
+
+    Round-cap and budget stops are the spend ceiling: AGENTS.md forbids
+    overriding them, so round-decide recomputes this before accepting an
+    explicit --decision continue.
+    """
+    r = current_round(state)
+    if r["round"] >= max_rounds:
+        return "round cap reached (%d of %d)" % (r["round"], max_rounds)
+    if max_total_run_hours is not None:
+        spent = spent_hours(state)
+        if spent >= max_total_run_hours:
+            return ("run-hour budget spent (%.1f of %.1f h)"
+                    % (spent, max_total_run_hours))
+    return None
+
+
 def loop_decision(state, max_rounds, max_total_run_hours=None,
                   stop_on_plateau=True):
     """Apply the configured caps to the current round -> (decision, reason).
@@ -285,15 +554,10 @@ def loop_decision(state, max_rounds, max_total_run_hours=None,
     stop, but so is running out of the budget the user authorised, and the
     budget must win even while coverage is still growing.
     """
+    hard = hard_cap_reason(state, max_rounds, max_total_run_hours)
+    if hard:
+        return ("stop", hard)
     r = current_round(state)
-    if r["round"] >= max_rounds:
-        return ("stop", "round cap reached (%d of %d)"
-                % (r["round"], max_rounds))
-    if max_total_run_hours is not None:
-        spent = total_run_hours(state)
-        if spent >= max_total_run_hours:
-            return ("stop", "run-hour budget spent (%.1f of %.1f h)"
-                    % (spent, max_total_run_hours))
     if stop_on_plateau and r["coverage_verdict"] == "plateaued":
         return ("stop", "coverage plateaued in round %d" % r["round"])
     if r["coverage_verdict"] == "unknown":
@@ -309,12 +573,23 @@ def advance_round(state):
         raise ValueError("current round decision is %r, not 'continue' — "
                          "record a continue decision before advancing"
                          % r["decision"])
+    not_done = [p for p in ROUND_PHASES
+                if state["phases"][p]["status"] != "done"]
+    if not_done:
+        raise ValueError("cannot advance to round %d: round phase(s) not "
+                         "done: %s — finish them or mark them blocked first"
+                         % (r["round"] + 1, ", ".join(not_done)))
+    if not r.get("ended") or r.get("run_hours") is None:
+        raise ValueError("cannot advance to round %d: round %d has no "
+                         "recorded round-end — measure it first: "
+                         "pipeline_ctl.py round-end --from-run <run-id>"
+                         % (r["round"] + 1, r["round"]))
     for p in ROUND_PHASES:
         state["phases"][p] = dict(DEFAULT_PHASE)
     # Carry the worklist forward: besides the corpus, it is the only state the
     # new round inherits from the last one.
-    state["rounds"].append(dict(DEFAULT_ROUND, round=r["round"] + 1,
-                                started=_now(), worklist_in=r.get("worklist")))
+    state["rounds"].append(_new_round(round=r["round"] + 1, started=_now(),
+                                      worklist_in=r.get("worklist")))
     return current_round(state)
 
 
@@ -375,6 +650,18 @@ def validate(state):
             elif c.get("status") != "duplicate":
                 problems.append("%s has duplicate_of=%s but status=%s"
                                 % (cid, dup, c.get("status")))
+            elif state["crashes"][dup].get("status") == "duplicate":
+                # Chains (A->B->C) and cycles are both caught here: every
+                # member of either is itself a duplicate, so its inbound
+                # links point at a duplicate and get flagged. duplicate_of
+                # must reference the surviving, non-duplicate entry.
+                problems.append("%s duplicates %s, which is itself a "
+                                "duplicate — link directly to the surviving "
+                                "entry (chains and cycles are not allowed)"
+                                % (cid, dup))
+        elif c.get("status") == "duplicate":
+            problems.append("%s has status 'duplicate' but no duplicate_of "
+                            "link" % cid)
         rate = c.get("repro_rate")
         if rate is not None and not (isinstance(rate, (int, float))
                                      and 0.0 <= rate <= 1.0):

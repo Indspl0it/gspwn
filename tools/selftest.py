@@ -57,15 +57,29 @@ else:
 
 
 class StateTempMixin:
-    """Point pipeline_state at a throwaway state file for each test."""
+    """Point pipeline_state at throwaway state for each test.
+
+    Every module-level path pipeline_state can write must be redirected, not
+    just STATE_PATH. The spend ledger deliberately does not follow
+    GSPWN_STATE (that is what closes the ablation bypass), so redirecting the
+    state file alone left the suite writing the real state/spend.json —
+    running the tests on a campaign box would inject phantom hours into the
+    budget that gates live spend, and leak state between tests in the same
+    run. DEFAULT_STATE_PATH is redirected too: it is the fail-closed
+    fallback spend_for_budget() reads when the ledger is absent.
+    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.state_path = os.path.join(self.tmp.name, "state", "pipeline.json")
-        self._orig = ps.STATE_PATH
-        ps.STATE_PATH = self.state_path
-        self.addCleanup(lambda: setattr(ps, "STATE_PATH", self._orig))
+        state_dir = os.path.join(self.tmp.name, "state")
+        self.state_path = os.path.join(state_dir, "pipeline.json")
+        self.spend_path = os.path.join(state_dir, "spend.json")
+        for attr, value in (("STATE_PATH", self.state_path),
+                            ("DEFAULT_STATE_PATH", self.state_path),
+                            ("SPEND_PATH", self.spend_path)):
+            self.addCleanup(setattr, ps, attr, getattr(ps, attr))
+            setattr(ps, attr, value)
 
 
 class TestState(StateTempMixin, unittest.TestCase):
@@ -324,11 +338,25 @@ class TestReproHelpers(unittest.TestCase):
     def test_matched_signature_agrees_with_hit_counting(self):
         # The hit count and the logged verdict come from one predicate, so
         # they cannot disagree about whether a run reproduced.
-        self.assertEqual(repro_ctl.matched_signature("KASAN: bad", "nv_free"),
-                         "KASAN:")
-        self.assertEqual(repro_ctl.matched_signature("oops nv_free here",
-                                                     "nv_free"), "nv_free")
-        self.assertIsNone(repro_ctl.matched_signature("all quiet", "nv_free"))
+        sig = {"funcs": ["nv_free"], "phrases": ["use-after-free in nv_free"]}
+        self.assertEqual(repro_ctl.matched_signature("oops nv_free here", sig),
+                         "nv_free")
+        self.assertIsNone(repro_ctl.matched_signature("all quiet", sig))
+
+    def test_a_different_bug_does_not_count_as_a_reproduction(self):
+        # The rate that gates disclosure must measure *this* crash: a generic
+        # kernel oops in the window is not evidence that this one reproduced.
+        sig = {"funcs": ["nv_free"], "phrases": ["use-after-free in nv_free"]}
+        self.assertIsNone(repro_ctl.matched_signature(
+            "BUG: soft lockup - CPU#2 stuck", sig))
+        self.assertIsNone(repro_ctl.matched_signature("KASAN: bad", sig))
+
+    def test_a_title_phrase_counts_when_no_frame_is_available(self):
+        # Report-less crashes still have to be scorable, so the title's
+        # stable phrases are the fallback evidence.
+        sig = {"funcs": [], "phrases": ["soft lockup in nv_uvm"]}
+        self.assertEqual(repro_ctl.matched_signature(
+            "x soft lockup in nv_uvm y", sig), "soft lockup in nv_uvm")
 
 
 class TestReproVerifyBookkeeping(StateTempMixin, unittest.TestCase):
@@ -592,9 +620,17 @@ class TestLoopDecision(StateTempMixin, unittest.TestCase):
 
     def test_budget_beats_growing_coverage(self):
         st = self.state_at(1, verdict="growing", hours=300)
+        ps.record_run_hours("r1-k1", 300.0)   # the ledger is the authority
         d, why = ps.loop_decision(st, max_rounds=9, max_total_run_hours=216)
         self.assertEqual(d, "stop")
         self.assertIn("budget", why)
+
+    def test_a_lost_ledger_stops_the_loop_rather_than_guessing(self):
+        # Hours on record with no ledger: the loop must not spend another
+        # campaign on the assumption that the budget is untouched.
+        st = self.state_at(1, verdict="growing", hours=300)
+        with self.assertRaises(ps.SpendLedgerMissing):
+            ps.loop_decision(st, max_rounds=9, max_total_run_hours=216)
 
     def test_plateau_can_be_disabled(self):
         d, _ = ps.loop_decision(self.state_at(1, verdict="plateaued"),
@@ -1079,16 +1115,24 @@ class TestDerivedRoundEnd(StateTempMixin, unittest.TestCase):
                          "plateaued")
 
 
-class TestTrackUCoverage(unittest.TestCase):
+class TestTrackUCoverage(StateTempMixin, unittest.TestCase):
     """Track U has to be in the loop's view, or a round stops while the
     container-toolkit harnesses are still finding coverage."""
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self._orig = coverage_ctl.RUNS_DIR
+        # StateTempMixin, not just a temp RUNS_DIR: cmd_sample reads the
+        # registry, and without the redirect these tests answer from the
+        # real state/pipeline.json.
+        super().setUp()
+        self.addCleanup(setattr, coverage_ctl, "RUNS_DIR",
+                        coverage_ctl.RUNS_DIR)
         coverage_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
-        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR", self._orig))
+
+    def register_run(self, run_id):
+        """Put a run in the registry — cmd_sample refuses unknown ids."""
+        st = ps.default_state()
+        ps.current_round(st)["run_ids"] = [run_id]
+        ps.save(st)
 
     def harness(self, run_id, name, stats=None, queue=0):
         d = os.path.join(coverage_ctl.track_u_dir(run_id), name)
@@ -1172,6 +1216,7 @@ class TestTrackUCoverage(unittest.TestCase):
                          "unknown")
 
     def test_sampling_stops_once_the_campaign_window_is_up(self):
+        self.register_run("r1-k1")
         d = os.path.join(coverage_ctl.RUNS_DIR, "r1-k1")
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "deadline"), "w") as f:
@@ -1237,21 +1282,45 @@ class TestFlaggedCrashesReachTheRegistry(StateTempMixin, unittest.TestCase):
 
 class TestBudgetGuard(StateTempMixin, unittest.TestCase):
     """eval and ablation campaigns never pass through round-decide, so the
-    run-hour ceiling has to be checked where a campaign starts."""
+    run-hour ceiling has to be checked where a campaign starts.
+
+    Spend comes from the ledger, not the state file: the ledger is what an
+    ablation run redirecting GSPWN_STATE cannot escape.
+    """
 
     def test_campaign_within_budget_is_allowed(self):
-        st = ps.default_state()
-        st["rounds"][-1]["run_hours"] = 100.0
-        ps.save(st)
+        ps.record_run_hours("r1-k1", 100.0)
         self.assertEqual(campaign_ctl.check_budget(24, 216), 100.0)
 
     def test_campaign_over_budget_is_refused(self):
+        ps.record_run_hours("r1-k1", 200.0)
+        with self.assertRaises(SystemExit) as cm:
+            campaign_ctl.check_budget(24, 216)
+        self.assertIn("max_total_run_hours", str(cm.exception))
+
+    def test_a_fresh_state_file_does_not_buy_a_fresh_budget(self):
+        # The ablation bypass: pipeline.json says nothing was spent, the
+        # ledger says 200 h. The ledger wins.
+        ps.record_run_hours("r1-k1", 200.0)
+        ps.save(ps.default_state())
+        with self.assertRaises(SystemExit) as cm:
+            campaign_ctl.check_budget(24, 216)
+        self.assertIn("max_total_run_hours", str(cm.exception))
+
+    def test_a_lost_ledger_refuses_rather_than_reading_as_unspent(self):
+        # Fail closed: hours on record with no ledger means the ledger was
+        # lost, not that the budget is fresh.
         st = ps.default_state()
         st["rounds"][-1]["run_hours"] = 200.0
         ps.save(st)
         with self.assertRaises(SystemExit) as cm:
             campaign_ctl.check_budget(24, 216)
-        self.assertIn("max_total_run_hours", str(cm.exception))
+        self.assertIn("spend-init", str(cm.exception))
+
+    def test_a_genuinely_fresh_machine_starts_at_zero(self):
+        # No ledger AND no recorded hours is a new machine, not a lost
+        # ledger — it must still be able to start its first campaign.
+        self.assertEqual(campaign_ctl.check_budget(24, 216), 0.0)
 
 
 class TestPlateauAcrossRestarts(unittest.TestCase):
@@ -1360,10 +1429,22 @@ class TestConfigRobustness(unittest.TestCase):
 class TestWorklistHandoff(StateTempMixin, unittest.TestCase):
     """The learning handoff is state, not a filename two prompts agree on."""
 
+    @staticmethod
+    def close_round(st, **kw):
+        """Bring a round to the point where it may legally advance.
+
+        advance_round refuses a round whose phases are unfinished or whose
+        hours were never measured — that guardrail is what stops a round
+        slipping past without billing its spend. These tests are about the
+        worklist, so they satisfy it rather than work around it.
+        """
+        for p in ps.ROUND_PHASES:
+            ps.update_phase(st, p, "done")
+        ps.end_round(st, verdict="growing", run_hours=1.0, **kw)
+
     def test_worklist_carries_into_the_next_round(self):
         st = ps.default_state()
-        ps.end_round(st, verdict="growing",
-                     worklist="artifacts/eval/r1-k1/worklist.md")
+        self.close_round(st, worklist="artifacts/eval/r1-k1/worklist.md")
         ps.record_decision(st, "continue", "still growing")
         new = ps.advance_round(st)
         self.assertEqual(new["round"], 2)
@@ -1377,7 +1458,7 @@ class TestWorklistHandoff(StateTempMixin, unittest.TestCase):
     def test_cli_prints_the_path_and_flags_a_missing_file(self):
         import pipeline_ctl
         st = ps.default_state()
-        ps.end_round(st, verdict="growing", worklist="artifacts/eval/gone.md")
+        self.close_round(st, worklist="artifacts/eval/gone.md")
         ps.record_decision(st, "continue", "x")
         ps.advance_round(st)
         ps.save(st)

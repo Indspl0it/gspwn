@@ -20,12 +20,24 @@ tracing time.
 1. Populate tools/ioctl_map.json: map ioctl request numbers to the
    description names produced by the describe phase (parse the NV_* header
    from describe + `gcc -E` or a small C probe to compute _IOWR values).
+   Round-1 note: this step consumes describe's NV_* header, so in round 1
+   seeds cannot fully parallelize with describe — the describe/seeds/harness
+   trio is fully independent only from round 2 on, when the header and map
+   already exist.
 2. Install a small CUDA workload (python3 + a minimal CUDA sample or
    pytorch if already present). Trace it:
    strace -v -f -P /dev/nvidiactl -P /dev/nvidia0 -P /dev/nvidia-uvm \
      -P /dev/nvidia-uvm-tools -o artifacts/seeds/trace.txt <workload>
 3. Convert: python3 tools/trace2seed.py --trace artifacts/seeds/trace.txt \
    --out-dir artifacts/seeds/
+   It prints "<n> mapped ioctls, <m> unmapped". Unmapped requests become
+   comments, not syscalls, so a seed that is mostly unmapped is an open/close
+   chain that exercises nothing. Read that ratio before moving on: a high
+   unmapped count means tools/ioctl_map.json is missing entries describe
+   should have produced, and the fix is to extend the map and re-run, not to
+   accept the seed. strace prints requests it cannot name as
+   `_IOC(dir, type, nr, size)`; the tool decodes that form back to a number,
+   so an unmapped entry is a real gap in the map, not a parsing artefact.
 4. Validate: every seed parses under syz-manager (add to corpus, watch for
    parse errors in the manager log during a 5-min smoke run).
 
