@@ -6,11 +6,13 @@ Subcommands:
   setup    - install kdump-tools, ensure pstore mount (bare metal only), set
              crashkernel= param
   verify   - check pstore/kdump readiness; print sysrq test instructions
-  harvest  - copy /sys/fs/pstore/* and newest /var/crash dump into artifacts/;
-             on EC2 also save `aws ec2 get-console-output` output
+  harvest  - copy /sys/fs/pstore/* and every new /var/crash dump into
+             artifacts/; on EC2 also save `aws ec2 get-console-output`
+             output. Exits 0 when no new crash logs are found.
 
-Global flag: --env ec2|baremetal overrides environment auto-detection
-(default: auto-detect via the EC2 instance metadata service).
+Global flag: --env ec2|baremetal|auto overrides environment auto-detection
+(default: auto-detect via the EC2 instance metadata service, IMDSv2 with
+an IMDSv1 fallback).
 
 Must run as root for setup/harvest. Debian-family (apt) only.
 """
@@ -25,7 +27,8 @@ import urllib.request
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CRASHES_DIR = os.path.join(REPO_ROOT, "artifacts", "crashes")
 GRUB_DEFAULT = "/etc/default/grub"
-METADATA_URL = "http://169.254.169.254/latest/meta-data/instance-id"
+IMDS_BASE = "http://169.254.169.254/latest"
+IMDS_TIMEOUT = 2
 
 
 def sh(cmd, check=True, capture=False):
@@ -33,19 +36,43 @@ def sh(cmd, check=True, capture=False):
                           capture_output=capture)
 
 
+def _imds_token():
+    """Fetch an IMDSv2 session token, or None when the token endpoint does
+    not answer (IMDSv1-only instance, or not EC2 at all)."""
+    req = urllib.request.Request(
+        IMDS_BASE + "/api/token", method="PUT",
+        headers={"X-aws-ec2-metadata-token-ttl-seconds": "300"})
+    try:
+        with urllib.request.urlopen(req, timeout=IMDS_TIMEOUT) as r:
+            return r.read().decode().strip()
+    except Exception:
+        return None
+
+
+def imds_get(path):
+    """GET an instance-metadata path, preferring IMDSv2 and falling back
+    to IMDSv1 only when the token endpoint is unavailable. Raises on
+    failure; bounded by IMDS_TIMEOUT on non-EC2 hosts."""
+    token = _imds_token()
+    headers = {"X-aws-ec2-metadata-token": token} if token else {}
+    req = urllib.request.Request(IMDS_BASE + "/meta-data/" + path,
+                                 headers=headers)
+    with urllib.request.urlopen(req, timeout=IMDS_TIMEOUT) as r:
+        return r.read().decode().strip()
+
+
 def detect_env():
     """Return "ec2" if the instance metadata service answers, else
     "baremetal"."""
     try:
-        urllib.request.urlopen(METADATA_URL, timeout=2)
+        imds_get("instance-id")
         return "ec2"
     except Exception:
         return "baremetal"
 
 
 def get_instance_id():
-    with urllib.request.urlopen(METADATA_URL, timeout=2) as r:
-        return r.read().decode().strip()
+    return imds_get("instance-id")
 
 
 def cmd_setup(env):
@@ -63,13 +90,24 @@ def cmd_setup(env):
         grub = f.read()
     if "crashkernel=" not in grub:
         shutil.copy(GRUB_DEFAULT, GRUB_DEFAULT + ".bak-gspwn")
-        grub = grub.replace(
-            'GRUB_CMDLINE_LINUX_DEFAULT="',
-            'GRUB_CMDLINE_LINUX_DEFAULT="crashkernel=256M ')
+        anchor = None
+        for cand in ('GRUB_CMDLINE_LINUX_DEFAULT="', 'GRUB_CMDLINE_LINUX="'):
+            if cand in grub:
+                anchor = cand
+                break
+        if anchor is None:
+            sys.exit(
+                "ERROR: neither GRUB_CMDLINE_LINUX_DEFAULT nor "
+                "GRUB_CMDLINE_LINUX found in %s; crashkernel= NOT added.\n"
+                "Add the crashkernel parameter manually, e.g.:\n"
+                '  GRUB_CMDLINE_LINUX_DEFAULT="crashkernel=256M"\n'
+                "then run update-grub and reboot." % GRUB_DEFAULT)
+        grub = grub.replace(anchor, anchor + "crashkernel=256M ", 1)
         with open(GRUB_DEFAULT, "w") as f:
             f.write(grub)
         sh(["update-grub"])
-        print("added crashkernel=256M; reboot required")
+        print("added crashkernel=256M to " + anchor.rstrip('"')
+              + "; reboot required")
     if env != "ec2":
         # pstore mount (usually automatic via systemd)
         if not os.path.ismount("/sys/fs/pstore"):
@@ -149,7 +187,11 @@ def cmd_harvest(env):
     else:
         copied = []
         for src in glob.glob("/sys/fs/pstore/*"):
-            shutil.copy(src, dest)
+            try:
+                shutil.copy(src, dest)
+            except (OSError, shutil.Error) as e:
+                print("WARN: could not copy %s (%s); continuing" % (src, e))
+                continue
             copied.append(src)
             found = True
         # pstore is a small fixed-size backend that only frees a record when
@@ -164,19 +206,33 @@ def cmd_harvest(env):
                       "later panics" % (src, e))
     # Every unharvested dump, not just the newest: several panics can land
     # between two harvests, and taking only the last one silently discards the
-    # earlier crashes.
+    # earlier crashes. Files can vanish mid-harvest (kdump-tools is writing
+    # to /var/crash at the same time), so stat and copy per-file and keep
+    # going past individual failures.
     already = harvested_kdumps()
-    for src in sorted(glob.glob("/var/crash/*"), key=os.path.getmtime):
+
+    def mtime(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+
+    for src in sorted(glob.glob("/var/crash/*"), key=mtime):
         name = os.path.basename(src)
         if name in already or not os.path.isdir(src):
             continue
-        shutil.copytree(src, os.path.join(dest, "kdump-" + name),
-                        dirs_exist_ok=True)
+        try:
+            shutil.copytree(src, os.path.join(dest, "kdump-" + name),
+                            dirs_exist_ok=True)
+        except (OSError, shutil.Error) as e:
+            print("WARN: could not copy %s (%s); continuing" % (src, e))
+            continue
         found = True
     if not found:
         shutil.rmtree(dest, ignore_errors=True)
-        print("no crash logs found")
-        sys.exit(1)
+        print("no new crash logs found (checked %s and /var/crash)"
+              % ("EC2 console output" if env == "ec2" else "pstore"))
+        sys.exit(0)
     print(dest)  # last line = artifact path, consumed by callers
 
 
@@ -189,12 +245,12 @@ def main():
             env = args[i + 1]
         except IndexError:
             sys.exit(__doc__)
-        if env not in ("ec2", "baremetal"):
+        if env not in ("ec2", "baremetal", "auto"):
             sys.exit(__doc__)
         del args[i:i + 2]
     if len(args) != 1 or args[0] not in ("setup", "verify", "harvest"):
         sys.exit(__doc__)
-    if env is None:
+    if env is None or env == "auto":
         env = detect_env()
     {"setup": cmd_setup, "verify": cmd_verify,
      "harvest": cmd_harvest}[args[0]](env)

@@ -53,6 +53,7 @@ DEFAULTS = {
         "idle_stop_minutes": 120,
         "idle_check_minutes": 30,
         "monthly_budget_usd": 0,
+        "estimated_hourly_usd": 0.0,
         "budget_alerts_usd": [50, 150],
     },
 }
@@ -61,21 +62,33 @@ DEFAULTS = {
 _POSITIVE = ("must be a positive number", lambda v: _num(v) and v > 0)
 _NON_NEGATIVE = ("must be zero or a positive number",
                  lambda v: _num(v) and v >= 0)
+# Caps that count things (rounds, processes, minutes) are integers: a float
+# like max_rounds: 2.5 must fail loudly, not silently truncate in one place
+# and compare as 2.5 in another. bool is an int subclass — exclude it.
+_POSITIVE_INT = ("must be a positive integer",
+                 lambda v: isinstance(v, int) and not isinstance(v, bool)
+                 and v > 0)
+_BOOL = ("must be true or false (unquoted — a quoted string is truthy and "
+         "silently keeps the default behavior)", lambda v: isinstance(v, bool))
 _RULES = [
-    ("track_k", "procs", _POSITIVE),
-    ("track_k", "smoke_window_minutes", _POSITIVE),
-    ("eval", "runs_per_config", _POSITIVE),
-    ("loop", "max_rounds", _POSITIVE),
+    ("track_k", "procs", _POSITIVE_INT),
+    ("track_k", "smoke_window_minutes", _POSITIVE_INT),
+    ("eval", "runs_per_config", _POSITIVE_INT),
+    ("loop", "max_rounds", _POSITIVE_INT),
     ("loop", "max_total_run_hours", _POSITIVE),
     ("loop", "campaign_hours", _POSITIVE),
-    ("loop", "plateau_window_min", _POSITIVE),
-    ("loop", "coverage_sample_min", _POSITIVE),
+    ("loop", "plateau_window_min", _POSITIVE_INT),
+    ("loop", "coverage_sample_min", _POSITIVE_INT),
     ("loop", "plateau_min_growth",
-     ("must be a fraction between 0 and 1 (0.02 = 2%)",
-      lambda v: _num(v) and 0 <= v < 1)),
-    ("cost", "idle_stop_minutes", _POSITIVE),
-    ("cost", "idle_check_minutes", _POSITIVE),
+     ("must be a fraction between 0 and 1 exclusive (0.02 = 2%; 0 would "
+      "silently disable the plateau stop)",
+      lambda v: _num(v) and 0 < v < 1)),
+    ("loop", "stop_on_plateau", _BOOL),
+    ("loop", "promote_seeds", _BOOL),
+    ("cost", "idle_stop_minutes", _POSITIVE_INT),
+    ("cost", "idle_check_minutes", _POSITIVE_INT),
     ("cost", "monthly_budget_usd", _NON_NEGATIVE),
+    ("cost", "estimated_hourly_usd", _NON_NEGATIVE),
 ]
 
 
@@ -121,8 +134,10 @@ def validate(cfg):
     if policy not in ("fresh", "carry"):
         problems.append("loop.corpus_policy = %r must be 'fresh' or 'carry'"
                         % policy)
-    if not isinstance(cfg["cost"]["budget_alerts_usd"], list):
-        problems.append("cost.budget_alerts_usd must be a list of amounts")
+    if not isinstance(cfg["cost"]["budget_alerts_usd"], list) or any(
+            not _num(a) or a < 0 for a in cfg["cost"]["budget_alerts_usd"]):
+        problems.append("cost.budget_alerts_usd must be a list of "
+                        "non-negative amounts")
     # A per-campaign duration longer than the total budget can never complete a
     # round, so the loop would spend the whole ceiling on run 1 and stop.
     if (_num(cfg["loop"]["campaign_hours"])
@@ -163,9 +178,13 @@ def load(path=None):
                 % path)
         with open(path) as f:
             try:
-                given = yaml.safe_load(f) or {}
+                given = yaml.safe_load(f)
             except yaml.YAMLError as e:
                 raise ConfigError("%s is not valid YAML: %s" % (path, e))
+        # An empty file means "defaults in force"; a top-level scalar or list
+        # ([], false, 0) is a malformed config and must not become one.
+        if given is None:
+            given = {}
         if not isinstance(given, dict):
             raise ConfigError("%s must contain a mapping at the top level"
                               % path)
@@ -204,6 +223,10 @@ def main():
           "total <= %s run-hours"
           % (lp["max_rounds"], lp["campaign_hours"],
              lp["max_total_run_hours"]))
+    if cs["estimated_hourly_usd"]:
+        print("estimated cost ceiling: %.2f USD (%s run-hours x %.2f USD/h)"
+              % (lp["max_total_run_hours"] * cs["estimated_hourly_usd"],
+                 lp["max_total_run_hours"], cs["estimated_hourly_usd"]))
     print("idle auto-stop after %s min; monthly budget %s USD (alerts at %s)"
           % (cs["idle_stop_minutes"], cs["monthly_budget_usd"] or "unset",
              ", ".join(str(a) for a in cs["budget_alerts_usd"]) or "none"))

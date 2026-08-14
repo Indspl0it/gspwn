@@ -29,6 +29,7 @@ Record progress with the state tool, never by editing pipeline.json:
 chosen rung, uname -r, dmesg KASAN line, nvidia-smi output.
 
 ## Errors
-Rung fails build or boot: harvest crash logs (`crashlog_ctl.py harvest`),
+Rung fails build or boot: harvest crash logs (`sudo python3
+tools/crashlog_ctl.py harvest`),
 record findings in artifacts/builds/rung-N-failed.md, proceed to next rung.
 All rungs fail: write artifacts/builds/FAILED.md, mark phase blocked.

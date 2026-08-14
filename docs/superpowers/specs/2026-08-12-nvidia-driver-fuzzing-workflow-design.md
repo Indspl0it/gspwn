@@ -5,10 +5,25 @@ Status: Approved architecture; critique revisions applied
 Origin: Extends https://www.interruptlabs.co.uk/articles/fuzzing-the-nvidia-gpu-drivers
 Intended output: working fuzzing pipeline + technical paper (approach, evaluation, findings)
 
-> **Note added after this document was written:** the orchestrator is any
-> `AGENTS.md`-aware coding agent — "Kimi Code" below names the agent in use
-> when the design was approved, not a dependency. This document is kept as the
-> dated design record; the README is the current front door.
+> **Historical design document.** This is the dated design record — the
+> paper's design history — not the current reference. Since it was approved:
+>
+> - The orchestrator is any `AGENTS.md`-aware coding agent — "Kimi Code"
+>   below names the agent in use when the design was approved, not a
+>   dependency.
+> - The SUT pivoted from the Kali laptop described in §2 to an AWS EC2
+>   g4dn.2xlarge (§2's "Cloud deployment" subsection, added at the pivot,
+>   has the details; `docs/cloud-setup.md` is the operational runbook).
+> - The phase numbering used here (0/1/2a/2b/2c/3/4/4.5/5/5b/6) is the
+>   design-era numbering. The code has twelve phases — provision, build,
+>   describe, seeds, harness, fuzz, triage, rca, poc, eval, refine, report —
+>   defined in `tools/pipeline_state.py`, and the improvement loop
+>   (`refine`, rounds, measured stop conditions) was added after this
+>   document was written.
+>
+> For the current architecture, phases, gates and tool behavior, read
+> `README.md`, `docs/architecture.md` and `AGENTS.md`. Where this document
+> and those disagree, those win.
 
 ## 1. Goal
 
@@ -39,7 +54,7 @@ The repo is self-contained: `git clone` onto the target laptop, run Kimi Code lo
 
 - The SUT is now an AWS EC2 g4dn.2xlarge spot instance (8 vCPU, 32 GB RAM, NVIDIA T4/Turing, GSP-based → open-gpu-kernel-modules supported) running the official Debian 12 AMI. The bare-metal laptop is retired. Setup details: `docs/cloud-setup.md`.
 - Crash capture on EC2 uses kdump plus EC2 console output instead of pstore; `tools/crashlog_ctl.py` auto-detects the environment (`--env` overrides) and harvests `aws ec2 get-console-output` alongside `/var/crash` dumps. Hard hangs are captured via console output, so the IAM instance profile allowing `ec2:GetConsoleOutput` is required.
-- Cost guardrails: `tools/cost_ctl.py` idle auto-stop watchdog (systemd timer, `IDLE_MINUTES` threshold, `state/KEEP_ALIVE` override) plus AWS Budgets alerts at $50 and $150 against a $200/month ceiling.
+- Cost guardrails: `tools/cost_ctl.py` idle auto-stop watchdog (systemd timer, `IDLE_MINUTES` threshold, `cost_ctl.py keepalive` override) plus AWS Budgets alerts at $50 and $150 against a $200/month ceiling.
 - The bare-metal path (pstore, Secure Boot handling) is retained in the tooling as a fallback.
 
 ## 3. Threat Model (explicit, per track)
@@ -76,15 +91,23 @@ gspwn/
 │   ├── rca.md                 # root cause analysis + verification sampling
 │   ├── poc.md                 # repro minimization, clean-boot verification, repro-rate grading
 │   ├── eval.md                # metrics, baselines, ablations, plots/tables for the paper
+│   ├── refine.md              # coverage-gap classification -> next-round worklist (added with the loop)
 │   └── report.md              # pentest-style report + PSIRT disclosure package
 ├── tools/
 │   ├── exec.py                # local command runner with logging/retries
-│   ├── crashlog_ctl.py        # ramoops/pstore + kdump setup; harvest /sys/fs/pstore after reboots
+│   ├── pipeline_state.py      # state/pipeline.json load/save/lock + spend ledger (imported by all tools)
+│   ├── pipeline_ctl.py        # state machine CLI: phases, rounds, crash registry, loop decisions
+│   ├── gspwn_config.py        # loads/validates campaign.yaml; single source of truth for every cap
+│   ├── crashlog_ctl.py        # ramoops/pstore + kdump setup; harvest after reboots (EC2: console output)
 │   ├── build_kernel.sh        # KCOV+KASAN kernel + modules; grub default; signing if SB on
 │   ├── trace2seed.py          # strace of CUDA workloads -> seed syz-programs
-│   ├── campaign_ctl.py        # syz-manager + Track U fuzzers as systemd units; cgroup mem limits
+│   ├── campaign_ctl.py        # campaign systemd units, corpus policy, per-run deadline timers, budget check
+│   ├── coverage_ctl.py        # coverage sampler (both tracks) + plateau verdicts
+│   ├── corpus_ctl.py          # promote a run's corpus into the persistent seed bank
+│   ├── cost_ctl.py            # EC2 idle auto-stop watchdog + keepalive override
 │   ├── crash_parse.py         # parse syz workdir + ASan/libFuzzer artifacts + NVRM/dmesg signals
-│   └── repro_ctl.py           # syz-repro -> C reproducer; Track U replay; clean-boot verification
+│   ├── repro_ctl.py           # syz-repro -> C reproducer; Track U replay; clean-boot verification
+│   └── selftest.py            # offline test suite (no GPU, root or network)
 ├── config/
 │   ├── machine.yaml           # paths, GPU model, distro, kernel/driver/firmware versions
 │   └── campaign.yaml          # syscalls, procs, durations, sandbox, Track U targets, eval matrix

@@ -212,7 +212,8 @@ flowchart TD
     subgraph L5["System under test"]
         F1["gspwn-k.service<br/><i>syz-manager, Track K</i>"]
         F2["gspwn-u.service<br/><i>harness container, Track U</i>"]
-        F3["gspwn-coverage.timer<br/><i>samples both, enforces deadline</i>"]
+        F3["gspwn-coverage.timer<br/><i>samples both tracks</i>"]
+        F4["gspwn-deadline@&lt;run-id&gt;.timer<br/><i>enforces the campaign window</i>"]
     end
 
     O -->|"dispatches with agents/&lt;phase&gt;.md"| L2
@@ -328,7 +329,8 @@ Fuzzers run as systemd units with `Restart=always` so they outlive the
 session; crash logs land in persistent storage that survives
 the reboot; state writes are tempfile + fsync + atomic rename, so a panic
 mid-write leaves the previous good file rather than a truncated one; and the
-campaign carries a **deadline on disk**, so a run configured for 24 hours ends
+campaign carries a **deadline on disk**, enforced by its own per-run
+`gspwn-deadline@<run-id>.timer`, so a run configured for 24 hours ends
 on time across any number of reboots, with no session attached.
 
 ## Repo layout
@@ -356,7 +358,7 @@ The tools, briefly:
 | `repro_ctl.py` | Extracts reproducers and measures reproduction rate |
 | `trace2seed.py` | Converts an strace of a CUDA workload into seed programs |
 | `build_kernel.sh` | Builds the KASAN/KCOV kernel and the open-source driver modules |
-| `cost_ctl.py` | Idle watchdog that stops the cloud instance when nothing is fuzzing |
+| `cost_ctl.py` | Idle watchdog that stops the cloud instance when nothing is fuzzing; `keepalive` holds it off during interactive sessions |
 | `selftest.py` | The offline test suite for all of the above |
 
 ## Configuration and cost control
@@ -374,6 +376,7 @@ loop:
 cost:
   idle_stop_minutes: 120     # stop the box when no fuzzer is running
   monthly_budget_usd: 0      # 0 = unset; record the ceiling here
+  estimated_hourly_usd: 0.0  # your instance's hourly price; prices the dollar cap
   budget_alerts_usd: [50, 150]
 ```
 
@@ -387,6 +390,28 @@ An unknown key is a hard error rather than a warning, so a typo in a cap
 fails loudly instead of falling back to the default. Values are range-checked,
 and combinations that would break the loop — a campaign longer than the total
 budget, a plateau window too short to hold enough samples — are rejected.
+
+The caps are enforced where the money is spent. Every campaign install goes
+through `campaign_ctl.py`'s budget check, which refuses to start a run whose
+projected hours — every hour already billed in the spend ledger
+(`state/spend.json`) plus this campaign's window — exceed
+`max_total_run_hours`. When `monthly_budget_usd` is set the same check runs
+in dollars, priced at `estimated_hourly_usd`; if that rate is unset the
+dollar cap degrades to a warning and only run-hours are enforced. This is
+in-repo enforcement against an *estimate* — the hard dollar guarantee is
+still AWS Budgets, so configure `budget_alerts_usd` there on day one. The
+ledger is billed by `round-end --from-run` from measured coverage samples
+(a run that died after 3 h bills 3, not the configured 24), and it
+deliberately ignores the `GSPWN_STATE` redirection used by test and
+ablation runs, so a fresh state file never comes with a fresh budget.
+
+The ledger also fails closed. If it goes missing while the state file still
+records billed hours, every command that reads spend refuses instead of
+reading the budget as untouched — a lost ledger on a re-provisioned box
+would otherwise silently reset the ceiling to zero. Rebuild it with
+`pipeline_ctl.py spend-init`, which re-derives the hours from the state file
+and never lowers recorded spend. A genuinely new machine, with no ledger and
+no recorded hours, starts at zero and needs no action.
 
 Once set, the pipeline requires no further input. Campaigns stop on their
 deadline, round outcomes are measured from the recorded curve rather than

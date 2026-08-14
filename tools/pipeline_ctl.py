@@ -14,6 +14,20 @@ Subcommands:
   crash-set <id> [--status S] [--duplicate-of ID|none] [--disclosure S]
             [--repro-rate F] [--notes TEXT]
   campaign-add --track k|u --note TEXT
+  round-show [--json]            round history + loop budget
+  round-add-run --run-id ID      attach a campaign run to the current round
+  round-end --from-run ID [--from-run ID ...] [--worklist PATH] [overrides]
+                                 measure this round's outcome from each run's
+                                 coverage.csv and record it (one call per run,
+                                 or several runs in one call; hours accumulate)
+  worklist                       print the worklist this round must execute
+  round-decide [--decision continue|stop] [--reason TEXT]
+                                 apply the configured loop caps; an explicit
+                                 continue cannot override a budget/round-cap
+                                 stop, and overriding a plateau/unknown stop
+                                 requires --reason
+  round-advance                  open the next round (requires all round
+                                 phases done and a recorded round-end)
   validate                       check integrity; exit 1 if problems found
 
 Exit codes: 0 ok, 1 problem/not-found, 2 usage error.
@@ -53,7 +67,7 @@ def cmd_show(a):
     cfg = _loop_cfg()
     print("pipeline: %s" % ps.STATE_PATH)
     print("round %d of max %d (%.1f run-hours of %s used)"
-          % (ps.round_number(st), cfg["max_rounds"], ps.total_run_hours(st),
+          % (ps.round_number(st), cfg["max_rounds"], ps.spent_hours(st),
              cfg["max_total_run_hours"]))
     for p in ps.PHASES:
         ph = st["phases"][p]
@@ -122,7 +136,7 @@ def cmd_round_show(a):
         print()
         return 0
     print("rounds: %d of max %d   run-hours: %.1f of %s"
-          % (ps.round_number(st), cfg["max_rounds"], ps.total_run_hours(st),
+          % (ps.round_number(st), cfg["max_rounds"], ps.spent_hours(st),
              cfg["max_total_run_hours"]))
     for r in st["rounds"]:
         edges = ""
@@ -143,18 +157,21 @@ def cmd_round_show(a):
     return 0
 
 
-def _derive_round(st, run_id, cfg):
-    """Measure this round's outcome from the recorded curve and the registry.
+def _derive_run(run_id, cfg):
+    """Measure one run's outcome from its own coverage.csv.
 
-    These four numbers decide whether the loop spends another campaign, and
+    These numbers decide whether the loop spends another campaign, and
     run_hours is the spend ceiling itself. Typing them in by hand puts a
     transcription step in front of a budget: the sampler already wrote every
     one of them to artifacts/runs/<id>/coverage.csv, so read them from there.
+    Each run is measured independently — a round's several campaigns never
+    share a single measurement.
     """
     import coverage_ctl
     verdict, detail, _per = coverage_ctl.run_verdict(
         run_id, cfg["plateau_window_min"], cfg["plateau_min_growth"])
-    out = {"coverage_verdict": verdict, "notes": "run %s: %s" % (run_id, detail)}
+    out = {"run_id": run_id, "coverage_verdict": verdict, "detail": detail,
+           "run_hours": None}
     # Edge totals are reported for Track K, the instrumented-kernel number the
     # paper cites; Track U's per-harness bitmaps are not comparable to it.
     rows = coverage_ctl.metric_rows(run_id, "edges", "k")
@@ -170,42 +187,89 @@ def _derive_round(st, run_id, cfg):
               for r in coverage_ctl.read_rows(run_id, t) if r.get("ts")]
     if len(stamps) > 1:
         out["run_hours"] = round((max(stamps) - min(stamps)) / 3600.0, 2)
-    # Crashes registered since the previous rounds accounted for theirs.
-    counted = sum(r.get("new_crashes") or 0 for r in st["rounds"][:-1])
-    out["new_crashes"] = max(len(st["crashes"]) - counted, 0)
     return out
 
 
+def _derived_new_crashes(st):
+    """Crashes registered since the previous rounds accounted for theirs.
+
+    Only genuine findings count: duplicates and still-unresolved flagged
+    collisions are not new bugs, and counting them would inflate the round
+    history the eval write-up cites. Post-triage statuses (reliable, flaky,
+    rca_done, ...) started life as unique findings, so they count too.
+    """
+    findings = sum(1 for c in st["crashes"].values()
+                   if c["status"] not in ("duplicate", "flagged"))
+    counted = sum(r.get("new_crashes") or 0 for r in st["rounds"][:-1])
+    return max(findings - counted, 0)
+
+
 def cmd_round_end(a):
+    from_runs = a.from_run
+    if isinstance(from_runs, str):
+        from_runs = [from_runs]      # tolerate a scalar from programmatic callers
+    if not from_runs:
+        sys.exit("error: round-end needs at least one --from-run to measure "
+                 "(pass one per campaign this round; hours accumulate)")
     explicit = {"coverage_verdict": a.coverage_verdict,
                 "new_crashes": a.new_crashes, "edges_start": a.edges_start,
                 "edges_end": a.edges_end, "run_hours": a.run_hours,
                 "notes": a.notes, "worklist": a.worklist}
     with ps.transaction() as st:
+        cfg = _loop_cfg()
+        derived = [_derive_run(rid, cfg) for rid in from_runs]
         vals = dict(explicit)
-        if a.from_run:
-            derived = _derive_round(st, a.from_run, _loop_cfg())
-            # An explicit flag still wins, so a measurement can be overridden
-            # when the operator knows better — but never silently.
-            for k, v in derived.items():
-                if vals.get(k) is None:
-                    vals[k] = v
+        # Combined verdict: growing on any run means the round is still
+        # learning — the same rule run_verdict applies across tracks.
+        # Unknown unless at least one run produced a verdict, so a broken
+        # sampler still stops the loop.
+        verdicts = [d["coverage_verdict"] for d in derived]
+        combined = ("growing" if "growing" in verdicts
+                    else "plateaued" if "plateaued" in verdicts
+                    else "unknown")
+        if vals["coverage_verdict"] is None:
+            vals["coverage_verdict"] = combined
+        if vals["notes"] is None:
+            vals["notes"] = "; ".join("run %s: %s" % (d["run_id"], d["detail"])
+                                      for d in derived)
+        # Edges: the first run's baseline plus every run's peak-over-start
+        # gain (counters reset between campaigns, so raw peaks don't add).
+        measured = [d for d in derived if "edges_start" in d]
+        if measured:
+            if vals["edges_start"] is None:
+                vals["edges_start"] = measured[0]["edges_start"]
+            if vals["edges_end"] is None:
+                vals["edges_end"] = measured[0]["edges_start"] + sum(
+                    max(0, d["edges_end"] - d["edges_start"]) for d in measured)
+        if vals["new_crashes"] is None:
+            vals["new_crashes"] = _derived_new_crashes(st)
+        billed = {d["run_id"]: d["run_hours"] for d in derived
+                  if d["run_hours"] is not None}
+        unbilled = [d["run_id"] for d in derived if d["run_hours"] is None]
         try:
             r = ps.end_round(st, verdict=vals["coverage_verdict"],
                              new_crashes=vals["new_crashes"],
                              edges_start=vals["edges_start"],
                              edges_end=vals["edges_end"],
                              run_hours=vals["run_hours"], notes=vals["notes"],
-                             worklist=vals["worklist"])
+                             worklist=vals["worklist"], billed=billed)
         except ValueError as e:
             sys.exit("error: %s" % e)
+        # Bill every derived run to the machine-global spend ledger — the
+        # budget the loop checks against. Idempotent per run id, so a retried
+        # round-end cannot double-count a campaign.
+        for rid, hours in billed.items():
+            ps.record_run_hours(rid, hours)
         summary = "round %d closed: %s, crashes=%s, run_h=%s" % (
             r["round"], r["coverage_verdict"], r["new_crashes"],
             r["run_hours"])
-        note = r["notes"]
     print(summary)
-    if a.from_run:
-        print("  measured from run %s: %s" % (a.from_run, note))
+    for d in derived:
+        print("  measured from run %s: %s" % (d["run_id"], d["detail"]))
+    if unbilled:
+        print("  WARNING: run(s) %s had no usable coverage samples and billed "
+              "0.0 h — check the sampler; unmeasured spend must not pass "
+              "silently" % ", ".join(unbilled))
     return 0
 
 
@@ -240,13 +304,27 @@ def cmd_round_add_run(a):
 def cmd_round_decide(a):
     cfg = _loop_cfg()
     with ps.transaction() as st:
+        computed, computed_reason = ps.loop_decision(
+            st, max_rounds=cfg["max_rounds"],
+            max_total_run_hours=cfg["max_total_run_hours"],
+            stop_on_plateau=cfg["stop_on_plateau"])
         if a.decision:
+            if a.decision == "continue" and computed == "stop":
+                # The budget and the round cap are the spend ceiling; AGENTS.md
+                # forbids overriding them, and the state machine enforces it.
+                hard = ps.hard_cap_reason(st, cfg["max_rounds"],
+                                          cfg["max_total_run_hours"])
+                if hard:
+                    sys.exit("error: computed decision is stop (%s) — a "
+                             "budget or round-cap stop cannot be overridden"
+                             % hard)
+                if not (a.reason or "").strip():
+                    sys.exit("error: computed decision is stop (%s) — "
+                             "overriding it requires --reason"
+                             % computed_reason)
             decision, reason = a.decision, (a.reason or "set explicitly")
         else:
-            decision, reason = ps.loop_decision(
-                st, max_rounds=cfg["max_rounds"],
-                max_total_run_hours=cfg["max_total_run_hours"],
-                stop_on_plateau=cfg["stop_on_plateau"])
+            decision, reason = computed, computed_reason
         try:
             ps.record_decision(st, decision, reason)
         except ValueError as e:
@@ -327,12 +405,24 @@ def cmd_crash_set(a):
                 if c["status"] == "duplicate" and not a.status:
                     c["status"] = "unique"
             else:
+                if a.status and a.status != "duplicate":
+                    sys.exit("error: --duplicate-of implies status 'duplicate'"
+                             " — it cannot be combined with --status %s"
+                             % a.status)
                 if a.duplicate_of == a.crash_id:
                     sys.exit("error: a crash cannot duplicate itself")
                 if a.duplicate_of not in st["crashes"]:
                     sys.exit("error: unknown crash id: %s" % a.duplicate_of)
+                if st["crashes"][a.duplicate_of]["status"] == "duplicate":
+                    sys.exit("error: %s is itself a duplicate — link directly "
+                             "to the surviving entry (chains and cycles are "
+                             "not allowed)" % a.duplicate_of)
                 c["duplicate_of"] = a.duplicate_of
                 c["status"] = "duplicate"
+        if c["status"] == "duplicate" and not c.get("duplicate_of"):
+            sys.exit("error: status 'duplicate' requires --duplicate-of <id> "
+                     "— an unlinked duplicate is excluded from the RCA queue "
+                     "with nothing pointing at the surviving entry")
         if a.disclosure:
             if a.disclosure not in ps.DISCLOSURE_STATUS:
                 sys.exit("error: unknown disclosure status: %s (expected one "
@@ -343,7 +433,9 @@ def cmd_crash_set(a):
             if not 0.0 <= a.repro_rate <= 1.0:
                 sys.exit("error: --repro-rate must be between 0.0 and 1.0")
             c["repro_rate"] = a.repro_rate
-        if a.notes:
+        if a.notes is not None:
+            # argparse gives None when the flag is absent, so --notes '' is a
+            # deliberate clear, not a no-op.
             c["notes"] = a.notes
         summary = "%s: status=%s disclosure=%s" % (a.crash_id, c["status"],
                                                    c["disclosure"])
@@ -352,11 +444,14 @@ def cmd_crash_set(a):
 
 
 def cmd_campaign_add(a):
+    track = a.track.upper()
+    if track not in ps.TRACKS:
+        sys.exit("error: unknown track: %s (expected k or u)" % a.track)
     with ps.transaction() as st:
-        st["campaigns"].append({"track": a.track, "action": "record",
+        st["campaigns"].append({"track": track, "action": "record",
                                 "note": a.note, "at": ps._now()})
         n = len(st["campaigns"])
-    print("recorded campaign entry #%d (track %s)" % (n, a.track))
+    print("recorded campaign entry #%d (track %s)" % (n, track))
     return 0
 
 
@@ -368,6 +463,24 @@ def cmd_validate(a):
     for p in problems:
         print("PROBLEM: " + p)
     return 1
+
+
+def cmd_spend_init(a):
+    """Rebuild a lost spend ledger from the hours the state file records.
+
+    The deliberate act that clearing SpendLedgerMissing requires. It never
+    lowers recorded spend: with a ledger already present this is a no-op, so
+    it cannot be used to wipe the budget.
+    """
+    existed = os.path.exists(ps.SPEND_PATH)
+    total = ps.seed_spend_ledger()
+    print("%s %s: %.1f run-hours billed"
+          % ("ledger already present at" if existed else "seeded ledger",
+             ps.SPEND_PATH, total))
+    if existed:
+        print("(no change — delete the ledger first if you truly mean to "
+              "rebuild it from the state file)")
+    return 0
 
 
 def build_parser():
@@ -411,7 +524,8 @@ def build_parser():
     p.set_defaults(fn=cmd_crash_set)
 
     p = sub.add_parser("campaign-add", help="record a campaign event")
-    p.add_argument("--track", required=True, choices=["k", "u"])
+    p.add_argument("--track", required=True,
+                   help="k or u (case-insensitive; stored as K/U)")
     p.add_argument("--note", required=True)
     p.set_defaults(fn=cmd_campaign_add)
 
@@ -424,16 +538,21 @@ def build_parser():
     p.set_defaults(fn=cmd_round_add_run)
 
     p = sub.add_parser("round-end", help="record this round's measured outcome")
-    p.add_argument("--from-run", dest="from_run",
-                   help="measure verdict/edges/run-hours/crashes from this "
-                        "run's coverage.csv instead of passing them by hand")
+    p.add_argument("--from-run", dest="from_run", action="append",
+                   metavar="RUN_ID",
+                   help="measure verdict/edges/run-hours from this run's "
+                        "coverage.csv instead of passing them by hand; "
+                        "repeatable — pass every campaign this round ran, "
+                        "each is measured and billed independently")
     p.add_argument("--coverage-verdict", dest="coverage_verdict",
                    choices=sorted(ps.COVERAGE_VERDICT),
                    help="from: coverage_ctl.py plateau --run-id ID")
     p.add_argument("--new-crashes", dest="new_crashes", type=int)
     p.add_argument("--edges-start", dest="edges_start", type=int)
     p.add_argument("--edges-end", dest="edges_end", type=int)
-    p.add_argument("--run-hours", dest="run_hours", type=float)
+    p.add_argument("--run-hours", dest="run_hours", type=float,
+                   help="bill these hours to the round (added to the round "
+                        "total; derived per-run hours are preferred)")
     p.add_argument("--notes")
     p.add_argument("--worklist",
                    help="path to this round's worklist.md; the next round's "
@@ -447,12 +566,18 @@ def build_parser():
     p = sub.add_parser("round-decide",
                        help="apply the configured loop caps -> continue|stop")
     p.add_argument("--decision", choices=sorted(ps.ROUND_DECISION),
-                   help="override the computed decision (states the reason)")
+                   help="override the computed decision (a budget or "
+                        "round-cap stop cannot be overridden; a plateau or "
+                        "unknown stop requires --reason)")
     p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_round_decide)
 
     p = sub.add_parser("round-advance", help="open the next round")
     p.set_defaults(fn=cmd_round_advance)
+
+    p = sub.add_parser("spend-init",
+                       help="re-seed the spend ledger from the state file")
+    p.set_defaults(fn=cmd_spend_init)
 
     p = sub.add_parser("validate", help="check state integrity")
     p.set_defaults(fn=cmd_validate)
@@ -464,6 +589,10 @@ def main():
     try:
         sys.exit(a.fn(a))
     except ValueError as e:
+        sys.exit("error: %s" % e)
+    except ps.SpendLedgerMissing as e:
+        # Every command that reads spend fails closed through here; the
+        # exception already carries the spend-init remediation.
         sys.exit("error: %s" % e)
 
 
