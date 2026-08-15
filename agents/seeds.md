@@ -72,3 +72,32 @@ seed parse errors. Report the unmapped count — a high unmapped ratio
 means the ioctl_map is incomplete and the seeds cover less than they appear to.
 From round 2 on, also report per `[finding ...]` item whether a seed now
 establishes its precondition, and name the ones you could not reach.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase seeds
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase seeds "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase seeds "..."
+```
+
+A **learning** is about the target — for this phase, typically workload facts:
+which CUDA calls reach which ioctls, which object chains a trace can and
+cannot produce.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.

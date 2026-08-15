@@ -206,8 +206,9 @@ flowchart TD
     end
 
     subgraph L4["Blackboard — everything on disk"]
-        S1[("state/pipeline.json<br/>phases · crashes · rounds")]
+        S1[("state/pipeline.json<br/>phases · crashes · findings · rounds")]
         S2[("artifacts/<br/>descriptions · seeds · runs · pocs · report")]
+        S3[("knowledge/<br/><i>committed, outlives the box</i>")]
     end
 
     subgraph L5["System under test"]
@@ -293,6 +294,26 @@ with `pipeline_ctl.py worklist` instead of guessing. Meanwhile the run's
 evolved corpus is promoted into a persistent seed bank, so round 3 starts from
 everything rounds 1 and 2 learned rather than from zero.
 
+**That worklist carries two signals.** Coverage says where the fuzzer has not
+been. It is a proxy, and a round following it alone will widen the surface
+indefinitely without ever going back to a place that already produced a bug.
+So `rca` also records a research record per analysed crash: subsystem, bug
+class, the calls involved, the state they needed, and the **adjacent** calls
+that share the same object, lock, refcount or teardown path and were never
+exercised. `refine` merges both, tagging each item `[coverage]` or
+`[finding crash-NNNN]`, and `describe` and `seeds` work the finding items
+first. A crash that gets analysed and then only written up is a round that
+learned nothing, so `validate` reports it.
+
+**What the campaigns learn outlives the box.** `state/pipeline.json` describes
+one campaign on one instance and is gone when it is rebuilt. `knowledge/` is
+committed: `learnings.md` for facts about the target, `mistakes.md` for
+process errors worth not repeating. Every phase reads its own section before
+starting and appends through `knowledge_ctl.py note`. Those files carry ABI
+and process facts, never findings. `note` refuses text naming a crash id,
+because the repository is public and the general form of the lesson is the
+more useful one anyway.
+
 **When it stops.** A sampler records the coverage curve for both tracks. If
 edge growth over the trailing window falls below the configured threshold, the
 round has *plateaued*. The loop stops on plateau, on the round cap, or on the
@@ -342,8 +363,9 @@ campaign carries a **deadline on disk**, enforced by its own per-run
 on time across any number of reboots, with no session attached.
 
 The agent itself is supervised the same way. A fresh session needs no memory
-of the one the panic killed, because `pipeline_ctl.py next` reads the state
-file and says where the pipeline is. That makes the state file the
+of the one the panic killed, because `pipeline_ctl.py brief` reads the state
+file and says where the pipeline is, what is blocked, what the findings point
+at, and what earlier campaigns learned. That makes the state file the
 orchestrator's memory and the agent replaceable, which is what lets
 `gspwn-orchestrator.service` simply start a new one. It refuses to keep
 restarting forever: `orchestrator_ctl.py` counts same-boot restarts and
@@ -351,6 +373,16 @@ reboots separately, and stops the unit when either passes its limit, when a
 phase is blocked, or when the pipeline is complete. Kernel fuzzing reboots the
 box by design, so those two counters cannot share one limit without either
 stopping a healthy campaign or letting a crash loop run all night.
+
+A replacement agent is sufficient but not free. What it loses is the
+reasoning: what was tried, what was ruled out, and why. Setting
+`orchestrator.resume_command` carries that across instead, reusing the
+previous session. The id is assigned rather than discovered, generated as a
+UUID and passed in, because parsing it out of agent output or globbing for the
+newest transcript races anything else on the box. Resumes are bounded, so a
+transcript cannot grow until it silently auto-compacts. A resume that exits
+non-zero clears the id, so the next start is clean instead of retrying an
+unresumable transcript until the breaker trips.
 
 ## Repo layout
 
@@ -360,8 +392,9 @@ stopping a healthy campaign or letting a crash loop run all night.
 | `agents/*.md` | One prompt per phase — the actual instructions each subagent runs on |
 | `tools/*.py` | Deterministic tools. Everything that acts on the system |
 | `config/campaign.yaml` | Every tunable and every spend cap, in one file |
-| `state/pipeline.json` | The blackboard: phase statuses, crash registry, rounds, disclosure status |
-| `state/spend.json`, `state/orchestrator.json` | Machine-global: the run-hour ledger and the orchestrator circuit breaker. Neither follows `GSPWN_STATE` |
+| `state/pipeline.json` | The blackboard: phase statuses, crash registry, research records, rounds, disclosure status. One campaign, one box. Gitignored |
+| `state/spend.json`, `state/orchestrator.json` | Machine-global: the run-hour ledger, and the orchestrator's circuit breaker and session. Neither follows `GSPWN_STATE` |
+| `knowledge/` | What outlives the campaign: `learnings.md` about the target, `mistakes.md` about us. Committed on purpose |
 | `artifacts/` | Everything produced at runtime — descriptions, seeds, runs, crashes, PoCs, report. Gitignored |
 | `docs/` | Runbook, design spec, implementation record |
 
@@ -377,7 +410,8 @@ The tools, briefly:
 | `crash_parse.py` / `crashlog_ctl.py` | Turns raw crashes and post-panic logs into registry entries |
 | `repro_ctl.py` | Extracts reproducers and measures reproduction rate |
 | `trace2seed.py` | Converts an strace of a CUDA workload into seed programs |
-| `orchestrator_ctl.py` | Supervises the driving agent so it comes back after a panic; circuit breaker against restart loops |
+| `orchestrator_ctl.py` | Supervises the driving agent so it comes back after a panic; circuit breaker against restart loops; optional session resume |
+| `knowledge_ctl.py` | Appends to `knowledge/` — the facts and mistakes that outlive the campaign and the box |
 | `build_kernel.sh` | Builds the KASAN/KCOV kernel and the open-source driver modules |
 | `selftest.py` | The offline test suite for all of the above |
 

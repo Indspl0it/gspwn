@@ -16,6 +16,25 @@ detailed vulnerability sections ONLY — no executive summary. Per finding:
 Flaky findings go in a clearly labeled subsection. Unreproducible crashes
 are listed in an appendix, one paragraph each, labeled as unverified.
 
+## The research record
+`python3 tools/pipeline_ctl.py finding-list` prints what rca recorded per
+crash. Three of its fields belong in the report and are easy to leave on the
+floor because the RCA prose reads complete without them:
+
+- `source_refs` — the `file.c:line` the analysis rests on. A vendor reading
+  this wants the line, not a paragraph describing it.
+- `hypothesis` — rca's theory about the underlying pattern rather than this
+  one crash. Where the same hypothesis covers several findings, say so: a
+  class of mistake repeated across a subsystem is a stronger and more
+  actionable result than the same crashes reported one at a time.
+- `confidence` — carry it into the severity justification. A `low` confidence
+  record means the mechanism is largely [UNVERIFIED] against source, and a
+  severity argued from an unverified mechanism has to say so.
+
+Report the record and the prose consistently. Where they disagree the record
+is the later and more structured statement, but a disagreement is itself worth
+resolving before the report goes out rather than picking one silently.
+
 ## Scoping the impact claim
 Two claims are easy to overstate and both get challenged first.
 
@@ -62,3 +81,32 @@ package and stop.
 ## Gate evidence
 report path, disclosure package paths, and registry disclosure statuses from
 `python3 tools/pipeline_ctl.py crash-list`.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase report
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase report "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase report "..."
+```
+
+A **learning** is about the target — for this phase, typically scoping facts:
+what an impact claim does and does not survive, which evidence a reader asked
+for that was missing.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.
