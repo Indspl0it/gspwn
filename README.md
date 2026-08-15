@@ -299,6 +299,12 @@ run-hour budget. It also stops if the coverage verdict is `unknown` — a broken
 sampler must never be able to authorize another blind campaign. A round counts
 as still learning if **either** track is still finding edges.
 
+Each sample also records whether the GPU is answering. A GPU that falls off
+the bus does not stop the fuzzer, so the curve flattens and a plateau test
+with no view of the hardware would report a finished round that never
+happened. A flat window over an unhealthy GPU reads `unknown` instead, which
+stops the loop and says why.
+
 ## Surviving kernel panics
 
 Crashing the kernel is the expected outcome. When the fuzzer finds a bug the

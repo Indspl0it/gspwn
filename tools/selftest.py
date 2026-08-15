@@ -33,6 +33,23 @@ import repro_ctl
 import pipeline_state as ps
 import trace2seed
 
+
+def csv_line(ts, edges=None, source="test", gpu="ok", **extra):
+    """One coverage.csv row, positioned by coverage_ctl.FIELDS.
+
+    Fixtures used to hand-write comma strings, which silently shifted every
+    value one column left when a field was added. Building from the field list
+    keeps them correct across schema changes. gpu defaults to "ok" because
+    these curves stand in for runs on a working GPU; a fixture that wants the
+    dead-card case passes it explicitly.
+    """
+    row = {"ts": ts, "source": source, "gpu": gpu}
+    if edges is not None:
+        row["edges"] = edges
+    row.update(extra)
+    return ",".join(str(row.get(k, "")) for k in coverage_ctl.FIELDS)
+
+
 # A stand-in for syz-db: pack/unpack a directory of programs through a JSON
 # blob. Lets the seed-injection path be tested without a syzkaller build.
 FAKE_SYZ_DB = r'''#!/usr/bin/env python3
@@ -654,7 +671,7 @@ class TestCoverage(unittest.TestCase):
         with open(os.path.join(d, "coverage.csv"), "w") as f:
             f.write(",".join(coverage_ctl.FIELDS) + "\n")
             for off, edges in points:
-                f.write("%d,,%d,,,,test\n" % (base + off * 60, edges))
+                f.write(csv_line(base + off * 60, edges) + "\n")
 
     def verdict(self, points, window=240, growth=0.02):
         self.write_csv("r1", points)
@@ -689,7 +706,8 @@ class TestCoverage(unittest.TestCase):
         with open(os.path.join(d, "coverage.csv"), "w") as f:
             f.write(",".join(coverage_ctl.FIELDS) + "\n")
             for i in range(6):
-                f.write("%d,,,,,,unreachable\n" % (1_700_000_000 + i * 3600))
+                f.write(csv_line(1_700_000_000 + i * 3600,
+                                 source="unreachable") + "\n")
         rows = coverage_ctl.metric_rows("r2")
         self.assertEqual(coverage_ctl.plateau_verdict(rows, 240, 0.02)[0],
                          "unknown")
@@ -1051,7 +1069,7 @@ class TestDerivedRoundEnd(StateTempMixin, unittest.TestCase):
         with open(os.path.join(d, "coverage.csv"), "w") as f:
             f.write(",".join(coverage_ctl.FIELDS) + "\n")
             for ts, edges in points:
-                f.write("%d,,%d,,,,json:/stats\n" % (ts, edges))
+                f.write(csv_line(ts, edges, source="json:/stats") + "\n")
 
     class Args:
         def __init__(self, **kw):
@@ -1215,7 +1233,7 @@ class TestTrackUCoverage(StateTempMixin, unittest.TestCase):
         with open(coverage_ctl.csv_path(run_id, track), "w") as f:
             f.write(",".join(coverage_ctl.FIELDS) + "\n")
             for ts, edges in points:
-                f.write("%d,,%d,,,,,src\n" % (ts, edges))
+                f.write(csv_line(ts, edges, source="src") + "\n")
 
     def test_a_growing_track_u_keeps_the_round_alive(self):
         base = 1_700_000_000
@@ -1387,9 +1405,9 @@ class TestPlateauAcrossRestarts(unittest.TestCase):
     """The fuzzer restarts by design: units are Restart=always and the box
     panics. Edge counts reset to zero when it does."""
 
-    def rows(self, edges, step=3600):
+    def rows(self, edges, step=3600, gpu="ok"):
         base = 1_700_000_000
-        return [{"ts": base + i * step, "edges": e}
+        return [{"ts": base + i * step, "edges": e, "gpu": gpu}
                 for i, e in enumerate(edges)]
 
     def test_restart_inside_the_window_is_not_a_plateau(self):

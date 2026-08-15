@@ -31,9 +31,16 @@ Subcommands:
                                        exit 0 growing, 3 plateaued, 1 unknown
   compare --run-id A --against B [--track k|u]
                                        side-by-side endpoints (two runs)
+  gpu-health                           probe the GPU now; exit 0 healthy, 1 not
 
 Coverage is kernel-side reachable code only. GSP firmware is not instrumented
 (spec §3); every consumer of these numbers must say so.
+
+Every sample records the GPU's state alongside the counters. A GPU that has
+fallen off the bus does not stop the fuzzer: the curve simply flattens, and
+without that column a plateau verdict cannot tell a finished round from a dead
+card. `plateau` refuses to call a flat window a plateau when the GPU was not
+healthy across it.
 
 NOTE ON THE STATS ENDPOINT: syz-manager's HTTP surface has changed across
 syzkaller versions. This tool tries the known JSON endpoints, then falls back
@@ -60,9 +67,18 @@ RUNS_DIR = os.path.join(REPO_ROOT, "artifacts", "runs")
 # corpus is a program count; corpus_bytes is a file size. They were once the
 # same column, which made any comparison spanning a source change meaningless.
 FIELDS = ["ts", "uptime_s", "edges", "corpus", "corpus_bytes", "crashes",
-          "execs", "source"]
+          "execs", "source", "gpu"]
+# Columns holding text, not counts: read_rows must not run them through
+# _to_int, which would turn "ok" into None and silently un-record a healthy GPU.
+TEXT_FIELDS = ("source", "gpu")
 TIMER_NAME = "gspwn-coverage"
 TRACKS = ("k", "u")
+# How long to wait for nvidia-smi before calling the driver wedged. A dead GPU
+# usually fails fast; a hung one blocks, which is the case this bounds.
+GPU_PROBE_TIMEOUT_S = int(os.environ.get("GSPWN_GPU_PROBE_TIMEOUT_S", "20"))
+# The one GPU status that permits a plateau claim. Everything else means the
+# curve cannot be trusted to say why it flattened.
+GPU_OK = "ok"
 
 # Candidate JSON endpoints, newest-style first.
 JSON_PATHS = ("/stats?format=json", "/api/stats", "/stats.json")
@@ -255,6 +271,53 @@ def collect(run_id, url, track="k"):
     return row, "corpus.db-size" if row else "unreachable"
 
 
+def gpu_health(timeout=None):
+    """-> (status, detail). Only GPU_OK lets a plateau verdict be claimed.
+
+    A GPU that falls off the bus (Xid 79) does not stop the fuzzer. syz-manager
+    keeps executing, the sampler keeps appending rows, the edge count stops
+    moving, and `plateau` reports "plateaued" — so the loop stops and the
+    write-up records a plateau that never happened. That is a broken
+    measurement path producing a well-formed wrong number, the same shape as
+    the dmesg_restrict bug. Recording the GPU's state next to every sample is
+    what lets `plateau` refuse to make the claim.
+
+    Statuses: ok | dead | hung | missing | error. The probe reports; it does
+    not attempt recovery. `nvidia-smi -r`, a module reload and a reboot can all
+    be tried by hand, and a GPU that survives none of them needs a stop/start
+    from the AWS console, which nothing in this repo can do.
+    """
+    timeout = GPU_PROBE_TIMEOUT_S if timeout is None else timeout
+    cmd = ["nvidia-smi", "--query-gpu=name,pci.bus_id", "--format=csv,noheader"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return "missing", "nvidia-smi is not on PATH"
+    except subprocess.TimeoutExpired:
+        return "hung", ("nvidia-smi did not return within %ds; the driver is "
+                        "not answering" % timeout)
+    except OSError as e:
+        return "error", "could not run nvidia-smi: %s" % e
+    out = (r.stdout or "").strip()
+    err = (r.stderr or "").strip()
+    if r.returncode != 0:
+        return "dead", ("nvidia-smi exit %d: %s"
+                        % (r.returncode, err or out or "no output"))
+    if not out:
+        return "dead", "nvidia-smi returned no GPU"
+    return GPU_OK, "; ".join(line.strip() for line in out.splitlines())
+
+
+def cmd_gpu_health(a):
+    status, detail = gpu_health()
+    print("GPU: %s (%s)" % (status, detail))
+    if status != GPU_OK:
+        print("A plateau verdict will read 'unknown' while the GPU is in this "
+              "state, so the loop stops rather than recording a plateau the "
+              "fuzzer did not actually reach.")
+    return 0 if status == GPU_OK else 1
+
+
 def campaign_finished(run_id):
     """True once the campaign's deadline has passed.
 
@@ -309,11 +372,19 @@ def cmd_sample(a):
     row = {k: row.get(k) for k in FIELDS}
     row["ts"] = int(time.time())
     row["source"] = source
+    gpu, gpu_detail = gpu_health()
+    row["gpu"] = gpu
     path = csv_path(a.run_id, a.track)
     new = not os.path.exists(path)
+    # Append under the header the file already has, not the one this version
+    # would write. A run that started before the gpu column existed keeps an
+    # 8-column file: writing 9 values into it would misalign every later read.
+    # Those rows carry no GPU status, so plateau reads 'unknown' for them,
+    # which is the safe direction.
+    fields = FIELDS if new else existing_fields(path)
     try:
         with open(path, "a", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=FIELDS)
+            w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             if new:
                 w.writeheader()
             w.writerow(row)
@@ -327,8 +398,17 @@ def cmd_sample(a):
               "check with sudo, or read the curve with `series` instead."
               % path)
         return 1
-    print("%s edges=%s corpus=%s crashes=%s (source: %s)"
-          % (path, row["edges"], row["corpus"], row["crashes"], source))
+    print("%s edges=%s corpus=%s crashes=%s (source: %s, gpu: %s)"
+          % (path, row["edges"], row["corpus"], row["crashes"], source, gpu))
+    if gpu != GPU_OK:
+        print("WARN: GPU is %s (%s). The fuzzer keeps running on a dead GPU "
+              "and the curve flattens, so plateau will report 'unknown' for "
+              "any window holding this sample rather than calling it a "
+              "plateau." % (gpu, gpu_detail))
+    if "gpu" not in fields:
+        print("WARN: %s predates the gpu column, so this sample's GPU status "
+              "was not recorded. Plateau will read 'unknown' for windows over "
+              "these rows." % path)
     if source == "unreachable":
         if a.track == "u":
             print("WARN: no Track U harness output under %s — the sample was "
@@ -342,6 +422,16 @@ def cmd_sample(a):
     return 0
 
 
+def existing_fields(path):
+    """The header a CSV already carries, or FIELDS if it has none."""
+    try:
+        with open(path, newline="") as f:
+            header = next(csv.reader(f), None)
+    except OSError:
+        return FIELDS
+    return header or FIELDS
+
+
 def read_rows(run_id, track="k"):
     path = csv_path(run_id, track)
     if not os.path.exists(path):
@@ -349,8 +439,8 @@ def read_rows(run_id, track="k"):
     with open(path, newline="") as f:
         rows = []
         for r in csv.DictReader(f):
-            rows.append({k: (_to_int(r.get(k)) if k != "source"
-                             else r.get(k)) for k in FIELDS})
+            rows.append({k: (r.get(k) if k in TEXT_FIELDS
+                             else _to_int(r.get(k))) for k in FIELDS})
         return rows
 
 
@@ -371,6 +461,13 @@ def cmd_series(a):
           % (a.run_id, a.track, len(rows), span_h))
     print("  sources: %s" % ", ".join(sorted({r["source"] or "?"
                                               for r in rows})))
+    bad = unhealthy_gpu_samples(rows)
+    if bad:
+        print("  gpu: %d of %d sample(s) not healthy (%s)"
+              % (sum(bad.values()), len(rows),
+                 ", ".join("%s x%d" % (k, v) for k, v in sorted(bad.items()))))
+    else:
+        print("  gpu: healthy across all %d sample(s)" % len(rows))
     if cov:
         print("  edges: %s -> %s (+%s)"
               % (cov[0]["edges"], cov[-1]["edges"],
@@ -404,6 +501,21 @@ def since_last_reset(rows):
     return rows[start:], start > 0
 
 
+def unhealthy_gpu_samples(window):
+    """-> {status: count} for every sample in the window not recording GPU_OK.
+
+    A row from a CSV written before the gpu column existed reports None, which
+    counts as unhealthy: absence of evidence that the GPU was alive is not
+    evidence that it was.
+    """
+    bad = {}
+    for r in window:
+        status = r.get("gpu") or "unrecorded"
+        if status != GPU_OK:
+            bad[status] = bad.get(status, 0) + 1
+    return bad
+
+
 def plateau_verdict(rows, window_min, min_growth):
     """-> (verdict, detail). Growth is measured over the trailing window.
 
@@ -411,6 +523,14 @@ def plateau_verdict(rows, window_min, min_growth):
     data, or not enough data since a restart means we must not claim a
     plateau. The loop treats unknown as a stop, so a broken sampler cannot
     silently authorise more spend.
+
+    A flat curve over a window where the GPU was not healthy is also
+    'unknown'. A GPU that has fallen off the bus flattens the curve exactly
+    like a genuine plateau, and only the plateau reading gets written into the
+    report as a finding about the target. The GPU check gates that reading
+    alone: 'growing' needs no such guard, because coverage cannot climb on a
+    GPU that is not answering, so growth is its own evidence the probe was
+    only having a bad moment.
     """
     if len(rows) < 3:
         return "unknown", "only %d usable sample(s); need >= 3" % len(rows)
@@ -437,7 +557,19 @@ def plateau_verdict(rows, window_min, min_growth):
     detail = ("edges %d -> %d over %.0f min = %.3f%% growth (threshold %.3f%%)"
               "%s" % (start, end, window_min, growth * 100, min_growth * 100,
                       "; measured since a fuzzer restart" if restarted else ""))
-    return ("plateaued" if growth < min_growth else "growing"), detail
+    if growth >= min_growth:
+        return "growing", detail
+    bad = unhealthy_gpu_samples(window)
+    if bad:
+        return "unknown", (
+            "%s, but the GPU was not healthy for %d of %d sample(s) in the "
+            "window (%s). A dead GPU flattens the curve the same way a real "
+            "plateau does, so this is not reported as a plateau. Check "
+            "`coverage_ctl.py gpu-health` and the run's Xid entries before "
+            "deciding the round is done."
+            % (detail, sum(bad.values()), len(window),
+               ", ".join("%s x%d" % (k, v) for k, v in sorted(bad.items()))))
+    return "plateaued", detail
 
 
 def run_verdict(run_id, window_min, min_growth, tracks=TRACKS):
@@ -614,6 +746,9 @@ def build_parser():
                    help="fractional edge growth below which the run has "
                         "plateaued (default loop.plateau_min_growth)")
     p.set_defaults(fn=cmd_plateau)
+
+    p = sub.add_parser("gpu-health")
+    p.set_defaults(fn=cmd_gpu_health)
 
     p = sub.add_parser("compare")
     p.add_argument("--run-id", required=True)

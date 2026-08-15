@@ -86,3 +86,11 @@ not by you blocking.
 showing increase over the smoke window. Flat coverage across the whole smoke
 window is a failed gate, not a slow start — report it rather than extending
 the window until it looks green.
+
+Before calling flat coverage a failed gate, run
+`python3 tools/coverage_ctl.py gpu-health`. A GPU that has fallen off the bus
+leaves the fuzzer running against nothing, and the curve looks identical to a
+descriptions problem. Recover the GPU first (`nvidia-smi -r`, then a module
+reload, then a guest reboot; a card that survives all three needs an instance
+stop/start from the AWS console) and re-run the smoke window before drawing
+any conclusion about the descriptions.
