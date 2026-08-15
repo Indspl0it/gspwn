@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from contextlib import redirect_stdout
@@ -3035,6 +3036,741 @@ class TestBrief(StateTempMixin, unittest.TestCase):
         out = self.brief()
         self.assertIn("run phase provision", out)
         self.assertIn("knowledge unavailable", out)
+
+
+class TestCampaignWindowGatesTheRound(StateTempMixin, unittest.TestCase):
+    """The loop must not measure a campaign that is still running.
+
+    The fuzz gate used to be the 30-minute smoke window, so an unattended
+    round advanced half an hour into a 24-hour run: triage scanned a nearly
+    empty workdir, the later gates were satisfied by having nothing to do, and
+    round-end fitted a three-sample curve while the campaign kept fuzzing
+    behind it. Everything downstream inherited that.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._orig_runs = campaign_ctl.RUNS_DIR
+        campaign_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(campaign_ctl, "RUNS_DIR",
+                                        self._orig_runs))
+        import pipeline_ctl
+        self.ctl = pipeline_ctl
+        st = ps.default_state()
+        ps.current_round(st)["run_ids"] = ["r1-1"]
+        ps.save(st)
+
+    def with_deadline(self, hours):
+        campaign_ctl.write_deadline("r1-1", hours)
+
+    def fuzz_done(self):
+        with ps.transaction() as st:
+            ps.update_phase(st, "fuzz", "done")
+
+    def test_a_campaign_inside_its_window_is_visible_as_live(self):
+        self.with_deadline(5)
+        live = self.ctl._live_runs(ps.load())
+        self.assertEqual([r for r, _ in live], ["r1-1"])
+
+    def test_an_elapsed_campaign_is_not_live(self):
+        self.with_deadline(-1)
+        self.assertEqual(self.ctl._live_runs(ps.load()), [])
+
+    def test_next_reports_wait_while_the_campaign_runs(self):
+        self.with_deadline(5)
+        self.fuzz_done()
+        kind, val = self.ctl._next_action(ps.load())
+        self.assertEqual(kind, "wait")
+        self.assertEqual(val[0], "r1-1")
+
+    def test_the_fuzz_phase_itself_is_never_told_to_wait(self):
+        """fuzz is what starts the campaign. Telling it to wait for the
+        campaign it has not installed yet would deadlock the round."""
+        self.with_deadline(5)
+        kind, val = self.ctl._next_action(ps.load())
+        self.assertEqual((kind, val), ("phase", "provision"))
+
+    def test_once_the_window_closes_the_pipeline_moves_on(self):
+        self.with_deadline(-1)
+        self.fuzz_done()
+        kind, _ = self.ctl._next_action(ps.load())
+        self.assertEqual(kind, "phase")
+
+    def test_wait_check_reports_a_live_campaign_without_blocking(self):
+        self.with_deadline(5)
+        args = types.SimpleNamespace(run_id="r1-1", check=True, poll_min=1)
+        with redirect_stdout(io.StringIO()) as out:
+            rc = campaign_ctl.cmd_wait(args)
+        self.assertEqual(rc, 1)
+        self.assertIn("still fuzzing", out.getvalue())
+
+    def test_wait_returns_once_the_window_has_elapsed(self):
+        self.with_deadline(-1)
+        args = types.SimpleNamespace(run_id="r1-1", check=False, poll_min=1)
+        with redirect_stdout(io.StringIO()) as out:
+            rc = campaign_ctl.cmd_wait(args)
+        self.assertEqual(rc, 0)
+        self.assertIn("has elapsed", out.getvalue())
+
+    def test_wait_refuses_a_run_it_cannot_date(self):
+        args = types.SimpleNamespace(run_id="r9-9", check=True, poll_min=1)
+        with self.assertRaises(SystemExit):
+            with redirect_stdout(io.StringIO()):
+                campaign_ctl.cmd_wait(args)
+
+
+class TestRoundEndRefusesALiveCampaign(StateTempMixin, unittest.TestCase):
+    """round-end is where a live campaign becomes wrong numbers on record."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_runs = campaign_ctl.RUNS_DIR
+        campaign_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        coverage_dir = os.path.join(self.tmp.name, "runs")
+        self._orig_cov = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = coverage_dir
+        self.addCleanup(lambda: setattr(campaign_ctl, "RUNS_DIR",
+                                        self._orig_runs))
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR",
+                                        self._orig_cov))
+        os.makedirs(os.path.join(coverage_dir, "r1-1"), exist_ok=True)
+        with open(coverage_ctl.csv_path("r1-1"), "w") as f:
+            f.write(",".join(coverage_ctl.FIELDS) + "\n")
+            for i in range(4):
+                f.write(csv_line(1000 + i * 600, edges=10 + i * 5,
+                                 execs=1000 * (i + 1)) + "\n")
+        st = ps.default_state()
+        ps.current_round(st)["run_ids"] = ["r1-1"]
+        ps.save(st)
+
+    def args(self, force=False):
+        return types.SimpleNamespace(
+            from_run=["r1-1"], coverage_verdict=None, new_crashes=None,
+            edges_start=None, edges_end=None, run_hours=None, notes=None,
+            worklist=None, force=force)
+
+    def test_measuring_a_live_campaign_is_refused(self):
+        campaign_ctl.write_deadline("r1-1", 5)
+        with self.assertRaises(SystemExit) as cm:
+            with redirect_stdout(io.StringIO()):
+                pipeline_ctl_cmd_round_end(self.args())
+        self.assertIn("refusing to measure a live campaign", str(cm.exception))
+        self.assertIsNone(ps.current_round(ps.load())["ended"])
+
+    def test_force_measures_it_anyway(self):
+        """The deadline file can outlive the campaign it described. --force is
+        the way to say so, and it has to actually work or the escape hatch is
+        theatre."""
+        campaign_ctl.write_deadline("r1-1", 5)
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(self.args(force=True))
+        self.assertIsNotNone(ps.current_round(ps.load())["ended"])
+
+    def test_an_elapsed_campaign_needs_no_force(self):
+        campaign_ctl.write_deadline("r1-1", -1)
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(self.args())
+        self.assertIsNotNone(ps.current_round(ps.load())["ended"])
+
+
+class TestNoiseXidsAreNotFindings(StateTempMixin, unittest.TestCase):
+    """A campaign that counts its own exhaust has not found anything.
+
+    The Xid classification existed and was tested; it was simply never
+    consulted where the counts are derived, so every round's new_crashes
+    carried the Xids the fuzzer produces on purpose.
+    """
+
+    DMESG = ("[1.0] NVRM: Xid (PCI:0000:00:1e): 13, pid=1, Graphics "
+             "Exception\n"
+             "[2.0] NVRM: Xid (PCI:0000:00:1e): 31, pid=2, Ch 8\n"
+             "[3.0] NVRM: Xid (PCI:0000:00:1e): 119, pid=3, GSP RPC Timeout\n")
+
+    def registry(self):
+        st = ps.default_state()
+        path = os.path.join(self.tmp.name, "dmesg.txt")
+        with open(path, "w") as f:
+            f.write(self.DMESG)
+        with redirect_stdout(io.StringIO()):
+            crash_parse.scan_dmesg(st, path)
+        return st
+
+    def test_only_the_signal_xid_counts_as_a_finding(self):
+        import pipeline_ctl
+        st = self.registry()
+        self.assertEqual(len(st["crashes"]), 3)      # all three registered
+        self.assertEqual(pipeline_ctl._derived_new_crashes(st), 1)
+
+    def test_noise_entries_stay_in_the_registry_as_an_audit_trail(self):
+        st = self.registry()
+        signals = sorted(c["signal"] for c in st["crashes"].values())
+        self.assertEqual(signals, ["noise", "noise", "signal"])
+
+    def test_a_signal_xid_alone_still_counts(self):
+        import pipeline_ctl
+        st = ps.default_state()
+        ps.register_crash(st, {"track": "K", "title": "NVRM Xid: 119",
+                               "stack_hash": "h", "status": "unique",
+                               "dir": "d", "signal": "signal"})
+        self.assertEqual(pipeline_ctl._derived_new_crashes(st), 1)
+
+    def test_the_bus_id_is_provenance_not_identity(self):
+        """The same driver bug on two cards is one bug. Leaving the bus id in
+        the title registered it once per card."""
+        st = self.registry()
+        titles = [c["title"] for c in st["crashes"].values()]
+        self.assertFalse([t for t in titles if "PCI:" in t], titles)
+        self.assertTrue(any("0000:00:1e" in (c["notes"] or "")
+                            for c in st["crashes"].values()))
+
+
+class TestRcaGuardOutlivesThePocPhase(StateTempMixin, unittest.TestCase):
+    """`status` is not durable, so the integrity check cannot key on it.
+
+    The poc phase writes reliable/flaky/unreproducible straight over
+    `rca_done`, and poc always runs after rca, so a check keyed on the current
+    status stopped seeing an unanalysed crash exactly when it mattered.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.st = ps.default_state()
+        self.cid = ps.register_crash(self.st, {
+            "track": "K", "title": "KASAN: uaf", "stack_hash": "h",
+            "status": "unique", "dir": "d"})
+
+    def problems(self):
+        return [p for p in ps.validate(self.st) if self.cid in p]
+
+    def test_an_analysed_crash_with_no_records_is_a_problem(self):
+        ps.set_crash_status(self.st["crashes"][self.cid], "rca_done")
+        self.assertEqual(len(self.problems()), 2)     # finding + impact
+
+    def test_the_problem_survives_poc_overwriting_the_status(self):
+        c = self.st["crashes"][self.cid]
+        ps.set_crash_status(c, "rca_done")
+        ps.set_crash_status(c, "reliable", "repro_ctl")
+        self.assertEqual(len(self.problems()), 2)
+
+    def test_a_crash_poc_verified_but_never_analysed_is_not_flagged(self):
+        """Only crashes rca actually finished with owe a finding and an
+        impact. A reliable crash still queued for analysis owes nothing yet."""
+        ps.set_crash_status(self.st["crashes"][self.cid], "reliable",
+                            "repro_ctl")
+        self.assertEqual(self.problems(), [])
+
+    def test_a_duplicate_is_exempt(self):
+        c = self.st["crashes"][self.cid]
+        ps.set_crash_status(c, "rca_done")
+        other = ps.register_crash(self.st, {
+            "track": "K", "title": "t2", "stack_hash": "h2",
+            "status": "unique", "dir": "d2"})
+        c["duplicate_of"] = other
+        ps.set_crash_status(c, "duplicate")
+        self.assertEqual(self.problems(), [])
+
+    def test_the_stamp_is_written_once(self):
+        c = self.st["crashes"][self.cid]
+        ps.set_crash_status(c, "rca_done")
+        first = c["rca_done_at"]
+        ps.set_crash_status(c, "reliable", "repro_ctl")
+        ps.set_crash_status(c, "rca_done")
+        self.assertEqual(c["rca_done_at"], first)
+
+    def test_a_registry_predating_the_stamp_still_reports(self):
+        """was_analysed falls back to the current status, so a state file
+        written before the stamp existed is not silently exempted."""
+        c = self.st["crashes"][self.cid]
+        c["status"] = "rca_done"
+        c.pop("rca_done_at", None)
+        self.assertEqual(len(self.problems()), 2)
+
+    def test_the_status_change_is_recorded_in_the_trail(self):
+        c = self.st["crashes"][self.cid]
+        ps.set_crash_status(c, "rca_done")
+        ps.set_crash_status(c, "reliable", "repro_ctl")
+        self.assertEqual([h["to"] for h in c["history"]],
+                         ["rca_done", "reliable"])
+
+    def test_setting_the_same_status_twice_adds_no_trail_entry(self):
+        c = self.st["crashes"][self.cid]
+        ps.set_crash_status(c, "reliable")
+        ps.set_crash_status(c, "reliable")
+        self.assertEqual(len(c["history"]), 1)
+
+
+class TestOrchestratorUnitSections(unittest.TestCase):
+    """systemd ignores keys in the wrong section, silently.
+
+    StartLimitIntervalSec and StartLimitBurst are [Unit] options;
+    systemd.service(5) only cross-references them. Under [Service] they are an
+    unknown key, so the intended limit never applied and the manager default
+    of 5 starts per 10s governed instead, which RestartSec=60 can never reach.
+    """
+
+    def sections(self):
+        text = orchestrator_ctl.UNIT_TMPL.format(
+            root="/r", restart_sec=60, user="u", home="/h",
+            limit_interval=3600, limit_burst=20,
+            blocked_exit=orchestrator_ctl.BLOCKED_EXIT)
+        out, name = {}, None
+        for line in text.splitlines():
+            if line.startswith("[") and line.endswith("]"):
+                name = line.strip("[]")
+                out[name] = []
+            elif name and line and not line.startswith("#"):
+                out[name].append(line)
+        return out
+
+    def test_the_start_rate_limit_is_in_the_unit_section(self):
+        unit = "\n".join(self.sections()["Unit"])
+        self.assertIn("StartLimitIntervalSec=3600", unit)
+        self.assertIn("StartLimitBurst=20", unit)
+
+    def test_it_is_not_in_the_service_section(self):
+        service = "\n".join(self.sections()["Service"])
+        self.assertNotIn("StartLimit", service)
+
+    def test_the_restart_settings_stay_in_the_service_section(self):
+        service = "\n".join(self.sections()["Service"])
+        self.assertIn("Restart=always", service)
+        self.assertIn("RestartPreventExitStatus=%d"
+                      % orchestrator_ctl.BLOCKED_EXIT, service)
+
+
+class TestAgentStallTimeout(unittest.TestCase):
+    """The breaker counts starts, not stalls.
+
+    An agent blocked on a prompt or a wedged tool held the pipeline open for
+    as long as it liked while the instance billed, and nothing anywhere
+    noticed.
+    """
+
+    def kill_after_a_second(self, cmd):
+        """launch_agent prints why it killed the agent; that belongs in the
+        journal on a real box, not in the middle of the test output."""
+        with redirect_stdout(io.StringIO()):
+            return orchestrator_ctl.launch_agent(cmd, max_hours=1.0 / 3600.0)
+
+    def test_an_agent_past_the_limit_is_killed(self):
+        started = time.time()
+        r = self.kill_after_a_second("sleep 30")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertLess(time.time() - started, 25)
+
+    def test_a_normal_agent_is_untouched(self):
+        self.assertEqual(orchestrator_ctl.launch_agent("true", 1).returncode, 0)
+
+    def test_zero_means_no_limit(self):
+        self.assertEqual(orchestrator_ctl.launch_agent("true", 0).returncode, 0)
+
+    def test_the_whole_process_group_goes(self):
+        """shell=True means the immediate child is a shell. Killing only that
+        leaves the agent running, detached, still stuck on whatever it was
+        stuck on."""
+        marker = os.path.join(tempfile.mkdtemp(), "alive")
+        self.kill_after_a_second("sh -c 'sleep 20; touch %s' & wait" % marker)
+        time.sleep(3)
+        self.assertFalse(os.path.exists(marker))
+
+
+class TestDeadlineReconstruction(StateTempMixin, unittest.TestCase):
+    """Losing one small file used to remove the spend ceiling in silence."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_runs = campaign_ctl.RUNS_DIR
+        campaign_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(campaign_ctl, "RUNS_DIR",
+                                        self._orig_runs))
+
+    def install_event(self, hours=24):
+        st = ps.default_state()
+        st["campaigns"].append({"track": "k", "action": "install",
+                                "run_id": "r1-1", "at": ps._now(),
+                                "hours": hours, "note": "window"})
+        ps.save(st)
+
+    def test_a_lost_deadline_is_rebuilt_from_the_install_record(self):
+        self.install_event(24)
+        at = campaign_ctl.reconstruct_deadline("r1-1")
+        self.assertIsNotNone(at)
+        self.assertAlmostEqual((at - time.time()) / 3600.0, 24, delta=0.1)
+
+    def test_the_rebuilt_deadline_is_written_back(self):
+        self.install_event(24)
+        campaign_ctl.reconstruct_deadline("r1-1")
+        self.assertIsNotNone(campaign_ctl.read_deadline("r1-1"))
+
+    def test_the_latest_install_wins(self):
+        """install-k and install-u both write one, and install-u resets the
+        clock, so the newest is the window actually in force."""
+        self.install_event(2)
+        st = ps.load()
+        st["campaigns"].append({"track": "u", "action": "install",
+                                "run_id": "r1-1", "at": ps._now(),
+                                "hours": 24, "note": "window"})
+        ps.save(st)
+        at = campaign_ctl.reconstruct_deadline("r1-1")
+        self.assertAlmostEqual((at - time.time()) / 3600.0, 24, delta=0.1)
+
+    def test_nothing_to_reconstruct_from_returns_none(self):
+        self.assertIsNone(campaign_ctl.reconstruct_deadline("r9-9"))
+
+    def test_check_deadline_uses_the_reconstruction(self):
+        self.install_event(24)
+        args = types.SimpleNamespace(run_id="r1-1")
+        with redirect_stdout(io.StringIO()) as out:
+            campaign_ctl.cmd_check_deadline(args)
+        self.assertIn("rebuilt it from the install record", out.getvalue())
+        self.assertIn("left of its campaign window", out.getvalue())
+
+    def test_wait_still_dates_a_run_whose_deadline_file_is_gone(self):
+        """Testing reconstruct_deadline directly proves the reconstruction
+        works; it does not prove the fuzz gate uses it. `wait` is what the
+        phase blocks on, so if it reads only the file, losing that file turns
+        the gate into an immediate error and the round advances anyway."""
+        self.install_event(24)
+        self.assertIsNone(campaign_ctl.read_deadline("r1-1"))
+        args = types.SimpleNamespace(run_id="r1-1", check=True, poll_min=1)
+        with redirect_stdout(io.StringIO()) as out:
+            rc = campaign_ctl.cmd_wait(args)
+        self.assertEqual(rc, 1)
+        self.assertIn("still fuzzing", out.getvalue())
+
+    def test_an_undatable_run_with_nothing_running_is_left_alone(self):
+        args = types.SimpleNamespace(run_id="r9-9")
+        with redirect_stdout(io.StringIO()) as out:
+            rc = campaign_ctl.cmd_check_deadline(args)
+        self.assertEqual(rc, 0)
+        self.assertIn("nothing to enforce", out.getvalue())
+
+
+class TestEveryCampaignBills(StateTempMixin, unittest.TestCase):
+    """A round that never closes used to keep its hours off the cap entirely.
+
+    bill_run skipped anything attached to a round, assuming round-end would
+    bill it. A round abandoned to a blocked phase or a breaker trip never
+    reaches round-end, so a whole campaign went unbilled.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._orig = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR", self._orig))
+        os.makedirs(os.path.join(coverage_ctl.RUNS_DIR, "r1-1"))
+        with open(coverage_ctl.csv_path("r1-1"), "w") as f:
+            f.write(",".join(coverage_ctl.FIELDS) + "\n")
+            # Not epoch 0: read_rows filters on `if r.get("ts")`, so a sample
+            # at 0 is dropped and the measured span collapses to one stamp.
+            f.write(csv_line(1700000000, edges=1) + "\n")
+            f.write(csv_line(1700007200, edges=9) + "\n")   # two hours on
+
+    def test_a_round_campaign_is_billed_at_its_stop(self):
+        st = ps.default_state()
+        ps.current_round(st)["run_ids"] = ["r1-1"]
+        ps.save(st)
+        with redirect_stdout(io.StringIO()):
+            campaign_ctl.bill_run("r1-1", "test")
+        self.assertAlmostEqual(ps.total_spend_hours(), 2.0, delta=0.01)
+
+    def test_billing_twice_does_not_double_count(self):
+        with redirect_stdout(io.StringIO()):
+            campaign_ctl.bill_run("r1-1", "test")
+            campaign_ctl.bill_run("r1-1", "test")
+        self.assertAlmostEqual(ps.total_spend_hours(), 2.0, delta=0.01)
+
+    def test_hours_come_from_the_samples_not_the_configured_window(self):
+        """A run that died after two hours must not bill the configured 24."""
+        hours, basis = campaign_ctl.measured_run_hours("r1-1")
+        self.assertAlmostEqual(hours, 2.0, delta=0.01)
+        self.assertIn("coverage samples", basis)
+
+
+class TestDiskHeadroom(unittest.TestCase):
+    """Everything this pipeline writes shares one filesystem."""
+
+    def test_free_space_is_measurable(self):
+        self.assertIsInstance(coverage_ctl.disk_free_mb(), int)
+
+    def test_it_is_a_recorded_column(self):
+        self.assertIn("disk_free_mb", coverage_ctl.FIELDS)
+
+    def test_plenty_of_space_warns_about_nothing(self):
+        self.assertEqual(coverage_ctl.disk_warning(500 * 1024), "")
+
+    def test_running_short_warns(self):
+        out = coverage_ctl.disk_warning(1024)      # 1 GB, floor is 20
+        self.assertIn("min_free_disk_gb", out)
+
+    def test_an_unmeasurable_filesystem_does_not_invent_a_warning(self):
+        self.assertEqual(coverage_ctl.disk_warning(None), "")
+
+
+class TestTrackUDoesNotUseTheGpu(unittest.TestCase):
+    """Gating the container-toolkit verdict on the GPU reported a real
+    plateau as unknown, for a reason unrelated to what was measured."""
+
+    def test_the_not_applicable_marker_is_not_unhealthy(self):
+        rows = [{"gpu": coverage_ctl.GPU_NOT_APPLICABLE}] * 3
+        self.assertEqual(coverage_ctl.unhealthy_gpu_samples(rows), {})
+
+    def test_a_dead_gpu_still_counts_on_track_k(self):
+        self.assertEqual(coverage_ctl.unhealthy_gpu_samples([{"gpu": "dead"}]),
+                         {"dead": 1})
+
+    def test_an_unrecorded_gpu_still_counts(self):
+        """Absence of evidence that the GPU was alive is not evidence that it
+        was, and that stays true."""
+        self.assertEqual(coverage_ctl.unhealthy_gpu_samples([{}]),
+                         {"unrecorded": 1})
+
+    def test_a_flat_track_u_curve_can_still_be_called_a_plateau(self):
+        rows = [{"ts": 1_700_000_000 + i * 600, "edges": 100,
+                 "execs": 1000 * (i + 1),
+                 "gpu": coverage_ctl.GPU_NOT_APPLICABLE} for i in range(30)]
+        verdict, detail = coverage_ctl.plateau_verdict(rows, 240, 0.02)
+        self.assertEqual(verdict, "plateaued", detail)
+
+
+class TestLiveCampaignBlocksVerification(unittest.TestCase):
+    """A reproduction is scored partly on the box going down during the run.
+
+    That inference only holds when the reproducer is the only thing that can
+    panic the machine, and the fuzzer panics it by design.
+    """
+
+    def fake_is_active(self, state):
+        def run(cmd, **kw):
+            return types.SimpleNamespace(stdout=state + "\n", stderr="",
+                                         returncode=0)
+        real = repro_ctl.subprocess
+        repro_ctl.subprocess = types.SimpleNamespace(run=run)
+        self.addCleanup(lambda: setattr(repro_ctl, "subprocess", real))
+
+    def test_verification_is_refused_while_the_fuzzer_runs(self):
+        self.fake_is_active("active")
+        with self.assertRaises(SystemExit) as cm:
+            repro_ctl._refuse_live_campaign(False)
+        self.assertIn("still fuzzing", str(cm.exception))
+
+    def test_a_restarting_unit_counts_as_running(self):
+        self.fake_is_active("activating")
+        with self.assertRaises(SystemExit):
+            repro_ctl._refuse_live_campaign(False)
+
+    def test_a_stopped_campaign_lets_verification_proceed(self):
+        self.fake_is_active("inactive")
+        repro_ctl._refuse_live_campaign(False)
+
+    def test_the_override_is_honoured(self):
+        self.fake_is_active("active")
+        repro_ctl._refuse_live_campaign(True)
+
+
+class TestStaleReproducerIsRebuilt(unittest.TestCase):
+    """extract regenerates repro.c; a build-if-absent check then verified the
+    previous binary against the new source, and neither file looked wrong."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.src = os.path.join(self.tmp.name, "repro.c")
+        self.exe = os.path.join(self.tmp.name, "repro")
+
+    def write(self, path, mtime):
+        with open(path, "w") as f:
+            f.write("x")
+        os.utime(path, (mtime, mtime))
+
+    def test_a_newer_source_forces_a_rebuild(self):
+        self.write(self.exe, 1000)
+        self.write(self.src, 2000)
+        self.assertTrue(repro_ctl.needs_rebuild(self.src, self.exe))
+
+    def test_an_up_to_date_binary_is_kept(self):
+        self.write(self.src, 1000)
+        self.write(self.exe, 2000)
+        self.assertFalse(repro_ctl.needs_rebuild(self.src, self.exe))
+
+    def test_a_missing_binary_is_not_a_stale_one(self):
+        self.write(self.src, 1000)
+        self.assertFalse(repro_ctl.needs_rebuild(self.src, self.exe))
+
+
+class TestConfigValidatesWhatReachesTheSystem(unittest.TestCase):
+    """The unvalidated keys were the ones that fail late, on the target."""
+
+    def load(self, text):
+        path = os.path.join(tempfile.mkdtemp(), "campaign.yaml")
+        with open(path, "w") as f:
+            f.write(text)
+        return gspwn_config.load(path)
+
+    def rejects(self, text, needle):
+        with self.assertRaises(gspwn_config.ConfigError) as cm:
+            self.load(text)
+        self.assertIn(needle, str(cm.exception))
+
+    def test_a_systemd_byte_spec_typo_is_caught(self):
+        self.rejects("track_k:\n  memory_max: 12GB\n", "memory_max")
+
+    def test_a_valid_byte_spec_passes(self):
+        self.assertEqual(self.load("track_k:\n  memory_max: 12G\n")
+                         ["track_k"]["memory_max"], "12G")
+
+    def test_an_unknown_sandbox_is_caught(self):
+        self.rejects("track_k:\n  sandbox: sandboxed\n", "sandbox")
+
+    def test_a_malformed_stats_address_is_caught(self):
+        self.rejects("track_k:\n  http: localhost\n", "http")
+
+    def test_a_scalar_syscall_list_is_caught(self):
+        self.rejects("track_k:\n  enabled_syscalls: ioctl$NV_*\n",
+                     "enabled_syscalls")
+
+    def test_an_empty_docker_image_is_caught(self):
+        self.rejects("track_u:\n  docker_image: ''\n", "docker_image")
+
+    def test_an_agent_timeout_under_the_campaign_window_is_caught(self):
+        """The fuzz phase waits out the whole window in one launch, so a
+        shorter timeout kills every healthy agent at the same point."""
+        self.rejects("loop:\n  campaign_hours: 24\norchestrator:\n"
+                     "  max_agent_hours: 12\n", "max_agent_hours")
+
+    def test_a_longer_agent_timeout_passes(self):
+        cfg = self.load("loop:\n  campaign_hours: 24\norchestrator:\n"
+                        "  max_agent_hours: 30\n")
+        self.assertEqual(cfg["orchestrator"]["max_agent_hours"], 30)
+
+    def test_zero_disables_the_agent_timeout(self):
+        cfg = self.load("orchestrator:\n  max_agent_hours: 0\n")
+        self.assertEqual(cfg["orchestrator"]["max_agent_hours"], 0)
+
+    def test_the_reliable_threshold_must_be_a_fraction(self):
+        self.rejects("poc:\n  reliable_threshold: 80\n", "reliable_threshold")
+
+    def test_the_poc_section_reaches_the_tool(self):
+        self.assertEqual(sorted(gspwn_config.DEFAULTS["poc"]),
+                         ["default_runs", "reliable_threshold",
+                          "repro_timeout_sec", "void_retry_factor"])
+
+
+class TestBulkTriageDecisions(unittest.TestCase):
+    """The triage gate is an empty flagged queue, and one generic panic title
+    with a varying stack flags every distinct stack."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = os.path.join(self.tmp.name, "state", "pipeline.json")
+        self.env = dict(os.environ, GSPWN_STATE=self.state)
+        st = ps.default_state()
+        self.ids = [ps.register_crash(st, {
+            "track": "K", "title": "t%d" % i, "stack_hash": "h%d" % i,
+            "status": "flagged", "dir": "d%d" % i}) for i in range(4)]
+        ps.save(st, self.state)
+
+    def ctl(self, *args, expect=0):
+        r = subprocess.run(
+            [sys.executable, os.path.join(HERE, "pipeline_ctl.py")]
+            + list(args), env=self.env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, expect,
+                         "args=%s\n%s%s" % (list(args), r.stdout, r.stderr))
+        return r.stdout + r.stderr
+
+    def crashes(self):
+        return ps.load(self.state)["crashes"]
+
+    def test_one_call_resolves_several_flags(self):
+        self.ctl("crash-set", *self.ids[1:], "--duplicate-of", self.ids[0])
+        self.assertEqual([self.crashes()[i]["status"] for i in self.ids[1:]],
+                         ["duplicate"] * 3)
+
+    def test_a_single_id_still_works(self):
+        self.ctl("crash-set", self.ids[0], "--status", "unique")
+        self.assertEqual(self.crashes()[self.ids[0]]["status"], "unique")
+
+    def test_a_rejected_id_changes_nothing(self):
+        """All-or-nothing, so the queue is never left half-decided and a retry
+        of the same command is safe."""
+        self.ctl("crash-set", self.ids[0], "crash-9999", "--status", "unique",
+                 expect=1)
+        self.assertEqual(self.crashes()[self.ids[0]]["status"], "flagged")
+
+
+class TestAdvanceRoundRemediation(StateTempMixin, unittest.TestCase):
+    """The error told the reader to do something that does not work."""
+
+    def message(self):
+        st = ps.default_state()
+        for p in ps.PHASES:
+            ps.update_phase(st, p, "done")
+        ps.update_phase(st, "poc", "blocked")
+        ps.record_decision(st, "continue")
+        ps.end_round(st, run_hours=1.0)
+        with self.assertRaises(ValueError) as cm:
+            ps.advance_round(st)
+        return str(cm.exception)
+
+    def test_it_no_longer_suggests_marking_the_phase_blocked(self):
+        self.assertNotIn("mark them blocked first", self.message())
+
+    def test_it_says_marking_blocked_will_not_help(self):
+        self.assertIn("does not satisfy", self.message())
+
+    def test_it_offers_the_two_things_that_do_work(self):
+        msg = self.message()
+        self.assertIn("Finish them", msg)
+        self.assertIn("round-decide", msg)
+
+
+class TestSeedsParseAsSyzlang(unittest.TestCase):
+    """openat takes four arguments. Emitting three produced a seed bank that
+    could not parse at all, and the seeds gate would have blamed the model."""
+
+    def prog(self):
+        trace = ('openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR) = 3\n'
+                 'ioctl(3, 0xc020462a, 0x7ffd) = 0\n'
+                 'close(3) = 0\n')
+        return trace2seed.convert(trace, {"0xc020462a": "ioctl$NV_ALLOC"})
+
+    def test_openat_carries_the_directory_fd(self):
+        line = [l for l in self.prog().splitlines() if "openat" in l][0]
+        self.assertIn(trace2seed.AT_FDCWD, line)
+
+    def test_openat_has_four_arguments(self):
+        line = [l for l in self.prog().splitlines() if "openat" in l][0]
+        args = line.split("(", 1)[1].rsplit(")", 1)[0]
+        self.assertEqual(len(args.split(", ")), 4, line)
+
+    def test_the_mapped_count_does_not_depend_on_the_description_prefix(self):
+        """The map's values are whatever describe named its descriptions.
+        Counting lines starting with "ioctl$" reported zero mapped while
+        emitting them, and the seeds gate reads that ratio."""
+        import re as _re
+        prog = trace2seed.convert(
+            'openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR) = 3\n'
+            'ioctl(3, 0xc020462a, 0x0) = 0\n',
+            {"0xc020462a": "nv_esc_rm_alloc"})
+        mapped = sum(1 for ln in prog.splitlines()
+                     if _re.match(r"^[A-Za-z_][\w$]*\(r\d+,", ln))
+        self.assertEqual(mapped, 1, prog)
+
+
+class TestHarvestDoesNotFakeSuccess(unittest.TestCase):
+    """Reporting "no new crash logs found" when it could not read anything
+    lost the panic evidence silently, on the automated recovery path."""
+
+    def test_a_non_root_harvest_is_refused(self):
+        import crashlog_ctl
+        real = crashlog_ctl.os.geteuid
+        crashlog_ctl.os.geteuid = lambda: 1000
+        self.addCleanup(lambda: setattr(crashlog_ctl.os, "geteuid", real))
+        with self.assertRaises(SystemExit) as cm:
+            crashlog_ctl.cmd_harvest("baremetal")
+        self.assertIn("must run as root", str(cm.exception))
 
 
 def pipeline_ctl_cmd_round_end(args):

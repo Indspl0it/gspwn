@@ -524,18 +524,29 @@ def _recover(prog, now_boot, logs, c, cid):
             % n)
 
 
+def needs_rebuild(src, exe):
+    """Is the compiled reproducer older than the source it came from?
+
+    `extract` regenerates repro.c whenever syz-prog2c has something better to
+    say. A build-if-absent check then verifies the previous binary against the
+    new source, and neither file looks wrong on its own, so the mismatch is
+    invisible in the recorded rate.
+    """
+    if not (os.path.exists(exe) and os.path.exists(src)):
+        return False
+    try:
+        return os.path.getmtime(src) > os.path.getmtime(exe)
+    except OSError:
+        return False
+
+
 def _prepare_k(cid, c):
     """Track K preconditions; returns (run_one, first_baseline)."""
     timeout = _poc_cfg()["repro_timeout_sec"]
     dest = os.path.join(REPO_ROOT, "artifacts", "pocs", cid)
     src = os.path.join(dest, "repro.c")
     exe = os.path.join(dest, "repro")
-    # Rebuild when the source is newer than the binary. `extract` regenerates
-    # repro.c whenever syz-prog2c has something better to say, and a
-    # build-if-absent check then verifies the previous binary against the new
-    # source without either of them being wrong on its own.
-    outdated = (os.path.exists(exe) and os.path.exists(src)
-                and os.path.getmtime(src) > os.path.getmtime(exe))
+    outdated = needs_rebuild(src, exe)
     if not os.path.exists(exe) or outdated:
         if not os.path.exists(src) or os.path.getsize(src) == 0:
             sys.exit("no usable repro.c in %s (run extract first — an empty "
