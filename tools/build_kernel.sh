@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build instrumented kernel + NVIDIA open-gpu-kernel-modules.
-# Degradation ladder (spec Phase 1):
+# Degradation ladder:
 #   RUNG=1  KASAN+KCOV kernel, KASAN+KCOV nvidia modules
 #   RUNG=2  KASAN+KCOV kernel, KCOV-only nvidia modules
 #   RUNG=3  KASAN+KCOV kernel, uninstrumented nvidia modules

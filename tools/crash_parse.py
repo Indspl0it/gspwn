@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Harvest crashes from both tracks and dedup into state/pipeline.json.
 
-Dedup (spec Phase 4): primary key = normalized report title (syzkaller
+Dedup: primary key = normalized report title (syzkaller
 'description' file / ASan summary line / kernel report-start line).
 Secondary = stack hash (sha1 of the top triage.stack_hash_frames function
 frames, addresses and offsets stripped). Both keys are normalized identically

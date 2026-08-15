@@ -2,7 +2,7 @@
 """Convert strace of a real CUDA workload into seed syz-programs.
 
 Valid RM object allocation chains from real workloads are exactly what
-random generation struggles to produce (spec Phase 2b). Seeds are text
+random generation struggles to produce. Seeds are text
 prog files; syz-manager imports them via the corpus.
 
 fd tracking: openat("/dev/nvidiaX") = N  ->  resource r<k>
@@ -31,8 +31,8 @@ DEV_TO_DESC = {
     "/dev/nvidia-uvm-tools": "openat$nvidia_uvm_tools",
 }
 
-# Devices the describe phase is forbidden to model (agents/describe.md,
-# spec section 9): seeds referencing them fail the syzkaller-parse gate.
+# Devices the describe phase is forbidden to model (agents/describe.md):
+# seeds referencing them fail the syzkaller-parse gate.
 OUT_OF_SCOPE = {
     "/dev/nvidia-modeset": "nvidia-modeset out of scope",
 }
