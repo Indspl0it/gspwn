@@ -246,6 +246,9 @@ def default_state():
         "campaigns": [],
         "rounds": [_new_round(round=1, started=_now())],
         "manifest": "artifacts/builds/manifest.json",
+        # The dedup settings the registry's hashes were produced under.
+        # Stamped on the first registration; see triage_drift().
+        "triage_settings": {},
     }
 
 
@@ -1040,9 +1043,49 @@ def impacts(state, primitive=None, consequence=None):
     return out
 
 
-def validate(state):
-    """Return a list of human-readable integrity problems (empty == clean)."""
+def stamp_triage_settings(state, settings):
+    """Record the dedup settings the registry's hashes were produced under.
+
+    Written once, at the first registration, and never overwritten. The point
+    is to remember what the stored hashes mean; rewriting it later would erase
+    exactly the evidence that they were produced under something else.
+    """
+    if not state.get("triage_settings"):
+        state["triage_settings"] = dict(settings)
+    return state["triage_settings"]
+
+
+def triage_drift(state, settings):
+    """[(key, recorded, current)] for dedup settings changed since stamping.
+
+    Changing frame depths or the frameless signature mid-campaign does not
+    recompute the hashes already in the registry, so across the change the
+    same bug can register twice and two different bugs can merge into one that
+    never reaches rca. The config comments say to change them between
+    campaigns; this is what makes ignoring that visible instead of silent,
+    which is the difference between a caveat and a check.
+    """
+    was = state.get("triage_settings") or {}
+    return [(k, was[k], settings[k]) for k in sorted(was)
+            if k in settings and was[k] != settings[k]]
+
+
+def validate(state, triage_settings=None):
+    """Return a list of human-readable integrity problems (empty == clean).
+
+    `triage_settings` is the current dedup config. Optional because this
+    module deliberately does not read config — the caller that has it passes
+    it in, and the drift check is simply skipped for one that does not.
+    """
     problems = []
+    if triage_settings:
+        for key, was, now in triage_drift(state, triage_settings):
+            problems.append(
+                "triage.%s is %r now but the registry's hashes were built "
+                "with %r. Hashes are not recomputed, so across this change "
+                "one bug can register twice and two bugs can merge into one "
+                "that never reaches rca. Restore it for the rest of this "
+                "campaign, or start a fresh registry" % (key, now, was))
     for p in PHASES:
         st = state["phases"][p]["status"]
         if st not in PHASE_STATUS:
