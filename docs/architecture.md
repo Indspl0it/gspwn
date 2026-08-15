@@ -67,6 +67,35 @@ with it — the pipeline cannot route around a failure to keep making progress.
 Disclosure is tracked separately: `pending` → `submitted` → `resolved`, or
 `not_applicable`.
 
+### The research record
+
+Every analysed crash carries a `finding`: the structured record `rca` produces
+alongside its prose write-up. The prose is what the report is built from; the
+record is what the *next round* can act on.
+
+| Field | What reads it |
+|---|---|
+| `subsystem` | `refine` groups by it; it is the key of the per-subsystem rollup |
+| `bug_class`, `trigger` | closed vocabularies (`pipeline_state.BUG_CLASS`, `TRIGGER`) so records from different rounds group together |
+| `ioctls` | the calls the reproducer made, in call order — `describe` models a sequence, not a set |
+| `preconditions` | the object state that had to exist first; `seeds` builds exactly this |
+| `adjacent` | calls **not** exercised that share an object, lock, refcount or teardown path — the highest-value field, and nothing else in the pipeline derives it |
+| `source_refs`, `hypothesis`, `confidence` | the report, and the next round's `rca` |
+
+A record is refused if it names no `subsystem`, or if `ioctls`,
+`preconditions` and `adjacent` are all empty. A taxonomy with nothing to
+target would let the feedback edge look wired while carrying nothing, and the
+failure would be silent for the rest of the campaign. Not `ioctls` alone:
+Track U findings are userspace and have none.
+
+`validate` reports an `rca_done` crash with no record as an integrity problem.
+The analysis happened and nothing survived it, which is the exact failure this
+whole path exists to prevent.
+
+Records from `duplicate` crashes are excluded from `findings()`. They describe
+the same bug as their surviving entry, so counting both would weight a
+subsystem by how many times the fuzzer happened to rediscover one bug.
+
 ### Rounds
 
 Each round records what it measured and what it produced:
@@ -85,6 +114,18 @@ Each round records what it measured and what it produced:
 `worklist` → `worklist_in` is the learning handoff. `round-advance` copies one
 to the other so the next round's `describe` and `seeds` agents can find their
 input with `pipeline_ctl.py worklist` instead of guessing a run id.
+
+Two signals travel that road, tagged per item so the receiving agent can tell
+them apart:
+
+- `[coverage]` — derived from the run's own curve. Where the fuzzer has not
+  been.
+- `[finding crash-NNNN]` — derived from a research record's `adjacent` and
+  `preconditions`. Where a bug has already been.
+
+Coverage alone widens the surface indefinitely and never returns to a place
+that yielded. That is the difference between a fuzzing pipeline and a research
+loop, and it is one payload on a road that already existed.
 
 ## Surviving a panic
 

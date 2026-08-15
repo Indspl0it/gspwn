@@ -7,11 +7,19 @@ The output of this phase is what the next round's describe and seeds agents
 execute. A refine pass that produces no specific, checkable work items has not
 met its gate.
 
+You steer on two signals, and they are not interchangeable. Coverage says
+where the fuzzer has not been. Findings say where the bugs have been. A round
+that only follows coverage will keep widening the surface and never go back to
+the place that already yielded.
+
 ## Inputs
 - artifacts/runs/<run-id>/coverage.csv (via tools/coverage_ctl.py)
 - artifacts/runs/<run-id>/workdir (syz-manager corpus and logs)
 - artifacts/descriptions/ (what is currently modeled)
 - artifacts/seeds/ (the persistent seed bank)
+- `python3 tools/pipeline_ctl.py finding-list` — every research record rca has
+  produced, in this round and every previous one, with the per-subsystem
+  rollup
 - state/pipeline.json rounds history
 - config/campaign.yaml loop settings
 
@@ -46,22 +54,43 @@ description for, and supplying valid object-chain seeds it cannot invent.
      generation will not build. Fix: a seed from a real workload (seeds).
    - **out of scope / firmware** — lives behind GSP, or is modeset. Fix:
      nothing; record it so the report's coverage claims stay correctly scoped.
-4. Write artifacts/eval/<run-id>/gaps.md: one row per gap with the ioctl or
+4. Derive the finding-adjacent work. Run `python3 tools/pipeline_ctl.py
+   finding-list` and, for every record:
+   - its `adjacent` calls become describe items. These are calls that share an
+     object, lock, refcount or teardown path with something that already broke
+     and were not exercised. They are the highest-value items in the worklist
+     and nothing else in the pipeline produces them.
+   - its `preconditions` become seeds items: the object or handle state that
+     has to exist before the bug class can be reached at all.
+   - its `hypothesis` may suggest further items in the same subsystem. A
+     hypothesis only ever **adds** targets. Never drop or deprioritise an item
+     because a hypothesis suggests it is not where the bug is: rca is the only
+     judgement in this loop, and a confident wrong one would otherwise
+     narrow every remaining round.
+   Weigh the rollup: a subsystem with several findings has proven it yields,
+   and its items go above a coverage gap in an area that has produced nothing.
+   A subsystem that has produced no finding across two rounds despite good
+   coverage goes below them — say so in gaps.md, because that is a real
+   result and the next round should not rediscover it.
+5. Write artifacts/eval/<run-id>/gaps.md: one row per gap with the ioctl or
    subsystem, the evidence it is uncovered, the classification, and the
    specific next action. No action may be "investigate further" — say what to
    model or what to trace.
-5. Write artifacts/eval/<run-id>/worklist.md: the ordered, deduplicated work
+6. Write artifacts/eval/<run-id>/worklist.md: the ordered, deduplicated work
    items for the next round, split into a describe section and a seeds
    section. The next round's agents are prompted with this file, so write it
-   for them, not as a report for a human.
-6. Promote the round's corpus into the seed bank so the next round starts
+   for them, not as a report for a human. Every item carries its source —
+   `[coverage]` or `[finding crash-NNNN]` — so the next round's agents can
+   tell a place nobody has looked from a place that has already yielded, and
+   so a later round can see which kind of item actually paid off.
+7. Promote the round's corpus into the seed bank so the next round starts
    ahead: `python3 tools/corpus_ctl.py promote --run-id <id>`. The tool
    honours `loop.promote_seeds` in config/campaign.yaml and refuses when it
    is false — record that in gaps.md rather than working around it. If it
    reports zero new programs, say so in gaps.md — a corpus that adds nothing
    new is direct evidence the round stopped learning, and it is a strong
    input to the stop decision.
-7. Check the loop is still buying anything: compare this round's edge total
+8. Check the loop is still buying anything: compare this round's edge total
    with the previous round's from `pipeline_ctl.py round-show`. Rounds that
    add crashes but no coverage, or coverage but no crashes, are both worth
    noting explicitly in gaps.md.
@@ -111,4 +140,8 @@ design — fix the sampler and re-run rather than supplying a verdict yourself.
 
 ## Gate evidence
 gaps.md and worklist.md paths, the plateau verdict with its detail line, the
-corpus promotion count, and the round-end summary.
+corpus promotion count, the round-end summary, and the split of worklist items
+by source: how many came from coverage gaps and how many from findings. A
+round in which rca recorded findings but the worklist carries no
+`[finding ...]` item has broken the feedback edge, and the next round will
+repeat this one's search.

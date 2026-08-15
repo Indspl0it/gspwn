@@ -68,7 +68,9 @@ the state file and never lowers recorded hours.
 | Advance / block a phase | `python3 tools/pipeline_ctl.py set-phase <phase> <status> --notes "..."` |
 | Inspect the crash registry | `python3 tools/pipeline_ctl.py crash-list [--status S] [--track K\|U]` |
 | Fix a triage decision | `python3 tools/pipeline_ctl.py crash-set <id> --duplicate-of <id>` |
-| Record disclosure status | `python3 tools/pipeline_ctl.py crash-set <id> --disclosure submitted` |
+| Record disclosure status | `python3 tools/pipeline_ctl.py crash-set <id> --disclosure pending` |
+| Attach rca's research record | `python3 tools/pipeline_ctl.py finding-set <id> --json -` |
+| What the findings say to target | `python3 tools/pipeline_ctl.py finding-list` |
 | Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
 | Round history + loop budget | `python3 tools/pipeline_ctl.py round-show` |
 | Rebuild a lost spend ledger | `python3 tools/pipeline_ctl.py spend-init` |
@@ -102,10 +104,10 @@ do not skip ahead to a later phase to keep making progress.
 | harness | agents/harness.md | Track U harnesses build and produce coverage on seeds |
 | fuzz | agents/fuzz.md | both systemd units active; coverage increases within smoke window |
 | triage | agents/triage.md | every raw crash registered unique/duplicate/flagged; the flagged queue is empty (`crash-list --status flagged` returns nothing) |
-| rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC |
+| rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC; each also has a research record (`finding-list`), which is what steers the next round |
 | poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json; every reliable/flaky Track K crash has a recorded profile-check outcome |
 | eval | agents/eval.md | `artifacts/eval/` holds the coverage series, findings table and round progression for every run in this round |
-| refine | agents/refine.md | gaps.md + worklist.md written; round outcome recorded via `round-end` |
+| refine | agents/refine.md | gaps.md + worklist.md written, every item tagged `[coverage]` or `[finding crash-NNNN]`; round outcome recorded via `round-end` |
 | report | agents/report.md | report + PSIRT packages exist; disclosure status recorded |
 
 ## The improvement loop
@@ -123,12 +125,28 @@ provision → build → ┌─ describe / seeds / harness → fuzz → triage
 ```
 
 Each round: fuzz a fresh or carried corpus, triage what it found, measure
-coverage on both tracks, then `refine` works out what was *not* covered and
-writes `artifacts/eval/<run-id>/worklist.md`, recording it with
+coverage on both tracks, then `refine` writes
+`artifacts/eval/<run-id>/worklist.md` and records it with
 `round-end --worklist <path>`. `round-advance` carries that path into the new
 round, where `describe` and `seeds` read it back with `pipeline_ctl.py
-worklist`. Coverage growth across rounds measures whether the loop is
-improving.
+worklist`.
+
+**Two signals steer the next round, and they are not interchangeable.**
+Coverage says where the fuzzer has *not been*: `refine` derives it from the
+run's own curve. Findings say where the bugs *have been*: `rca` records a
+research record per analysed crash (`finding-set`), naming the subsystem, the
+bug class, the calls involved, the state they needed, and the adjacent calls
+that share the same object, lock or teardown path. `refine` merges both into
+one worklist with every item tagged `[coverage]` or `[finding crash-NNNN]`.
+
+Without the second signal the loop only ever widens the surface and never
+returns to a place that already yielded, which is a fuzzing pipeline rather
+than a research loop. An `rca_done` crash with no research record is an
+integrity problem `validate` reports for exactly that reason: the analysis
+happened and nothing survived it.
+
+Coverage growth across rounds measures whether the loop is still learning; the
+per-subsystem rollup in `finding-list` measures where it has been paying off.
 
 Ask `python3 tools/pipeline_ctl.py next` what to do; it returns a phase, or
 `decide`, or `advance-round`, or `complete`. The loop transition is:
