@@ -1,0 +1,697 @@
+/* gspwn documentation theme.
+
+   Dark-first. Starlight's convention is that :root carries the dark values and
+   [data-theme='light'] overrides them, and that is followed here.
+
+   The look is deliberately terminal-adjacent: near-black with a blue cast, a
+   cyan accent, and monospace for every identifier. Identifiers are most of what
+   this site says. */
+
+/* ------------------------------------------------------------- palette --- */
+
+:root {
+  --sl-color-accent-low: #0b2b34;
+  --sl-color-accent: #22b8d6;
+  --sl-color-accent-high: #9fe6f5;
+
+  --sl-color-white: #f4f6f8;
+  --sl-color-gray-1: #e3e6eb;
+  --sl-color-gray-2: #b9bfc9;
+  --sl-color-gray-3: #7f8794;
+  --sl-color-gray-4: #4c545f;
+  --sl-color-gray-5: #2c333d;
+  --sl-color-gray-6: #1b2027;
+  --sl-color-gray-7: #14181e;
+  --sl-color-black: #0d1015;
+
+  --sl-color-bg: #0d1015;
+  --sl-color-bg-nav: rgba(13, 16, 21, 0.72);
+  --sl-color-bg-sidebar: #0d1015;
+  --sl-color-bg-inline-code: #1b2027;
+  --sl-color-hairline: #1f252d;
+  --sl-color-hairline-light: #262d36;
+  --sl-color-hairline-shade: #161b22;
+
+  --sl-color-text: #c8ced8;
+  --sl-color-text-accent: #4fd0e8;
+  --sl-color-text-invert: #0d1015;
+
+  /* Local tokens */
+  --gs-surface: #12161c;
+  --gs-surface-raised: #171c24;
+  --gs-border: #232a33;
+  --gs-border-strong: #2f3743;
+  --gs-glow: rgba(34, 184, 214, 0.16);
+  --gs-code-border: #232a33;
+
+  --sl-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --sl-font-mono: ui-monospace, SFMono-Regular, 'JetBrains Mono',
+    'Cascadia Code', Menlo, Consolas, monospace;
+
+  --sl-text-code: 0.8125rem;
+  /* Wider than the Starlight default: the reference pages are six-column
+     tables, and at 50rem the prose column wraps to one word per line. */
+  --sl-content-width: 56rem;
+  --sl-sidebar-width: 19rem;
+  --sl-nav-height: 3.75rem;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #d3f0f7;
+  --sl-color-accent: #0e8faa;
+  --sl-color-accent-high: #08475a;
+
+  --sl-color-white: #10141a;
+  --sl-color-gray-1: #1b2027;
+  --sl-color-gray-2: #333a44;
+  --sl-color-gray-3: #616a77;
+  --sl-color-gray-4: #98a1ad;
+  --sl-color-gray-5: #d6dbe2;
+  --sl-color-gray-6: #eef1f5;
+  --sl-color-gray-7: #f6f8fa;
+  --sl-color-black: #ffffff;
+
+  --sl-color-bg: #ffffff;
+  --sl-color-bg-nav: rgba(255, 255, 255, 0.78);
+  --sl-color-bg-sidebar: #fbfcfd;
+  --sl-color-bg-inline-code: #eef1f5;
+  --sl-color-hairline: #e3e7ec;
+  --sl-color-hairline-light: #edf0f4;
+  --sl-color-hairline-shade: #e3e7ec;
+
+  --sl-color-text: #333a44;
+  --sl-color-text-accent: #0e8faa;
+  --sl-color-text-invert: #ffffff;
+
+  --gs-surface: #fbfcfd;
+  --gs-surface-raised: #ffffff;
+  --gs-border: #e3e7ec;
+  --gs-border-strong: #d0d6de;
+  --gs-glow: rgba(14, 143, 170, 0.1);
+  --gs-code-border: #e3e7ec;
+}
+
+/* ------------------------------------------------------------ backdrop --- */
+
+/* Two fixed washes of accent, so the page has depth without a texture file. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 32rem at 78% -8%, var(--gs-glow), transparent 62%),
+    radial-gradient(48rem 28rem at 4% 4%, rgba(34, 184, 214, 0.07), transparent 58%);
+}
+
+::selection {
+  background: var(--sl-color-accent);
+  color: #04161b;
+}
+
+/* --------------------------------------------------------------- chrome --- */
+
+header.header {
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  border-bottom: 1px solid var(--gs-border);
+  box-shadow: none;
+}
+
+.site-title {
+  font-family: var(--sl-font-mono);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--sl-color-white);
+}
+
+/* Search field reads as an input rather than a button. */
+site-search button[data-open-modal] {
+  border: 1px solid var(--gs-border);
+  background: var(--gs-surface);
+  border-radius: 0.5rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+site-search button[data-open-modal]:hover {
+  border-color: var(--gs-border-strong);
+  background: var(--gs-surface-raised);
+}
+
+/* -------------------------------------------------------------- sidebar --- */
+
+.sidebar-pane {
+  border-inline-end: 1px solid var(--gs-border);
+  background: var(--sl-color-bg-sidebar);
+}
+
+.sidebar-content {
+  padding-top: 1.25rem;
+}
+
+/* Group labels: small, spaced, quiet. */
+.sidebar-content summary,
+.sidebar-content > ul > li > details > summary > .group-label > span,
+.sidebar-content > ul > li > span.large {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+
+.sidebar-content a {
+  border-radius: 0.4rem;
+  padding-block: 0.3rem;
+  font-size: 0.875rem;
+  border-inline-start: 2px solid transparent;
+  transition: color 0.12s ease, background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.sidebar-content a:hover {
+  background: var(--gs-surface);
+  color: var(--sl-color-white);
+}
+
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  background: linear-gradient(
+    90deg,
+    var(--sl-color-accent-low),
+    transparent 92%
+  );
+  border-inline-start-color: var(--sl-color-accent);
+  color: var(--sl-color-white);
+  font-weight: 600;
+}
+
+/* Deep nesting (the CLI and component lists) reads as a hairline tree. */
+.sidebar-content ul ul {
+  border-inline-start: 1px solid var(--gs-border);
+  margin-inline-start: 0.55rem;
+  padding-inline-start: 0.45rem;
+}
+
+/* ------------------------------------------------------------ headings --- */
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+h1.hero-title,
+.content-panel h1 {
+  letter-spacing: -0.022em;
+  color: var(--sl-color-white);
+}
+
+.sl-markdown-content h2 {
+  margin-top: 2.75rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--gs-border);
+  font-size: 1.4rem;
+}
+
+.sl-markdown-content h2::before {
+  content: '';
+  display: block;
+  width: 2rem;
+  height: 2px;
+  margin-bottom: 0.8rem;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--sl-color-accent), transparent);
+}
+
+.sl-markdown-content h3 {
+  margin-top: 2rem;
+  font-size: 1.1rem;
+}
+
+/* --------------------------------------------------------------- prose --- */
+
+.sl-markdown-content {
+  font-size: 1rem;
+  line-height: 1.75;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+  text-decoration-color: color-mix(in srgb, var(--sl-color-text-accent) 45%, transparent);
+  transition: text-decoration-color 0.15s ease, color 0.15s ease;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration-color: var(--sl-color-text-accent);
+}
+
+/* Identifiers carry most of the meaning here, so they get a real chip. */
+.sl-markdown-content :not(pre) > code {
+  font-family: var(--sl-font-mono);
+  font-size: 0.8125em;
+  border: 1px solid var(--gs-code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.36em;
+  background: var(--sl-color-bg-inline-code);
+  color: var(--sl-color-white);
+}
+
+.sl-markdown-content blockquote {
+  border-inline-start: 2px solid var(--sl-color-accent);
+  padding-inline-start: 1rem;
+  color: var(--sl-color-gray-2);
+}
+
+.sl-markdown-content hr {
+  border-color: var(--gs-border);
+}
+
+/* -------------------------------------------------------------- tables --- */
+
+.sl-markdown-content table {
+  display: block;
+  overflow-x: auto;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  border: 1px solid var(--gs-border);
+  border-radius: 0.6rem;
+  background: var(--gs-surface);
+}
+
+/* Deliberately not sticky. The table is its own horizontal scroll container
+   with no vertical overflow, so a sticky header resolves against the viewport
+   and floats over the site header instead. */
+.sl-markdown-content thead th {
+  text-align: left;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-2);
+  background: var(--gs-surface-raised);
+}
+
+.sl-markdown-content td,
+.sl-markdown-content th {
+  padding: 0.55rem 0.8rem;
+  border: 0;
+  border-bottom: 1px solid var(--gs-border);
+  vertical-align: top;
+  /* A floor per cell, so a wide table scrolls rather than collapsing its prose
+     column to one word per line. */
+  min-width: 7rem;
+}
+
+/* The first column of a reference table is an identifier. */
+.sl-markdown-content td:first-child {
+  min-width: 10rem;
+}
+
+.sl-markdown-content tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.sl-markdown-content tbody tr:hover td {
+  background: color-mix(in srgb, var(--sl-color-accent) 5%, transparent);
+}
+
+.sl-markdown-content td code {
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- cards --- */
+
+.card {
+  border: 1px solid var(--gs-border);
+  border-radius: 0.75rem;
+  background: var(--gs-surface);
+  transition: border-color 0.18s ease, transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.card:hover {
+  border-color: color-mix(in srgb, var(--sl-color-accent) 55%, var(--gs-border));
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px -18px var(--sl-color-accent);
+}
+
+.card .icon {
+  color: var(--sl-color-accent);
+  background: var(--sl-color-accent-low);
+  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 30%, transparent);
+  border-radius: 0.5rem;
+  padding: 0.35rem;
+}
+
+.card .title {
+  color: var(--sl-color-white);
+  letter-spacing: -0.01em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card:hover { transform: none; }
+}
+
+/* ----------------------------------------------------------- nav cards --- */
+
+/* Starlight's Card is a static container, so only the inline link inside one
+   was clickable and the rest of the surface did nothing. NavCard is a single
+   anchor, so the whole card is the target. */
+/* 20rem, so the four cards land as 2x2 at the 56rem content width. A 16rem
+   floor fits three across and leaves the fourth stranded on its own row. */
+.nav-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 1rem;
+  margin-block: 1.5rem;
+}
+
+.nav-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 1.25rem;
+  border: 1px solid var(--gs-border);
+  border-radius: 0.75rem;
+  background: var(--gs-surface);
+  color: var(--sl-color-gray-2);
+  text-decoration: none;
+  transition: border-color 0.18s ease, transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.nav-card:hover,
+.nav-card:focus-visible {
+  border-color: color-mix(in srgb, var(--sl-color-accent) 55%, var(--gs-border));
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px -18px var(--sl-color-accent);
+  text-decoration: none;
+}
+
+.nav-card__head {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.nav-card__icon {
+  flex: none;
+  color: var(--sl-color-accent);
+  background: var(--sl-color-accent-low);
+  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 30%, transparent);
+  border-radius: 0.5rem;
+  padding: 0.35rem;
+  box-sizing: content-box;
+}
+
+.nav-card__title {
+  font-size: var(--sl-text-h5);
+  font-weight: 600;
+  color: var(--sl-color-white);
+  letter-spacing: -0.01em;
+}
+
+.nav-card__body {
+  font-size: var(--sl-text-sm);
+  line-height: 1.6;
+}
+
+/* Hidden until hover, so the resting card stays quiet. */
+.nav-card__arrow {
+  position: absolute;
+  top: 1.35rem;
+  right: 1.25rem;
+  color: var(--sl-color-accent);
+  opacity: 0;
+  transform: translateX(-0.25rem);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.nav-card:hover .nav-card__arrow,
+.nav-card:focus-visible .nav-card__arrow {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-card:hover { transform: none; }
+  .nav-card,
+  .nav-card__arrow { transition: none; }
+}
+
+/* ---------------------------------------------------------------- hero --- */
+
+.hero {
+  padding-block: 1rem 0;
+}
+
+.hero > img,
+.hero > .hero-html {
+  filter: drop-shadow(0 24px 60px rgba(34, 184, 214, 0.18));
+}
+
+.hero h1 {
+  font-size: clamp(2.5rem, 7vw, 3.75rem);
+  letter-spacing: -0.04em;
+  background: linear-gradient(
+    180deg,
+    var(--sl-color-white),
+    color-mix(in srgb, var(--sl-color-white) 62%, var(--sl-color-accent))
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero .tagline {
+  color: var(--sl-color-gray-2);
+  font-size: clamp(1rem, 1.6vw, 1.15rem);
+  line-height: 1.6;
+  max-width: 42ch;
+}
+
+.hero .actions {
+  margin-top: 1.75rem;
+}
+
+.sl-link-button.primary {
+  border-radius: 0.55rem;
+  box-shadow: 0 8px 24px -12px var(--sl-color-accent);
+}
+
+.sl-link-button.minimal {
+  border-radius: 0.55rem;
+}
+
+/* -------------------------------------------------------------- asides --- */
+
+.starlight-aside {
+  border-radius: 0.6rem;
+  border: 1px solid var(--gs-border);
+  border-inline-start-width: 3px;
+  background: var(--gs-surface);
+}
+
+.starlight-aside__title {
+  letter-spacing: -0.01em;
+}
+
+/* ------------------------------------------------------------ code blocks -- */
+
+.expressive-code .frame {
+  border-radius: 0.6rem;
+}
+
+.expressive-code pre {
+  border: 1px solid var(--gs-code-border) !important;
+}
+
+/* ----------------------------------------------------------- diagrams --- */
+
+/* Diagrams sit in a card and scroll inside it, so a wide flowchart never makes
+   the page scroll sideways. */
+.mermaid,
+pre.mermaid {
+  overflow-x: auto;
+  margin-block: 1.75rem;
+  padding: 1.25rem 1rem;
+  text-align: center;
+  border: 1px solid var(--gs-border);
+  border-radius: 0.75rem;
+  background: var(--gs-surface);
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Mermaid's own light and dark themes carry the text and line colours, because
+   one palette cannot serve both schemes. Only the node fill and border are
+   restated here, per scheme, so the diagrams share the site's accent. Scoped to
+   .node, so sequence-diagram actors and notes keep their theme colours. */
+:root:not([data-theme='light']) .mermaid .node rect,
+:root:not([data-theme='light']) .mermaid .node polygon,
+:root:not([data-theme='light']) .mermaid .node circle,
+:root:not([data-theme='light']) .mermaid .node ellipse,
+:root:not([data-theme='light']) .mermaid .node path {
+  fill: #16202a !important;
+  stroke: #2e8ba3 !important;
+  stroke-width: 1.2px !important;
+}
+
+:root:not([data-theme='light']) .mermaid .cluster rect {
+  fill: #11161c !important;
+  stroke: var(--gs-border-strong) !important;
+}
+
+:root[data-theme='light'] .mermaid .node rect,
+:root[data-theme='light'] .mermaid .node polygon,
+:root[data-theme='light'] .mermaid .node circle,
+:root[data-theme='light'] .mermaid .node ellipse,
+:root[data-theme='light'] .mermaid .node path {
+  fill: #edf7fa !important;
+  stroke: #0e8faa !important;
+  stroke-width: 1.2px !important;
+}
+
+:root[data-theme='light'] .mermaid .cluster rect {
+  fill: #f6f8fa !important;
+  stroke: var(--gs-border-strong) !important;
+}
+
+/* The rules above reach flowchart nodes only. Mermaid gives state and sequence
+   diagrams their own class names, so without these a page mixing diagram types
+   renders some of them in the site's accent and the rest in mermaid's stock
+   palette. Rects only: `text.actor` and the state machine's start and end
+   circles share the bare `.actor` and `.node` selectors, and filling those
+   erases the label or the terminal dot. */
+:root:not([data-theme='light']) .mermaid .statediagram-state rect,
+:root:not([data-theme='light']) .mermaid g.stateGroup rect,
+:root:not([data-theme='light']) .mermaid rect.actor,
+:root:not([data-theme='light']) .mermaid rect.actor-box {
+  fill: #16202a !important;
+  stroke: #2e8ba3 !important;
+}
+
+:root:not([data-theme='light']) .mermaid .statediagram-cluster rect,
+:root:not([data-theme='light']) .mermaid rect.note,
+:root:not([data-theme='light']) .mermaid rect.labelBox {
+  fill: #11161c !important;
+  stroke: var(--gs-border-strong) !important;
+}
+
+:root[data-theme='light'] .mermaid .statediagram-state rect,
+:root[data-theme='light'] .mermaid g.stateGroup rect,
+:root[data-theme='light'] .mermaid rect.actor,
+:root[data-theme='light'] .mermaid rect.actor-box {
+  fill: #edf7fa !important;
+  stroke: #0e8faa !important;
+}
+
+:root[data-theme='light'] .mermaid .statediagram-cluster rect,
+:root[data-theme='light'] .mermaid rect.note,
+:root[data-theme='light'] .mermaid rect.labelBox {
+  fill: #f6f8fa !important;
+  stroke: var(--gs-border-strong) !important;
+}
+
+/* Mermaid pairs its actor text colour with its own actor box colour, so
+   overriding the box above leaves the label unreadable against it: dark theme
+   renders #1f2020 on the #16202a box. Owning the fill means owning the label. */
+:root:not([data-theme='light']) .mermaid text.actor,
+:root:not([data-theme='light']) .mermaid text.actor-box,
+:root:not([data-theme='light']) .mermaid .statediagram-state text,
+:root:not([data-theme='light']) .mermaid g.stateGroup text {
+  fill: #c8ced8 !important;
+}
+
+:root[data-theme='light'] .mermaid text.actor,
+:root[data-theme='light'] .mermaid text.actor-box,
+:root[data-theme='light'] .mermaid .statediagram-state text,
+:root[data-theme='light'] .mermaid g.stateGroup text {
+  fill: #24292f !important;
+}
+
+/* Edge labels carry an opaque background so an edge does not strike through
+   its own text. Mermaid sizes it to the page background, which is wrong once
+   the diagram sits on a card. */
+:root:not([data-theme='light']) .mermaid .edgeLabel,
+:root:not([data-theme='light']) .mermaid .edgeLabel rect,
+:root:not([data-theme='light']) .mermaid .edgeLabel p {
+  background-color: var(--gs-surface) !important;
+  fill: var(--gs-surface) !important;
+}
+
+:root[data-theme='light'] .mermaid .edgeLabel,
+:root[data-theme='light'] .mermaid .edgeLabel rect,
+:root[data-theme='light'] .mermaid .edgeLabel p {
+  background-color: var(--gs-surface) !important;
+  fill: var(--gs-surface) !important;
+}
+
+/* ------------------------------------------------------------------ toc --- */
+
+.right-sidebar {
+  border-inline-start: 1px solid var(--gs-border);
+}
+
+starlight-toc a {
+  border-radius: 0.35rem;
+  font-size: 0.8125rem;
+  border-inline-start: 2px solid transparent;
+  padding-inline-start: 0.6rem;
+}
+
+starlight-toc a[aria-current='true'] {
+  border-inline-start-color: var(--sl-color-accent);
+  color: var(--sl-color-white);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--sl-color-accent) 8%, transparent);
+}
+
+/* --------------------------------------------------------- pagination --- */
+
+.pagination-links a {
+  border: 1px solid var(--gs-border);
+  border-radius: 0.6rem;
+  background: var(--gs-surface);
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.pagination-links a:hover {
+  border-color: color-mix(in srgb, var(--sl-color-accent) 55%, var(--gs-border));
+  transform: translateY(-1px);
+}
+
+/* -------------------------------------------------------- scrollbars --- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--gs-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--gs-border-strong);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--sl-color-gray-4);
+}

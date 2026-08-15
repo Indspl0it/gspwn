@@ -1,0 +1,25 @@
+---
+// A card whose whole surface is the link. Starlight's own Card is a static
+// container, so a reader who clicks the body of one gets nothing; LinkCard is
+// clickable but carries no icon. This is both.
+import { Icon } from '@astrojs/starlight/components';
+
+interface Props {
+	title: string;
+	href: string;
+	icon?: string;
+}
+
+const { title, href, icon } = Astro.props;
+---
+
+<a class="nav-card" href={href}>
+	<span class="nav-card__head">
+		{icon && <Icon name={icon} class="nav-card__icon" size="1.5rem" />}
+		<span class="nav-card__title">{title}</span>
+	</span>
+	<span class="nav-card__body"><slot /></span>
+	<span class="nav-card__arrow" aria-hidden="true">
+		<Icon name="right-arrow" size="1rem" />
+	</span>
+</a>
