@@ -134,6 +134,21 @@ REPORT_VOLATILE_RE = re.compile(
 # per-occurrence; the name is not, and a panic in modprobe is not the same bug
 # as a panic in syz-executor.
 COMM_INDEX_RE = re.compile(r"(\bComm:\s*\S+?)\.\d+\b")
+# The faulting instruction pointer. In a report with no decodable call trace
+# this is the only field naming *where* the fault happened, so it has to be
+# part of the identity: without it two different faulting functions behind the
+# same fault type produce the same title and the same signature, and the
+# second is registered as a duplicate that never reaches rca.
+#
+# Found by pattern rather than by line number, because how much prologue
+# precedes it varies with the fault type — a fixed line count cannot reach it
+# reliably, and raising the count far enough to try would drag in lines that
+# vary per occurrence. The offset is dropped for the same reason stack_frames
+# drops it: it moves with the build, and the same bug in two builds is one
+# bug. An unresolved RIP (a bare address, module not loaded) matches nothing
+# and leaves the signature as it was.
+RIP_RE = re.compile(r"\bRIP:\s*[0-9a-fA-F]{4}:(?:\s*\[<[0-9a-fA-F]+>\])?\s*"
+                    r"([A-Za-z_][\w.]*)")
 
 
 def norm_title(t):
@@ -220,6 +235,10 @@ def register(state, track, title, shash, srcdir, signal=None,
     DUPed — unless it is the identical sighting re-read from the identical
     source (a re-scan), which stays a plain DUP.
     """
+    # Stamp what the registry's hashes mean before adding to them. Self-
+    # guarded: written once, at the first registration, so `validate` can say
+    # later that the dedup settings moved underneath the stored hashes.
+    ps.stamp_triage_settings(state, gspwn_config.triage())
     title = canon_title(title)
     by_title, by_hash, seen = existing_keys(state)
     prior = seen.get((title, shash, srcdir))
@@ -392,9 +411,14 @@ def block_signature(block, lines=None, chars=None):
     # would otherwise be eaten as an address first and never recognised as a
     # pid, so the same panic would split on task id alone.
     ctx = COMM_INDEX_RE.sub(r"\1", REPORT_VOLATILE_RE.sub("", " ".join(head)))
-    return hashlib.sha1(
-        norm_title(HEX_RE.sub("0xADDR", ctx))[:chars].encode()
-    ).hexdigest()[:16]
+    ctx = norm_title(HEX_RE.sub("0xADDR", ctx))[:chars]
+    # After the cut, never inside it. The faulting symbol is the strongest
+    # evidence a frameless report carries, so a long prologue must not be able
+    # to push it out of the identity.
+    rip = RIP_RE.search(block)
+    if rip:
+        ctx += " RIP:" + rip.group(1)
+    return hashlib.sha1(ctx.encode()).hexdigest()[:16]
 
 
 def scan_dmesg(state, path):

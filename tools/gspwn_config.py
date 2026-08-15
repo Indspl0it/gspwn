@@ -164,10 +164,11 @@ DEFAULTS = {
     # decides what reaches `rca` and what the next round hunts, so they are
     # research knobs rather than parser internals.
     #
-    # CAUTION: changing any of them mid-campaign applies only to crashes
-    # registered afterwards. Already-registered hashes are not recomputed, so
-    # the same bug can register twice across the change. Change them between
-    # campaigns.
+    # CAUTION: change them between campaigns, not during one. Already
+    # registered hashes are not recomputed, so across a mid-campaign change
+    # one bug can register twice and two bugs can merge into one that never
+    # reaches rca. pipeline_state stamps the settings in force at the first
+    # registration and `pipeline_ctl.py validate` reports it when they move.
     "triage": {
         # Frames hashed for the secondary dedup key. Fewer merges distinct
         # bugs that share a common caller; more splits one bug whose stack
@@ -177,18 +178,20 @@ DEFAULTS = {
         "signature_frames": 5,
         # The two below govern the fallback identity for a report with no
         # usable stack at all — a lone "BUG: unable to handle ..." or a
-        # trace-less panic. With no frames to hash, the only distinguishing
-        # evidence is the wording around the report's start line, normalized
-        # so timestamps, hex addresses and pids do not make every occurrence
-        # unique. They are a dedup decision like the frame counts, and they
-        # fail in opposite directions: too narrow and one trace-less panic
-        # registers as many bugs, burying the real ones in the queue; too wide
-        # and two different panics that share a prologue merge into one, so
-        # the second never reaches rca at all.
+        # trace-less panic. With no frames to hash, the evidence is the
+        # faulting function plus the wording around the report's start line,
+        # normalized so timestamps, addresses and per-occurrence detail do not
+        # make every sighting unique. These two bound the wording only: the
+        # faulting function is matched by pattern wherever it sits and is
+        # always part of the identity, because without it two different faults
+        # behind the same fault type merge and the second never reaches rca.
+        #
+        # They fail in opposite directions: too narrow and one panic registers
+        # as many bugs, burying the real ones in the queue; too wide and the
+        # signature picks up detail that varies per occurrence.
         #
         # Report lines that form the signature. Small on purpose: later lines
-        # of a trace-less report are usually register dumps, which vary per
-        # occurrence and would split one bug into many.
+        # of a trace-less report are usually register dumps.
         "frameless_signature_lines": 5,
         # Characters of that normalized wording actually hashed.
         "frameless_signature_chars": 300,

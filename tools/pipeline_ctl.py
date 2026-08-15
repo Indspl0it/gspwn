@@ -115,7 +115,7 @@ def cmd_show(a):
                  ", ".join("%s=%d" % kv for kv in sorted(by_status.items()))))
     else:
         print("crashes: none registered")
-    problems = ps.validate(st)
+    problems = ps.validate(st, _triage_cfg())
     if problems:
         print("INTEGRITY: %d problem(s) — run: pipeline_ctl.py validate"
               % len(problems))
@@ -805,7 +805,7 @@ def cmd_brief(a):
         # cannot get anywhere else.
         print("(knowledge unavailable: %s)" % e)
 
-    problems = ps.validate(st)
+    problems = ps.validate(st, _triage_cfg())
     if problems:
         print("\n## Integrity: %d problem(s)" % len(problems))
         for p in problems[:ag["brief_max_problems"]]:
@@ -826,8 +826,21 @@ def cmd_campaign_add(a):
     return 0
 
 
+def _triage_cfg():
+    """Current dedup settings, or None when config cannot be read.
+
+    None rather than an exit: validate's job is to report on the registry, and
+    it must still do that when the config is broken. The drift check is simply
+    one of the things it cannot answer then.
+    """
+    try:
+        return gspwn_config.triage()
+    except gspwn_config.ConfigError:
+        return None
+
+
 def cmd_validate(a):
-    problems = ps.validate(ps.load())
+    problems = ps.validate(ps.load(), _triage_cfg())
     if not problems:
         print("state is consistent")
         return 0
