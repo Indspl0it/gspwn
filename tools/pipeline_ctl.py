@@ -8,6 +8,9 @@ Subcommands:
   init [--force]                 create state/pipeline.json (idempotent)
   show [--json]                  phase table + crash summary
   next                           print the first phase not marked done
+  brief [--last N]               derived handoff for a fresh or compacted
+                                 session: position, crashes, findings, and the
+                                 tail of knowledge/
   set-phase <phase> <status> [--notes TEXT]
                                  status: pending|in_progress|done|blocked|failed
   crash-list [--status S] [--track K|U] [--json]
@@ -46,6 +49,16 @@ import pipeline_state as ps
 
 STATUS_MARK = {"done": "+", "in_progress": ">", "blocked": "!",
                "failed": "!", "pending": "."}
+
+
+def _repo_rel(path):
+    """Repo-relative when it is inside the repo, absolute otherwise.
+
+    A redirected GSPWN_STATE lives outside the tree, where relpath produces a
+    run of '..' segments that is longer and less useful than the real path.
+    """
+    rel = os.path.relpath(path, ps.REPO_ROOT)
+    return path if rel.startswith("..") else rel
 
 
 def cmd_init(a):
@@ -534,6 +547,109 @@ def cmd_finding_list(a):
     return 0
 
 
+def cmd_brief(a):
+    """Everything a replacement agent needs, derived from state at read time.
+
+    This is what a fresh session reads after a panic, and what an agent whose
+    context was compacted reads to recover. It is deliberately *derived*: a
+    hand-maintained handoff file drifts the moment a phase changes without it
+    being rewritten, and a stale file that looks authoritative is worse than
+    none. This one cannot be stale, only old, and it stamps its own time so
+    that is visible.
+
+    Keep it short. It is read into a context window that has just been
+    truncated, and every line here displaces something else.
+    """
+    st = ps.load()
+    cfg = _loop_cfg()
+    r = ps.current_round(st)
+    print("# gspwn brief — generated %s" % ps._now())
+    print("Derived from %s at read time. Re-run it rather than trusting a "
+          "copy;\nnothing here is authoritative once the state file moves on."
+          % _repo_rel(ps.STATE_PATH))
+
+    print("\n## Where the pipeline is")
+    print("round %d of max %d, %.1f of %s run-hours spent"
+          % (r["round"], cfg["max_rounds"], ps.spent_hours(st),
+             cfg["max_total_run_hours"]))
+    kind, val = ps.next_action(st)
+    print("next action: %s" % {
+        "phase": lambda: "run phase %s (see agents/%s.md)" % (val, val),
+        "decide": lambda: "pipeline_ctl.py round-decide",
+        "advance-round": lambda: "pipeline_ctl.py round-advance",
+        "done": lambda: "complete — all phases done"}[kind]())
+    for label, sel in (("done", "done"), ("in progress", "in_progress"),
+                       ("blocked", "blocked"), ("failed", "failed")):
+        names = [p for p in ps.PHASES if st["phases"][p]["status"] == sel]
+        if names:
+            print("%-12s %s" % (label + ":", ", ".join(names)))
+    for p in ps.PHASES:
+        ph = st["phases"][p]
+        if ph["status"] in ("blocked", "failed") and ph["notes"]:
+            print("  %s %s: %s" % (p, ph["status"], ph["notes"]))
+
+    if r.get("worklist_in"):
+        print("\nthis round executes: %s" % r["worklist_in"])
+    prev = st["rounds"][-2] if len(st["rounds"]) > 1 else None
+    if prev and prev.get("decision"):
+        print("previous round %d: %s — %s"
+              % (prev["round"], prev["decision"], prev["decision_reason"]))
+
+    print("\n## Crashes")
+    crashes = st["crashes"]
+    if not crashes:
+        print("none registered")
+    else:
+        by_status = {}
+        for c in crashes.values():
+            by_status[c["status"]] = by_status.get(c["status"], 0) + 1
+        print("%d total: %s" % (len(crashes),
+                                ", ".join("%s=%d" % kv
+                                          for kv in sorted(by_status.items()))))
+        flagged = by_status.get("flagged", 0)
+        if flagged:
+            print("%d flagged — triage cannot pass its gate until that queue "
+                  "is empty" % flagged)
+
+    print("\n## Findings (what steers the next round)")
+    rows = ps.findings(st)
+    if not rows:
+        print("none recorded — the loop can only steer on coverage")
+    else:
+        by_sub = {}
+        for _cid, f in rows:
+            by_sub.setdefault(f["subsystem"], []).append(f["bug_class"])
+        for sub in sorted(by_sub, key=lambda s: (-len(by_sub[s]), s)):
+            print("  %-24s %d  %s" % (sub, len(by_sub[sub]),
+                                      ", ".join(sorted(set(by_sub[sub])))))
+
+    print("\n## Recent knowledge (cross-campaign)")
+    try:
+        import knowledge_ctl
+        for kind_ in knowledge_ctl.KINDS:
+            entries = knowledge_ctl._entries(kind_)[-a.last:]
+            if not entries:
+                continue
+            print("%s:" % knowledge_ctl.FILENAME[kind_])
+            for _ts, phase, _tags, body in entries:
+                first = body.split("\n")[0]
+                print("  [%s] %s" % (phase, first[:100]))
+        print("full text: python3 tools/knowledge_ctl.py show")
+    except Exception as e:
+        # The brief is a recovery tool. An unreadable knowledge file must not
+        # cost the reader the state summary above it, which is the part they
+        # cannot get anywhere else.
+        print("(knowledge unavailable: %s)" % e)
+
+    problems = ps.validate(st)
+    if problems:
+        print("\n## Integrity: %d problem(s)" % len(problems))
+        for p in problems[:5]:
+            print("  " + p)
+        print("  full list: python3 tools/pipeline_ctl.py validate")
+    return 0
+
+
 def cmd_campaign_add(a):
     track = a.track.upper()
     if track not in ps.TRACKS:
@@ -615,6 +731,12 @@ def build_parser():
     p.add_argument("--repro-rate", dest="repro_rate", type=float)
     p.add_argument("--notes")
     p.set_defaults(fn=cmd_crash_set)
+
+    p = sub.add_parser("brief",
+                       help="derived handoff: state + findings + knowledge")
+    p.add_argument("--last", type=int, default=3, metavar="N",
+                   help="knowledge entries per file (default 3)")
+    p.set_defaults(fn=cmd_brief)
 
     p = sub.add_parser("finding-set",
                        help="attach rca's research record to a crash")
