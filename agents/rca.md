@@ -84,3 +84,32 @@ eval phase samples from exactly that set, so an RCA reporting zero unverified
 claims must have verified all of them against source — and
 `python3 tools/pipeline_ctl.py finding-list`, which must show one record per
 crash marked rca_done this round.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase rca
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase rca "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase rca "..."
+```
+
+A **learning** is about the target — for this phase, typically root-cause
+patterns: a class of mistake the driver makes in more than one place is worth
+more than any single crash.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.

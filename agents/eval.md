@@ -40,3 +40,31 @@ rca-audit.md.
 ## Gate evidence
 File listing of artifacts/eval/ with a one-line description of each artifact.
 Name explicitly any run excluded from the numbers and why.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase eval
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase eval "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase eval "..."
+```
+
+A **learning** is about the target — for this phase, typically measurement
+facts: a number that turned out to mean something other than it appeared to.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.
