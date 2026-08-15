@@ -169,3 +169,19 @@ triage:
   stack_hash_frames: 3   # fewer merges distinct bugs sharing a caller;
                          # more splits one bug whose stack varies by inlining
   signature_frames: 5    # frames a reproduction must match to count as a hit
+  # Fallback identity for a report with no usable stack at all: a lone
+  # "BUG: unable to handle ..." or a trace-less panic. With no frames to hash,
+  # the only distinguishing evidence is the wording around the start line,
+  # normalized so timestamps, hex addresses and pids do not make every
+  # occurrence unique. Too narrow and one panic registers as many bugs,
+  # burying the real ones in the queue; too wide and two different panics
+  # sharing a prologue merge, so the second never reaches rca.
+  # Known limit of the default: RIP sits around line 8 of a real x86 oops, so
+  # at 5 two different faulting functions behind the same fault type share a
+  # signature and the second is a dup. Raising this to ~8 separates them and
+  # reaches lines that vary more. Nothing here has been measured against real
+  # reports from this driver yet, which is why it is a knob and why the
+  # default was left alone.
+  frameless_signature_lines: 5   # report lines that form the signature
+  frameless_signature_chars: 300 # of that normalized wording, how much is
+                                 # actually hashed

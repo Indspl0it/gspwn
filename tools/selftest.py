@@ -298,6 +298,125 @@ class TestCrashParse(StateTempMixin, unittest.TestCase):
         self.assertTrue(any("KASAN" in t or "BUG" in t for t in titles), titles)
 
 
+class TestFramelessSignature(unittest.TestCase):
+    """A report with no stack at all still has to get a bug identity, and it
+    is the only thing standing between one trace-less panic and a queue full
+    of what look like distinct bugs."""
+
+    def block(self, ts="1.0", addr="0xffff888012345678", cpu=3, pid=412,
+              comm="syz-executor.0", oops=1, taint="G           O",
+              tail="RIP: 0010:nv_open+0x40/0x120"):
+        """A standard x86 oops prologue, which is all a frameless report is."""
+        return ("[%s] BUG: unable to handle page fault for address: %s\n"
+                "[%s] #PF: supervisor read access in kernel mode\n"
+                "[%s] PGD 0 P4D 0\n"
+                "[%s] Oops: 0000 [#%s] SMP NOPTI\n"
+                "[%s] CPU: %s PID: %s Comm: %s Tainted: %s 6.6.0 #1\n"
+                "[%s] %s\n"
+                % (ts, addr, ts, ts, ts, oops, ts, cpu, pid, comm, taint,
+                   ts, tail))
+
+    def sig(self, block, **kw):
+        return crash_parse.block_signature(block, **kw)
+
+    def test_the_same_panic_twice_is_one_bug(self):
+        """Every field that varies here varies on every occurrence of the same
+        bug: the timestamp, the faulting address, the core, the task, the
+        executor index, the oops counter, and the taint flags once the first
+        die has tainted the kernel. Any one of them reaching the hash means a
+        recurring trace-less panic registers as a new bug each time it fires,
+        floods the queue, and buries the findings that matter — and triage and
+        rca both run per registered crash, so the flood is not free."""
+        self.assertEqual(
+            self.sig(self.block()),
+            self.sig(self.block(ts="9982.7", addr="0xffff88803abcdef0",
+                                cpu=7, pid=9137, comm="syz-executor.4",
+                                oops=2, taint="G      D    O")))
+
+    def test_an_eight_digit_pid_is_still_recognised_as_a_pid(self):
+        """Volatile fields are blanked before the hex blanking, not after: a
+        long pid matches the address pattern, and if it were eaten as an
+        address first the same panic would split on task id alone."""
+        self.assertEqual(self.sig(self.block(pid=412)),
+                         self.sig(self.block(pid=31337420)))
+
+    def test_a_different_panic_is_a_different_bug(self):
+        a = self.block()
+        b = a.replace("page fault for address", "invalid opcode at")
+        self.assertNotEqual(self.sig(a), self.sig(b))
+
+    def test_a_different_process_is_a_different_bug(self):
+        """Only the executor index is per-occurrence. The name is not, and a
+        panic in modprobe is not the same bug as one in syz-executor."""
+        self.assertNotEqual(self.sig(self.block(comm="syz-executor.0")),
+                            self.sig(self.block(comm="modprobe")))
+
+    def test_a_varying_register_dump_does_not_split_one_bug(self):
+        """Register values are hex, so the address blanking neutralises them
+        whether or not the line count reaches them."""
+        a = self.block(tail="RAX: 0000000000000001 RBX: ffff888012345678")
+        b = self.block(ts="2.0", pid=413,
+                       tail="RAX: 00000000000000ff RBX: ffff88807654cba0")
+        self.assertEqual(self.sig(a), self.sig(b))
+        self.assertEqual(self.sig(a, lines=6), self.sig(b, lines=6))
+
+    def test_the_default_depth_stops_short_of_the_faulting_function(self):
+        """Documents a real limit of the shipped default rather than asserting
+        it is right. RIP sits around line 8 of a real oops, so at the default
+        of 5 two different faulting functions behind the same fault type share
+        a signature. Raising frameless_signature_lines separates them, at the
+        cost of reaching lines that vary more. Nothing here has been measured
+        against real reports from this driver yet, which is why the knob is in
+        config and the default was left where it was."""
+        a = self.block(tail="RIP: 0010:nv_open+0x40/0x120")
+        b = self.block(tail="RIP: 0010:uvm_va_range_destroy+0x88/0x300")
+        self.assertEqual(self.sig(a), self.sig(b))
+        self.assertNotEqual(self.sig(a, lines=6), self.sig(b, lines=6))
+
+    def test_too_few_hashed_characters_merges_distinct_bugs(self):
+        """Why the config floor exists. Cut short enough and the hash covers
+        only the shared prologue, so the second bug never reaches rca."""
+        a = self.block()
+        b = a.replace("supervisor read access", "supervisor write access")
+        self.assertNotEqual(self.sig(a), self.sig(b))
+        self.assertEqual(self.sig(a, chars=24), self.sig(b, chars=24))
+
+    def configured(self, **over):
+        """Run with a patched triage config, as an operator edit would."""
+        cfg = dict(gspwn_config.DEFAULTS["triage"], **over)
+        orig = gspwn_config.triage
+        gspwn_config.triage = lambda path=None: cfg
+        self.addCleanup(setattr, gspwn_config, "triage", orig)
+
+    def test_the_configured_depth_is_what_runs(self):
+        """Comparing the default against itself would pass even if the value
+        were hardcoded again, so this changes the config and checks the
+        signature moves with it. An operator editing campaign.yaml has to
+        actually change how bugs are counted."""
+        block = self.block()
+        default = self.sig(block)
+        self.configured(frameless_signature_lines=1)
+        self.assertNotEqual(self.sig(block), default)
+        self.assertEqual(self.sig(block), self.sig(block, lines=1))
+
+    def test_the_configured_char_cut_is_what_runs(self):
+        block = self.block()
+        default = self.sig(block)
+        self.configured(frameless_signature_chars=32)
+        self.assertNotEqual(self.sig(block), default)
+        self.assertEqual(self.sig(block), self.sig(block, chars=32))
+
+    def test_a_report_with_frames_never_reaches_the_fallback(self):
+        """block_signature is the answer only when there is no stack. Where a
+        frame hash exists it is the stronger key and has to win."""
+        framed = ("BUG: KASAN: use-after-free in nv_free\n"
+                  " #0 0x1 in nv_free\n #1 0x2 in rm_ioctl\n"
+                  " #2 0x3 in os_call\n")
+        self.assertTrue(crash_parse.stack_hash(framed))
+        self.assertNotEqual(crash_parse.stack_hash(framed),
+                            self.sig(framed))
+
+
 class TestTrace2Seed(unittest.TestCase):
     TRACE = (
         'openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR) = 3\n'
@@ -922,7 +1041,17 @@ class TestConfig(unittest.TestCase):
                     "loop:\n  max_total_run_hours: -5\n",
                     "loop:\n  plateau_min_growth: 40\n",
                     "loop:\n  corpus_policy: sometimes\n",
-                    "track_k:\n  procs: 0\n"):
+                    "track_k:\n  procs: 0\n",
+                    "triage:\n  stack_hash_frames: 0\n",
+                    "triage:\n  frameless_signature_lines: 0\n",
+                    # Below the floor the hash covers little more than the
+                    # report's opening words, so unrelated trace-less panics
+                    # sharing a prologue merge and the second never reaches
+                    # rca.
+                    "triage:\n  frameless_signature_chars: 8\n",
+                    "coverage:\n  min_fit_samples: 2\n",
+                    "coverage:\n  model_min_r2: 0\n",
+                    "coverage:\n  fit_tail_fraction: 0\n"):
             with self.assertRaises(gspwn_config.ConfigError, msg=bad):
                 gspwn_config.load(self.write(bad))
 
