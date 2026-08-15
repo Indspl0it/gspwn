@@ -45,8 +45,17 @@ jobs:
           python3 - <<'PY'
           import glob, os, re, subprocess, sys
           cmds, uses, bad = set(), [], []
-          for f in glob.glob("agents/*.md") + ["AGENTS.md", "README.md",
-                                               "docs/architecture.md"]:
+          # The prose files are checked when they exist. README.md and the
+          # docs tree are being rebuilt, and a check that fails because a file
+          # it names is absent tells nobody anything about the prompts, which
+          # are the part that actually has to stay in step with the tools.
+          optional = ["README.md", "docs/architecture.md"]
+          scanned = glob.glob("agents/*.md") + ["AGENTS.md"] + [
+              p for p in optional if os.path.exists(p)]
+          for p in optional:
+              if not os.path.exists(p):
+                  print("note: %s absent, not checked" % p)
+          for f in scanned:
               txt = open(f).read()
               for m in re.finditer(
                       r"tools/(\w+)\.py\s+([a-z][a-z0-9-]*)"
