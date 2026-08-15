@@ -301,8 +301,14 @@ def unit_active(name):
     unit, bill the run and retire its own timer while the restart completes
     behind it — a campaign left fuzzing with nothing able to stop it.
     """
-    r = subprocess.run(["systemctl", "is-active", name],
-                       capture_output=True, text=True)
+    try:
+        r = subprocess.run(["systemctl", "is-active", name],
+                           capture_output=True, text=True)
+    except OSError:
+        # No systemd here (a container, a workstation running the tools
+        # offline). "I cannot tell" is not "it is running": treating it as
+        # active would make check-deadline stop a campaign it cannot see.
+        return False
     return r.stdout.strip() in ("active", "activating")
 
 
