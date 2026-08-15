@@ -1,0 +1,57 @@
+---
+// Starlight's own ThemeProvider, with one change: a reader who has never
+// chosen a theme gets dark rather than whatever their desktop is set to.
+//
+// Starlight stores '' for Auto and 'light'/'dark' for an explicit choice, so
+// null is the only value that means "never chosen". That case is seeded with
+// 'dark', which also stops ThemeSelect re-applying Auto on connect. Both the
+// Light and Auto options keep working afterwards.
+import { Icon } from '@astrojs/starlight/components';
+---
+
+{/* Inlined on purpose, to avoid a flash of the wrong theme. */}
+<script is:inline>
+	window.StarlightThemeProvider = (() => {
+		const store = typeof localStorage !== 'undefined' ? localStorage : null;
+		let stored = store ? store.getItem('starlight-theme') : null;
+		let theme;
+		if (stored === 'light' || stored === 'dark') {
+			theme = stored;
+		} else if (stored === '') {
+			// An explicit Auto: follow the operating system.
+			theme = window.matchMedia('(prefers-color-scheme: light)').matches
+				? 'light'
+				: 'dark';
+		} else {
+			theme = 'dark';
+			stored = 'dark';
+			try {
+				if (store) store.setItem('starlight-theme', 'dark');
+			} catch {}
+		}
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = stored || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script>
+
+<template id="theme-icons">
+	<Icon name="sun" class="light" />
+	<Icon name="moon" class="dark" />
+	<Icon name="laptop" class="auto" />
+</template>

@@ -11,3 +11,8 @@ __pycache__/
 thoughts/
 tmp/
 .claude/settings.local.json
+# The documentation site's build output and toolchain. package.json and
+# package-lock.json are committed; CI installs from the lockfile.
+docs/node_modules/
+docs/dist/
+docs/.astro/

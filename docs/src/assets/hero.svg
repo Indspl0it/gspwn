@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 340" role="img" aria-label="The gspwn round loop: describe, seeds and harness feed a bounded campaign, whose crashes are triaged, analysed and reproduced, and whose measurements steer the next round.">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1d94ad"/>
+      <stop offset="100%" stop-color="#0d5d70"/>
+    </linearGradient>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#1d94ad"/>
+    </marker>
+    <marker id="af" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#a5e4f2"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="420" height="340" rx="18" fill="#12141a"/>
+  <rect x="0.5" y="0.5" width="419" height="339" rx="18" fill="none" stroke="#2a2f3a"/>
+
+  <!-- the ring -->
+  <circle cx="210" cy="176" r="104" fill="none" stroke="#2a2f3a" stroke-width="1.5" stroke-dasharray="3 5"/>
+
+  <!-- phase nodes around the ring -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#c0c2c7">
+    <circle cx="210" cy="72" r="5.5" fill="url(#g)"/>
+    <text x="210" y="56" text-anchor="middle">describe</text>
+
+    <circle cx="284" cy="102" r="5.5" fill="url(#g)"/>
+    <text x="308" y="98" text-anchor="middle">seeds</text>
+
+    <circle cx="314" cy="176" r="5.5" fill="url(#g)"/>
+    <text x="344" y="180" text-anchor="middle">fuzz</text>
+
+    <circle cx="284" cy="250" r="5.5" fill="url(#g)"/>
+    <text x="312" y="268" text-anchor="middle">triage</text>
+
+    <circle cx="210" cy="280" r="5.5" fill="url(#g)"/>
+    <text x="210" y="300" text-anchor="middle">rca</text>
+
+    <circle cx="136" cy="250" r="5.5" fill="url(#g)"/>
+    <text x="112" y="268" text-anchor="middle">poc</text>
+
+    <circle cx="106" cy="176" r="5.5" fill="url(#g)"/>
+    <text x="76" y="180" text-anchor="middle">eval</text>
+
+    <circle cx="136" cy="102" r="5.5" fill="url(#g)"/>
+    <text x="108" y="98" text-anchor="middle">refine</text>
+  </g>
+
+  <!-- the feedback edge, drawn inside the ring -->
+  <path d="M136 108 A 96 96 0 0 1 204 74" fill="none" stroke="#a5e4f2" stroke-width="1.8" marker-end="url(#af)"/>
+
+  <!-- centre -->
+  <g text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+    <text x="210" y="166" font-size="26" fill="#eceef2" letter-spacing="-0.5">gspwn</text>
+    <text x="210" y="186" font-size="9" fill="#888b96">autonomous</text>
+    <text x="210" y="200" font-size="9" fill="#888b96">autoresearch agent</text>
+  </g>
+
+  <!-- the two tracks -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">
+    <rect x="24" y="20" width="118" height="26" rx="6" fill="#171a21" stroke="#2a2f3a"/>
+    <circle cx="38" cy="33" r="3.5" fill="#1d94ad"/>
+    <text x="48" y="37" fill="#c0c2c7">Track K  driver</text>
+
+    <rect x="278" y="20" width="118" height="26" rx="6" fill="#171a21" stroke="#2a2f3a"/>
+    <circle cx="292" cy="33" r="3.5" fill="#a5e4f2"/>
+    <text x="302" y="37" fill="#c0c2c7">Track U  toolkit</text>
+  </g>
+
+  <!-- caps -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9" fill="#545861" text-anchor="middle">
+    <text x="210" y="322">max_rounds  ·  max_total_run_hours  ·  plateau</text>
+  </g>
+</svg>

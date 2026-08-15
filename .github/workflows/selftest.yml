@@ -45,16 +45,21 @@ jobs:
           python3 - <<'PY'
           import glob, os, re, subprocess, sys
           cmds, uses, bad = set(), [], []
-          # The prose files are checked when they exist. README.md and the
-          # docs tree are being rebuilt, and a check that fails because a file
-          # it names is absent tells nobody anything about the prompts, which
-          # are the part that actually has to stay in step with the tools.
-          optional = ["README.md", "docs/architecture.md"]
-          scanned = glob.glob("agents/*.md") + ["AGENTS.md"] + [
+          # The agent prompts are checked always; the documentation site and
+          # the README are checked when they exist. Pointing this at the docs
+          # tree is what makes every command example on the site verified
+          # against the tools' real --help output.
+          docs = sorted(glob.glob("docs/src/content/docs/**/*.md",
+                                  recursive=True)
+                        + glob.glob("docs/src/content/docs/**/*.mdx",
+                                    recursive=True))
+          optional = ["README.md"]
+          scanned = glob.glob("agents/*.md") + ["AGENTS.md"] + docs + [
               p for p in optional if os.path.exists(p)]
           for p in optional:
               if not os.path.exists(p):
                   print("note: %s absent, not checked" % p)
+          print("scanning %d prompt/doc file(s)" % len(scanned))
           for f in scanned:
               txt = open(f).read()
               for m in re.finditer(
