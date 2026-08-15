@@ -7,15 +7,33 @@ we care about, so fuzzing on EC2 is representative rather than a compromise.
 
 ## Instance recipe
 
-- g4dn.2xlarge, spot: 8 vCPU, 32 GB RAM, one NVIDIA T4 (Turing). Turing is
-  GSP-based, so open-gpu-kernel-modules is supported.
+Which GPU a family carries, and which families the open kernel modules
+support at all, is in the README under "Supported GPUs and instances". Pick
+from there before launching: the choice is made in the console and nothing in
+this repo can validate it afterwards.
+
+- g4dn.2xlarge: 8 vCPU, 32 GB RAM, one NVIDIA T4 (Turing). Turing is
+  GSP-based, so open-gpu-kernel-modules is supported. This is the cheapest
+  supported entry, not the only one.
+- **On-demand, not spot, for any campaign whose artifacts matter.** A one-time
+  spot request is terminated on interruption rather than stopped: the root
+  volume goes with it, mid-campaign, and there is no next boot of that
+  instance whatever delete-on-termination says. Spot is fine for a throwaway
+  smoke run.
 - Official Debian 12 AMI.
-- 200 GB gp3 root volume with delete-on-termination set to false. Artifacts
-  survive stop and accidental termination.
+- Termination protection enabled (`disable-api-termination`).
+- 200 GB gp3 root volume with delete-on-termination set to false.
+- A **separate EBS volume mounted at `artifacts/`**. This is the single
+  cheapest piece of insurance here. A GPU that will not come back costs you
+  the instance; without a separate volume it also costs you the campaign,
+  because a detachable volume can be reattached to a fresh box and a root
+  volume in a dead instance is a recovery exercise.
 - Security group: SSH inbound only, from the operator's IP. Nothing else.
 - IAM instance profile allowing `ec2:GetConsoleOutput` on the instance
-  itself. That is how hard hangs get captured, and it is the only AWS
-  permission the pipeline uses. Nothing in the repo calls any other EC2 API.
+  itself. Attach it at launch. That is how hard hangs get captured: EC2 has
+  no pstore, so a hang that never reaches kdump is only recoverable from the
+  console log. It is the only AWS permission the pipeline uses, and nothing
+  in the repo calls any other EC2 API.
 
 ## Golden image flow
 
@@ -83,9 +101,31 @@ directories are named `pstore-*` on both platforms — and still collects
 the only record of a hard hang where kdump itself cannot run, which is why
 the IAM profile is not optional.
 
+## When the GPU stops answering
+
+A GPU that falls off the bus (Xid 79) does not stop the fuzzer. syz-manager
+keeps executing against nothing and the coverage curve flattens, which reads
+exactly like a finished round. `coverage_ctl.py plateau` refuses to call that
+a plateau, but recovering the card is a manual ladder:
+
+| Step | Action | Autonomous? |
+| --- | --- | --- |
+| 1 | `nvidia-smi -r` (needs no process holding the GPU) | Yes |
+| 2 | `rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia`, then `modprobe nvidia` | Yes |
+| 3 | Guest `reboot` | Yes |
+| 4 | **stop, then start, from the AWS console** | No |
+
+Step 4 is the one that needs a human, and it is the one that usually works: a
+guest reboot does not power-cycle a passthrough GPU, while a stop/start moves
+the instance to different physical hardware. This is the reason `stop` and
+`terminate` must not be confused. Stopping preserves the EBS volumes, which is
+what makes stop/start a safe recovery rather than the end of the campaign.
+
+Check the card at any time with `python3 tools/coverage_ctl.py gpu-health`.
+
 ## Learning-phase advice
 
-For the first sessions, set `IDLE_MINUTES=60` so a forgotten instance
-costs at most an hour. Expect to iterate on the workflow; that is what the
-learning budget is for. The one hard rule: never leave an instance running
-overnight without a campaign on it.
+Expect to iterate on the workflow for the first few sessions. Stop the
+instance from the console whenever you leave it without a campaign running:
+nothing in the repo will do it for you, and an idle GPU instance bills at the
+same rate as a busy one.

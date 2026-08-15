@@ -28,7 +28,8 @@ reproduction rate from a clean boot.
 - [The improvement loop](#the-improvement-loop)
 - [Surviving kernel panics](#surviving-kernel-panics)
 - [Repo layout](#repo-layout)
-- [Configuration and cost control](#configuration-and-cost-control)
+- [Configuration and stopping rules](#configuration-and-stopping-rules)
+- [Supported GPUs and instances](#supported-gpus-and-instances)
 - [Quickstart](#quickstart-ec2)
 - [Tests](#tests)
 - [Threat model](#threat-model)
@@ -438,14 +439,58 @@ the box keeps running until you stop it from the console. That is deliberate.
 The artifacts and the crash registry live on its disk, and an automatic stop
 firing partway through a long reproduction run would lose more than it saved.
 
+## Supported GPUs and instances
+
+`open-gpu-kernel-modules` supports Turing and later. Those architectures carry
+a GSP microcontroller and the open modules depend on it. Volta and earlier have
+no GSP, so they run only the proprietary driver, whose Resource Manager ships
+as a prebuilt binary. KCOV cannot instrument that binary, so coverage-guided
+kernel fuzzing does not work there at all.
+
+| EC2 family | GPU | Architecture | Open kernel modules | MIG |
+| --- | --- | --- | --- | --- |
+| `p3` | V100 | Volta | No | No |
+| `g4dn` | T4 | Turing | Yes | No |
+| `g5` | A10G | Ampere | Yes | No |
+| `g6` | L4 | Ada | Yes | No |
+| `g6e` | L40S | Ada | Yes | No |
+| `p4d` | A100 | Ampere | Yes | Yes |
+| `p5` | H100 | Hopper | Yes | Yes |
+
+`p3` is listed to make its exclusion explicit. Size variants within a family
+carry the same GPU, and the region affects availability, quota and price but
+never which GPU a family carries. `g4ad` is an AMD GPU and unrelated; `g5g`
+pairs a T4G with Graviton, so it is arm64 and the instrumented kernel build has
+never been exercised there.
+
+Hourly price spans roughly two orders of magnitude across this table. MIG
+matters because it is the only hardware partitioning here, and the tenancy
+model a finding is claimed under depends on it.
+
+Pick the instance before cloning: the choice is made in the AWS console, and
+nothing in this repo can validate it after the fact.
+
 ## Quickstart (EC2)
 
 Full runbook: [docs/cloud-setup.md](docs/cloud-setup.md). The short version:
 
-1. Launch a spot `g4dn.2xlarge` — 8 vCPU, 32 GB, one T4. Turing is GSP-based,
-   so `open-gpu-kernel-modules` is supported. Use the official Debian 12 AMI.
+1. Launch a `g4dn.2xlarge` — 8 vCPU, 32 GB, one T4, the cheapest supported
+   entry in the table above. Official Debian 12 AMI. At launch, and not
+   afterwards:
+   - **On-demand, not spot.** A one-time spot request is *terminated* on
+     interruption, not stopped, so the root volume and every artifact go with
+     it mid-campaign.
+   - **Attach an IAM instance profile allowing `ec2:GetConsoleOutput`** on the
+     instance itself. That is the only AWS permission the pipeline uses, and
+     it is how a hard hang gets captured: EC2 has no pstore, so a hang that
+     never reaches kdump is only recoverable from the console log.
+   - **Enable termination protection** and set `DeleteOnTermination=false` on
+     the root volume.
+   - **Put `artifacts/` on its own EBS volume.** A GPU that dies for good
+     costs you the instance; a separate volume detaches and reattaches, so it
+     does not also cost you the campaign.
 2. `git clone` this repo on the instance.
-3. Set the caps in `config/campaign.yaml` and confirm them with
+3. Set the limits in `config/campaign.yaml` and confirm them with
    `python3 tools/gspwn_config.py`.
 4. Open a coding-agent session in the repo root and say **"run the pipeline"**.
    `AGENTS.md` makes it the orchestrator.
