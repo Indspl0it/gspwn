@@ -42,11 +42,17 @@ Subcommands:
 Coverage is kernel-side reachable code only. GSP firmware is not instrumented
 (spec §3); every consumer of these numbers must say so.
 
-Every sample records the GPU's state alongside the counters. A GPU that has
-fallen off the bus does not stop the fuzzer: the curve simply flattens, and
+Every Track K sample records the GPU's state alongside the counters. A GPU that
+has fallen off the bus does not stop the fuzzer: the curve simply flattens, and
 without that column a plateau verdict cannot tell a finished round from a dead
 card. `plateau` refuses to call a flat window a plateau when the GPU was not
-healthy across it.
+healthy across it. Track U records the column as `n/a`, because those harnesses
+run in a container and never touch the GPU, so gating their verdict on its
+health would report a real plateau as unknown.
+
+Every sample also records free disk space. Kernel dumps, the corpus, these
+CSVs and the agent's transcript share one filesystem, and a full disk stops the
+fuzzer, the sampler and every state write at the same moment.
 
 NOTE ON THE STATS ENDPOINT: syz-manager's HTTP surface has changed across
 syzkaller versions. This tool tries the known JSON endpoints, then falls back
@@ -74,18 +80,20 @@ RUNS_DIR = os.path.join(REPO_ROOT, "artifacts", "runs")
 # corpus is a program count; corpus_bytes is a file size. They were once the
 # same column, which made any comparison spanning a source change meaningless.
 FIELDS = ["ts", "uptime_s", "edges", "corpus", "corpus_bytes", "crashes",
-          "execs", "source", "gpu"]
+          "execs", "source", "gpu", "disk_free_mb"]
 # Columns holding text, not counts: read_rows must not run them through
 # _to_int, which would turn "ok" into None and silently un-record a healthy GPU.
 TEXT_FIELDS = ("source", "gpu")
 TIMER_NAME = "gspwn-coverage"
 TRACKS = ("k", "u")
-# How long to wait for nvidia-smi before calling the driver wedged. A dead GPU
-# usually fails fast; a hung one blocks, which is the case this bounds.
-GPU_PROBE_TIMEOUT_S = int(os.environ.get("GSPWN_GPU_PROBE_TIMEOUT_S", "20"))
 # The one GPU status that permits a plateau claim. Everything else means the
 # curve cannot be trusted to say why it flattened.
 GPU_OK = "ok"
+# Recorded instead of a status for Track U. The container-toolkit harnesses
+# never touch the GPU, so gating their plateau verdict on its health reports a
+# genuine Track U plateau as 'unknown' for a reason that has nothing to do
+# with the target being measured.
+GPU_NOT_APPLICABLE = "n/a"
 
 # Candidate JSON endpoints, newest-style first.
 JSON_PATHS = ("/stats?format=json", "/api/stats", "/stats.json")
@@ -294,7 +302,8 @@ def gpu_health(timeout=None):
     be tried by hand, and a GPU that survives none of them needs a stop/start
     from the AWS console, which nothing in this repo can do.
     """
-    timeout = GPU_PROBE_TIMEOUT_S if timeout is None else timeout
+    if timeout is None:
+        timeout = _coverage_cfg()["gpu_probe_timeout_sec"]
     cmd = ["nvidia-smi", "--query-gpu=name,pci.bus_id", "--format=csv,noheader"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -313,6 +322,40 @@ def gpu_health(timeout=None):
     if not out:
         return "dead", "nvidia-smi returned no GPU"
     return GPU_OK, "; ".join(line.strip() for line in out.splitlines())
+
+
+def disk_free_mb(path=None):
+    """Free megabytes on the filesystem holding the artifacts, or None.
+
+    Everything this pipeline produces lands on one disk: kernel dumps copied
+    out of /var/crash, the corpus, the coverage CSVs and the agent's own
+    transcript. A full disk stops the fuzzer, the sampler and every state
+    write at the same moment, and nothing else here would notice until they
+    all started failing at once.
+    """
+    try:
+        st = os.statvfs(path or REPO_ROOT)
+    except (OSError, AttributeError):
+        return None
+    return int(st.f_bavail * st.f_frsize / 1048576)
+
+
+def disk_warning(free_mb=None):
+    """A warning line when free space is under loop.min_free_disk_gb, else ''."""
+    free_mb = disk_free_mb() if free_mb is None else free_mb
+    if free_mb is None:
+        return ""
+    try:
+        floor_gb = gspwn_config.loop()["min_free_disk_gb"]
+    except Exception:
+        floor_gb = gspwn_config.DEFAULTS["loop"]["min_free_disk_gb"]
+    if not floor_gb or free_mb >= floor_gb * 1024:
+        return ""
+    return ("WARN: %.1f GB free, under loop.min_free_disk_gb (%s GB). A full "
+            "disk stops the fuzzer, the sampler and every state write at "
+            "once. Prune harvested crash dirs (crashlog_ctl.py prune) or "
+            "grow the volume before it runs out."
+            % (free_mb / 1024.0, floor_gb))
 
 
 def cmd_gpu_health(a):
@@ -379,8 +422,16 @@ def cmd_sample(a):
     row = {k: row.get(k) for k in FIELDS}
     row["ts"] = int(time.time())
     row["source"] = source
-    gpu, gpu_detail = gpu_health()
+    # Track U harnesses run in a container and never touch the GPU, so its
+    # health says nothing about why their curve flattened. Probing anyway also
+    # spends the probe timeout on every sample of a track that cannot use the
+    # answer.
+    if a.track == "k":
+        gpu, gpu_detail = gpu_health()
+    else:
+        gpu, gpu_detail = GPU_NOT_APPLICABLE, "track u does not use the GPU"
     row["gpu"] = gpu
+    row["disk_free_mb"] = disk_free_mb()
     path = csv_path(a.run_id, a.track)
     new = not os.path.exists(path)
     # Append under the header the file already has, not the one this version
@@ -407,7 +458,10 @@ def cmd_sample(a):
         return 1
     print("%s edges=%s corpus=%s crashes=%s (source: %s, gpu: %s)"
           % (path, row["edges"], row["corpus"], row["crashes"], source, gpu))
-    if gpu != GPU_OK:
+    warning = disk_warning(row["disk_free_mb"])
+    if warning:
+        print(warning)
+    if gpu not in (GPU_OK, GPU_NOT_APPLICABLE):
         print("WARN: GPU is %s (%s). The fuzzer keeps running on a dead GPU "
               "and the curve flattens, so plateau will report 'unknown' for "
               "any window holding this sample rather than calling it a "
@@ -473,8 +527,17 @@ def cmd_series(a):
         print("  gpu: %d of %d sample(s) not healthy (%s)"
               % (sum(bad.values()), len(rows),
                  ", ".join("%s x%d" % (k, v) for k, v in sorted(bad.items()))))
+    elif all(r.get("gpu") == GPU_NOT_APPLICABLE for r in rows):
+        print("  gpu: not applicable (these harnesses do not use the GPU)")
     else:
         print("  gpu: healthy across all %d sample(s)" % len(rows))
+    free = [r["disk_free_mb"] for r in rows if r.get("disk_free_mb")]
+    if free:
+        print("  disk free: %.1f GB -> %.1f GB (low water %.1f GB)"
+              % (free[0] / 1024.0, free[-1] / 1024.0, min(free) / 1024.0))
+        warning = disk_warning(min(free))
+        if warning:
+            print("  " + warning)
     if cov:
         print("  edges: %s -> %s (+%s)"
               % (cov[0]["edges"], cov[-1]["edges"],
@@ -513,12 +576,14 @@ def unhealthy_gpu_samples(window):
 
     A row from a CSV written before the gpu column existed reports None, which
     counts as unhealthy: absence of evidence that the GPU was alive is not
-    evidence that it was.
+    evidence that it was. Track U rows record GPU_NOT_APPLICABLE and are
+    excluded, because those harnesses never touch the GPU and gating their
+    verdict on it would report a real plateau as unknown.
     """
     bad = {}
     for r in window:
         status = r.get("gpu") or "unrecorded"
-        if status != GPU_OK:
+        if status not in (GPU_OK, GPU_NOT_APPLICABLE):
             bad[status] = bad.get(status, 0) + 1
     return bad
 

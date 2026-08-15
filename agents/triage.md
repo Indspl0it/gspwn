@@ -31,6 +31,13 @@ registry.
      python3 tools/pipeline_ctl.py crash-set <id> --duplicate-of <other-id>
      python3 tools/pipeline_ctl.py crash-set <id> --status unique \
        --notes "<why distinct>"
+   `crash-set` takes several ids, so a group that is clearly one bug is one
+   call rather than forty:
+     python3 tools/pipeline_ctl.py crash-set <id> <id> <id> \
+       --duplicate-of <other-id>
+   It is all-or-nothing: a rejected id changes nothing, so the queue is never
+   left half-decided. Group only what you have actually read — the point of
+   the flag is that a machine could not tell these apart.
    Setting `--status duplicate` without a `--duplicate-of` link fails
    `validate`: a crash that leaves the queue must say what it duplicates, or
    it has been dropped, not triaged.
@@ -47,9 +54,11 @@ registry.
    `--signal`:
    - `noise` — Xids the fuzzer produces by design (13, 31, 43 and similar:
      illegal instruction, illegal address, app-caused channel error). Every
-     bad pointer makes one. Do not queue these for RCA and do not count them
-     in "crashes found"; a campaign that reports them as findings has
-     reported its own exhaust.
+     bad pointer makes one. Do not queue these for RCA. They stay in the
+     registry as an audit trail but are excluded from every "crashes found"
+     figure the tools derive (`round-end`, `round-show`, `brief`, `show`), so
+     your counts and theirs agree; a campaign that reports them as findings
+     has reported its own exhaust.
    - `signal` — memory-integrity or firmware-boundary Xids (ECC classes, GSP
      RPC timeout, corrupted push buffer). Queue these.
    - `health` — the GPU or the box is degraded (79 = fallen off the bus).

@@ -39,6 +39,11 @@ NVRM_RE = re.compile(r"NVRM: (Xid[^\n]*|GPU at[^\n]*error[^\n]*)", re.I)
 # Volatile Xid fields: the same recurring Xid must dedup across pids/channels.
 XID_VOLATILE_RE = re.compile(r"\s*,?\s*(?:pid=[^,\s]+|ch(?:annel)?\s*[= ]\s*"
                              r"[0-9a-fA-Fx]+)", re.I)
+# The GPU the Xid came from. Which card faulted is provenance, not identity:
+# on a multi-GPU box the same driver bug on two cards is one bug, and leaving
+# the bus id in the title registers it once per card. Kept in the notes.
+XID_BUSID_RE = re.compile(r"\s*\((?:PCI:)?[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:"
+                          r"[0-9a-fA-F]{2}(?:\.[0-9a-fA-F])?\)")
 # "NVRM: Xid (PCI:0000:00:1e): 13, pid=..." -> 13. The bus id in the optional
 # parenthesised group carries its own colons, so it has to be consumed as a
 # group rather than skipped with [^:]* — that reads the first field of the bus
@@ -425,7 +430,14 @@ def scan_dmesg(state, path):
     text = read_text(path)
     for m in NVRM_RE.finditer(text):
         body = norm_title(XID_VOLATILE_RE.sub("", m.group(1))).strip(" ,")
+        # Classify before dropping the bus id: XID_NUM_RE reads past it, but
+        # the note is more useful with the card it came from named.
         cls, why = xid_class(body)
+        bus = XID_BUSID_RE.search(body)
+        if bus:
+            why = "; ".join(x for x in (why, "on %s" % bus.group(0).strip(" ()"))
+                            if x)
+        body = norm_title(XID_BUSID_RE.sub("", body)).strip(" ,")
         register(state, "K", "NVRM " + body,
                  hashlib.sha1(body.encode()).hexdigest()[:16], path,
                  signal=cls, signal_note=why)

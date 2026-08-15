@@ -8,13 +8,22 @@ Subcommands:
   verify   - check pstore/kdump readiness; print sysrq test instructions
   harvest  - copy /sys/fs/pstore/* and every new /var/crash dump into
              artifacts/; on EC2 also save `aws ec2 get-console-output`
-             output. Exits 0 when no new crash logs are found.
+             output. Exits 0 when no new crash logs are found, and non-zero
+             when it could not read a source — "nothing to harvest" and
+             "could not look" must not be the same answer, because the
+             orchestrator runs this unattended after every panic.
+  prune [--keep N]
+           - delete the oldest harvest dirs beyond the newest N (default 10).
+             Never automatic: harvested logs are evidence. kdump writes
+             hundreds of MB per panic and this pipeline panics by design, so
+             reclaiming the space has to be one command rather than a
+             hand-written find.
 
 Global flag: --env ec2|baremetal|auto overrides environment auto-detection
 (default: auto-detect via the EC2 instance metadata service, IMDSv2 with
 an IMDSv1 fallback).
 
-Must run as root for setup/harvest. Debian-family (apt) only.
+Must run as root for setup, harvest and prune. Debian-family (apt) only.
 """
 import glob
 import os
@@ -155,6 +164,75 @@ def cmd_verify(env):
     sys.exit(0 if ok else 1)
 
 
+def _dir_bytes(path):
+    total = 0
+    for root, _subdirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                continue
+    return total
+
+
+def report_disk():
+    """Say what the crash logs are costing, and warn when space runs short.
+
+    kdump writes hundreds of megabytes per panic and this pipeline panics on
+    purpose, so /var/crash and the harvested copies are the fastest-growing
+    things on the box. A full disk stops the fuzzer, the sampler and every
+    state write at once, which is a far worse outcome than losing an old dump.
+    """
+    sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+    try:
+        import coverage_ctl
+        free_mb = coverage_ctl.disk_free_mb()
+        warning = coverage_ctl.disk_warning(free_mb)
+    except Exception:
+        free_mb, warning = None, ""
+    parts = []
+    for label, path in (("harvested", CRASHES_DIR), ("/var/crash",
+                                                     "/var/crash")):
+        if os.path.isdir(path):
+            parts.append("%s %.1f GB" % (label, _dir_bytes(path) / 1073741824.0))
+    if free_mb is not None:
+        parts.append("%.1f GB free" % (free_mb / 1024.0))
+    if parts:
+        print("disk: " + ", ".join(parts))
+    if warning:
+        print(warning)
+        print("      prune old harvests with: sudo python3 "
+              "tools/crashlog_ctl.py prune --keep 10")
+
+
+def cmd_prune(env, keep):
+    """Delete the oldest harvest dirs beyond --keep. Explicit, never automatic.
+
+    Harvested crash logs are evidence, so nothing removes them on its own.
+    This exists so that reclaiming the space is one command rather than a
+    hand-written find, and so the count that is kept is a stated decision.
+    """
+    if os.geteuid() != 0:
+        sys.exit("prune must run as root: the harvest dirs are written by the "
+                 "root harvester")
+    dirs = sorted((d for d in glob.glob(os.path.join(CRASHES_DIR, "pstore-*"))
+                   if os.path.isdir(d)), key=os.path.getmtime)
+    doomed = dirs[:-keep] if keep else dirs
+    if not doomed:
+        print("nothing to prune: %d harvest dir(s), keeping %d"
+              % (len(dirs), keep))
+        report_disk()
+        return
+    freed = 0
+    for d in doomed:
+        freed += _dir_bytes(d)
+        shutil.rmtree(d, ignore_errors=True)
+        print("removed " + d)
+    print("pruned %d of %d harvest dir(s), freeing %.1f GB"
+          % (len(doomed), len(dirs), freed / 1073741824.0))
+    report_disk()
+
+
 def harvested_kdumps():
     """Basenames of /var/crash dumps already copied by a previous harvest."""
     seen = set()
@@ -164,10 +242,24 @@ def harvested_kdumps():
 
 
 def cmd_harvest(env):
+    # /sys/fs/pstore and /var/crash are root-only. Run as anyone else the
+    # globs come back empty, the copies raise PermissionError, and the old
+    # code turned both into a WARN, found nothing, printed "no new crash logs
+    # found" and exited 0 — so the automated post-panic path reported success
+    # while the evidence stayed on the machine until pstore filled up and
+    # started dropping later panics. Refusing is the only honest answer.
+    if os.geteuid() != 0:
+        sys.exit("harvest must run as root: /sys/fs/pstore and /var/crash are "
+                 "root-only, and a non-root harvest reads nothing while "
+                 "looking like it found nothing. Re-run with sudo. (The "
+                 "orchestrator uses `sudo -n`, so the unit's user needs a "
+                 "passwordless rule for this command — see "
+                 "orchestrator_ctl.py preflight.)")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(CRASHES_DIR, "pstore-" + stamp)
     os.makedirs(dest, exist_ok=True)
     found = False
+    failures = []
     if env == "ec2":
         console_log = os.path.join(dest, "console-output.log")
         try:
@@ -191,6 +283,7 @@ def cmd_harvest(env):
                 shutil.copy(src, dest)
             except (OSError, shutil.Error) as e:
                 print("WARN: could not copy %s (%s); continuing" % (src, e))
+                failures.append(src)
                 continue
             copied.append(src)
             found = True
@@ -226,19 +319,33 @@ def cmd_harvest(env):
                             dirs_exist_ok=True)
         except (OSError, shutil.Error) as e:
             print("WARN: could not copy %s (%s); continuing" % (src, e))
+            failures.append(src)
             continue
         found = True
+    report_disk()
     if not found:
         shutil.rmtree(dest, ignore_errors=True)
+        if failures:
+            # Nothing was harvested AND something could not be read. That is
+            # not "no crashes"; it is a harvest that did not work, and the
+            # caller has to be able to tell the two apart.
+            sys.exit("harvest read nothing and failed on %d source(s): %s. "
+                     "This is not evidence that no crash occurred — fix the "
+                     "cause and re-run before treating the panic as "
+                     "unrecorded." % (len(failures), ", ".join(failures[:5])))
         print("no new crash logs found (checked %s and /var/crash)"
               % ("EC2 console output" if env == "ec2" else "pstore"))
         sys.exit(0)
+    if failures:
+        print("WARN: %d source(s) could not be read and are missing from this "
+              "harvest: %s" % (len(failures), ", ".join(failures[:5])))
     print(dest)  # last line = artifact path, consumed by callers
 
 
 def main():
     args = sys.argv[1:]
     env = None
+    keep = 10
     if "--env" in args:
         i = args.index("--env")
         try:
@@ -248,8 +355,20 @@ def main():
         if env not in ("ec2", "baremetal", "auto"):
             sys.exit(__doc__)
         del args[i:i + 2]
-    if len(args) != 1 or args[0] not in ("setup", "verify", "harvest"):
+    if "--keep" in args:
+        i = args.index("--keep")
+        try:
+            keep = int(args[i + 1])
+        except (IndexError, ValueError):
+            sys.exit("--keep needs a non-negative integer")
+        if keep < 0:
+            sys.exit("--keep needs a non-negative integer")
+        del args[i:i + 2]
+    if len(args) != 1 or args[0] not in ("setup", "verify", "harvest",
+                                         "prune"):
         sys.exit(__doc__)
+    if args[0] == "prune":
+        return cmd_prune(env, keep)
     if env is None or env == "auto":
         env = detect_env()
     {"setup": cmd_setup, "verify": cmd_verify,

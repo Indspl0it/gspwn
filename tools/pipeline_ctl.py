@@ -14,8 +14,10 @@ Subcommands:
   set-phase <phase> <status> [--notes TEXT]
                                  status: pending|in_progress|done|blocked|failed
   crash-list [--status S] [--track K|U] [--json]
-  crash-set <id> [--status S] [--duplicate-of ID|none] [--disclosure S]
-            [--repro-rate F] [--notes TEXT]
+  crash-set <id> [<id> ...] [--status S] [--duplicate-of ID|none]
+            [--disclosure S] [--repro-rate F] [--notes TEXT]
+                                 several ids apply the same edit to each, for
+                                 working a flagged queue down in one call
   finding-set <id> --json PATH|-  attach rca's research record to a crash
   finding-list [--subsystem S] [--bug-class C] [--json]
                                  the records refine and describe steer from
@@ -28,10 +30,13 @@ Subcommands:
   campaign-add --track k|u --note TEXT
   round-show [--json]            round history + loop budget
   round-add-run --run-id ID      attach a campaign run to the current round
-  round-end --from-run ID [--from-run ID ...] [--worklist PATH] [overrides]
+  round-end --from-run ID [--from-run ID ...] [--worklist PATH] [--force]
                                  measure this round's outcome from each run's
                                  coverage.csv and record it (one call per run,
-                                 or several runs in one call; hours accumulate)
+                                 or several runs in one call; hours accumulate).
+                                 Refuses while a run's campaign window is still
+                                 open — measuring a live campaign gets every
+                                 column wrong at once
   worklist                       print the worklist this round must execute
   round-decide [--decision continue|stop] [--reason TEXT]
                                  apply the configured loop caps; an explicit
@@ -48,6 +53,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gspwn_config
@@ -100,8 +106,9 @@ def cmd_show(a):
         if ph["notes"]:
             line += "  %s" % ph["notes"]
         print(line)
-    kind, val = ps.next_action(st)
+    kind, val = _next_action(st)
     print("next: %s" % {"phase": lambda: "run phase %s" % val,
+                        "wait": lambda: _wait_line(*val),
                         "decide": lambda: "round-decide (round phases done)",
                         "advance-round": lambda: "round-advance",
                         "done": lambda: "complete — all phases done"}[kind]())
@@ -113,6 +120,7 @@ def cmd_show(a):
         print("crashes: %d total (%s)"
               % (len(crashes),
                  ", ".join("%s=%d" % kv for kv in sorted(by_status.items()))))
+        _print_noise_line(crashes)
     else:
         print("crashes: none registered")
     problems = ps.validate(st, _triage_cfg())
@@ -120,6 +128,19 @@ def cmd_show(a):
         print("INTEGRITY: %d problem(s) — run: pipeline_ctl.py validate"
               % len(problems))
     return 0
+
+
+def _print_noise_line(crashes):
+    """Say how many registered entries are the fuzzer's own exhaust.
+
+    They stay in the registry as an audit trail but are not findings, so the
+    headline count has to say how much of it they are. Without the line a
+    reader sees "crashes: 412" and has no way to tell it is mostly Xid 13.
+    """
+    noise = sum(1 for c in crashes.values() if c.get("signal") == "noise")
+    if noise:
+        print("  of these %d are noise Xids (the fuzzer causes them by "
+              "design; not counted as findings)" % noise)
 
 
 def _loop_cfg():
@@ -148,9 +169,33 @@ def _agent_cfg():
         sys.exit("error: %s" % e)
 
 
+def _next_action(st):
+    """ps.next_action, refusing to run ahead of a campaign still fuzzing.
+
+    Returns the same (kind, value) pairs plus ("wait", (run_id, hours_left)).
+    The fuzz phase itself is exempt: it is what starts the campaign.
+    """
+    kind, val = ps.next_action(st)
+    if kind == "phase" and val == "fuzz":
+        return kind, val
+    if st["phases"]["fuzz"]["status"] != "done":
+        return kind, val
+    live = _live_runs(st)
+    return ("wait", live[-1]) if live else (kind, val)
+
+
+def _wait_line(run_id, left_h):
+    return ("wait  (run %s has %.1f h left of its campaign window; the round "
+            "cannot be measured until it ends: python3 tools/campaign_ctl.py "
+            "wait --run-id %s)" % (run_id, left_h, run_id))
+
+
 def cmd_next(a):
     st = ps.load()
-    kind, val = ps.next_action(st)
+    kind, val = _next_action(st)
+    if kind == "wait":
+        print(_wait_line(*val))
+        return 0
     if kind == "phase":
         print(val)
     elif kind == "decide":
@@ -225,18 +270,51 @@ def _derive_run(run_id, cfg):
     return out
 
 
-def _derived_new_crashes(st):
-    """Crashes registered since the previous rounds accounted for theirs.
+def _is_finding(c):
+    """Does this registry entry count as a bug the campaign found?
 
-    Only genuine findings count: duplicates and still-unresolved flagged
-    collisions are not new bugs, and counting them would inflate the round
-    history the eval write-up cites. Post-triage statuses (reliable, flaky,
-    rca_done, ...) started life as unique findings, so they count too.
+    Three things are registered but are not findings:
+    duplicates (the same bug sighted twice), still-unresolved flagged
+    collisions (nobody has decided yet whether they are one bug or two), and
+    Xids the fuzzer produces by design. A campaign that reports its own
+    exhaust as findings has reported noise, which is exactly what the Xid
+    classification exists to prevent — it was just never applied here, so
+    every `new_crashes` figure carried it.
+
+    Post-triage statuses (reliable, flaky, rca_done, ...) started life as
+    unique findings, so they count.
     """
-    findings = sum(1 for c in st["crashes"].values()
-                   if c["status"] not in ("duplicate", "flagged"))
+    return (c.get("status") not in ("duplicate", "flagged")
+            and c.get("signal") != "noise")
+
+
+def _derived_new_crashes(st):
+    """Crashes registered since the previous rounds accounted for theirs."""
+    findings = sum(1 for c in st["crashes"].values() if _is_finding(c))
     counted = sum(r.get("new_crashes") or 0 for r in st["rounds"][:-1])
     return max(findings - counted, 0)
+
+
+def _live_runs(st):
+    """-> [(run_id, hours_left)] for this round's campaigns still inside their
+    window, newest deadline last.
+
+    The fuzz phase's gate used to be the smoke window, so the pipeline
+    advanced roughly half an hour into a 24-hour campaign: triage scanned a
+    workdir holding almost nothing, every later gate was trivially satisfied,
+    and round-end measured a curve three samples long while the campaign kept
+    running behind it with nobody reading its output. Everything downstream
+    inherited that — the plateau verdict, the edge counts, the billed hours
+    and the crash counts the report is built from.
+    """
+    import campaign_ctl
+    out = []
+    now = time.time()
+    for rid in ps.current_round(st).get("run_ids") or []:
+        at = campaign_ctl.read_deadline(rid)
+        if at is not None and at > now:
+            out.append((rid, (at - now) / 3600.0))
+    return sorted(out, key=lambda p: p[1])
 
 
 def cmd_round_end(a):
@@ -246,6 +324,26 @@ def cmd_round_end(a):
     if not from_runs:
         sys.exit("error: round-end needs at least one --from-run to measure "
                  "(pass one per campaign this round; hours accumulate)")
+    # Measuring a campaign that is still running is the wrong number in every
+    # column at once: the curve stops where the sampler happens to be, the
+    # billed hours are the elapsed ones rather than the campaign's, and the
+    # crash count is whatever had landed by then. Refusing is cheap; the
+    # measurement it prevents is what the whole round is for.
+    import campaign_ctl
+    now = time.time()
+    still_live = [(rid, (campaign_ctl.read_deadline(rid) - now) / 3600.0)
+                  for rid in from_runs
+                  if campaign_ctl.read_deadline(rid) is not None
+                  and campaign_ctl.read_deadline(rid) > now]
+    if still_live and not a.force:
+        sys.exit("error: refusing to measure a live campaign: %s. The curve, "
+                 "the billed hours and the crash count would all describe the "
+                 "part of the run that happened to be over. Wait it out with "
+                 "`python3 tools/campaign_ctl.py wait --run-id <id>`, or pass "
+                 "--force if the campaign really is finished and only its "
+                 "deadline file is stale."
+                 % "; ".join("run %s has %.1f h left" % (r, h)
+                             for r, h in still_live))
     explicit = {"coverage_verdict": a.coverage_verdict,
                 "new_crashes": a.new_crashes, "edges_start": a.edges_start,
                 "edges_end": a.edges_end, "run_hours": a.run_hours,
@@ -435,61 +533,80 @@ def cmd_crash_list(a):
     return 0
 
 
+def _apply_crash_set(st, cid, a):
+    """Apply one crash-set operation. Raises ValueError on a rejected edit."""
+    if cid not in st["crashes"]:
+        raise ValueError("unknown crash id: %s" % cid)
+    c = st["crashes"][cid]
+    if a.status:
+        if a.status not in ps.CRASH_STATUS:
+            raise ValueError("unknown crash status: %s (expected one of %s)"
+                             % (a.status, ", ".join(sorted(ps.CRASH_STATUS))))
+        ps.set_crash_status(c, a.status)
+    if a.duplicate_of is not None:
+        if a.duplicate_of.lower() in ("none", ""):
+            c["duplicate_of"] = None
+            # Clearing the link has to clear the verdict too, or the crash
+            # keeps status=duplicate with nothing to duplicate and stays
+            # excluded from the unique/RCA queue forever. An explicit
+            # --status in the same command still wins.
+            if c["status"] == "duplicate" and not a.status:
+                ps.set_crash_status(c, "unique")
+        else:
+            if a.status and a.status != "duplicate":
+                raise ValueError("--duplicate-of implies status 'duplicate' "
+                                 "— it cannot be combined with --status %s"
+                                 % a.status)
+            if a.duplicate_of == cid:
+                raise ValueError("a crash cannot duplicate itself")
+            if a.duplicate_of not in st["crashes"]:
+                raise ValueError("unknown crash id: %s" % a.duplicate_of)
+            if st["crashes"][a.duplicate_of]["status"] == "duplicate":
+                raise ValueError("%s is itself a duplicate — link directly to "
+                                 "the surviving entry (chains and cycles are "
+                                 "not allowed)" % a.duplicate_of)
+            c["duplicate_of"] = a.duplicate_of
+            ps.set_crash_status(c, "duplicate")
+    if c["status"] == "duplicate" and not c.get("duplicate_of"):
+        raise ValueError("status 'duplicate' requires --duplicate-of <id> — "
+                         "an unlinked duplicate is excluded from the RCA "
+                         "queue with nothing pointing at the surviving entry")
+    if a.disclosure:
+        if a.disclosure not in ps.DISCLOSURE_STATUS:
+            raise ValueError("unknown disclosure status: %s (expected one of "
+                             "%s)" % (a.disclosure,
+                                      ", ".join(sorted(ps.DISCLOSURE_STATUS))))
+        c["disclosure"] = a.disclosure
+    if a.repro_rate is not None:
+        if not 0.0 <= a.repro_rate <= 1.0:
+            raise ValueError("--repro-rate must be between 0.0 and 1.0")
+        c["repro_rate"] = a.repro_rate
+    if a.notes is not None:
+        # argparse gives None when the flag is absent, so --notes '' is a
+        # deliberate clear, not a no-op.
+        c["notes"] = a.notes
+    return "%s: status=%s disclosure=%s" % (cid, c["status"], c["disclosure"])
+
+
 def cmd_crash_set(a):
+    """Apply one edit to one or more crashes.
+
+    Several ids because the triage gate is "the flagged queue is empty", and
+    one generic panic title with a varying stack flags every distinct stack.
+    Resolving forty of those one command at a time is the kind of work that
+    stalls an unattended round; `crash-set a b c --duplicate-of X` is one
+    call. All-or-nothing: a rejected id aborts the transaction so the queue is
+    never left half-decided.
+    """
+    summaries = []
     with ps.transaction() as st:
-        if a.crash_id not in st["crashes"]:
-            sys.exit("error: unknown crash id: %s" % a.crash_id)
-        c = st["crashes"][a.crash_id]
-        if a.status:
-            if a.status not in ps.CRASH_STATUS:
-                sys.exit("error: unknown crash status: %s (expected one of %s)"
-                         % (a.status, ", ".join(sorted(ps.CRASH_STATUS))))
-            c["status"] = a.status
-        if a.duplicate_of is not None:
-            if a.duplicate_of.lower() in ("none", ""):
-                c["duplicate_of"] = None
-                # Clearing the link has to clear the verdict too, or the crash
-                # keeps status=duplicate with nothing to duplicate and stays
-                # excluded from the unique/RCA queue forever. An explicit
-                # --status in the same command still wins.
-                if c["status"] == "duplicate" and not a.status:
-                    c["status"] = "unique"
-            else:
-                if a.status and a.status != "duplicate":
-                    sys.exit("error: --duplicate-of implies status 'duplicate'"
-                             " — it cannot be combined with --status %s"
-                             % a.status)
-                if a.duplicate_of == a.crash_id:
-                    sys.exit("error: a crash cannot duplicate itself")
-                if a.duplicate_of not in st["crashes"]:
-                    sys.exit("error: unknown crash id: %s" % a.duplicate_of)
-                if st["crashes"][a.duplicate_of]["status"] == "duplicate":
-                    sys.exit("error: %s is itself a duplicate — link directly "
-                             "to the surviving entry (chains and cycles are "
-                             "not allowed)" % a.duplicate_of)
-                c["duplicate_of"] = a.duplicate_of
-                c["status"] = "duplicate"
-        if c["status"] == "duplicate" and not c.get("duplicate_of"):
-            sys.exit("error: status 'duplicate' requires --duplicate-of <id> "
-                     "— an unlinked duplicate is excluded from the RCA queue "
-                     "with nothing pointing at the surviving entry")
-        if a.disclosure:
-            if a.disclosure not in ps.DISCLOSURE_STATUS:
-                sys.exit("error: unknown disclosure status: %s (expected one "
-                         "of %s)" % (a.disclosure,
-                                     ", ".join(sorted(ps.DISCLOSURE_STATUS))))
-            c["disclosure"] = a.disclosure
-        if a.repro_rate is not None:
-            if not 0.0 <= a.repro_rate <= 1.0:
-                sys.exit("error: --repro-rate must be between 0.0 and 1.0")
-            c["repro_rate"] = a.repro_rate
-        if a.notes is not None:
-            # argparse gives None when the flag is absent, so --notes '' is a
-            # deliberate clear, not a no-op.
-            c["notes"] = a.notes
-        summary = "%s: status=%s disclosure=%s" % (a.crash_id, c["status"],
-                                                   c["disclosure"])
-    print(summary)
+        for cid in a.crash_id:
+            try:
+                summaries.append(_apply_crash_set(st, cid, a))
+            except ValueError as e:
+                sys.exit("error: %s (nothing was changed)" % e)
+    for line in summaries:
+        print(line)
     return 0
 
 
@@ -713,9 +830,10 @@ def cmd_brief(a):
     print("round %d of max %d, %.1f of %s run-hours spent"
           % (r["round"], cfg["max_rounds"], ps.spent_hours(st),
              cfg["max_total_run_hours"]))
-    kind, val = ps.next_action(st)
+    kind, val = _next_action(st)
     print("next action: %s" % {
         "phase": lambda: "run phase %s (see agents/%s.md)" % (val, val),
+        "wait": lambda: _wait_line(*val),
         "decide": lambda: "pipeline_ctl.py round-decide",
         "advance-round": lambda: "pipeline_ctl.py round-advance",
         "done": lambda: "complete — all phases done"}[kind]())
@@ -747,6 +865,7 @@ def cmd_brief(a):
         print("%d total: %s" % (len(crashes),
                                 ", ".join("%s=%d" % kv
                                           for kv in sorted(by_status.items()))))
+        _print_noise_line(crashes)
         flagged = by_status.get("flagged", 0)
         if flagged:
             print("%d flagged — triage cannot pass its gate until that queue "
@@ -899,8 +1018,10 @@ def build_parser():
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_crash_list)
 
-    p = sub.add_parser("crash-set", help="update a crash registry entry")
-    p.add_argument("crash_id")
+    p = sub.add_parser("crash-set", help="update crash registry entries")
+    p.add_argument("crash_id", nargs="+", metavar="CRASH_ID",
+                   help="one or more crash ids; the same edit is applied to "
+                        "each, and a rejected id aborts the whole call")
     p.add_argument("--status")
     p.add_argument("--duplicate-of", dest="duplicate_of",
                    help="crash id, or 'none' to clear")
@@ -995,6 +1116,10 @@ def build_parser():
     p.add_argument("--worklist",
                    help="path to this round's worklist.md; the next round's "
                         "describe/seeds agents read it via `worklist`")
+    p.add_argument("--force", action="store_true",
+                   help="measure a run whose campaign window has not elapsed "
+                        "(only when the campaign really is finished and its "
+                        "deadline file is stale)")
     p.set_defaults(fn=cmd_round_end)
 
     p = sub.add_parser("worklist",

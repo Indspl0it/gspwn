@@ -42,9 +42,13 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
 
 ## Configuration (the only thing a human keys in)
 
-Every cap, budget and duration lives in `config/campaign.yaml`. Nothing is
-hardcoded in a tool, and no further input is required once these are set.
-Before the first campaign, confirm what actually took effect:
+Every cap, budget, duration and threshold that changes what the campaign does
+or concludes lives in `config/campaign.yaml`, including the ones that decide
+research outcomes: the plateau rule, the dedup depths, and what counts as a
+reliable reproduction. No further input is required once these are set. What
+is still fixed in code is limited to internal safety floors that are not
+decisions about the target. Before the first campaign, confirm what actually
+took effect:
 
 ```
 python3 tools/gspwn_config.py
@@ -119,11 +123,11 @@ do not skip ahead to a later phase to keep making progress.
 | describe | agents/describe.md | Syzlang compiles; smoke run reaches driver (dmesg evidence); audit sample logged |
 | seeds | agents/seeds.md | `artifacts/seeds/*.syz` exist; seeds parse under syz-manager |
 | harness | agents/harness.md | Track U harnesses build and produce coverage on seeds |
-| fuzz | agents/fuzz.md | both systemd units active; coverage increases within smoke window |
+| fuzz | agents/fuzz.md | both systemd units active and coverage increases within the smoke window, **then the campaign window has elapsed** (`campaign_ctl.py wait --run-id <id>`). The smoke window only says the campaign started; everything after this phase measures the run, so advancing on it measures the first half hour of a 24-hour campaign |
 | triage | agents/triage.md | every raw crash registered unique/duplicate/flagged; the flagged queue is empty (`crash-list --status flagged` returns nothing) |
 | rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC; each also has a research record (`finding-list`), which is what steers the next round, and an impact record (`impact-list`), which is what lets the report argue a severity |
 | poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json; every reliable/flaky Track K crash has a recorded profile-check outcome |
-| eval | agents/eval.md | `artifacts/eval/` holds the coverage series, findings table and round progression for every run in this round |
+| eval | agents/eval.md | `artifacts/eval/` holds the coverage series, findings table, round progression and version-persistence.md (an explicit `skipped: <why>` counts) for every run in this round |
 | refine | agents/refine.md | gaps.md + worklist.md written, every item tagged `[coverage]` or `[finding crash-NNNN]`; round outcome recorded via `round-end` |
 | report | agents/report.md | report + PSIRT packages exist; disclosure status recorded |
 
@@ -186,7 +190,10 @@ reason as a missing research record — the report would carry a reproducer with
 no severity behind it.
 
 Ask `python3 tools/pipeline_ctl.py next` what to do; it returns a phase, or
-`decide`, or `advance-round`, or `complete`. The loop transition is:
+`wait`, or `decide`, or `advance-round`, or `complete`. `wait` means a
+campaign in this round is still inside its window: block on
+`campaign_ctl.py wait --run-id <id>` rather than running the next phase
+against a run that is not finished. The loop transition is:
 
 ```
 python3 tools/pipeline_ctl.py round-decide     # applies the caps -> continue|stop

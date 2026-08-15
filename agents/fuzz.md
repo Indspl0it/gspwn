@@ -63,7 +63,24 @@ units and its deadline timer).
    `python3 tools/campaign_ctl.py status --run-id <id>` and
    `python3 tools/coverage_ctl.py series --run-id <id>`; coverage must
    increase. If Track K unit is failed, read `journalctl -u gspwn-k` and fix
-   once.
+   once. The smoke window is an early abort, not the end of this phase: it
+   only says the campaign started correctly.
+5b. Wait out the campaign. This phase is not done until the window closes:
+   ```
+   python3 tools/campaign_ctl.py wait --run-id <id>
+   ```
+   It blocks until `loop.campaign_hours` have elapsed, printing a heartbeat,
+   and returns when the deadline timer has stopped the units. The deadline
+   lives on disk, so if the box panics while you are waiting, re-run the same
+   command after the reboot and it resumes against the same deadline.
+
+   Do not advance to triage on the strength of the smoke window. Everything
+   after this phase measures the run: triage scans the workdir, refine fits
+   the coverage curve, and round-end derives the verdict, the edge counts and
+   the billed hours from it. Run at half an hour into a twenty-four hour
+   campaign, all of them describe the first half hour and the round bills a
+   full campaign for it. `pipeline_ctl.py next` reports `wait` while a
+   campaign is live, and `round-end` refuses to measure one.
 6. After any reboot: `sudo python3 tools/crashlog_ctl.py harvest` BEFORE
    restarting the campaign; hand harvested paths to the triage phase. The
    coverage sampler is a systemd timer and resumes on its own — confirm it did
@@ -82,8 +99,13 @@ not by you blocking.
  --notes "<one line>"`. Never edit pipeline.json by hand.
 
 ## Gate evidence
-`systemctl is-active gspwn-k gspwn-u` both active; coverage stats
-showing increase over the smoke window. Flat coverage across the whole smoke
+The campaign window has elapsed (`campaign_ctl.py wait --run-id <id>` has
+returned, or `wait --check` exits 0), both units have been stopped by the
+deadline timer, and the coverage series covers the whole campaign rather than
+its first minutes.
+
+During the smoke window: `systemctl is-active gspwn-k gspwn-u` both active,
+and coverage stats showing an increase. Flat coverage across the whole smoke
 window is a failed gate, not a slow start — report it rather than extending
 the window until it looks green.
 

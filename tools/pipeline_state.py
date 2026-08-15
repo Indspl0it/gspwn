@@ -75,6 +75,13 @@ DEFAULT_CRASH = {"track": "K", "title": "", "stack_hash": "",
                  "status": "unique", "dir": "", "repro_rate": None,
                  "duplicate_of": None, "disclosure": "pending", "notes": "",
                  "signal": "unclassified",
+                 # When rca finished with this crash. Stamped once and never
+                 # cleared, because `status` is not durable: the poc phase
+                 # overwrites `rca_done` with the reproduction class, so an
+                 # invariant keyed on the current status would expire exactly
+                 # when the pipeline reaches the phase that should notice it.
+                 # See was_analysed().
+                 "rca_done_at": None,
                  # finding: the research record from rca, or None when the
                  # crash has not been analysed. See DEFAULT_FINDING.
                  "finding": None,
@@ -716,9 +723,16 @@ def advance_round(state):
     not_done = [p for p in ROUND_PHASES
                 if state["phases"][p]["status"] != "done"]
     if not_done:
-        raise ValueError("cannot advance to round %d: round phase(s) not "
-                         "done: %s — finish them or mark them blocked first"
-                         % (r["round"] + 1, ", ".join(not_done)))
+        # Deliberately not satisfiable by marking a phase blocked: a blocked
+        # gate is a stopping point, and carrying one into a new round would
+        # bury it. The two real ways out are finishing the phase or stopping
+        # the loop, so say those rather than one that does not work.
+        raise ValueError(
+            "cannot advance to round %d: round phase(s) not done: %s. Finish "
+            "them, or stop the loop instead of advancing (round-decide "
+            "--decision stop --reason \"...\") and run the report phase. "
+            "Marking a phase blocked does not satisfy this check"
+            % (r["round"] + 1, ", ".join(not_done)))
     if not r.get("ended") or r.get("run_hours") is None:
         raise ValueError("cannot advance to round %d: round %d has no "
                          "recorded round-end — measure it first: "
@@ -751,6 +765,43 @@ def register_crash(state, crash):
     cid = next_crash_id(state)
     state["crashes"][cid] = dict(DEFAULT_CRASH, **crash)
     return cid
+
+
+def set_crash_status(crash, status, tool="pipeline_ctl"):
+    """Set a crash's status, keeping the trail and the rca stamp.
+
+    Every status write goes through here. Two things have to happen alongside
+    the assignment and both were previously done in only one of the two places
+    that write it:
+
+    - the append-only history trail, so a reclassification does not erase that
+      the earlier one happened;
+    - the `rca_done_at` stamp, because `rca_done` is transient. The poc phase
+      writes reliable/flaky/unreproducible straight over it, so `validate`
+      checking `status == "rca_done"` stops seeing an unanalysed crash the
+      moment poc runs, which is the one phase guaranteed to run afterwards.
+    """
+    if status not in CRASH_STATUS:
+        raise ValueError("unknown crash status: %s (expected one of %s)"
+                         % (status, ", ".join(sorted(CRASH_STATUS))))
+    prev = crash.get("status")
+    if prev != status:
+        history = list(crash.get("history") or [])
+        history.append({"ts": _now(), "from": prev, "to": status, "tool": tool})
+        crash["history"] = history
+    crash["status"] = status
+    if status == "rca_done" and not crash.get("rca_done_at"):
+        crash["rca_done_at"] = _now()
+    return crash
+
+
+def was_analysed(crash):
+    """Has rca ever finished with this crash?
+
+    The stamp first, the current status second: a registry written before the
+    stamp existed still reports correctly while a crash sits at `rca_done`.
+    """
+    return bool(crash.get("rca_done_at")) or crash.get("status") == "rca_done"
 
 
 def _finding_strings(value, field, kind="finding"):
@@ -1149,12 +1200,14 @@ def validate(state, triage_settings=None):
                 if gap:
                     problems.append("%s has a finding that steers nothing: %s"
                                     % (cid, gap))
-        elif c.get("status") == "rca_done":
+        elif c.get("status") != "duplicate" and was_analysed(c):
             # rca_done without a research record is the failure this whole
             # edge exists to prevent: the analysis happened and nothing
-            # survived it for the next round to act on.
-            problems.append("%s is rca_done but has no finding — the round "
-                            "learned nothing from it (record one with: "
+            # survived it for the next round to act on. Keyed on the stamp,
+            # so the poc phase writing a reproduction class over the status
+            # does not retire the check.
+            problems.append("%s was analysed by rca but has no finding — the "
+                            "round learned nothing from it (record one with: "
                             "pipeline_ctl.py finding-set %s --json ...)"
                             % (cid, cid))
         if c.get("impact") is not None:
@@ -1168,14 +1221,15 @@ def validate(state, triage_settings=None):
                 if gap:
                     problems.append("%s has an impact record that does not "
                                     "support its conclusion: %s" % (cid, gap))
-        elif c.get("status") == "rca_done":
+        elif c.get("status") != "duplicate" and was_analysed(c):
             # A crash analysed but never assessed reaches the report as a
             # reproducer with no severity behind it, which is a bug report
             # rather than a vulnerability report.
-            problems.append("%s is rca_done but has no impact record — the "
-                            "report would carry a reproducer with no argued "
-                            "severity (record one with: pipeline_ctl.py "
-                            "impact-set %s --json ...)" % (cid, cid))
+            problems.append("%s was analysed by rca but has no impact record "
+                            "— the report would carry a reproducer with no "
+                            "argued severity (record one with: "
+                            "pipeline_ctl.py impact-set %s --json ...)"
+                            % (cid, cid))
     for i, r in enumerate(state.get("rounds", []), start=1):
         if r.get("round") != i:
             problems.append("round %d is numbered %r (rounds must be "

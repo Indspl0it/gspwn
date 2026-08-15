@@ -11,11 +11,28 @@ For RUNG in 1, 2, 3 (stop at the first that passes the gate):
 1. `sudo JOBS=$(nproc) LINUX_SRC=artifacts/src/linux \
    NVIDIA_SRC=artifacts/src/open-gpu-kernel-modules RUNG=$RUNG \
    bash tools/build_kernel.sh` (via tools/exec.py --log build-rung$RUNG).
+
+   **Pass `SKIP_KERNEL=1` for rungs 2 and 3.** Only the NVIDIA module CFLAGS
+   differ between rungs; the kernel is identical. Rebuilding it per rung
+   spends hours of billed machine time producing the same image, and those
+   hours come out of the same budget as the fuzzing.
+
+   The script bases the config on `/boot/config-$(uname -r)` so the new
+   kernel keeps the storage and network drivers this machine boots with.
+   Override with `BASE_CONFIG=` only if you know the running config is wrong
+   for the target hardware. If it warns that it fell back to `defconfig`,
+   stop: that kernel will very likely not find its own root filesystem, and
+   you would discover it after a full build and a reboot.
 2. If the NVIDIA module build fails because conftest.sh strips
    KBUILD_EXTRA_CFLAGS: patch kernel-open/conftest.sh minimally to append
    the flags, log the patch into artifacts/builds/, retry ONCE per rung.
-3. Reboot into the new kernel.
-4. Gate check: `dmesg | grep -i kasan` shows expected state for the rung;
+3. Reboot into the new kernel. The script sets the GRUB default to the entry
+   it just installed and verifies it stuck, so this needs no manual step; if
+   it reported an error there, do not reboot until it is resolved, because
+   the machine would come back on the old kernel and fail the gate below for
+   a reason that looks like the build.
+4. Gate check: `uname -r` matches the kernel just built;
+   `dmesg | grep -i kasan` shows expected state for the rung;
    `lsmod | grep nvidia` non-empty; `nvidia-smi` works.
 5. On gate success: set instrumentation_rung in config/machine.yaml and
    artifacts/builds/manifest.json, and stop walking the ladder.

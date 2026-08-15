@@ -29,19 +29,24 @@ while another run's units are active or its deadline timer is still
 installed. --replace retires the old run first (stops and disables its units
 and its deadline timer), then installs the new one.
 
-When a campaign that is not part of a pipeline round stops — by deadline, by
-a manual `stop`, or already finished when `status` looks at it — its
-measured hours are billed to the machine-global spend ledger
-(state/spend.json, which GSPWN_STATE does not redirect). Round campaigns are
-billed per run by round-end instead; a campaign outside a round never passes
-through round-end, so its stop is the only place its hours can reach the
-run-hour cap.
+When a campaign stops — by deadline, by a manual `stop`, or already finished
+when `status` looks at it — its measured hours are billed to the
+machine-global spend ledger (state/spend.json, which GSPWN_STATE does not
+redirect). Round campaigns are billed again by round-end; both derive the
+figure from the same coverage-sample span and record_run_hours is idempotent
+per run id, so the two cannot double-count. Billing here as well is what
+keeps a round that never closes from leaving its hours off the cap entirely.
 
 Subcommands:
   gen-config --run-id ID                 write the run's syz-manager.cfg
   install-k --run-id ID [--corpus fresh|carry] [--from-run ID] [--seeds DIR]
             [--hours H] [--replace]
   install-u --run-id ID [--hours H] [--replace]
+  wait --run-id ID [--check]             block until the campaign window has
+                                         elapsed; this is what the fuzz phase
+                                         gate waits on, so the round is
+                                         measured over the whole campaign
+                                         rather than its first half hour
   check-deadline --run-id ID             stop the campaign if its window is up
   start <k|u> | stop <k|u>
   status [--run-id ID]
@@ -57,6 +62,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus_ctl
@@ -428,10 +434,6 @@ def cmd_install_u(a):
 
 
 DEADLINE_NAME = "gspwn-deadline"
-# Fixed cadence, deliberately decoupled from loop.coverage_sample_min:
-# raising the sampling interval must not also delay every deadline stop
-# past the campaign window.
-DEADLINE_CHECK_MIN = 2
 # Template units, instantiated per run as gspwn-deadline@<run-id>.timer, so
 # installing run B never retires run A's enforcement — the pre-template
 # single global unit did exactly that.
@@ -483,8 +485,12 @@ def install_deadline_timer(run_id):
                 os.remove(p)
     with open("/etc/systemd/system/%s@.service" % DEADLINE_NAME, "w") as f:
         f.write(DEADLINE_SERVICE_TMPL.format(root=REPO_ROOT))
+    # Cadence from loop.deadline_check_min, deliberately its own key rather
+    # than loop.coverage_sample_min: raising the sampling interval must not
+    # also delay every deadline stop past the window it enforces.
     with open("/etc/systemd/system/%s@.timer" % DEADLINE_NAME, "w") as f:
-        f.write(DEADLINE_TIMER_TMPL.format(every=DEADLINE_CHECK_MIN))
+        f.write(DEADLINE_TIMER_TMPL.format(
+            every=cfg()["loop"]["deadline_check_min"]))
     # A run installed under GSPWN_STATE keeps its own pipeline.json;
     # a per-instance drop-in points its deadline service at that same state
     # file (the template itself is shared across runs and cannot carry it).
@@ -529,6 +535,56 @@ def read_deadline(run_id):
         return None
 
 
+def reconstruct_deadline(run_id):
+    """Rebuild a lost deadline file from the install event, or None.
+
+    The deadline is one small file under artifacts/runs/<id>/, and losing it
+    used to remove the spend ceiling in silence: check-deadline reported
+    "nothing to enforce" every two minutes forever while Restart=always units
+    kept fuzzing. The install event already records when the campaign started
+    and the window it was given, which is the deadline, so there is no reason
+    to be left with nothing.
+
+    install-k and install-u each write one, and install-u resets the clock, so
+    the latest is the one in force.
+    """
+    try:
+        st = ps.load()
+    except ValueError:
+        return None
+    latest = None
+    for c in st.get("campaigns", []):
+        if (c.get("run_id") != run_id or c.get("action") != "install"
+                or not c.get("hours") or not c.get("at")):
+            continue
+        try:
+            started = datetime.fromisoformat(c["at"]).timestamp()
+            at = started + float(c["hours"]) * 3600.0
+        except (ValueError, TypeError):
+            continue
+        latest = at if latest is None else max(latest, at)
+    if latest is None:
+        return None
+    os.makedirs(run_dir(run_id), exist_ok=True)
+    with open(deadline_path(run_id), "w") as f:
+        f.write("%d\n" % int(latest))
+        f.flush()
+        os.fsync(f.fileno())
+    return latest
+
+
+def effective_deadline(run_id):
+    """The run's deadline, rebuilt from state if the file is gone."""
+    at = read_deadline(run_id)
+    return at if at is not None else reconstruct_deadline(run_id)
+
+
+def units_for_run(run_id):
+    """Campaign units currently running this run id."""
+    return [t for t in ("k", "u")
+            if unit_active(unit(t)) and unit_run_id(unit(t)) == run_id]
+
+
 def configured_hours(run_id):
     """The campaign window this run was installed with, if recoverable."""
     try:
@@ -571,23 +627,23 @@ def measured_run_hours(run_id):
 
 
 def bill_run(run_id, why):
-    """Bill a finished non-round campaign to the machine-global spend ledger.
+    """Bill a finished campaign to the machine-global spend ledger.
 
-    Round campaigns are billed by round-end (each --from-run is measured and
-    recorded there); a campaign outside a round never passes through
-    round-end, so its stop is the only place its hours reach the cap.
-    The ledger does not follow GSPWN_STATE, and record_run_hours is
-    idempotent per run id, so recording at every reliable stop detection
-    cannot double-count.
+    Every campaign, round or not. Skipping round campaigns on the assumption
+    that round-end would bill them left a hole exactly where it hurts: a round
+    that never closes, because a phase blocked or the breaker tripped or
+    someone stopped it by hand, kept its hours out of the ledger entirely and
+    the cap under-counted by a whole campaign.
+
+    Billing here and again at round-end is safe. record_run_hours is
+    idempotent per run id, and both places derive the figure the same way,
+    from the span of the run's coverage samples. Where this one falls back to
+    the configured window because the run left no samples, round-end declines
+    to bill at all, so the fallback stands rather than being overwritten with
+    nothing.
     """
     if not run_id:
         return
-    try:
-        st = ps.load()
-    except ValueError:
-        return
-    if any(run_id in (r.get("run_ids") or []) for r in st.get("rounds", [])):
-        return          # a round campaign: round-end bills it
     hours, basis = measured_run_hours(run_id)
     if not hours:
         print("run %s: nothing billed (%s)" % (run_id, basis))
@@ -606,8 +662,28 @@ def cmd_check_deadline(a):
     """Stop the campaign if its configured hours are up. Idempotent."""
     at = read_deadline(a.run_id)
     if at is None:
-        print("run %s: no deadline recorded; nothing to enforce" % a.run_id)
-        return 0
+        at = reconstruct_deadline(a.run_id)
+        if at is not None:
+            print("run %s: the deadline file was missing; rebuilt it from the "
+                  "install record (window ends at epoch %d)"
+                  % (a.run_id, int(at)))
+    if at is None:
+        # Nothing on disk and nothing in state. If units are still fuzzing for
+        # this run there is now no ceiling on what they spend, and an
+        # unbounded campaign is the expensive direction to be wrong in, so
+        # stop rather than report that there is nothing to enforce.
+        running = units_for_run(a.run_id)
+        if not running:
+            print("run %s: no deadline recorded and no campaign unit running "
+                  "for it; nothing to enforce" % a.run_id)
+            return 0
+        print("ERROR: run %s has no deadline on disk and none reconstructible "
+              "from the install record, but unit(s) %s are still fuzzing for "
+              "it. Nothing bounds what that campaign spends, so it is being "
+              "stopped. Re-install it with campaign_ctl.py install-k/install-u "
+              "to start a fresh, bounded window."
+              % (a.run_id, ", ".join(unit(t) for t in running)))
+        at = time.time()      # fall through to the stop path below
     left_h = (at - time.time()) / 3600.0
     if left_h > 0:
         print("run %s: %.1f h left of its campaign window" % (a.run_id, left_h))
@@ -654,6 +730,57 @@ def cmd_check_deadline(a):
     print("run %s: campaign window elapsed; stopped %s"
           % (a.run_id, ", ".join(stopped) or "nothing (already inactive)"))
     return 1 if failed else 0
+
+
+def cmd_wait(a):
+    """Block until the run's campaign window has elapsed.
+
+    The fuzz phase's gate is the end of the campaign, not the smoke window.
+    Without something to wait on, the pipeline advanced roughly half an hour
+    into a 24-hour run: triage scanned a workdir holding almost nothing, every
+    later gate was satisfied by having nothing to do, and round-end measured a
+    three-sample curve while the campaign kept running behind it. The round
+    then billed a full campaign for thirty minutes of measurement.
+
+    Durable across the panics this pipeline causes: the deadline is on disk,
+    so a wait interrupted by a reboot resumes against the same one when the
+    agent re-runs this. It prints a heartbeat because a silent process
+    blocking for a day is indistinguishable from a hung one.
+    """
+    at = effective_deadline(a.run_id)
+    if at is None:
+        sys.exit("run %s has no recorded campaign deadline and none could be "
+                 "reconstructed from the install record. Install the campaign "
+                 "first (campaign_ctl.py install-k/install-u), which is what "
+                 "starts the clock." % a.run_id)
+    poll_s = max(1, a.poll_min) * 60
+    while True:
+        # Re-read every pass: a --replace install moves the deadline, and the
+        # wait has to follow the campaign that is actually running.
+        at = effective_deadline(a.run_id) or at
+        left = at - time.time()
+        if left <= 0:
+            break
+        if a.check:
+            print("run %s: still fuzzing, %.1f h left of its campaign window"
+                  % (a.run_id, left / 3600.0))
+            return 1
+        print("run %s: %.1f h left of its campaign window (ends %s)"
+              % (a.run_id, left / 3600.0,
+                 time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(at))))
+        sys.stdout.flush()
+        time.sleep(min(poll_s, left))
+    print("run %s: campaign window has elapsed" % a.run_id)
+    # The deadline timer normally stops the units. Do it here too: if the
+    # timer was never installed or was removed, waiting it out and then
+    # measuring a campaign that is still running is the same wrong number.
+    running = units_for_run(a.run_id)
+    if running:
+        print("run %s: unit(s) %s are still active past the deadline; "
+              "enforcing it now" % (a.run_id,
+                                    ", ".join(unit(t) for t in running)))
+        return cmd_check_deadline(a)
+    return 0
 
 
 def cmd_start_stop(a):
@@ -719,6 +846,19 @@ def build_parser():
                        help="stop the campaign if its window has elapsed")
     p.add_argument("--run-id", required=True)
     p.set_defaults(fn=cmd_check_deadline)
+
+    p = sub.add_parser("wait",
+                       help="block until the campaign window has elapsed "
+                            "(what the fuzz phase gate waits on)")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--check", action="store_true",
+                   help="do not block: exit 0 if the window has elapsed, "
+                        "1 if the campaign is still inside it")
+    p.add_argument("--poll-min", type=int,
+                   default=cfg()["loop"]["deadline_check_min"],
+                   help="heartbeat interval in minutes "
+                        "(default loop.deadline_check_min)")
+    p.set_defaults(fn=cmd_wait)
 
     p = sub.add_parser("install-u")
     p.add_argument("--run-id", required=True)

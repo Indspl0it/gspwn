@@ -88,7 +88,7 @@ coverage alone.
    `display` capability, and the threat model is a default tenant
    (`compute,utility`), which gets neither. A crash found there could not be
    claimed under the model, so the descriptions are not worth the round.
-   Widening scope is a decision recorded in the README threat model first,
+   Widening scope is a decision recorded in the threat model first,
    not something this phase does because the ioctls looked reachable.
 3. Create a header defining the NV_* ioctl command numbers via _IOWR macros;
    extract constants with syz-extract; compile with syz-compile.

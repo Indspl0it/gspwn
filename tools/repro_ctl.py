@@ -25,9 +25,17 @@ Exit codes (verify): 0 = protocol satisfied (>= --runs counted runs);
 2 = a rate was recorded on fewer counted runs than --runs requested (the
 attempt cap fired — the denominator is short, and stdout says so).
 
-Classification (spec Phase 5): reliable >= 80%, flaky = reproduces but < 80%,
-unreproducible = 0/N. Clean-boot verification is orchestrated by the poc agent
-(it reboots between runs); this tool provides the per-run mechanics.
+Classification: reliable at or above poc.reliable_threshold, flaky =
+reproduces below it, unreproducible = 0/N. The threshold, the per-run timeout
+and the default run count live in config/campaign.yaml, because a reliable
+label is what a disclosure package is built on. Clean-boot verification is
+orchestrated by the poc agent (it reboots between runs); this tool provides
+the per-run mechanics.
+
+Track K verification refuses to run while gspwn-k is still fuzzing. A run
+counts as a reproduction partly because the box went down during it, and that
+only means anything when the reproducer is the only thing that could have
+panicked it.
 
 What counts as a reproduction — and what does not. A run is a hit only when
 the evidence ties to *this* crash:
@@ -88,8 +96,23 @@ import pipeline_state as ps
 REPO_ROOT = ps.REPO_ROOT
 SYZKALLER = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller")
 
-REPRO_TIMEOUT = 120          # seconds per run before we call it a hang
 REPRO_LOCK = "repro.lock"    # in the state dir, next to .pipeline.lock
+
+
+def _poc_cfg():
+    """How long a run may take, and what counts as reliable.
+
+    In config rather than in this module because a reliable classification is
+    what a disclosure package is built on: the threshold is a research
+    decision, not a tool internal. Falls back to the shipped defaults only if
+    the config cannot be read at all, so verification still runs on a box
+    whose config is mid-edit.
+    """
+    try:
+        return gspwn_config.poc()
+    except Exception:
+        return dict(gspwn_config.DEFAULTS["poc"])
+
 
 # Generic kernel-crash markers. These NEVER score a hit on their own — any
 # BUG/Oops in the window is not evidence that *this* crash reproduced. They
@@ -503,14 +526,23 @@ def _recover(prog, now_boot, logs, c, cid):
 
 def _prepare_k(cid, c):
     """Track K preconditions; returns (run_one, first_baseline)."""
+    timeout = _poc_cfg()["repro_timeout_sec"]
     dest = os.path.join(REPO_ROOT, "artifacts", "pocs", cid)
     src = os.path.join(dest, "repro.c")
     exe = os.path.join(dest, "repro")
-    if not os.path.exists(exe):
+    # Rebuild when the source is newer than the binary. `extract` regenerates
+    # repro.c whenever syz-prog2c has something better to say, and a
+    # build-if-absent check then verifies the previous binary against the new
+    # source without either of them being wrong on its own.
+    outdated = (os.path.exists(exe) and os.path.exists(src)
+                and os.path.getmtime(src) > os.path.getmtime(exe))
+    if not os.path.exists(exe) or outdated:
         if not os.path.exists(src) or os.path.getsize(src) == 0:
             sys.exit("no usable repro.c in %s (run extract first — an empty "
                      "repro.c is the residue of a failed syz-prog2c and "
                      "extract will regenerate it)" % dest)
+        if outdated:
+            print("repro.c is newer than the compiled reproducer; rebuilding")
         r = subprocess.run(["gcc", "-pthread", "-static", "-o", exe, src])
         if r.returncode != 0:
             sys.exit("gcc failed (rc %d) building repro.c in %s — re-run "
@@ -537,7 +569,7 @@ def _prepare_k(cid, c):
         timed_out = False
         exec_failed = None
         try:
-            subprocess.run([exe], timeout=REPRO_TIMEOUT,
+            subprocess.run([exe], timeout=timeout,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             timed_out = True
@@ -571,11 +603,11 @@ def _prepare_k(cid, c):
                 return {"verdict": "hit", "timed_out": True,
                         "evidence": "timeout-hang-class",
                         "detail": "repro hung past %ds and the crash is "
-                                  "hang-class (%s)" % (REPRO_TIMEOUT, marker)}
+                                  "hang-class (%s)" % (timeout, marker)}
             return {"verdict": "void", "timed_out": True,
                     "detail": "repro timed out after %ds; the title has no "
                               "hang-class marker, so a hang here is not "
-                              "evidence for this crash" % REPRO_TIMEOUT}
+                              "evidence for this crash" % timeout}
         if wrapped:
             return {"verdict": "void", "timed_out": False,
                     "detail": "dmesg ring wrapped; delta not computable"}
@@ -586,6 +618,7 @@ def _prepare_k(cid, c):
 
 def _prepare_u(cid, c, cmd, crash_exit):
     """Track U preconditions; returns the run_one closure."""
+    timeout = _poc_cfg()["repro_timeout_sec"]
     dest = os.path.join(REPO_ROOT, "artifacts", "pocs", cid)
     input_path = os.path.join(dest, "input")
     if not os.path.exists(input_path):
@@ -602,7 +635,7 @@ def _prepare_u(cid, c, cmd, crash_exit):
     def run_one(before=None):
         timed_out = False
         try:
-            r = subprocess.run(run_cmd, shell=True, timeout=REPRO_TIMEOUT,
+            r = subprocess.run(run_cmd, shell=True, timeout=timeout,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE,
                                text=True, errors="replace")
@@ -636,11 +669,11 @@ def _prepare_u(cid, c, cmd, crash_exit):
                 return {"verdict": "hit", "timed_out": True,
                         "evidence": "timeout-hang-class",
                         "detail": "harness hung past %ds and the crash is "
-                                  "hang-class (%s)" % (REPRO_TIMEOUT, marker)}
+                                  "hang-class (%s)" % (timeout, marker)}
             return {"verdict": "void", "timed_out": True,
                     "detail": "harness timed out after %ds; the title has "
                               "no hang-class marker, so a hang here is not "
-                              "evidence for this crash" % REPRO_TIMEOUT}
+                              "evidence for this crash" % timeout}
         if crash_exit is not None and rc == crash_exit:
             return {"verdict": "hit", "detail": "exit %d matched "
                                                 "--crash-exit" % rc,
@@ -713,8 +746,12 @@ def _verify_session(cid, runs, restart, run_one, first_before=None):
 
     # Void runs do not advance the count, so keep going until `runs` verdicts
     # land — but cap total attempts so a persistently wrapping ring buffer
-    # cannot loop forever.
-    attempt_cap = prog["runs_done"] + 2 * max(runs - counted_now(), 0) + 5
+    # cannot loop forever. The factor is poc.void_retry_factor; the small
+    # fixed slack keeps a one-run verification from giving up after a single
+    # unlucky attempt.
+    attempt_cap = (prog["runs_done"]
+                   + _poc_cfg()["void_retry_factor"]
+                   * max(runs - counted_now(), 0) + 5)
     while counted_now() < runs:
         if prog["runs_done"] >= attempt_cap:
             print("giving up after %d attempts: too many void runs"
@@ -751,18 +788,18 @@ def _verify_session(cid, runs, restart, run_one, first_before=None):
               % (cid, prog["inconclusive"]))
         return 1
     rate = prog["hits"] / counted
-    status = ("reliable" if rate >= 0.8
+    threshold = _poc_cfg()["reliable_threshold"]
+    status = ("reliable" if rate >= threshold
               else "flaky" if prog["hits"] > 0 else "unreproducible")
     with ps.transaction() as st:
         c = st["crashes"][cid]
-        # Append-only classification trail: reclassifying a crash (e.g.
-        # overwriting the rca_done marker) must not lose that it happened.
-        history = list(c.get("history") or [])
-        history.append({"ts": ps._now(), "from": c.get("status"),
-                        "to": status, "tool": "repro_ctl"})
-        c["history"] = history
+        # set_crash_status keeps the append-only trail and, when the crash was
+        # already rca_done, the stamp that says so. Writing the reproduction
+        # class straight over `status` used to retire validate's "analysed but
+        # no finding/impact" checks, because they keyed on a value this line
+        # overwrites and poc always runs after rca.
+        ps.set_crash_status(c, status, "repro_ctl")
         c["repro_rate"] = rate
-        c["status"] = status
         c["repro_runs_counted"] = counted
         c["repro_runs_requested"] = runs
         c["repro_progress"] = dict(prog)
@@ -787,12 +824,42 @@ def _verify_session(cid, runs, restart, run_one, first_before=None):
     return 0
 
 
-def cmd_verify(cid, runs, restart, cmd=None, crash_exit=None, track=None):
+def _refuse_live_campaign(allow):
+    """Track K verification is only meaningful with the fuzzer stopped.
+
+    A reproduction is scored partly on "the box rebooted while the run was
+    executing, so the reproducer killed it". That inference holds only when
+    the reproducer is the only thing capable of panicking the machine. With a
+    campaign still running, the fuzzer panics this box by design and every
+    such panic lands as a hit — inflating exactly the rate that decides
+    whether a finding is reliable enough to disclose.
+    """
+    if allow:
+        return
+    try:
+        r = subprocess.run(["systemctl", "is-active", "gspwn-k"],
+                           capture_output=True, text=True)
+    except OSError:
+        return          # no systemd here; nothing to assert either way
+    if r.stdout.strip() in ("active", "activating"):
+        sys.exit("refusing to verify while gspwn-k is still fuzzing: a run "
+                 "is scored as a reproduction when the box goes down during "
+                 "it, and the fuzzer panics this machine by design, so every "
+                 "one of its panics would count as a hit for this crash. "
+                 "Stop the campaign first (sudo python3 "
+                 "tools/campaign_ctl.py stop k), or pass "
+                 "--allow-live-campaign if you accept the inflated rate.")
+
+
+def cmd_verify(cid, runs, restart, cmd=None, crash_exit=None, track=None,
+               allow_live=False):
     c = crash_entry(cid)
     trk = _check_track(c, cid, track)
     if trk == "K" and (cmd or crash_exit is not None):
         sys.exit("--cmd/--crash-exit are track U options; %s is track K"
                  % cid)
+    if trk == "K":
+        _refuse_live_campaign(allow_live)
     lock_fd = _acquire_lock()
     try:
         if trk == "K":
@@ -816,7 +883,13 @@ def main():
                    help="cross-check the track against the registry (the "
                         "registry is authoritative)")
     p = sub.add_parser("verify"); p.add_argument("crash_id")
-    p.add_argument("--runs", type=int, default=10)
+    p.add_argument("--runs", type=int, default=_poc_cfg()["default_runs"],
+                   help="counted runs to reach (default poc.default_runs)")
+    p.add_argument("--allow-live-campaign", dest="allow_live",
+                   action="store_true",
+                   help="track K: verify even while gspwn-k is fuzzing. The "
+                        "fuzzer's own panics then score as reproductions of "
+                        "this crash, so the recorded rate is an overestimate")
     p.add_argument("--restart", action="store_true",
                    help="discard partial progress and start from run 1")
     p.add_argument("--cmd", default=None,
@@ -835,7 +908,7 @@ def main():
         if a.runs < 1:
             sys.exit("--runs must be >= 1")
         sys.exit(cmd_verify(a.crash_id, a.runs, a.restart, a.cmd,
-                            a.crash_exit, a.track) or 0)
+                            a.crash_exit, a.track, a.allow_live) or 0)
 
 
 if __name__ == "__main__":

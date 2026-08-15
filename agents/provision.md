@@ -16,6 +16,22 @@ instrumented kernel fuzzing.
    - Install the baseline NVIDIA driver from Debian non-free repos FIRST
      (before step 5's cloning) — needed for the nvidia-smi GPU/model/GSP
      facts in step 1.
+0a. Grant the agent passwordless sudo for the pipeline tools. This is a hard
+   prerequisite, not a convenience: crash harvesting after a panic runs
+   `sudo -n`, and campaign installs and the coverage sampler all need root
+   from a headless session that cannot answer a password prompt. Without it
+   the harvest captures nothing and every campaign install fails.
+
+   Write /etc/sudoers.d/gspwn (via `visudo -f`, which validates it):
+   ```
+   <agent-user> ALL=(root) NOPASSWD: /usr/bin/python3 /path/to/repo/tools/*.py
+   ```
+   SECURITY: those scripts must not be writable by that user, or the rule is
+   equivalent to unrestricted root. Keep the repo root-owned on the SUT and
+   give the agent user read and execute only.
+
+   Confirm the whole prerequisite set before going further:
+   `python3 tools/orchestrator_ctl.py preflight`
 0b. Install the orchestrator supervisor so the pipeline survives a panic
    without a human logging in:
    - set `orchestrator.command` in config/campaign.yaml to the headless
@@ -37,11 +53,19 @@ instrumented kernel fuzzing.
    `sudo python3 tools/crashlog_ctl.py verify`. Guide the user through the
    sysrq test panic and confirm `crashlog_ctl.py harvest` produces a dump.
    On EC2 the tool auto-detects the environment: setup skips pstore, and
-   harvest also saves the EC2 console output (requires the IAM instance
-   profile from docs/cloud-setup.md).
+   harvest also saves the EC2 console output. That needs an IAM instance
+   profile granting `ec2:GetConsoleOutput` and nothing else, plus awscli
+   installed (step 4).
+   `harvest` must run as root — it reads /sys/fs/pstore and /var/crash, which
+   are root-only, and it now refuses rather than reporting that it found no
+   crashes when what happened is that it could not look.
 4. Install build deps via apt (use the Debian/Kali name mapping; never PPAs):
    build-essential bc flex bison libssl-dev libelf-dev dwarves rsync git
-   python3-yaml docker.io kdump-tools pstore-tools.
+   python3-yaml docker.io kdump-tools pstore-tools mokutil.
+   On EC2 also install awscli — `crashlog_ctl.py verify` fails without it,
+   because hard-hang capture there is the EC2 console output.
+   On bare metal mokutil is what reports Secure Boot state; without it the
+   build phase cannot tell whether its modules will be allowed to load.
 5. Clone into artifacts/src/: upstream linux (stable branch matching the
    newest supported by open-gpu-kernel-modules), open-gpu-kernel-modules
    (latest production branch), syzkaller (master), nvidia-container-toolkit,
@@ -58,7 +82,11 @@ state/pipeline.json, which every later phase reads. Then record progress with
  --notes "<one line>"`. Never edit pipeline.json by hand.
 
 ## Gate evidence to return
-manifest.json path, `crashlog_ctl.py verify` output, harvest output path.
+manifest.json path, `crashlog_ctl.py verify` output, harvest output path, and
+a clean `orchestrator_ctl.py preflight` (config valid, agent command set,
+passwordless sudo working, disk headroom). A failing preflight is a blocked
+gate: every one of those is something the unattended loop needs and cannot
+report on for itself once it is running.
 
 ## Errors
 One retry per failed step with the error log. Second failure: write

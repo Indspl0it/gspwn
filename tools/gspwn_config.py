@@ -12,6 +12,7 @@ Unknown keys are rejected rather than ignored, so a misspelled key fails
 loudly instead of leaving the default value in force.
 """
 import os
+import re
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +45,16 @@ DEFAULTS = {
         "coverage_sample_min": 10,
         "corpus_policy": "carry",
         "promote_seeds": True,
+        # How often the per-run deadline timer checks whether the campaign
+        # window is up. Deliberately separate from coverage_sample_min:
+        # raising the sampling interval must not also delay every deadline
+        # stop past the window it is meant to enforce.
+        "deadline_check_min": 2,
+        # Free space below which the tools warn. This machine writes kernel
+        # dumps, a growing corpus, coverage CSVs and agent transcripts to the
+        # same disk, and a full one stops the fuzzer, the sampler and every
+        # state write at the same moment. 0 disables the check.
+        "min_free_disk_gb": 20,
     },
     "orchestrator": {
         # The headless agent invocation the supervisor launches. Empty on
@@ -88,6 +99,13 @@ DEFAULTS = {
         "window_min": 60,
         "max_same_boot_starts": 5,
         "max_reboots": 10,
+        # Wall-clock ceiling on one agent launch. The breaker counts starts,
+        # not stalls, so without this an agent blocked on a prompt or a wedged
+        # tool holds the pipeline open indefinitely while the instance bills.
+        # It has to exceed loop.campaign_hours, because the fuzz phase blocks
+        # on `campaign_ctl.py wait` for the whole campaign window; validation
+        # refuses a value that does not. 0 disables the timeout.
+        "max_agent_hours": 0,
         # Substituted for {anchor} in resume_command. This is the first thing a
         # resumed agent reads after a panic, and what stops it from continuing
         # a half-finished tool call issued at the moment the kernel died — so
@@ -159,6 +177,32 @@ DEFAULTS = {
         # tolerance absorbs sampling noise early in a run without accepting a
         # genuinely wrong shape.
         "beta_tolerance": 0.05,
+        # How long to wait for nvidia-smi before calling the driver wedged. A
+        # dead GPU usually fails fast; a hung one blocks, which is the case
+        # this bounds. Track K only: the container-toolkit harnesses never
+        # touch the GPU, so their samples record it as not applicable.
+        "gpu_probe_timeout_sec": 20,
+    },
+    # Reproduction verification. These decide what "reliable" means, and a
+    # reliable classification is what a disclosure package is built on, so
+    # they belong here rather than in the tool.
+    "poc": {
+        # Seconds one reproducer run may take before it counts as a hang. A
+        # hang is a hit only for a crash whose title is hang-class; otherwise
+        # the run is void and re-run.
+        "repro_timeout_sec": 120,
+        # Hit rate at or above which a crash is `reliable` rather than
+        # `flaky`. Both are reportable; the label travels into the report.
+        "reliable_threshold": 0.8,
+        # Counted runs `verify` aims for when --runs is not given.
+        "default_runs": 10,
+        # Void runs (a wrapped dmesg ring, an interrupted run) do not advance
+        # the count, so verify keeps going until enough verdicts land. This
+        # bounds that: at most this many attempts per still-needed counted
+        # run, so a persistently wrapping ring cannot loop forever. A small
+        # fixed slack is added on top so a one-run verification still gets a
+        # few retries.
+        "void_retry_factor": 2,
     },
     # Dedup depth. These decide whether two reports are the same bug, which
     # decides what reaches `rca` and what the next round hunts, so they are
@@ -208,9 +252,47 @@ _POSITIVE_INT = ("must be a positive integer",
                  and v > 0)
 _BOOL = ("must be true or false (unquoted — a quoted string is truthy and "
          "silently keeps the default behavior)", lambda v: isinstance(v, bool))
+
+
+def _str_list(v):
+    return isinstance(v, list) and all(isinstance(x, str) and x.strip()
+                                       for x in v)
+
+
+_STR_LIST = ("must be a list of non-empty strings (a bare scalar reaches "
+             "syz-manager as a one-character list and the campaign starts "
+             "with the wrong syscall set)", _str_list)
+# systemd byte specs: a number with an optional K/M/G/T suffix, or 'infinity'.
+# Unvalidated, a typo like '12GB' is accepted here and only fails when
+# systemd refuses to load the unit, hours later on the target.
+_SYSTEMD_BYTES = (
+    "must be a systemd byte spec: a number with an optional K, M, G or T "
+    "suffix (12G), or 'infinity'. 'GB'/'gb' are not valid suffixes and make "
+    "the unit unloadable",
+    lambda v: isinstance(v, str) and bool(
+        re.fullmatch(r"(?:infinity|\d+(?:\.\d+)?[KMGT]?)", v.strip())))
+_NONEMPTY_STR = ("must be a non-empty string",
+                 lambda v: isinstance(v, str) and bool(v.strip()))
+# syzkaller's sandbox values. A name it does not know makes syz-manager exit
+# at startup, which is loud but costs the campaign's first minutes either way.
+_SANDBOX = ("must be one of: none, setuid, namespace, android",
+            lambda v: v in ("none", "setuid", "namespace", "android"))
+_HOSTPORT = (
+    "must be host:port (or a full http:// URL). The coverage sampler derives "
+    "its address from this, and a malformed one records the whole campaign "
+    "as unreachable",
+    lambda v: isinstance(v, str) and bool(
+        re.match(r"^(?:https?://)?[\w.\-\[\]:]+:\d+/?$", v.strip())))
 _RULES = [
     ("track_k", "procs", _POSITIVE_INT),
     ("track_k", "smoke_window_minutes", _POSITIVE_INT),
+    ("track_k", "memory_max", _SYSTEMD_BYTES),
+    ("track_k", "http", _HOSTPORT),
+    ("track_k", "sandbox", _SANDBOX),
+    ("track_k", "enabled_syscalls", _STR_LIST),
+    ("track_u", "memory_max", _SYSTEMD_BYTES),
+    ("track_u", "docker_image", _NONEMPTY_STR),
+    ("track_u", "targets", _STR_LIST),
     ("loop", "max_rounds", _POSITIVE_INT),
     ("loop", "max_total_run_hours", _POSITIVE),
     ("loop", "campaign_hours", _POSITIVE),
@@ -222,12 +304,19 @@ _RULES = [
       lambda v: _num(v) and 0 < v < 1)),
     ("loop", "stop_on_plateau", _BOOL),
     ("loop", "promote_seeds", _BOOL),
+    ("loop", "deadline_check_min", _POSITIVE_INT),
+    ("loop", "min_free_disk_gb",
+     ("must be a number >= 0 (0 disables the free-space check)",
+      lambda v: _num(v) and v >= 0)),
     ("orchestrator", "window_min", _POSITIVE_INT),
     ("orchestrator", "max_same_boot_starts", _POSITIVE_INT),
     ("orchestrator", "max_reboots", _POSITIVE_INT),
     ("orchestrator", "max_resumes", _POSITIVE_INT),
     ("orchestrator", "max_session_mb",
      ("must be a number >= 0 (0 disables the size check)",
+      lambda v: _num(v) and v >= 0)),
+    ("orchestrator", "max_agent_hours",
+     ("must be a number >= 0 (0 disables the per-launch timeout)",
       lambda v: _num(v) and v >= 0)),
     ("orchestrator", "resume_anchor",
      ("must be a non-empty string containing no apostrophe or double quote. "
@@ -266,6 +355,14 @@ _RULES = [
      ("must be a number between 0 and 1 (how far above beta=1 to tolerate "
       "before calling the series something other than an accumulation curve)",
       lambda v: _num(v) and 0 <= v < 1)),
+    ("coverage", "gpu_probe_timeout_sec", _POSITIVE_INT),
+    ("poc", "repro_timeout_sec", _POSITIVE_INT),
+    ("poc", "default_runs", _POSITIVE_INT),
+    ("poc", "void_retry_factor", _POSITIVE_INT),
+    ("poc", "reliable_threshold",
+     ("must be a fraction in (0, 1]. It is the line between a reliable and a "
+      "flaky classification, and a disclosure package is built on that label",
+      lambda v: _num(v) and 0 < v <= 1)),
 ]
 
 # Substituted into orchestrator.command and resume_command. Not str.format:
@@ -357,6 +454,18 @@ def validate(cfg):
             "no round could finish inside the budget"
             % (cfg["loop"]["campaign_hours"],
                cfg["loop"]["max_total_run_hours"]))
+    # The fuzz phase blocks on `campaign_ctl.py wait` for the whole campaign
+    # window, so a timeout at or below it kills every healthy agent at the
+    # same point in every round and the pipeline never gets past fuzz.
+    if (_num(orch.get("max_agent_hours")) and orch["max_agent_hours"]
+            and _num(cfg["loop"]["campaign_hours"])
+            and orch["max_agent_hours"] <= cfg["loop"]["campaign_hours"]):
+        problems.append(
+            "orchestrator.max_agent_hours (%s) must exceed "
+            "loop.campaign_hours (%s) — the fuzz phase waits out the whole "
+            "campaign window in one agent launch, so a shorter timeout would "
+            "kill every healthy agent at the same point in every round"
+            % (orch["max_agent_hours"], cfg["loop"]["campaign_hours"]))
     if (_num(cfg["loop"]["plateau_window_min"])
             and _num(cfg["loop"]["coverage_sample_min"])
             and cfg["loop"]["plateau_window_min"] < cfg["loop"][
@@ -436,8 +545,13 @@ def triage(path=None):
 
 
 def coverage(path=None):
-    """How the plateau decision is made — the campaign's stopping rule."""
+    """How the plateau decision is made: the campaign's stopping rule."""
     return cached(path)["coverage"]
+
+
+def poc(path=None):
+    """What counts as a reliable reproduction, and how long a run may take."""
+    return cached(path)["poc"]
 
 
 def manager_url(path=None):
@@ -496,6 +610,16 @@ def main():
           % (cv["fit_tail_fraction"] * 100, cv["min_fit_samples"],
              cv["model_min_r2"], cv["horizon_hours"],
              cv["plateau_new_edges"]))
+    pc = cfg["poc"]
+    print("repro: %d run(s) by default, %ds per run, reliable at >= %.0f%%"
+          % (pc["default_runs"], pc["repro_timeout_sec"],
+             pc["reliable_threshold"] * 100))
+    print("guards: deadline checked every %d min, agent launch capped at %s, "
+          "warn below %s GB free"
+          % (lp["deadline_check_min"],
+             ("%.0f h" % orch["max_agent_hours"]) if orch["max_agent_hours"]
+             else "no limit",
+             lp["min_free_disk_gb"] or "(check off)"))
     if cv["horizon_hours"] != lp["campaign_hours"]:
         print("  note: horizon %.0f h differs from loop.campaign_hours %.0f h, "
               "so the verdict answers a different question than the one the "
