@@ -2,10 +2,9 @@
 """Install/manage fuzz campaigns as systemd units (survive panics/reboots).
 
 Every campaign runs in its own directory under artifacts/runs/<run-id>/ with
-its own workdir, corpus and generated syz-manager config. The eval protocol
-reports variance across independent runs, and runs sharing a workdir share an
-evolved corpus, so they are not independent. The same applies to ablation
-arms: a "without seeds" arm sharing a workdir fuzzes the seeded corpus.
+its own workdir, corpus and generated syz-manager config. Runs sharing a
+workdir share an evolved corpus, so a run started to test a different seed or
+description set is not measuring what it claims to.
 
 Corpus policy is explicit per run, with the config supplying the default:
   --corpus fresh            empty corpus; seeds imported only if --seeds given
@@ -34,9 +33,9 @@ When a campaign that is not part of a pipeline round stops — by deadline, by
 a manual `stop`, or already finished when `status` looks at it — its
 measured hours are billed to the machine-global spend ledger
 (state/spend.json, which GSPWN_STATE does not redirect). Round campaigns are
-billed per run by round-end instead; eval and ablation campaigns never pass
-through round-end, so their stop is the only place their hours can reach the
-budget.
+billed per run by round-end instead; a campaign outside a round never passes
+through round-end, so its stop is the only place its hours can reach the
+run-hour cap.
 
 Subcommands:
   gen-config --run-id ID                 write the run's syz-manager.cfg
@@ -178,13 +177,13 @@ def install_seeds(dest_db, seeds_dir):
 
     syz-manager's only corpus input is workdir/corpus.db, so seeds must be
     packed into it with `syz-db pack`. Programs placed in a directory beside
-    the database are never loaded: the run starts empty, and a seeded and an
-    unseeded arm become the same configuration.
+    the database are never loaded: the run starts empty, and a seeded run
+    becomes indistinguishable from an unseeded one.
     """
     files = sorted(f for f in os.listdir(seeds_dir) if f.endswith(".syz"))
     if not files:
         print("WARN: --seeds %s holds no .syz files — this run is NOT seeded "
-              "and is equivalent to an unseeded ablation arm." % seeds_dir)
+              "and starts from an empty corpus." % seeds_dir)
         return 0
     with tempfile.TemporaryDirectory() as tmp:
         staged = os.path.join(tmp, "progs")
@@ -236,25 +235,23 @@ def seed_corpus(run_id, corpus, from_run, seeds):
     return dest_db
 
 
-def check_budget(hours, cap, cost=None):
-    """Refuse to start a campaign that the spend budget cannot cover.
+def check_budget(hours, cap):
+    """Refuse to start a campaign the run-hour cap cannot cover.
 
-    round-decide enforces the cap between rounds, but eval and ablation
-    campaigns are started directly by the fuzz phase and never pass through
-    it, so without this check the budget can be overshot by an arbitrary
-    number of extra runs. Raising the cap is a deliberate edit to
-    config/campaign.yaml, not something a tool does to keep a campaign alive.
+    round-decide enforces the cap between rounds, but a campaign started
+    directly by the fuzz phase never passes through it, so without this check
+    the cap can be overshot by an arbitrary number of extra runs. Raising the
+    cap is a deliberate edit to config/campaign.yaml, not something a tool
+    does to keep a campaign alive.
 
     Spend is read from the spend ledger (state/spend.json), which — unlike
-    pipeline.json — does NOT follow GSPWN_STATE: an ablation run redirecting
-    its state file gets a fresh, empty pipeline.json and must not get a
-    fresh, empty budget along with it. A missing ledger that contradicts
-    recorded hours refuses the campaign rather than reading as $0 spent.
+    pipeline.json — does NOT follow GSPWN_STATE: a run redirecting its state
+    file gets a fresh, empty pipeline.json and must not get a fresh, empty
+    budget along with it. A missing ledger that contradicts recorded hours
+    refuses the campaign rather than reading as nothing spent.
 
-    When cost.monthly_budget_usd is set, the projected dollar spend is
-    checked too, priced at cost.estimated_hourly_usd. Both checks refuse only
-    what is strictly over budget — exact equality is admitted, matching
-    round-decide's enforcement point.
+    Refuses only what is strictly over the cap — exact equality is admitted,
+    matching round-decide's enforcement point.
     """
     try:
         spent = ps.spend_for_budget()
@@ -265,24 +262,6 @@ def check_budget(hours, cap, cost=None):
                  "campaign exceeds loop.max_total_run_hours (%s). Raise the "
                  "cap in config/campaign.yaml to allow it."
                  % (spent, hours, cap))
-    if cost:
-        budget = cost["monthly_budget_usd"]
-        if budget > 0:
-            hourly = cost["estimated_hourly_usd"]
-            if hourly > 0:
-                projected = (spent + hours) * hourly
-                if projected > budget:
-                    sys.exit("refusing to start: projected spend $%.2f "
-                             "((%.1f h spent + %.1f h for this campaign) x "
-                             "$%.2f/h) exceeds cost.monthly_budget_usd "
-                             "($%.2f). Raise the budget in "
-                             "config/campaign.yaml to allow it."
-                             % (projected, spent, hours, hourly, budget))
-            else:
-                print("WARN: cost.monthly_budget_usd is set ($%.2f) but "
-                      "cost.estimated_hourly_usd is 0 — the dollar cap "
-                      "cannot be estimated; only run-hours are enforced."
-                      % budget)
     return spent
 
 
@@ -314,9 +293,7 @@ def unit_active(name):
     unit sits in after a syz-manager crash, which this pipeline expects
     routinely. Reading that as stopped would let check-deadline disable the
     unit, bill the run and retire its own timer while the restart completes
-    behind it — a campaign left fuzzing with nothing able to stop it. Same
-    reading as cost_ctl.is_idle, which must not disagree about the same
-    units.
+    behind it — a campaign left fuzzing with nothing able to stop it.
     """
     r = subprocess.run(["systemctl", "is-active", name],
                        capture_output=True, text=True)
@@ -404,8 +381,7 @@ def cmd_install_k(a):
     conf = cfg()
     c = conf["track_k"]
     hours = a.hours if a.hours is not None else conf["loop"]["campaign_hours"]
-    spent = check_budget(hours, conf["loop"]["max_total_run_hours"],
-                         conf["cost"])
+    spent = check_budget(hours, conf["loop"]["max_total_run_hours"])
     check_overlap(a)
     corpus = a.corpus or conf["loop"]["corpus_policy"]
     seed_corpus(a.run_id, corpus, a.from_run, a.seeds)
@@ -432,8 +408,7 @@ def cmd_install_u(a):
     conf = cfg()
     c = conf["track_u"]
     hours = a.hours if a.hours is not None else conf["loop"]["campaign_hours"]
-    spent = check_budget(hours, conf["loop"]["max_total_run_hours"],
-                         conf["cost"])
+    spent = check_budget(hours, conf["loop"]["max_total_run_hours"])
     check_overlap(a)
     os.makedirs(run_dir(a.run_id), exist_ok=True)
     at = write_deadline(a.run_id, hours)
@@ -510,7 +485,7 @@ def install_deadline_timer(run_id):
         f.write(DEADLINE_SERVICE_TMPL.format(root=REPO_ROOT))
     with open("/etc/systemd/system/%s@.timer" % DEADLINE_NAME, "w") as f:
         f.write(DEADLINE_TIMER_TMPL.format(every=DEADLINE_CHECK_MIN))
-    # An ablation run installed under GSPWN_STATE keeps its own pipeline.json;
+    # A run installed under GSPWN_STATE keeps its own pipeline.json;
     # a per-instance drop-in points its deadline service at that same state
     # file (the template itself is shared across runs and cannot carry it).
     dropin = "/etc/systemd/system/%s.service.d" % deadline_unit(run_id,
@@ -599,8 +574,8 @@ def bill_run(run_id, why):
     """Bill a finished non-round campaign to the machine-global spend ledger.
 
     Round campaigns are billed by round-end (each --from-run is measured and
-    recorded there); eval and ablation campaigns never pass through
-    round-end, so their stop is the only place their hours reach the budget.
+    recorded there); a campaign outside a round never passes through
+    round-end, so its stop is the only place its hours reach the cap.
     The ledger does not follow GSPWN_STATE, and record_run_hours is
     idempotent per run id, so recording at every reliable stop detection
     cannot double-count.

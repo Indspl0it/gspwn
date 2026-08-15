@@ -10,7 +10,9 @@ track_k:
     - "mmap$nvidia*"
     - "ioctl$NV_*"
     - "ioctl$UVM_*"
-    - "ioctl$DRM_IOCTL_NVIDIA_*"
+    # nvidia-drm / /dev/dri are out of scope: a default container tenant
+    # (compute,utility) never receives those nodes. See the README threat
+    # model before adding them back.
   sandbox: "namespace"
   procs: 2                 # capped to protect 32GB RAM budget
   memory_max: "12G"        # systemd cgroup MemoryMax for syz-manager
@@ -22,14 +24,11 @@ track_u:
   memory_max: "8G"
   targets: []              # agent-facing: written by harness phase, read by fuzz phase
 
-eval:
-  runs_per_config: 3       # independent runs per configuration (variance)
-  # Run length comes from loop.campaign_hours below — one duration, one place.
-
 loop:
-  # Caps on the autonomous improvement loop. These are the spend ceiling: the
-  # loop runs unattended until one of them trips, so set them before starting a
-  # campaign, not after. AWS Budgets alerts remain the backstop for real money.
+  # The campaign's declared stopping rules. The loop runs unattended until one
+  # of them trips, so set them before starting, not after. They bound the
+  # search, not the bill: this repo has no view of what an instance costs.
+  # Watch real money in the AWS console.
   max_rounds: 3              # hard cap on rounds, whatever coverage does
   # Total run-hour budget, checked against the spend ledger state/spend.json.
   # round-end bills every campaign's measured hours there per run id (a run
@@ -45,13 +44,19 @@ loop:
   corpus_policy: carry       # fresh | carry — carry builds each round on the last
   promote_seeds: true        # add coverage-advancing programs to the seed bank
 
-cost:
-  # EC2 guardrails. The idle watchdog is what stops a forgotten instance.
-  idle_stop_minutes: 120     # stop the box after this long with no fuzzer
-  idle_check_minutes: 30     # how often the watchdog checks
-  monthly_budget_usd: 0      # 0 = unset; record your ceiling here
-  # Your instance's hourly price (0.0 = unset). Informational: gspwn_config
-  # prints the run-hour budget converted to dollars so the ceiling is visible
-  # in money terms, not just hours. AWS Budgets remains the enforcement.
-  estimated_hourly_usd: 0.0
-  budget_alerts_usd: [50, 150]
+orchestrator:
+  # The agent that drives the pipeline is supervised by systemd so it comes
+  # back after a kernel panic without anyone SSHing in. Install with:
+  #   sudo python3 tools/orchestrator_ctl.py install
+  #
+  # No default command: this repo works with any AGENTS.md-aware coding agent
+  # and will not guess which one is on the box. Set the headless invocation,
+  # e.g. command: "claude -p 'run the pipeline'"
+  command: ""
+  # Circuit breaker. Same-boot restarts and reboots are counted separately:
+  # this pipeline panics the machine by design, so reboots are expected, while
+  # an agent restarting on one boot means nothing is progressing and every
+  # restart costs tokens.
+  window_min: 60
+  max_same_boot_starts: 5
+  max_reboots: 10

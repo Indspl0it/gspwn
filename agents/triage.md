@@ -40,8 +40,29 @@ registry.
    made in error, `crash-set <id> --duplicate-of none` clears the link and
    returns the crash to the unique queue.
 4. Prioritize unique crashes for RCA: KASAN UAF/OOB-write and Track U ASan
-   heap-corruption first; then other KASAN; then NVRM Xid signals; panics
-   without sanitizer reports last.
+   heap-corruption first; then other KASAN; then NVRM entries classed
+   `signal` or `review`; panics without sanitizer reports last.
+   NVRM entries carry an Xid classification set at registration
+   (`crash_parse.XID_CLASS`), visible in `crash-list` and filterable with
+   `--signal`:
+   - `noise` — Xids the fuzzer produces by design (13, 31, 43 and similar:
+     illegal instruction, illegal address, app-caused channel error). Every
+     bad pointer makes one. Do not queue these for RCA and do not count them
+     in "crashes found"; a campaign that reports them as findings has
+     reported its own exhaust.
+   - `signal` — memory-integrity or firmware-boundary Xids (ECC classes, GSP
+     RPC timeout, corrupted push buffer). Queue these.
+   - `health` — the GPU or the box is degraded (79 = fallen off the bus).
+     Not a finding. It means the measurement path is broken: check
+     `coverage_ctl.py gpu-health`, recover the GPU, and treat any coverage
+     recorded after it as suspect.
+   - `review` — anything not in the table, including Xids from a driver
+     branch the table predates. Read it before deciding; the classification
+     deliberately does not default to `noise`, because that is how a new
+     signal would get silently discarded.
+   Reclassifying is a judgement call you record, not a silent edit: if an Xid
+   classed `noise` genuinely looks like a finding, say why in the crash notes
+   before promoting it.
 5. Correlate reboots with crashes: a reboot + fresh pstore dump with no
    syz-manager report is still a finding — register it via crash_parse
    --dmesg and mark notes in the registry.
