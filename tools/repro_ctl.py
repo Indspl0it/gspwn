@@ -82,6 +82,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gspwn_config
 import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
@@ -330,7 +331,9 @@ def crash_signature(c, cid):
             f = f.strip(".~")
             if len(f) >= 3 and f not in funcs:
                 funcs.append(f)
-    funcs = funcs[:5]
+    # How many frames a run has to match to count as a reproduction of this
+    # crash, rather than as some other crash the same workload also triggers.
+    funcs = funcs[:gspwn_config.triage()["signature_frames"]]
     for tok in re.findall(r"[A-Za-z_][\w.~]*", title):
         if len(tok) >= 4 and ("_" in tok or "." in tok) and tok not in funcs:
             funcs.append(tok)

@@ -38,6 +38,13 @@ description for, and supplying valid object-chain seeds it cannot invent.
    which one is carrying the round before concluding anything about the
    other. `round-end --from-run` records the same verdict, so you do not
    transcribe it.
+   Read the detail line, not just the verdict. It carries the discovery
+   exponent, the fit quality, and how many new edges another campaign is
+   expected to find — that last number is the decision, and it belongs in
+   gaps.md. A `plateaued` verdict means this grammar has stopped reaching new
+   code, which is a statement about the descriptions as much as about the
+   driver: it is the strongest argument for what to model next, not a reason
+   to conclude the subsystem is covered.
 2. Identify what did not get covered, and be specific. Useful sources:
    - enabled syscalls in the campaign config that show little or no execution
    - ioctl command numbers present in the driver's dispatch switches but
@@ -100,6 +107,14 @@ description for, and supplying valid object-chain seeds it cannot invent.
   `unknown`. Say so and do not infer a plateau from corpus size alone — the
   loop treats `unknown` as a stop precisely so a broken sampler cannot
   authorise more spend.
+- An `unknown` saying the curve does not fit the model means exactly that: the
+  series is not behaving like a discovery curve. Plot it before concluding
+  anything. A stuck sampler, a source that changed mid-run, and a genuine
+  regime change all look like this, and they need different responses.
+- An `unknown` saying the fuzzer is still replaying its corpus means the round
+  ended before it got back to its own high-water mark after a restart. Nothing
+  about saturation can be read from it. Report the round as unmeasured rather
+  than reaching for a number from somewhere else.
 - An `unknown` naming the GPU means the card was not healthy across the
   window, so the flat curve is not evidence of anything about the target.
   Run `python3 tools/coverage_ctl.py gpu-health`, check the run's Xid

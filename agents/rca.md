@@ -7,14 +7,15 @@ registry priority order (artifacts/crashes/QUEUE.md).
 2. Read the implicated source (open-gpu-kernel-modules for Track K;
    libnvidia-container / nvidia-container-toolkit for Track U).
 3. Write artifacts/rca/<id>.md with: faulting function, root-cause
-   hypothesis, affected versions (from manifest.json), exploitability
-   (Track K: privilege escalation / container-escape; Track U: escape under
-   the malicious-image threat model), and whether GSP firmware involvement
-   limits visibility (say so explicitly when it does).
+   hypothesis, affected versions (from manifest.json), the impact argument
+   (below), and whether GSP firmware involvement limits visibility (say so
+   explicitly when it does).
 4. Flag every claim about code behavior that you could not verify against
    source with [UNVERIFIED] — the eval phase samples these for manual audit.
 5. Record the research record (below). The prose in step 3 is for the report;
    the record is what the next round can act on.
+6. Record the impact record (below). Without it the report has a reproducer
+   and no argued severity.
 
 Do not invent certainty. A wrong RCA is worse than recording "unknown".
 
@@ -89,6 +90,94 @@ Nothing downstream may **remove** a target because of a hypothesis; a
 hypothesis only adds. You are the only judgement in this loop, so a confident
 wrong one runs unchecked for the rest of the campaign.
 
+## The impact record
+A reproducer proves a crash condition. That is a bug report: the software
+faulted, here is the input. A vulnerability report has to name the weakness
+and say what the fault hands an attacker, and only then can a product security
+team rate it. This record is that second half.
+
+It stops at the primitive. Saying a UAF gives a controlled write into an
+allocation the attacker can reclaim is analysis; building the escalation is
+not, and is out of scope.
+
+```
+python3 tools/pipeline_ctl.py impact-set <id> --json - <<'JSON'
+{"primitive": "controlled-write",
+ "consequence": "privilege-escalation",
+ "corrupted_object": "uvm_va_range_t",
+ "cache": "kmalloc-512",
+ "access_type": "write",
+ "access_size": 8,
+ "overwrite_target": "function-pointer",
+ "reclaim_path": "UVM_CREATE_EXTERNAL_RANGE reallocates from kmalloc-512 with caller-sized data",
+ "allocation_site": "uvm_va_range.c:118",
+ "free_site": "uvm_va_range.c:412",
+ "access_site": "uvm_channel.c:906",
+ "attacker_control": ["allocation-timing", "written-data"],
+ "evidence": ["uvm_va_range.c:412", "uvm_channel.c:906"],
+ "unverified": ["that the reclaim wins the race in practice"],
+ "confidence": "medium"}
+JSON
+```
+
+Four fields do the work; the rest are the evidence for them.
+
+- `primitive` — what the memory-safety violation actually hands an attacker.
+  This is what the record exists for. `none` is the right answer for a fault
+  that only kills the machine, and most kernel faults are that.
+- `consequence` — the highest outcome the evidence supports. Not the worst
+  case imaginable. `dos-only` is a complete answer.
+- `overwrite_target` — which field the corruption lands on. An overwritten
+  function pointer and an overwritten flags byte are the same memory-safety
+  bug and very different vulnerabilities, and this is the field that says
+  which.
+- `attacker_control` — what the attacker influences. A consequence above
+  denial of service argued from an attacker who influences nothing is the
+  claim a vendor engineer disproves first.
+
+The transcription fields come straight off the sanitizer report and are not
+judgement: `access_type`, `access_size`, `corrupted_object`, `cache`,
+`allocation_site`, `free_site`, `access_site`. KASAN prints all of them.
+
+`cwe` is derived from the finding's `bug_class` — leave it empty. Set it only
+when `bug_class` is `other`, or when a more specific child class is right.
+
+`reclaim_path` is the UAF question that decides everything downstream: can the
+attacker get the freed allocation back with data they chose? Say how, or leave
+it empty. `race_window` is the same question for races.
+
+### Undetermined is a real answer
+The faulting path may disappear into GSP firmware where you cannot see the
+callee. The reproducer may be too coarse to tell which object was hit. Set
+`primitive` or `consequence` to `undetermined` and say what blocked you in
+`undetermined_reason`.
+
+This costs you nothing and it is checked for exactly one thing: that you said
+why. An unexplained `undetermined` is indistinguishable from an analysis
+nobody did.
+
+**Do not invent an impact story.** A confident wrong severity is worse than no
+severity, because a vendor who disproves one finding discounts every other
+finding in the same report. If the evidence stops, stop with it.
+
+### What the record is checked against
+`impact-set` refuses a malformed record and stores a weak one, then says so.
+`python3 tools/pipeline_ctl.py impact-list` ends with how many of your records
+can carry a severity into the report and names the ones that cannot. Three
+things make a record unable to carry one:
+
+- `undetermined` with no `undetermined_reason`.
+- A primitive other than `none` with an empty `evidence` list. A primitive is
+  a claim about code and needs the file:line it rests on.
+- A consequence of `privilege-escalation` or `container-escape` drawn from an
+  `undetermined` primitive, or from an attacker who controls nothing.
+
+### Not your call: who can reach it
+Do not claim tenant reachability here. The poc phase runs after you and
+answers it with an experiment — it re-runs the reproducer inside a container
+matching the threat model. Your record says what the fault is worth; that one
+says who can get to it. The report joins them.
+
 ## State
 Mark each analysed crash and the phase with the state tool, never by editing
 pipeline.json:
@@ -96,7 +185,9 @@ pipeline.json:
 `python3 tools/pipeline_ctl.py set-phase rca in_progress|done|blocked`
 
 `rca_done` without a research record is an integrity problem `validate`
-reports, because the analysis happened and nothing survived it.
+reports, because the analysis happened and nothing survived it. So is
+`rca_done` without an impact record: the report would carry a reproducer with
+no argued severity, which is a bug report rather than a vulnerability report.
 
 ## Gate evidence
 paths of completed RCA files, the count of [UNVERIFIED] claims per file — the
@@ -107,6 +198,11 @@ crash marked rca_done this round, and its closing count of how many records
 can steer the next round. Report that count in the gate even when it is low;
 `validate` will report it anyway, and a phase that hides it has spent the
 round for nothing.
+
+Also `python3 tools/pipeline_ctl.py impact-list` and its closing count of how
+many records can carry a severity. A round where every crash was analysed and
+no record can carry a severity is a round that produced crash reports, and the
+gate has to say so rather than let the report phase discover it.
 
 ## Knowledge (cross-campaign)
 

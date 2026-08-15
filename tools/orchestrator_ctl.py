@@ -75,10 +75,10 @@ the agent without an exit code, and that is the case where the transcript is
 growing fastest — counting only clean exits would mean a panicky campaign
 never rotates.
 
-`{anchor}` in the invocation is replaced with RESUME_ANCHOR, which tells the
-resumed agent its last turn predates the interruption and that `brief` is
-authoritative. Without it the agent continues from a half-finished tool call
-issued at the moment the kernel died.
+`{anchor}` in the invocation is replaced with `orchestrator.resume_anchor`,
+which tells the resumed agent its last turn predates the interruption and that
+`brief` is authoritative. Without it the agent continues from a half-finished
+tool call issued at the moment the kernel died.
 
 Subcommands:
   install [--command 'CMD']   write and enable gspwn-orchestrator.service
@@ -123,19 +123,13 @@ BLOCKED_EXIT = 78
 
 SESSION_PLACEHOLDER = gspwn_config.SESSION_PLACEHOLDER
 ANCHOR_PLACEHOLDER = "{anchor}"
-# Substituted for {anchor} in a resume invocation. The resumed agent's last
-# turn is whatever it was mid-way through when the kernel died, so its own
-# account of what is running is the least reliable thing in its context.
-# Deliberately free of apostrophes and double quotes: it is substituted into a
-# shell command line the operator has already quoted.
-RESUME_ANCHOR = (
-    "This session has resumed after an interruption. Your most recent turn "
-    "predates a kernel panic, a reboot or a restart, so anything it says "
-    "about what is running or what phase you were in is stale. Do not act on "
-    "it. Run: python3 tools/pipeline_ctl.py brief -- its output is "
-    "authoritative and your memory is not. Then continue from the phase it "
-    "reports, following AGENTS.md. Your earlier reasoning about the target is "
-    "still useful; your earlier belief about the machine is not.")
+# Substituted for {anchor} in a resume invocation, from
+# orchestrator.resume_anchor. This module keeps the default only as the
+# fallback for an unreadable config: the text is the first thing a resumed
+# agent reads after a panic, so it is a tuning knob and lives in the config
+# file like the rest of them. gspwn_config refuses one containing a quote,
+# because it is substituted into a shell line the operator already quoted.
+RESUME_ANCHOR = gspwn_config.DEFAULTS["orchestrator"]["resume_anchor"]
 
 UNIT_TMPL = """[Unit]
 Description=gspwn orchestrator (drives the pipeline across panics)
@@ -347,14 +341,24 @@ def resolve_session(state, conf, now, new_id=None, size_bytes=None):
             % (prev["id"][:8], used + 1, o["max_resumes"], size))
 
 
-def render_command(template, session_id):
+def render_command(template, session_id, anchor=None):
     """Substitute the placeholders into an operator-written command line.
 
     str.replace, not str.format: these invocations routinely carry a prompt
     containing braces, and format() would raise on the first one.
+
+    `anchor` defaults to the configured resume anchor, falling back to the
+    module default when config cannot be read — this runs on the recovery path
+    after a panic, and a resume that dies on a config error is the one failure
+    that would strand the campaign.
     """
+    if anchor is None:
+        try:
+            anchor = gspwn_config.load()["orchestrator"]["resume_anchor"]
+        except gspwn_config.ConfigError:
+            anchor = RESUME_ANCHOR
     return (template.replace(SESSION_PLACEHOLDER, session_id)
-            .replace(ANCHOR_PLACEHOLDER, RESUME_ANCHOR))
+            .replace(ANCHOR_PLACEHOLDER, anchor))
 
 
 def _block(state, reason, now):
@@ -475,7 +479,7 @@ def cmd_run(a):
     template = (o["resume_command"] if resuming else command)
     if a.command:
         template = a.command      # an explicit --command always wins
-    launched = render_command(template, session["id"])
+    launched = render_command(template, session["id"], o["resume_anchor"])
     print("launching: %s" % launched)
     sys.stdout.flush()
     # shell=True because the configured value is a command line the operator

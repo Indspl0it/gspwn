@@ -83,6 +83,8 @@ the state file and never lowers recorded hours.
 | Record disclosure status | `python3 tools/pipeline_ctl.py crash-set <id> --disclosure pending` |
 | Attach rca's research record | `python3 tools/pipeline_ctl.py finding-set <id> --json -` |
 | What the findings say to target | `python3 tools/pipeline_ctl.py finding-list` |
+| Attach rca's impact record | `python3 tools/pipeline_ctl.py impact-set <id> --json -` |
+| What the report can argue | `python3 tools/pipeline_ctl.py impact-list` |
 | Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
 | Record a fact about the target | `python3 tools/knowledge_ctl.py note --kind learning --phase <p> "..."` |
 | Record a process error to avoid | `python3 tools/knowledge_ctl.py note --kind mistake --phase <p> "..."` |
@@ -119,7 +121,7 @@ do not skip ahead to a later phase to keep making progress.
 | harness | agents/harness.md | Track U harnesses build and produce coverage on seeds |
 | fuzz | agents/fuzz.md | both systemd units active; coverage increases within smoke window |
 | triage | agents/triage.md | every raw crash registered unique/duplicate/flagged; the flagged queue is empty (`crash-list --status flagged` returns nothing) |
-| rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC; each also has a research record (`finding-list`), which is what steers the next round |
+| rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC; each also has a research record (`finding-list`), which is what steers the next round, and an impact record (`impact-list`), which is what lets the report argue a severity |
 | poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json; every reliable/flaky Track K crash has a recorded profile-check outcome |
 | eval | agents/eval.md | `artifacts/eval/` holds the coverage series, findings table and round progression for every run in this round |
 | refine | agents/refine.md | gaps.md + worklist.md written, every item tagged `[coverage]` or `[finding crash-NNNN]`; round outcome recorded via `round-end` |
@@ -162,6 +164,26 @@ happened and nothing survived it.
 
 Coverage growth across rounds measures whether the loop is still learning; the
 per-subsystem rollup in `finding-list` measures where it has been paying off.
+
+**A reproducer is not yet a vulnerability.** It proves a crash condition,
+which is a bug report. What makes it a vulnerability is the weakness class and
+what the fault hands an attacker, and that has two halves recorded by two
+phases. `rca` records the impact record (`impact-set`): the primitive, which
+field the corruption lands on, whether the freed allocation can be reclaimed
+with attacker data, and what the attacker influences. `poc` answers who can
+reach it, with an experiment rather than an opinion — it re-runs the
+reproducer under the threat model's capability set. `report` joins them into
+an argued severity.
+
+The record stops at the primitive; no weaponization. `undetermined` is a valid
+outcome and costs nothing as long as `undetermined_reason` says what blocked
+the analysis, because a fault that disappears into GSP firmware genuinely
+cannot be followed further. What is not acceptable is a conclusion that
+outruns its evidence: `impact-list` closes with how many records can carry a
+severity and names the ones that cannot, and `validate` reports the same. An
+`rca_done` crash with no impact record is an integrity problem for the same
+reason as a missing research record — the report would carry a reproducer with
+no severity behind it.
 
 Ask `python3 tools/pipeline_ctl.py next` what to do; it returns a phase, or
 `decide`, or `advance-round`, or `complete`. The loop transition is:

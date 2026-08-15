@@ -3,12 +3,12 @@
 
 Dedup (spec Phase 4): primary key = normalized report title (syzkaller
 'description' file / ASan summary line / kernel report-start line).
-Secondary = stack hash (sha1 of the top-3 function frames, addresses and
-offsets stripped). Both keys are normalized identically across sources, so
-the same bug found in the syz workdir and again in a harvested dmesg/pstore
-log collides instead of double-registering. A collision in only one key is
-flagged for manual review; an empty stack hash is *no evidence* and never
-drives a stack-based decision.
+Secondary = stack hash (sha1 of the top triage.stack_hash_frames function
+frames, addresses and offsets stripped). Both keys are normalized identically
+across sources, so the same bug found in the syz workdir and again in a
+harvested dmesg/pstore log collides instead of double-registering. A collision
+in only one key is flagged for manual review; an empty stack hash is *no
+evidence* and never drives a stack-based decision.
 """
 import argparse
 import glob
@@ -18,6 +18,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gspwn_config
 import pipeline_state as ps
 
 REPO_ROOT = ps.REPO_ROOT
@@ -145,14 +146,20 @@ def stack_frames(text):
     return frames
 
 
-def stack_hash(report_text):
-    """sha1 of the top-3 frames; '' when the text carries no frames at all.
+def stack_hash(report_text, depth=None):
+    """sha1 of the top frames; '' when the text carries no frames at all.
 
     '' means 'no evidence': register() never lets it drive a FLAG/DUP stack
     decision, so report-less syz crashes and signature-only Track U inputs
     can no longer alias each other through a constant hash.
+
+    How many frames is triage.stack_hash_frames in config/campaign.yaml,
+    because it decides what counts as the same bug and therefore what reaches
+    rca. `depth` overrides it for callers that need to compare two settings.
     """
-    frames = stack_frames(report_text)[:3]
+    if depth is None:
+        depth = gspwn_config.triage()["stack_hash_frames"]
+    frames = stack_frames(report_text)[:depth]
     if not frames:
         return ""
     return hashlib.sha1("|".join(frames).encode()).hexdigest()[:16]

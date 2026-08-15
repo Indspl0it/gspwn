@@ -19,6 +19,12 @@ Subcommands:
   finding-set <id> --json PATH|-  attach rca's research record to a crash
   finding-list [--subsystem S] [--bug-class C] [--json]
                                  the records refine and describe steer from
+  impact-set <id> --json PATH|-   attach rca's impact record: what the fault
+                                 gives an attacker, which is what lets the
+                                 report argue a severity rather than assert one
+  impact-list [--primitive P] [--consequence C] [--json]
+                                 the impact records, with the CWE rollup and
+                                 the count that can carry a severity
   campaign-add --track k|u --note TEXT
   round-show [--json]            round history + loop budget
   round-add-run --run-id ID      attach a campaign run to the current round
@@ -125,6 +131,19 @@ def _loop_cfg():
     """
     try:
         return gspwn_config.loop()
+    except gspwn_config.ConfigError as e:
+        sys.exit("error: %s" % e)
+
+
+def _agent_cfg():
+    """How much `brief` and `crash-list` put in front of the agent.
+
+    Same rule as _loop_cfg: a broken config stops the tool rather than
+    quietly reverting to a default, because the whole point of these keys is
+    that an operator can tune what a resumed agent sees.
+    """
+    try:
+        return gspwn_config.agent()
     except gspwn_config.ConfigError as e:
         sys.exit("error: %s" % e)
 
@@ -403,6 +422,7 @@ def cmd_crash_list(a):
     if not rows:
         print("no crashes match")
         return 0
+    title_chars = _agent_cfg()["crash_title_chars"]
     for cid, c in rows:
         rate = "" if c["repro_rate"] is None else " %.0f%%" % (
             c["repro_rate"] * 100)
@@ -411,7 +431,7 @@ def cmd_crash_list(a):
         sig = "" if sig == "unclassified" else " <%s>" % sig
         print("%s [%s] %-14s%s%s%s  %s"
               % (cid, c["track"], c["status"], rate, dup, sig,
-                 c["title"][:70]))
+                 c["title"][:title_chars]))
     return 0
 
 
@@ -473,6 +493,18 @@ def cmd_crash_set(a):
     return 0
 
 
+def _read_json_arg(src, what):
+    """The JSON object at PATH, or on stdin when src is '-'."""
+    try:
+        raw = sys.stdin.read() if src == "-" else open(src).read()
+    except OSError as e:
+        sys.exit("error: cannot read %s from %s: %s" % (what, src, e))
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        sys.exit("error: %s from %s is not valid JSON: %s" % (what, src, e))
+
+
 def cmd_finding_set(a):
     """Attach rca's research record to a crash.
 
@@ -481,15 +513,7 @@ def cmd_finding_set(a):
     filled in one call at a time, and a half-written record is the one thing
     this must not store.
     """
-    src = a.json_path
-    try:
-        raw = sys.stdin.read() if src == "-" else open(src).read()
-    except OSError as e:
-        sys.exit("error: cannot read finding from %s: %s" % (src, e))
-    try:
-        finding = json.loads(raw)
-    except json.JSONDecodeError as e:
-        sys.exit("error: finding from %s is not valid JSON: %s" % (src, e))
+    finding = _read_json_arg(a.json_path, "finding")
     with ps.transaction() as st:
         try:
             f = ps.set_finding(st, a.crash_id, finding)
@@ -564,6 +588,100 @@ def cmd_finding_list(a):
     return 0
 
 
+def cmd_impact_set(a):
+    """Attach rca's impact record to a crash.
+
+    Separate from finding-set because the two answer to different readers and
+    fail in different ways. A finding is refused when it can steer nothing;
+    an impact is refused when it cannot argue what it concludes. Merging them
+    would mean one record that has to satisfy both, and in practice that means
+    one that satisfies neither.
+    """
+    raw = _read_json_arg(a.json_path, "impact")
+    with ps.transaction() as st:
+        try:
+            im = ps.set_impact(st, a.crash_id, raw)
+        except ValueError as e:
+            sys.exit("error: %s" % e)
+        cwe = ps.cwe_of(st["crashes"][a.crash_id])
+    print("%s: %s -> %s%s (confidence %s)"
+          % (a.crash_id, im["primitive"], im["consequence"],
+             "  %s" % cwe if cwe else "", im["confidence"]))
+    gap = ps.impact_support_gap(im)
+    print("  %s" % (("UNSUPPORTED: %s" % gap) if gap else
+                    "the record supports its own conclusion"))
+    return 0
+
+
+def _print_impact(cid, im, cwe=""):
+    print("%s %s -> %s%s  confidence=%s"
+          % (cid, im["primitive"], im["consequence"],
+             "  [%s]" % cwe if cwe else "", im["confidence"]))
+    access = im["access_type"]
+    if im["access_size"]:
+        access += " of %d byte(s)" % im["access_size"]
+    print("    %-16s %s onto %s" % ("access:", access,
+                                    im["overwrite_target"]))
+    for label, key in (("object", "corrupted_object"), ("cache", "cache"),
+                       ("reclaim", "reclaim_path"), ("race window",
+                                                     "race_window")):
+        if im[key]:
+            print("    %-16s %s" % (label + ":", im[key]))
+    sites = [(k.split("_")[0], im[k]) for k in
+             ("allocation_site", "free_site", "access_site") if im[k]]
+    if sites:
+        print("    %-16s %s" % ("sites:", ", ".join("%s %s" % s
+                                                    for s in sites)))
+    for label, key in (("attacker ctrl", "attacker_control"),
+                       ("evidence", "evidence"), ("unverified", "unverified")):
+        if im[key]:
+            print("    %-16s %s" % (label + ":", ", ".join(im[key])))
+    if im["undetermined_reason"]:
+        print("    %-16s %s" % ("undetermined:", im["undetermined_reason"]))
+    gap = ps.impact_support_gap(im)
+    if gap:
+        print("    %-16s %s" % ("UNSUPPORTED:", gap))
+
+
+def cmd_impact_list(a):
+    """The impact records, plus the rollup a report's severity table needs."""
+    st = ps.load()
+    rows = ps.impacts(st, primitive=a.primitive, consequence=a.consequence)
+    if a.json:
+        json.dump({cid: dict(im, cwe=ps.cwe_of(st["crashes"][cid]))
+                   for cid, im in rows}, sys.stdout, indent=2, sort_keys=True)
+        print()
+        return 0
+    if not rows:
+        print("no impact records — rca has analysed no crash for what the "
+              "fault gives an attacker, so the report can only describe "
+              "crashes, not argue severities")
+        return 0
+    for cid, im in rows:
+        _print_impact(cid, im, ps.cwe_of(st["crashes"][cid]))
+    by_cons = {}
+    for cid, im in rows:
+        by_cons.setdefault(im["consequence"], []).append(
+            ps.cwe_of(st["crashes"][cid]) or "CWE-unmapped")
+    print("\nby consequence (what the report's severity table rests on):")
+    for cons in sorted(by_cons, key=lambda c: (-len(by_cons[c]), c)):
+        print("  %-22s %d  %s" % (cons, len(by_cons[cons]),
+                                  ", ".join(sorted(set(by_cons[cons])))))
+    # The same honesty line finding-list carries, for the same reason: an
+    # unsupported record reads identically to a supported one in the rollup
+    # above, and that is exactly how an over-claimed severity reaches a vendor.
+    bad = [(cid, why) for cid, im, why in ps.impacts_unsupported(st)
+           if (not a.primitive or im["primitive"] == a.primitive)
+           and (not a.consequence or im["consequence"] == a.consequence)]
+    print("\n%d of %d record(s) can carry a severity into the report."
+          % (len(rows) - len(bad), len(rows)))
+    if bad:
+        print("These cannot, and rca should revisit them:")
+        for cid, why in bad:
+            print("  %s: %s" % (cid, why))
+    return 0
+
+
 def cmd_brief(a):
     """Everything a replacement agent needs, derived from state at read time.
 
@@ -579,6 +697,12 @@ def cmd_brief(a):
     """
     st = ps.load()
     cfg = _loop_cfg()
+    ag = _agent_cfg()
+    # --last is the override for a reader who wants more than the campaign's
+    # configured depth right now. Unset means "whatever the config says", so
+    # the anchor a resumed agent gets is tunable in one place rather than by
+    # editing the command in the systemd unit.
+    last = a.last if a.last is not None else ag["brief_knowledge_entries"]
     r = ps.current_round(st)
     print("# gspwn brief — generated %s" % ps._now())
     print("Derived from %s at read time. Re-run it rather than trusting a "
@@ -645,17 +769,35 @@ def cmd_brief(a):
                   "the loop is back on coverage alone for those"
                   % (len(dead), len(rows)))
 
+    print("\n## Impact (what the report can argue)")
+    imps = ps.impacts(st)
+    if not imps:
+        print("none assessed — the report would carry reproducers with no "
+              "argued severity")
+    else:
+        by_cons = {}
+        for _cid, im in imps:
+            by_cons[im["consequence"]] = by_cons.get(im["consequence"], 0) + 1
+        print("%d assessed: %s"
+              % (len(imps), ", ".join("%s=%d" % kv
+                                      for kv in sorted(by_cons.items()))))
+        weak = ps.impacts_unsupported(st)
+        if weak:
+            print("  %d of %d cannot carry a severity (impact-list says "
+                  "which)" % (len(weak), len(imps)))
+
     print("\n## Recent knowledge (cross-campaign)")
     try:
         import knowledge_ctl
         for kind_ in knowledge_ctl.KINDS:
-            entries = knowledge_ctl._entries(kind_)[-a.last:]
+            entries = knowledge_ctl._entries(kind_)[-last:]
             if not entries:
                 continue
             print("%s:" % knowledge_ctl.FILENAME[kind_])
             for _ts, phase, _tags, body in entries:
                 first = body.split("\n")[0]
-                print("  [%s] %s" % (phase, first[:100]))
+                print("  [%s] %s"
+                      % (phase, first[:ag["brief_knowledge_line_chars"]]))
         print("full text: python3 tools/knowledge_ctl.py show")
     except Exception as e:
         # The brief is a recovery tool. An unreadable knowledge file must not
@@ -666,7 +808,7 @@ def cmd_brief(a):
     problems = ps.validate(st)
     if problems:
         print("\n## Integrity: %d problem(s)" % len(problems))
-        for p in problems[:5]:
+        for p in problems[:ag["brief_max_problems"]]:
             print("  " + p)
         print("  full list: python3 tools/pipeline_ctl.py validate")
     return 0
@@ -756,8 +898,9 @@ def build_parser():
 
     p = sub.add_parser("brief",
                        help="derived handoff: state + findings + knowledge")
-    p.add_argument("--last", type=int, default=3, metavar="N",
-                   help="knowledge entries per file (default 3)")
+    p.add_argument("--last", type=int, default=None, metavar="N",
+                   help="knowledge entries per file; defaults to "
+                        "agent.brief_knowledge_entries in campaign.yaml")
     p.set_defaults(fn=cmd_brief)
 
     p = sub.add_parser("finding-set",
@@ -778,6 +921,32 @@ def build_parser():
     p.add_argument("--bug-class", dest="bug_class", choices=ps.BUG_CLASS)
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_finding_list)
+
+    p = sub.add_parser("impact-set",
+                       help="attach rca's impact record to a crash")
+    p.add_argument("crash_id")
+    p.add_argument("--json", dest="json_path", required=True, metavar="PATH",
+                   help="file holding the impact record, or - for stdin. "
+                        "Fields: primitive %s, consequence %s, access_type "
+                        "%s, overwrite_target %s, attacker_control[] %s, "
+                        "corrupted_object, cache, access_size, reclaim_path, "
+                        "race_window, allocation_site, free_site, "
+                        "access_site, evidence[], unverified[], confidence "
+                        "%s, cwe (derived from bug_class when empty), "
+                        "undetermined_reason"
+                        % ("|".join(ps.PRIMITIVE), "|".join(ps.CONSEQUENCE),
+                           "|".join(ps.ACCESS_TYPE),
+                           "|".join(ps.OVERWRITE_TARGET),
+                           "|".join(ps.ATTACKER_CONTROL),
+                           "|".join(ps.CONFIDENCE)))
+    p.set_defaults(fn=cmd_impact_set)
+
+    p = sub.add_parser("impact-list",
+                       help="impact records + the consequence/CWE rollup")
+    p.add_argument("--primitive", choices=ps.PRIMITIVE)
+    p.add_argument("--consequence", choices=ps.CONSEQUENCE)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_impact_list)
 
     p = sub.add_parser("campaign-add", help="record a campaign event")
     p.add_argument("--track", required=True,
