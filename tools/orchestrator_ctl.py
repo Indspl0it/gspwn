@@ -56,6 +56,7 @@ hand does the same thing in the foreground.
 import argparse
 import json
 import os
+import pwd
 import subprocess
 import sys
 import time
@@ -88,6 +89,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# A system unit runs as root unless told otherwise, and a coding agent keeps
+# its login under the invoking user's HOME. Left as root the agent would look
+# in /root, find no credentials, fail, and be restarted until the breaker
+# trips. Both lines are load-bearing: User= alone does not set HOME.
+User={user}
+Environment=HOME={home}
+Environment=XDG_CONFIG_HOME={home}/.config
 WorkingDirectory={root}
 ExecStart=/usr/bin/python3 {root}/tools/orchestrator_ctl.py run
 Restart=always
@@ -396,7 +404,30 @@ def cmd_install(a):
               "%r. Put it in the config file too, or the next install will "
               "write the config value into the unit."
               % (o["command"] or ""))
+    user = a.user or os.environ.get("SUDO_USER") or ""
+    if not user or user == "root":
+        sys.exit(
+            "refusing to install: no non-root user to run the agent as. "
+            "A system unit runs as root, and a coding agent keeps its login "
+            "under the invoking user's HOME — as root it would look in "
+            "/root, find no credentials, fail, and be restarted until the "
+            "breaker trips. Pass --user <name> (or install with sudo from "
+            "that user's shell, which sets SUDO_USER).")
+    try:
+        home = pwd.getpwnam(user).pw_dir
+    except KeyError:
+        sys.exit("refusing to install: no such user %r" % user)
+    if not os.path.isdir(os.path.join(home, ".claude")) and not a.force:
+        print("NOTE: %s/.claude does not exist. If the agent keeps its "
+              "credentials elsewhere this is fine; if not, log it in as %s "
+              "before starting the unit." % (home, user))
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        print("WARNING: ANTHROPIC_API_KEY is set in this environment. If it "
+              "is also set for the unit (via /etc/environment or a drop-in) "
+              "it takes precedence over a subscription login and bills the "
+              "API instead. The unit written here does not set it.")
     text = UNIT_TMPL.format(root=REPO_ROOT, restart_sec=a.restart_sec,
+                            user=user, home=home,
                             limit_interval=o["window_min"] * 60,
                             limit_burst=o["max_same_boot_starts"] * 4,
                             blocked_exit=BLOCKED_EXIT)
@@ -408,6 +439,7 @@ def cmd_install(a):
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", UNIT_NAME], check=True)
     print("installed and enabled %s" % UNIT_NAME)
+    print("  runs as:  %s (HOME=%s)" % (user, home))
     print("  command:  %s" % command)
     print("  restart:  every %ss, blocked at %d same-boot start(s) or %d "
           "reboot(s) per %d min"
@@ -441,6 +473,11 @@ def main(argv=None):
                         "orchestrator.command from config/campaign.yaml)")
     q.add_argument("--restart-sec", dest="restart_sec", type=int, default=60,
                    help="systemd RestartSec (default 60)")
+    q.add_argument("--user", default=None,
+                   help="user to run the agent as (default: $SUDO_USER). Its "
+                        "HOME is where the agent's credentials live.")
+    q.add_argument("--force", action="store_true",
+                   help="install even if the user has no ~/.claude")
     q.set_defaults(fn=cmd_install)
 
     q = sub.add_parser("run")
