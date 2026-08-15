@@ -22,6 +22,13 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
   2. `python3 tools/pipeline_ctl.py show` (and `validate`)
   3. resume at the phase reported by `python3 tools/pipeline_ctl.py next`
 
+  You do not need memory of the previous session to do this. The state file
+  is the orchestrator's memory: `next` says where the pipeline is, and that
+  answer does not depend on who was driving before the panic. When
+  `gspwn-orchestrator.service` is installed it performs steps 1 and 2 for you
+  and launches a fresh agent, so this sequence runs without a human. See
+  `tools/orchestrator_ctl.py`.
+
 ## Configuration (the only thing a human keys in)
 
 Every cap, budget and duration lives in `config/campaign.yaml`. Nothing is

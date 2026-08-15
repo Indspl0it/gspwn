@@ -16,6 +16,15 @@ instrumented kernel fuzzing.
    - Install the baseline NVIDIA driver from Debian non-free repos FIRST
      (before step 5's cloning) — needed for the nvidia-smi GPU/model/GSP
      facts in step 1.
+0b. Install the orchestrator supervisor so the pipeline survives a panic
+   without a human logging in:
+   - set `orchestrator.command` in config/campaign.yaml to the headless
+     invocation of the coding agent installed on this box (there is no
+     default; the repo does not guess which one it is)
+   - `sudo python3 tools/orchestrator_ctl.py install`
+   - `sudo systemctl start gspwn-orchestrator`
+   Without it every kernel panic ends the campaign until someone SSHes in.
+   Check it later with `python3 tools/orchestrator_ctl.py status`.
 1. Record facts into config/machine.yaml: distro (`/etc/os-release` ID),
    GPU (`nvidia-smi --query-gpu=name --format=csv,noheader`),
    Secure Boot (`mokutil --sb-state`), GSP firmware (`nvidia-smi -q`).

@@ -45,6 +45,20 @@ DEFAULTS = {
         "corpus_policy": "carry",
         "promote_seeds": True,
     },
+    "orchestrator": {
+        # The headless agent invocation the supervisor launches. Empty on
+        # purpose: this repo is not tied to one coding-agent CLI, and a
+        # default here would be a guess about what is installed on the SUT.
+        # orchestrator_ctl.py install refuses until it is set.
+        "command": "",
+        # Circuit-breaker window and its two limits. Same-boot restarts and
+        # reboots are counted separately because they mean different things:
+        # kernel fuzzing panics the box by design, so reboots are expected and
+        # a single shared limit would stop a healthy campaign.
+        "window_min": 60,
+        "max_same_boot_starts": 5,
+        "max_reboots": 10,
+    },
 }
 
 # (section, key, predicate, message) — checked on every load.
@@ -71,6 +85,9 @@ _RULES = [
       lambda v: _num(v) and 0 < v < 1)),
     ("loop", "stop_on_plateau", _BOOL),
     ("loop", "promote_seeds", _BOOL),
+    ("orchestrator", "window_min", _POSITIVE_INT),
+    ("orchestrator", "max_same_boot_starts", _POSITIVE_INT),
+    ("orchestrator", "max_reboots", _POSITIVE_INT),
 ]
 
 
@@ -116,6 +133,11 @@ def validate(cfg):
     if policy not in ("fresh", "carry"):
         problems.append("loop.corpus_policy = %r must be 'fresh' or 'carry'"
                         % policy)
+    # Empty is valid (nothing installed yet); a non-string is not, and would
+    # otherwise reach subprocess as whatever YAML parsed it into.
+    if not isinstance(cfg["orchestrator"]["command"], str):
+        problems.append("orchestrator.command must be a string (quote it if "
+                        "it contains a colon)")
     # A per-campaign duration longer than the total budget can never complete a
     # round, so the loop would spend the whole ceiling on run 1 and stop.
     if (_num(cfg["loop"]["campaign_hours"])
@@ -192,11 +214,16 @@ def main():
     import json
     print("effective configuration (%s):" % CONFIG_PATH)
     print(json.dumps(cfg, indent=2, sort_keys=True))
-    lp = cfg["loop"]
+    lp, orch = cfg["loop"], cfg["orchestrator"]
     print("\nstopping rules: at most %d round(s) x campaigns of %s h, "
           "total <= %s run-hours"
           % (lp["max_rounds"], lp["campaign_hours"],
              lp["max_total_run_hours"]))
+    print("orchestrator: %s; breaker blocks at %d same-boot start(s) or %d "
+          "reboot(s) per %d min"
+          % (orch["command"] or "command unset (supervisor not installable)",
+             orch["max_same_boot_starts"], orch["max_reboots"],
+             orch["window_min"]))
     return 0
 
 

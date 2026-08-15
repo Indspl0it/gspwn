@@ -43,3 +43,20 @@ loop:
   coverage_sample_min: 10    # sampler interval (systemd timer)
   corpus_policy: carry       # fresh | carry — carry builds each round on the last
   promote_seeds: true        # add coverage-advancing programs to the seed bank
+
+orchestrator:
+  # The agent that drives the pipeline is supervised by systemd so it comes
+  # back after a kernel panic without anyone SSHing in. Install with:
+  #   sudo python3 tools/orchestrator_ctl.py install
+  #
+  # No default command: this repo works with any AGENTS.md-aware coding agent
+  # and will not guess which one is on the box. Set the headless invocation,
+  # e.g. command: "claude -p 'run the pipeline'"
+  command: ""
+  # Circuit breaker. Same-boot restarts and reboots are counted separately:
+  # this pipeline panics the machine by design, so reboots are expected, while
+  # an agent restarting on one boot means nothing is progressing and every
+  # restart costs tokens.
+  window_min: 60
+  max_same_boot_starts: 5
+  max_reboots: 10
