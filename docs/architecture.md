@@ -147,6 +147,33 @@ a different title. Either can be a real second bug or the same bug reported
 twice. Every flag must end in an explicit decision; an unreviewed flag is an
 open gate item, not a default-distinct crash.
 
+### The `signal` field, and why Xids need one
+
+A fuzzer generates illegal instructions and bad pointers on purpose, and the
+driver reports exactly that as Xid 13 and Xid 31. Harvesting every `NVRM:`
+line as a finding buries the interesting entries under thousands of rows and
+makes any "crashes found" number meaningless.
+
+So every NVRM registration carries a `signal` set from its Xid number, using
+the table in `crash_parse.XID_CLASS`:
+
+| `signal` | Meaning | What triage does |
+|---|---|---|
+| `noise` | The fuzzer caused it by design (13, 31, 43, 45, 8, 69) | Not a finding; not counted |
+| `signal` | Memory-integrity or firmware boundary (ECC classes, 119/120 GSP, 32 push buffer) | Queue for RCA |
+| `health` | The GPU or box is degraded (79 fallen off the bus, NVLink, page retirement) | Not a finding; the measurement path is broken |
+| `review` | Anything else, **including every Xid not in the table** | Read it before deciding |
+| `unclassified` | Not an NVRM entry, or an NVRM line with no Xid number | No verdict was made |
+
+The default for an unrecognized Xid is `review`, never `noise`. A driver
+branch can introduce an Xid this table predates, and defaulting it to exhaust
+would silently discard the one class of finding the campaign exists to
+produce. Filter with `pipeline_ctl.py crash-list --signal <class>`.
+
+The numbers come from NVIDIA's published Xid documentation, not from this
+repo's sources; confirm them against the branch under test before leaning on
+a classification in a report.
+
 ### What `verify` actually counts
 
 Reproduction rate is `hits / counted runs`. What counts is deliberately

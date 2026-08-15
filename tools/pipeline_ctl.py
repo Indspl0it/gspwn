@@ -376,6 +376,8 @@ def cmd_crash_list(a):
             continue
         if a.track and c["track"] != a.track:
             continue
+        if a.signal and c.get("signal", "unclassified") != a.signal:
+            continue
         rows.append((cid, c))
     if a.json:
         json.dump({cid: c for cid, c in rows}, sys.stdout, indent=2,
@@ -389,8 +391,11 @@ def cmd_crash_list(a):
         rate = "" if c["repro_rate"] is None else " %.0f%%" % (
             c["repro_rate"] * 100)
         dup = " dup_of=%s" % c["duplicate_of"] if c["duplicate_of"] else ""
-        print("%s [%s] %-14s%s%s  %s"
-              % (cid, c["track"], c["status"], rate, dup, c["title"][:70]))
+        sig = c.get("signal", "unclassified")
+        sig = "" if sig == "unclassified" else " <%s>" % sig
+        print("%s [%s] %-14s%s%s%s  %s"
+              % (cid, c["track"], c["status"], rate, dup, sig,
+                 c["title"][:70]))
     return 0
 
 
@@ -519,6 +524,8 @@ def build_parser():
     p = sub.add_parser("crash-list", help="list registered crashes")
     p.add_argument("--status", choices=sorted(ps.CRASH_STATUS))
     p.add_argument("--track", choices=sorted(ps.TRACKS))
+    p.add_argument("--signal", choices=sorted(ps.CRASH_SIGNAL),
+                   help="filter by Xid classification (crash_parse.XID_CLASS)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_crash_list)
 

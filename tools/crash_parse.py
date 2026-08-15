@@ -38,6 +38,73 @@ NVRM_RE = re.compile(r"NVRM: (Xid[^\n]*|GPU at[^\n]*error[^\n]*)", re.I)
 # Volatile Xid fields: the same recurring Xid must dedup across pids/channels.
 XID_VOLATILE_RE = re.compile(r"\s*,?\s*(?:pid=[^,\s]+|ch(?:annel)?\s*[= ]\s*"
                              r"[0-9a-fA-Fx]+)", re.I)
+# "NVRM: Xid (PCI:0000:00:1e): 13, pid=..." -> 13. The bus id in the optional
+# parenthesised group carries its own colons, so it has to be consumed as a
+# group rather than skipped with [^:]* — that reads the first field of the bus
+# id as the Xid number and classifies every crash as an unknown Xid 0.
+XID_NUM_RE = re.compile(r"\bXid\b\s*(?:\([^)]*\))?\s*:?\s*(\d+)", re.I)
+
+# What a given Xid means for this campaign. A fuzzer generates bad pointers and
+# illegal instructions by design, so the Xids that report exactly that are its
+# own exhaust: harvesting them as findings buries the real signal under
+# thousands of entries and makes "crashes found" meaningless.
+#
+# Classes:
+#   noise   the fuzzer caused it on purpose; not a finding on its own
+#   signal  security-relevant or memory-integrity relevant; triage it
+#   health  the GPU or the box is degraded; blocks measurement, not a finding
+#   review  everything else, including every Xid not listed here
+#
+# The default is deliberately 'review', never 'noise'. A new driver branch can
+# introduce an Xid this table has never seen, and defaulting it to exhaust
+# would silently discard the one class of finding this campaign exists to
+# produce. Confirm the numbers against NVIDIA's Xid documentation for the
+# driver branch under test; the meanings below are the widely published ones
+# and are not derived from this repo's own sources.
+XID_CLASS = {
+    8:   ("noise",  "GPU stopped processing (video engine), app-caused"),
+    13:  ("noise",  "graphics engine exception: illegal instruction/address"),
+    31:  ("noise",  "GPU memory page fault: illegal address by the app"),
+    43:  ("noise",  "GPU stopped processing, channel error caused by the app"),
+    45:  ("noise",  "preemptive channel cleanup, usually a killed process"),
+    69:  ("noise",  "graphics engine class error"),
+    12:  ("review", "driver error handling exception"),
+    32:  ("signal", "invalid or corrupted push buffer stream (DMA)"),
+    38:  ("signal", "driver firmware error"),
+    48:  ("signal", "double-bit ECC error"),
+    61:  ("signal", "internal micro-controller breakpoint or warning"),
+    62:  ("signal", "internal micro-controller halt"),
+    92:  ("signal", "high single-bit ECC error rate"),
+    94:  ("signal", "contained ECC error"),
+    95:  ("signal", "uncontained ECC error"),
+    119: ("signal", "GSP RPC timeout"),
+    120: ("signal", "GSP error"),
+    140: ("signal", "unrecovered ECC error"),
+    63:  ("health", "ECC page retirement or row remapping"),
+    64:  ("health", "ECC page retirement or row remapping failure"),
+    74:  ("health", "NVLink error"),
+    79:  ("health", "GPU has fallen off the bus"),
+}
+
+
+def xid_class(title):
+    """-> (class, why) for an NVRM title, or (None, '') if it carries no Xid.
+
+    'GPU at ... error' lines and anything else NVRM_RE catches without an Xid
+    number are left unclassified rather than guessed at.
+    """
+    m = XID_NUM_RE.search(title or "")
+    if not m:
+        return None, ""
+    n = int(m.group(1))
+    if n in XID_CLASS:
+        cls, meaning = XID_CLASS[n]
+        return cls, "Xid %d: %s" % (n, meaning)
+    return "review", ("Xid %d is not in the classification table — treated as "
+                      "review, not exhaust, so a new signal is never silently "
+                      "discarded" % n)
+
+
 REPORT_START_RE = re.compile(
     r"(BUG: [^\n]*|KASAN: [^\n]*|Kernel panic[^\n]*|Oops[^\n]*)")
 END_TRACE_RE = re.compile(r"---\[ end ")
@@ -110,7 +177,8 @@ def existing_keys(state):
     return by_title, by_hash, seen
 
 
-def register(state, track, title, shash, srcdir):
+def register(state, track, title, shash, srcdir, signal=None,
+             signal_note=""):
     """Add a crash to the registry, or explain why it was not added.
 
     A collision in one key but not the other may be a second bug or the same
@@ -147,6 +215,7 @@ def register(state, track, title, shash, srcdir):
                 "track": track, "title": title, "stack_hash": shash,
                 "status": "duplicate", "dir": srcdir, "repro_rate": None,
                 "duplicate_of": other_cid, "disclosure": "pending",
+                "signal": signal or "unclassified",
                 "notes": "same crash as %s, sighted via %s"
                          % (other_cid, srcdir)})
             link = "also sighted via %s (%s)" % (srcdir, cid)
@@ -168,17 +237,20 @@ def register(state, track, title, shash, srcdir):
         other_cid = by_hash[shash]
         reason = "same stack as %s, different title" % other_cid
     status = "flagged" if other_cid else "unique"
+    notes = [n for n in (reason if other_cid else None, signal_note) if n]
     cid = ps.register_crash(state, {
         "track": track, "title": title, "stack_hash": shash,
         "status": status, "dir": srcdir, "repro_rate": None,
         "duplicate_of": None, "disclosure": "pending",
-        "notes": reason if other_cid else ""})
+        "signal": signal or "unclassified",
+        "notes": "; ".join(notes)})
+    tag = "" if not signal else " [%s]" % signal
     if other_cid:
-        print("FLAG %s %s (%s) — decide with: pipeline_ctl.py crash-set %s "
+        print("FLAG %s %s%s (%s) — decide with: pipeline_ctl.py crash-set %s "
               "--duplicate-of %s | --status unique"
-              % (cid, title, reason, cid, other_cid))
+              % (cid, title, tag, reason, cid, other_cid))
     else:
-        print("NEW %s %s" % (cid, title))
+        print("NEW %s %s%s" % (cid, title, tag))
     return cid
 
 
@@ -287,8 +359,10 @@ def scan_dmesg(state, path):
     text = read_text(path)
     for m in NVRM_RE.finditer(text):
         body = norm_title(XID_VOLATILE_RE.sub("", m.group(1))).strip(" ,")
+        cls, why = xid_class(body)
         register(state, "K", "NVRM " + body,
-                 hashlib.sha1(body.encode()).hexdigest()[:16], path)
+                 hashlib.sha1(body.encode()).hexdigest()[:16], path,
+                 signal=cls, signal_note=why)
     for start_line, block in report_blocks(text):
         shash = stack_hash(block) or block_signature(block)
         register(state, "K", start_line, shash, path)

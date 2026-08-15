@@ -42,6 +42,7 @@ FINAL_PHASES = ["report"]
 PHASES = SETUP_PHASES + ROUND_PHASES + FINAL_PHASES
 
 PHASE_STATUS = {"pending", "in_progress", "done", "blocked", "failed"}
+CRASH_SIGNAL = ("signal", "review", "health", "noise", "unclassified")
 CRASH_STATUS = {"unique", "duplicate", "flagged", "reliable", "flaky",
                 "unreproducible", "rca_done", "reported"}
 DISCLOSURE_STATUS = {"pending", "submitted", "resolved", "not_applicable"}
@@ -53,9 +54,14 @@ ROUND_DECISION = {"continue", "stop"}
 PARALLEL_AFTER_BUILD = {"describe", "seeds", "harness"}
 
 DEFAULT_PHASE = {"status": "pending", "updated": None, "notes": ""}
+# signal: how a crash reads against the campaign's own noise floor. Set from
+# the Xid classification for NVRM entries (crash_parse.xid_class); everything
+# else stays "unclassified", which is not a verdict, just an absence of one.
+# See CRASH_SIGNAL for the values.
 DEFAULT_CRASH = {"track": "K", "title": "", "stack_hash": "",
                  "status": "unique", "dir": "", "repro_rate": None,
-                 "duplicate_of": None, "disclosure": "pending", "notes": ""}
+                 "duplicate_of": None, "disclosure": "pending", "notes": "",
+                 "signal": "unclassified"}
 DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  "ended": None, "run_ids": [], "coverage_verdict": "unknown",
                  "edges_start": None, "edges_end": None, "new_crashes": 0,

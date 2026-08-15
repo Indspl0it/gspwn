@@ -46,7 +46,7 @@ flowchart LR
     subgraph TK["Track K — GPU kernel driver"]
         direction TB
         T1["Unprivileged tenant<br/>inside a GPU container"]
-        T2["/dev/nvidiactl, /dev/nvidiaX<br/>/dev/nvidia-uvm, /dev/dri/*"]
+        T2["/dev/nvidiactl, /dev/nvidiaX<br/>/dev/nvidia-uvm[-tools]"]
         T3["nvidia.ko / open-gpu-kernel-modules<br/>runs in kernel space"]
         T1 -->|"ioctl syscalls"| T2 --> T3
         T3 -.->|"memory-safety bug"| T4(["Host kernel compromise"])
@@ -66,8 +66,8 @@ flowchart LR
 device node like `/dev/nvidia0` and drives it with `ioctl()` calls — "here's a
 command number and a blob of data, go do something." That code runs in the
 kernel, so a memory-safety bug there is a privilege escalation. The attacker
-model is a tenant inside a GPU-enabled container, who gets exactly those device
-nodes and nothing else.
+model is a tenant inside a GPU-enabled container started with the default
+capability set, who gets exactly those device nodes and nothing else.
 
 **Track U** is the glue that sets GPU containers up. It runs **as root**
 during container initialization, before isolation is fully in place, and it
@@ -171,7 +171,7 @@ orchestrator advances only after confirming that evidence:
 | fuzz | both campaigns active; coverage increases within the smoke window |
 | triage | every raw crash registered as unique, duplicate or flagged |
 | rca | a root-cause writeup exists for every crash selected for a PoC; claims not verified against source are tagged `[UNVERIFIED]` |
-| poc | every unique crash has a measured reproduction rate and a classification |
+| poc | every unique crash has a measured reproduction rate and a classification; every reliable or flaky Track K crash has been re-run inside a container matching the threat model, with the outcome recorded |
 | eval | coverage series, findings table and round progression exist for every run, including an audit sample of `[UNVERIFIED]` RCA claims re-checked against source |
 | refine | gap list and next-round worklist written; round outcome recorded |
 | report | report and PSIRT packages exist; disclosure status recorded |
@@ -458,11 +458,25 @@ by the phase gates on the target machine.
 
 ## Threat model
 
-- **Track K:** the attacker is an unprivileged container tenant with access to
-  `/dev/nvidiactl`, `/dev/nvidiaX`, `/dev/nvidia-uvm[-tools]` and `/dev/dri/*`
-  — exactly what a GPU-enabled container gets. Syzkaller's `sandbox: namespace`
-  approximates those privileges; the approximation and its limits are spelled
-  out in the design spec.
+- **Track K:** the attacker is an unprivileged tenant in a GPU container
+  started with the default capability set (`NVIDIA_DRIVER_CAPABILITIES` unset,
+  or the `compute,utility` most CUDA images request). That tenant receives
+  `/dev/nvidiactl`, `/dev/nvidiaX` and `/dev/nvidia-uvm[-tools]`, and nothing
+  else.
+- **Deliberately out of scope:** `nvidia-drm`, `nvidia-modeset` and
+  `/dev/dri/*`. Those nodes appear only when the container additionally
+  requests the `graphics` or `display` capability, which a default CUDA
+  workload does not. Fuzzing them would produce findings that cannot be
+  claimed under the attacker model above. Widening the model to cover them is
+  a deliberate decision, not something the describe phase does on its own.
+- **Reachability is verified, not assumed.** Syzkaller runs under
+  `sandbox: namespace`, which gives it a full capability set inside a fresh
+  user namespace. A container tenant has dropped capabilities, a seccomp
+  filter and a device cgroup allowlist, so syzkaller can reach paths the
+  attacker model cannot. That asymmetry produces over-claims rather than
+  missed bugs, which is the failure that gets challenged first. A finding is
+  only claimed under this model once its reproducer has been re-run inside a
+  container matching the profile above.
 - **Track U:** the attacker controls the container image. The code under test
   runs as root during container initialization, before isolation is fully
   enforced. Attacker-controlled inputs are the OCI config, hooks, environment

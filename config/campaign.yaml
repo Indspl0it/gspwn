@@ -10,7 +10,9 @@ track_k:
     - "mmap$nvidia*"
     - "ioctl$NV_*"
     - "ioctl$UVM_*"
-    - "ioctl$DRM_IOCTL_NVIDIA_*"
+    # nvidia-drm / /dev/dri are out of scope: a default container tenant
+    # (compute,utility) never receives those nodes. See the README threat
+    # model before adding them back.
   sandbox: "namespace"
   procs: 2                 # capped to protect 32GB RAM budget
   memory_max: "12G"        # systemd cgroup MemoryMax for syz-manager
