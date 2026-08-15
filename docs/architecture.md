@@ -277,6 +277,20 @@ samples, when the samples span less than the window, or when there is no
 non-zero edge baseline. The loop treats `unknown` as a **stop**, so a broken
 sampler can never authorize another campaign.
 
+A flat window over an unhealthy GPU is also `unknown`. Every sample records
+the GPU's state in the curve's `gpu` column, probed with `nvidia-smi`. A GPU
+that has fallen off the bus (Xid 79) does not stop the fuzzer: syz-manager
+keeps executing, the sampler keeps appending rows, and the edge count stops
+moving, which looks exactly like a finished round. Only the `plateaued`
+reading is gated this way. `growing` needs no guard, because coverage cannot
+climb on a card that is not answering, so growth is its own evidence the
+probe was only having a bad moment.
+
+Rows from a curve written before the `gpu` column existed report no status,
+which counts as unhealthy: absence of evidence that the GPU was alive is not
+evidence that it was. Such a run reads `unknown` until its window fills with
+newly sampled rows.
+
 The verdict the loop acts on combines both tracks: the round is still learning
 if **either** track is still finding edges. A track that was never sampled is
 ignored rather than forcing `unknown` — an absent Track U must not veto a
