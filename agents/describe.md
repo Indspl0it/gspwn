@@ -3,8 +3,8 @@ the NVIDIA driver ioctl surface.
 
 This is the phase where fuzzing quality is decided. Syzkaller without accurate
 descriptions bounces off the driver's argument validation and never reaches
-interesting code; the coverage numbers in the paper are downstream of the work
-you do here.
+interesting code. Every coverage number and every crash the campaign reports
+is downstream of the work you do here.
 
 ## Inputs
 - artifacts/src/open-gpu-kernel-modules (headers + ioctl handlers)
@@ -57,8 +57,9 @@ rather than being silently dropped from the next worklist.
 ## Do
 1. Check whether Interrupt Labs published their descriptions; if yes, import
    into artifacts/descriptions/ and extend instead of rewriting. Record what
-   was imported vs authored — the eval phase reports this split. (Round 1
-   only; later rounds start from the worklist.)
+   was imported vs authored — the eval phase reports this split, and a
+   crash found only in imported descriptions is not this campaign's finding
+   to claim. (Round 1 only; later rounds start from the worklist.)
 2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools],
    nvidia-drm ioctls. Skip nvidia-modeset (out of scope).
 3. Create a header defining the NV_* ioctl command numbers via _IOWR macros;
@@ -100,7 +101,8 @@ measured. All four checks are required, and their evidence goes in the gate:
 4. Manual audit: sample 5 descriptions and check them against the driver
    source (direction, struct layout, handle semantics). Record verdicts —
    including the failures — in artifacts/eval/description-audit.md. Audit
-   misses are paper data; do not quietly correct and omit them.
+   misses tell the next round where descriptions are weakest; do not
+   quietly correct and omit them.
 
 ## Outputs
 artifacts/descriptions/*.txt, compiled corpus-ready descriptions, audit file.

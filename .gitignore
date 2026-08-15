@@ -5,3 +5,6 @@ state/*
 !state/.gitkeep
 __pycache__/
 *.pyc
+thoughts/
+tmp/
+.claude/settings.local.json

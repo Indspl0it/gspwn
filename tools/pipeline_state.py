@@ -21,11 +21,11 @@ from datetime import datetime, timezone
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DIR = os.path.join(REPO_ROOT, "state")
 # GSPWN_STATE redirects the state file (used by tools/selftest.py; also lets
-# an ablation run keep its own pipeline.json without touching the main one).
+# a side run keep its own pipeline.json without touching the main one).
 DEFAULT_STATE_PATH = os.path.join(STATE_DIR, "pipeline.json")
 STATE_PATH = os.environ.get("GSPWN_STATE") or DEFAULT_STATE_PATH
 # The spend ledger is machine-global on purpose: it does NOT follow
-# GSPWN_STATE, so an ablation run with its own pipeline.json still bills the
+# GSPWN_STATE, so a run with its own pipeline.json still bills the
 # one true ledger (redirecting the state file must not redirect the budget).
 # GSPWN_SPEND exists only so tools/selftest.py can point it at a tempdir.
 SPEND_PATH = os.environ.get("GSPWN_SPEND") or os.path.join(STATE_DIR,
@@ -299,7 +299,7 @@ def _seed_spend_ledger(path):
     lost, but a per-run split must not be invented either.
 
     Seeds from the DEFAULT state file, never STATE_PATH, for the same reason
-    spend_for_budget() does: an ablation run redirecting GSPWN_STATE would
+    spend_for_budget() does: a run redirecting GSPWN_STATE would
     otherwise seed the machine-global ledger from its own empty registry, and
     every hour recorded before it would drop off the budget.
     """
@@ -402,7 +402,7 @@ def spend_for_budget():
 
     Falls back to the DEFAULT state file, not STATE_PATH: the ledger is
     machine-global, so its fallback must be too. Reading the redirected file
-    would let an ablation run with a fresh GSPWN_STATE reopen the very
+    would let a run with a fresh GSPWN_STATE reopen the very
     bypass the ledger closes.
     """
     if os.path.exists(SPEND_PATH):

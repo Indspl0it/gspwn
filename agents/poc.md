@@ -3,14 +3,8 @@ PoCs. PoCs stop at "reliably triggers the vulnerability" — no weaponization.
 
 ## Per unique crash <id> (priority order)
 1. python3 tools/repro_ctl.py extract <id>
-2. Track K: verify reproduction rate. First hold the idle watchdog off — with
-   the fuzz units stopped for verification the box reads idle and the
-   watchdog can stop it mid-verify:
-     python3 tools/cost_ctl.py keepalive --hours 6
-   Clear the hold when the batch is done:
-     python3 tools/cost_ctl.py keepalive --clear
-   Coordinate with the orchestrator for clean-boot runs (reboot between
-   batches when the crash corrupts state):
+2. Track K: verify reproduction rate. Coordinate with the orchestrator for
+   clean-boot runs (reboot between batches when the crash corrupts state):
      python3 tools/repro_ctl.py verify <id> --runs 10
    verify holds an flock on state/repro.lock for its whole run — one
    verification at a time; a second concurrent verify refuses.

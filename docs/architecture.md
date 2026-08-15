@@ -38,11 +38,11 @@ file. That keeps the file small enough to rewrite atomically on every update.
 
 A second state file sits beside it: `state/spend.json`, the run-hour ledger,
 keyed by run id and written under its own lock. `pipeline.json` follows the
-`GSPWN_STATE` redirect so an ablation can keep its own registry, but the
-budget belongs to the machine rather than to whichever registry is in use,
-so the ledger ignores that redirect. It also fails closed: if the state file
-records billed hours and no ledger is present, every command that reads
-spend refuses instead of presenting a spent budget as untouched.
+`GSPWN_STATE` redirect so a side run can keep its own registry, but the
+run-hour cap belongs to the machine rather than to whichever registry is in
+use, so the ledger ignores that redirect. It also fails closed: if the state
+file records hours and no ledger is present, every command that reads it
+refuses instead of presenting a spent cap as untouched.
 `pipeline_ctl.py spend-init` rebuilds it from the state file.
 
 ### Phase statuses
@@ -177,9 +177,9 @@ and stdout says so), and 1 when no run could be counted at all.
 
 ## Run directory layout
 
-Every campaign is isolated. The eval reports variance across independent
-runs, and two runs sharing a workdir share an evolved corpus, so they are not
-independent and every ablation arm drawn from them is contaminated.
+Every campaign is isolated. Two runs sharing a workdir share an evolved
+corpus, so neither one's coverage curve describes what that run actually
+reached.
 
 Only one run's campaign may be live at a time. `install-k` / `install-u`
 refuse while another run's units are active or its deadline timer is still
@@ -212,7 +212,7 @@ run independence the eval protocol depends on.
 
 | Policy | Effect |
 |---|---|
-| `--corpus fresh` | Empty corpus. Required for the vanilla-baseline ablation arm |
+| `--corpus fresh` | Empty corpus. Ignores whatever earlier rounds built |
 | `--corpus carry --from-run <id>` | Copies the previous run's `corpus.db`. This is how a round builds on the last |
 | `--seeds artifacts/seeds` | Packs the seed bank into `corpus.db` with `syz-db pack`, merging with anything carried |
 

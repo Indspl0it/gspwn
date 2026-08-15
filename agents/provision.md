@@ -16,9 +16,6 @@ instrumented kernel fuzzing.
    - Install the baseline NVIDIA driver from Debian non-free repos FIRST
      (before step 5's cloning) — needed for the nvidia-smi GPU/model/GSP
      facts in step 1.
-   - After the crashlog setup in step 3, also run
-     `sudo python3 tools/cost_ctl.py install-watchdog` (idle auto-stop;
-     see docs/cloud-setup.md).
 1. Record facts into config/machine.yaml: distro (`/etc/os-release` ID),
    GPU (`nvidia-smi --query-gpu=name --format=csv,noheader`),
    Secure Boot (`mokutil --sb-state`), GSP firmware (`nvidia-smi -q`).

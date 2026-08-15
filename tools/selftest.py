@@ -61,11 +61,11 @@ class StateTempMixin:
 
     Every module-level path pipeline_state can write must be redirected, not
     just STATE_PATH. The spend ledger deliberately does not follow
-    GSPWN_STATE (that is what closes the ablation bypass), so redirecting the
+    GSPWN_STATE (that is what closes the redirect bypass), so redirecting the
     state file alone left the suite writing the real state/spend.json —
     running the tests on a campaign box would inject phantom hours into the
-    budget that gates live spend, and leak state between tests in the same
-    run. DEFAULT_STATE_PATH is redirected too: it is the fail-closed
+    ledger that gates live campaigns, and leak state between tests in the
+    same run. DEFAULT_STATE_PATH is redirected too: it is the fail-closed
     fallback spend_for_budget() reads when the ledger is absent.
     """
 
@@ -887,7 +887,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["loop"]["max_rounds"], 7)
         self.assertEqual(cfg["loop"]["campaign_hours"],
                          gspwn_config.DEFAULTS["loop"]["campaign_hours"])
-        self.assertEqual(cfg["cost"]["idle_stop_minutes"], 120)
+        self.assertEqual(cfg["track_k"]["procs"],
+                         gspwn_config.DEFAULTS["track_k"]["procs"])
 
     def test_a_typo_in_a_cap_is_rejected_not_defaulted(self):
         # An unrecognized key must not fall back to the default value while
@@ -901,7 +902,7 @@ class TestConfig(unittest.TestCase):
                     "loop:\n  max_total_run_hours: -5\n",
                     "loop:\n  plateau_min_growth: 40\n",
                     "loop:\n  corpus_policy: sometimes\n",
-                    "cost:\n  idle_stop_minutes: 0\n"):
+                    "track_k:\n  procs: 0\n"):
             with self.assertRaises(gspwn_config.ConfigError, msg=bad):
                 gspwn_config.load(self.write(bad))
 
@@ -1315,11 +1316,11 @@ class TestFlaggedCrashesReachTheRegistry(StateTempMixin, unittest.TestCase):
 
 
 class TestBudgetGuard(StateTempMixin, unittest.TestCase):
-    """eval and ablation campaigns never pass through round-decide, so the
-    run-hour ceiling has to be checked where a campaign starts.
+    """A campaign outside a round never passes through round-decide, so the
+    run-hour cap has to be checked where a campaign starts.
 
-    Spend comes from the ledger, not the state file: the ledger is what an
-    ablation run redirecting GSPWN_STATE cannot escape.
+    Hours come from the ledger, not the state file: the ledger is what a run
+    redirecting GSPWN_STATE cannot escape.
     """
 
     def test_campaign_within_budget_is_allowed(self):
@@ -1333,7 +1334,7 @@ class TestBudgetGuard(StateTempMixin, unittest.TestCase):
         self.assertIn("max_total_run_hours", str(cm.exception))
 
     def test_a_fresh_state_file_does_not_buy_a_fresh_budget(self):
-        # The ablation bypass: pipeline.json says nothing was spent, the
+        # The redirect bypass: pipeline.json says nothing was spent, the
         # ledger says 200 h. The ledger wins.
         ps.record_run_hours("r1-k1", 200.0)
         ps.save(ps.default_state())
@@ -1341,27 +1342,27 @@ class TestBudgetGuard(StateTempMixin, unittest.TestCase):
             campaign_ctl.check_budget(24, 216)
         self.assertIn("max_total_run_hours", str(cm.exception))
 
-    def test_an_ablation_redirect_cannot_seed_the_ledger_from_its_own_state(
+    def test_a_state_redirect_cannot_seed_the_ledger_from_its_own_state(
             self):
         """Seeding must read the same file spend_for_budget does.
 
         The shape that broke: 100 h on the machine's record, no ledger yet,
-        and an ablation run with its own registry billing first. Seeding from
-        STATE_PATH built the ledger out of the ablation's empty registry and
-        all 100 h dropped off the budget — the bypass the ledger exists to
-        close, reopened one function below the guard.
+        and a run with its own registry billing first. Seeding from
+        STATE_PATH built the ledger out of that run's empty registry and all
+        100 h dropped off the cap — the bypass the ledger exists to close,
+        reopened one function below the guard.
         """
         st = ps.default_state()
         st["rounds"][-1]["run_ids"] = ["r1-k1"]
         st["rounds"][-1]["run_hours"] = 100.0
         st["rounds"][-1]["run_hours_by_run"] = {"r1-k1": 100.0}
         ps.save(st, ps.DEFAULT_STATE_PATH)
-        # The ablation run redirects its registry; the ledger must not follow.
+        # The side run redirects its registry; the ledger must not follow.
         # StateTempMixin's cleanup restores STATE_PATH afterwards.
-        ps.STATE_PATH = os.path.join(self.tmp.name, "state", "ablation.json")
+        ps.STATE_PATH = os.path.join(self.tmp.name, "state", "side.json")
         ps.save(ps.default_state(), ps.STATE_PATH)
 
-        ps.record_run_hours("ablation-1", 2.0)
+        ps.record_run_hours("side-1", 2.0)
 
         self.assertEqual(ps.spend_for_budget(), 102.0)
         self.assertEqual(ps._read_ledger(self.spend_path)["r1-k1"], 100.0)
@@ -1480,7 +1481,7 @@ class TestConfigRobustness(unittest.TestCase):
                     "loop:\n  plateau_window_min: null\n",
                     'loop:\n  coverage_sample_min: "10"\n',
                     'loop:\n  campaign_hours: "24"\n',
-                    'cost:\n  idle_stop_minutes: "120"\n'):
+                    'track_k:\n  smoke_window_minutes: "30"\n'):
             with self.assertRaises(gspwn_config.ConfigError, msg=bad):
                 gspwn_config.load(self.write(bad))
 

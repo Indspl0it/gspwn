@@ -30,7 +30,7 @@ Subcommands:
                                        (omit --track for the combined view)
                                        exit 0 growing, 3 plateaued, 1 unknown
   compare --run-id A --against B [--track k|u]
-                                       side-by-side endpoints (ablation diff)
+                                       side-by-side endpoints (two runs)
 
 Coverage is kernel-side reachable code only. GSP firmware is not instrumented
 (spec §3); every consumer of these numbers must say so.
@@ -296,8 +296,8 @@ def cmd_sample(a):
               "round-add-run names it). Refusing to sample: a typo here "
               "would create a root-owned artifacts/runs/%s/ that later "
               "confuses series/status. Fix the id or register the run "
-              "first. (Eval/ablation runs: use the same GSPWN_STATE their "
-              "install used.)" % (a.run_id, ps.STATE_PATH, a.run_id))
+              "first. (A run with its own registry: use the same "
+              "GSPWN_STATE its install used.)" % (a.run_id, ps.STATE_PATH, a.run_id))
         return 1
     d = run_dir(a.run_id)
     os.makedirs(d, exist_ok=True)
@@ -533,7 +533,7 @@ def cmd_install_timer(a):
                  "typo here would create a root-owned run dir the sampler "
                  "then pads with empty rows." % (a.run_id, ps.STATE_PATH))
     os.makedirs(run_dir(a.run_id), exist_ok=True)
-    # An eval/ablation run keeps its own pipeline.json via GSPWN_STATE; the
+    # A run may keep its own pipeline.json via GSPWN_STATE; the
     # unattended sampler must validate and record against that same registry,
     # so the unit carries the setting the install was made with.
     env = ""

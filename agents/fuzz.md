@@ -13,11 +13,11 @@ independent.
 Corpus policy for the round comes from `loop.corpus_policy` in
 config/campaign.yaml:
 - `carry` — build on the previous round: `--corpus carry --from-run <prev>`
-- `fresh` — start empty (required for the vanilla-baseline ablation arm)
+- `fresh` — start empty, ignoring what earlier rounds built
 Seeded runs additionally pass `--seeds artifacts/seeds`, which packs the bank
-into the run's corpus.db (merging anything carried). An ablation arm testing
-"without seeds" must omit `--seeds` *and* use `--corpus fresh`, or it is not
-testing what it claims.
+into the run's corpus.db (merging anything carried). A run meant to start
+clean must omit `--seeds` *and* use `--corpus fresh`; either one alone still
+inherits a corpus.
 
 Every campaign carries a deadline of `loop.campaign_hours`, written to disk at
 install time and enforced by `gspwn-deadline@<run-id>.timer`, so the run ends

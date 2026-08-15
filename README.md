@@ -141,7 +141,7 @@ flowchart TD
         P7["triage<br/><i>dedupe raw crashes into a registry</i>"]
         P8["rca<br/><i>root-cause each unique crash</i>"]
         P9["poc<br/><i>build reproducer, measure repro rate</i>"]
-        P10["eval<br/><i>metrics, ablations, agent audit</i>"]
+        P10["eval<br/><i>measure the round: coverage, findings, audit</i>"]
         P11["refine<br/><i>what did NOT get covered, and why</i>"]
         P3 --> P6
         P4 --> P6
@@ -149,7 +149,7 @@ flowchart TD
         P6 --> P7 --> P8 --> P9 --> P10 --> P11
     end
 
-    ROUND --> D{"round-decide<br/>caps + coverage verdict"}
+    ROUND --> D{"round-decide<br/>stopping rules + coverage verdict"}
     D -->|"continue"| ROUND
     D -->|"stop"| P12["report<br/><i>findings + PSIRT packages</i>"]
     P12 --> End([disclosure])
@@ -172,7 +172,7 @@ orchestrator advances only after confirming that evidence:
 | triage | every raw crash registered as unique, duplicate or flagged |
 | rca | a root-cause writeup exists for every crash selected for a PoC; claims not verified against source are tagged `[UNVERIFIED]` |
 | poc | every unique crash has a measured reproduction rate and a classification |
-| eval | metrics exist for all configured runs and ablations, including an audit sample of `[UNVERIFIED]` RCA claims re-checked against source |
+| eval | coverage series, findings table and round progression exist for every run, including an audit sample of `[UNVERIFIED]` RCA claims re-checked against source |
 | refine | gap list and next-round worklist written; round outcome recorded |
 | report | report and PSIRT packages exist; disclosure status recorded |
 
@@ -349,7 +349,7 @@ The tools, briefly:
 
 | Tool | Job |
 |---|---|
-| `gspwn_config.py` | Loads and validates `campaign.yaml`. Single source of truth for every cap |
+| `gspwn_config.py` | Loads and validates `campaign.yaml`. Single source of truth for every limit |
 | `pipeline_ctl.py` | The state machine: phases, rounds, crash registry, loop decisions |
 | `campaign_ctl.py` | Installs and controls the fuzz campaigns; corpus policy; campaign deadline |
 | `coverage_ctl.py` | Samples both tracks, detects plateau, compares runs |
@@ -358,14 +358,13 @@ The tools, briefly:
 | `repro_ctl.py` | Extracts reproducers and measures reproduction rate |
 | `trace2seed.py` | Converts an strace of a CUDA workload into seed programs |
 | `build_kernel.sh` | Builds the KASAN/KCOV kernel and the open-source driver modules |
-| `cost_ctl.py` | Idle watchdog that stops the cloud instance when nothing is fuzzing; `keepalive` holds it off during interactive sessions |
 | `selftest.py` | The offline test suite for all of the above |
 
-## Configuration and cost control
+## Configuration and stopping rules
 
-The pipeline runs unattended on a paid GPU instance and crashes the machine
-by design. Every limit lives in one file — `config/campaign.yaml` — set before
-a campaign starts:
+The pipeline runs unattended on a GPU instance and crashes the machine by
+design. Every limit lives in one file, `config/campaign.yaml`, set before a
+campaign starts:
 
 ```yaml
 loop:
@@ -373,11 +372,6 @@ loop:
   max_total_run_hours: 216   # total across every campaign
   campaign_hours: 24         # each campaign self-stops after this
   stop_on_plateau: true
-cost:
-  idle_stop_minutes: 120     # stop the box when no fuzzer is running
-  monthly_budget_usd: 0      # 0 = unset; record the ceiling here
-  estimated_hourly_usd: 0.0  # your instance's hourly price; prices the dollar cap
-  budget_alerts_usd: [50, 150]
 ```
 
 Check what actually took effect before launching anything:
@@ -386,36 +380,43 @@ Check what actually took effect before launching anything:
 python3 tools/gspwn_config.py
 ```
 
-An unknown key is a hard error rather than a warning, so a typo in a cap
+An unknown key is a hard error rather than a warning, so a typo in a limit
 fails loudly instead of falling back to the default. Values are range-checked,
-and combinations that would break the loop — a campaign longer than the total
-budget, a plateau window too short to hold enough samples — are rejected.
+and combinations that would break the loop are rejected: a campaign longer
+than the total run-hour budget, or a plateau window too short to hold enough
+samples.
 
-The caps are enforced where the money is spent. Every campaign install goes
-through `campaign_ctl.py`'s budget check, which refuses to start a run whose
-projected hours — every hour already billed in the spend ledger
-(`state/spend.json`) plus this campaign's window — exceed
-`max_total_run_hours`. When `monthly_budget_usd` is set the same check runs
-in dollars, priced at `estimated_hourly_usd`; if that rate is unset the
-dollar cap degrades to a warning and only run-hours are enforced. This is
-in-repo enforcement against an *estimate* — the hard dollar guarantee is
-still AWS Budgets, so configure `budget_alerts_usd` there on day one. The
-ledger is billed by `round-end --from-run` from measured coverage samples
-(a run that died after 3 h bills 3, not the configured 24), and it
-deliberately ignores the `GSPWN_STATE` redirection used by test and
-ablation runs, so a fresh state file never comes with a fresh budget.
+These limits bound the search. They are not a budget. The repo has no view of
+what an instance costs and does not try to estimate one: prices vary by
+instance family and region, and again between spot and on demand, so a number
+written into config would go stale while still looking authoritative. Watch
+real money in the AWS console and set an AWS Budgets alert on day one.
+
+What the repo can enforce is hours. Every campaign install goes through
+`campaign_ctl.py`, which refuses to start a run whose hours would exceed
+`max_total_run_hours`, counting every hour already recorded in
+`state/spend.json` plus this campaign's window. The ledger is filled by
+`round-end --from-run` from measured coverage samples, so a run that died
+after 3 h records 3 rather than the configured 24. It deliberately ignores the
+`GSPWN_STATE` redirection used by tests and side runs, so a fresh state file
+never arrives with a fresh allowance.
 
 The ledger also fails closed. If it goes missing while the state file still
-records billed hours, every command that reads spend refuses instead of
-reading the budget as untouched — a lost ledger on a re-provisioned box
-would otherwise silently reset the ceiling to zero. Rebuild it with
-`pipeline_ctl.py spend-init`, which re-derives the hours from the state file
-and never lowers recorded spend. A genuinely new machine, with no ledger and
-no recorded hours, starts at zero and needs no action.
+records hours, every command that reads it refuses rather than treating the
+cap as untouched. A lost ledger on a re-provisioned box would otherwise reset
+the count to zero without saying so. Rebuild it with `pipeline_ctl.py
+spend-init`, which re-derives the hours from the state file and never lowers
+what was already recorded. A genuinely new machine, with no ledger and no
+recorded hours, starts at zero and needs no action.
 
 Once set, the pipeline requires no further input. Campaigns stop on their
 deadline, round outcomes are measured from the recorded curve rather than
-supplied by an agent, and the loop halts on the first cap that trips.
+supplied by an agent, and the loop halts on the first rule that trips.
+
+Nothing stops the instance itself. When the loop ends the fuzz units stop, but
+the box keeps running until you stop it from the console. That is deliberate.
+The artifacts and the crash registry live on its disk, and an automatic stop
+firing partway through a long reproduction run would lose more than it saved.
 
 ## Quickstart (EC2)
 
@@ -426,10 +427,9 @@ Full runbook: [docs/cloud-setup.md](docs/cloud-setup.md). The short version:
 2. `git clone` this repo on the instance.
 3. Set the caps in `config/campaign.yaml` and confirm them with
    `python3 tools/gspwn_config.py`.
-4. Install the cost guardrail: `sudo python3 tools/cost_ctl.py install-watchdog`.
-5. Open a coding-agent session in the repo root and say **"run the pipeline"**.
+4. Open a coding-agent session in the repo root and say **"run the pipeline"**.
    `AGENTS.md` makes it the orchestrator.
-6. Snapshot the provisioned instance to an AMI once `build` is done. Every
+5. Snapshot the provisioned instance to an AMI once `build` is done. Every
    later campaign launches from that image, so re-provisioning costs nothing.
 
 ## Tests
@@ -471,7 +471,7 @@ by the phase gates on the target machine.
 - [docs/index.md](docs/index.md) — index of the full documentation set
 - [docs/architecture.md](docs/architecture.md) — data model, crash lifecycle, run layout, coverage internals, how to extend
 - [docs/cloud-setup.md](docs/cloud-setup.md) — EC2 operational runbook
-- [Design spec](docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-design.md) — architecture, phases, gates, threat model, paper framing
+- [Design spec](docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-design.md) — the original architecture, phases, gates and threat model. A dated record; `docs/architecture.md` is current
 - [Implementation plan](docs/superpowers/plans/2026-08-12-nvidia-fuzzing-workflow.md) — task-by-task build record
 
 ## Responsible disclosure
@@ -487,17 +487,17 @@ outcome of normal operation.
 
 ## Status
 
-Pre-publication research. The repo carries the orchestrator contract, the phase
+Active research. The repo carries the orchestrator contract, the phase
 prompts, the tools and the config templates. The syzlang descriptions, seeds
 and harnesses are generated by the agents at runtime on the target machine and
 land in the gitignored `artifacts/` tree.
 
 The work extends Interrupt Labs' published research on
 [fuzzing the NVIDIA GPU drivers](https://www.interruptlabs.co.uk/articles/fuzzing-the-nvidia-gpu-drivers).
-The contribution here is the agentic layer: agent-authored interface
-descriptions and trace-derived seeds for a surface that has lacked both, and an
-evaluation of that approach against manually refined descriptions, seedless
-runs, and vanilla syzkaller.
+What is added here is the agentic layer: agent-authored interface descriptions
+and trace-derived seeds for a surface that has lacked both, driven by a loop
+that feeds each round's coverage gaps back into the next round's
+descriptions.
 
 ## License
 
