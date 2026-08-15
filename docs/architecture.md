@@ -199,6 +199,39 @@ The last row was the gap. The fuzzers restarted after every panic and kept
 producing crashes, but the agent's session was gone and `AGENTS.md`'s resume
 procedure sat waiting for a human to SSH in and type it.
 
+### What comes back, and what is merely sufficient
+
+A fresh agent is always **sufficient**. `pipeline_ctl.py brief` says where the
+pipeline is, so nothing that affects correctness depends on the previous
+session. What a fresh agent loses is the *reasoning*: what was tried, what was
+ruled out, why an approach was abandoned. The state file was never meant to
+hold that.
+
+Setting `orchestrator.resume_command` carries it across. Three properties keep
+that from becoming its own failure mode:
+
+| Property | Why |
+|---|---|
+| The id is **assigned**, not discovered | `orchestrator_ctl.py` generates a UUID and substitutes it for `{session}` in both invocations. Parsing it out of the agent's output, or globbing for the newest transcript, races anything else running on the box. |
+| Resumes are **bounded** | After `max_resumes` the session rotates. An unbounded transcript is re-read on every restart and eventually auto-compacts, dropping detail unpredictably. |
+| A failed resume **self-heals** | A resume exiting non-zero clears the id, so the next start is clean instead of retrying an unresumable transcript every `RestartSec` until the breaker trips. |
+
+The resume counter increments *before* the launch. A panic kills the agent
+with no exit code at all, and that is precisely when the transcript is growing
+fastest — counting only clean exits would mean a panicky campaign never
+rotates.
+
+`{anchor}` in the invocation expands to a paragraph telling the resumed agent
+that its last turn predates the interruption and that `brief` is
+authoritative. Without it the agent picks up from a half-finished tool call
+issued at the moment the kernel died, and its most confident belief about the
+machine is the most stale thing in its context.
+
+Because both invocations must carry `{session}`, `gspwn_config` refuses a
+configuration where `resume_command` is set and either command lacks the
+placeholder: each restart would silently open a new session while the resume
+counter believed it was continuing one.
+
 The hard part was already solved: a fresh agent needs no memory of the old
 session, because `pipeline_ctl.py next` tells it where the pipeline is. **The
 state file is the orchestrator's memory.** What was missing was only a process

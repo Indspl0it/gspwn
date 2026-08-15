@@ -51,6 +51,17 @@ DEFAULTS = {
         # default here would be a guess about what is installed on the SUT.
         # orchestrator_ctl.py install refuses until it is set.
         "command": "",
+        # The invocation for a restart that reuses the previous session, with
+        # {session} substituted for the assigned id. Empty keeps every start
+        # fresh, which is always correct: the state file, not the transcript,
+        # is what says where the pipeline is. Setting it carries the previous
+        # session's reasoning across a panic as well.
+        "resume_command": "",
+        # Rotate to a fresh session after this many resumes. A transcript that
+        # grows forever is re-read on every restart and eventually auto-
+        # compacts, which drops detail unpredictably; a bounded one is re-
+        # anchored from `pipeline_ctl.py brief` instead.
+        "max_resumes": 20,
         # Circuit-breaker window and its two limits. Same-boot restarts and
         # reboots are counted separately because they mean different things:
         # kernel fuzzing panics the box by design, so reboots are expected and
@@ -88,7 +99,13 @@ _RULES = [
     ("orchestrator", "window_min", _POSITIVE_INT),
     ("orchestrator", "max_same_boot_starts", _POSITIVE_INT),
     ("orchestrator", "max_reboots", _POSITIVE_INT),
+    ("orchestrator", "max_resumes", _POSITIVE_INT),
 ]
+
+# Substituted into orchestrator.command and resume_command. Not str.format:
+# an agent invocation routinely carries a prompt containing braces, and
+# format() would raise or mangle it.
+SESSION_PLACEHOLDER = "{session}"
 
 
 def _num(v):
@@ -135,9 +152,26 @@ def validate(cfg):
                         % policy)
     # Empty is valid (nothing installed yet); a non-string is not, and would
     # otherwise reach subprocess as whatever YAML parsed it into.
-    if not isinstance(cfg["orchestrator"]["command"], str):
-        problems.append("orchestrator.command must be a string (quote it if "
-                        "it contains a colon)")
+    orch = cfg["orchestrator"]
+    for key in ("command", "resume_command"):
+        if not isinstance(orch[key], str):
+            problems.append("orchestrator.%s must be a string (quote it if "
+                            "it contains a colon)" % key)
+    # Session resume needs the id to reach BOTH invocations. The id is
+    # assigned here and passed in, never discovered afterwards: parsing it out
+    # of the agent's stdout, or globbing for the newest transcript, is a race
+    # against any other agent running on the box.
+    if isinstance(orch.get("resume_command"), str) and orch["resume_command"]:
+        for key in ("command", "resume_command"):
+            val = orch[key]
+            if isinstance(val, str) and SESSION_PLACEHOLDER not in val:
+                problems.append(
+                    "orchestrator.%s must contain %s when resume_command is "
+                    "set — the session id has to be assigned on the first "
+                    "launch and passed back on every resume, and without the "
+                    "placeholder each restart would silently open a new "
+                    "session while the resume counter believed otherwise"
+                    % (key, SESSION_PLACEHOLDER))
     # A per-campaign duration longer than the total budget can never complete a
     # round, so the loop would spend the whole ceiling on run 1 and stop.
     if (_num(cfg["loop"]["campaign_hours"])
@@ -224,6 +258,11 @@ def main():
           % (orch["command"] or "command unset (supervisor not installable)",
              orch["max_same_boot_starts"], orch["max_reboots"],
              orch["window_min"]))
+    print("session resume: %s"
+          % ("off — every restart starts a fresh session"
+             if not orch["resume_command"] else
+             "%s, rotating after %d resume(s)"
+             % (orch["resume_command"], orch["max_resumes"])))
     return 0
 
 

@@ -50,9 +50,29 @@ orchestrator:
   #   sudo python3 tools/orchestrator_ctl.py install
   #
   # No default command: this repo works with any AGENTS.md-aware coding agent
-  # and will not guess which one is on the box. Set the headless invocation,
-  # e.g. command: "claude -p 'run the pipeline'"
+  # and will not guess which one is on the box. Set the headless invocation.
+  #
+  # {session} is replaced with a UUID this tool assigns. {anchor} is replaced
+  # with a paragraph telling a resumed agent that its last turn predates the
+  # interruption and that `pipeline_ctl.py brief` is authoritative.
+  #
+  # With Claude Code:
+  #   command: "claude --session-id {session} -p 'Drive the pipeline per AGENTS.md.'"
+  #   resume_command: "claude --resume {session} -p '{anchor}'"
   command: ""
+  # Empty resume_command keeps every start fresh, which is always correct:
+  # the state file, not the transcript, says where the pipeline is. Setting it
+  # also carries the previous session's reasoning across a panic — what was
+  # tried, what was ruled out — which the state file was never meant to hold.
+  # When it is set, BOTH invocations must contain {session}: the id is
+  # assigned and passed in, never discovered afterwards, because parsing it
+  # out of agent output or globbing for the newest transcript races anything
+  # else running on the box.
+  resume_command: ""
+  # Rotate to a fresh session after this many resumes. An unbounded transcript
+  # is re-read on every restart and eventually auto-compacts, which drops
+  # detail unpredictably; the fresh session re-anchors from `brief` instead.
+  max_resumes: 20
   # Circuit breaker. Same-boot restarts and reboots are counted separately:
   # this pipeline panics the machine by design, so reboots are expected, while
   # an agent restarting on one boot means nothing is progressing and every
