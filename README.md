@@ -326,7 +326,8 @@ sequenceDiagram
     K->>K: reboot
     S->>K: units auto-restart (Restart=always)
     Note over A: session was killed by the panic
-    A->>D: new session reads state/pipeline.json
+    S->>A: gspwn-orchestrator restarts the agent
+    A->>D: fresh session reads state/pipeline.json
     A->>D: crashlog_ctl.py harvest
     A->>A: resume at the first phase not done
 ```
@@ -339,6 +340,17 @@ campaign carries a **deadline on disk**, enforced by its own per-run
 `gspwn-deadline@<run-id>.timer`, so a run configured for 24 hours ends
 on time across any number of reboots, with no session attached.
 
+The agent itself is supervised the same way. A fresh session needs no memory
+of the one the panic killed, because `pipeline_ctl.py next` reads the state
+file and says where the pipeline is. That makes the state file the
+orchestrator's memory and the agent replaceable, which is what lets
+`gspwn-orchestrator.service` simply start a new one. It refuses to keep
+restarting forever: `orchestrator_ctl.py` counts same-boot restarts and
+reboots separately, and stops the unit when either passes its limit, when a
+phase is blocked, or when the pipeline is complete. Kernel fuzzing reboots the
+box by design, so those two counters cannot share one limit without either
+stopping a healthy campaign or letting a crash loop run all night.
+
 ## Repo layout
 
 | Path | What lives there |
@@ -348,6 +360,7 @@ on time across any number of reboots, with no session attached.
 | `tools/*.py` | Deterministic tools. Everything that acts on the system |
 | `config/campaign.yaml` | Every tunable and every spend cap, in one file |
 | `state/pipeline.json` | The blackboard: phase statuses, crash registry, rounds, disclosure status |
+| `state/spend.json`, `state/orchestrator.json` | Machine-global: the run-hour ledger and the orchestrator circuit breaker. Neither follows `GSPWN_STATE` |
 | `artifacts/` | Everything produced at runtime — descriptions, seeds, runs, crashes, PoCs, report. Gitignored |
 | `docs/` | Runbook, design spec, implementation record |
 
@@ -363,6 +376,7 @@ The tools, briefly:
 | `crash_parse.py` / `crashlog_ctl.py` | Turns raw crashes and post-panic logs into registry entries |
 | `repro_ctl.py` | Extracts reproducers and measures reproduction rate |
 | `trace2seed.py` | Converts an strace of a CUDA workload into seed programs |
+| `orchestrator_ctl.py` | Supervises the driving agent so it comes back after a panic; circuit breaker against restart loops |
 | `build_kernel.sh` | Builds the KASAN/KCOV kernel and the open-source driver modules |
 | `selftest.py` | The offline test suite for all of the above |
 
@@ -435,6 +449,10 @@ Full runbook: [docs/cloud-setup.md](docs/cloud-setup.md). The short version:
    `python3 tools/gspwn_config.py`.
 4. Open a coding-agent session in the repo root and say **"run the pipeline"**.
    `AGENTS.md` makes it the orchestrator.
+   For an unattended campaign, set `orchestrator.command` in
+   `config/campaign.yaml` and run
+   `sudo python3 tools/orchestrator_ctl.py install`, so a kernel panic
+   restarts the agent instead of ending the campaign.
 5. Snapshot the provisioned instance to an AMI once `build` is done. Every
    later campaign launches from that image, so re-provisioning costs nothing.
 

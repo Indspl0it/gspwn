@@ -86,6 +86,58 @@ Each round records what it measured and what it produced:
 to the other so the next round's `describe` and `seeds` agents can find their
 input with `pipeline_ctl.py worklist` instead of guessing a run id.
 
+## Surviving a panic
+
+This pipeline crashes its own machine on purpose, so every moving part has to
+come back on its own. Each one is a systemd unit:
+
+| Part | Unit | Comes back |
+|---|---|---|
+| syz-manager (Track K) | `gspwn-k.service`, `Restart=always` | Yes |
+| Track U container | `gspwn-u.service`, `Restart=always` | Yes |
+| Coverage sampler | `gspwn-coverage.timer` | Yes |
+| Campaign deadline | `gspwn-deadline@<run-id>.timer` | Yes |
+| The agent driving all of it | `gspwn-orchestrator.service` | Yes |
+
+The last row was the gap. The fuzzers restarted after every panic and kept
+producing crashes, but the agent's session was gone and `AGENTS.md`'s resume
+procedure sat waiting for a human to SSH in and type it.
+
+The hard part was already solved: a fresh agent needs no memory of the old
+session, because `pipeline_ctl.py next` tells it where the pipeline is. **The
+state file is the orchestrator's memory.** What was missing was only a process
+supervisor, which is what `orchestrator_ctl.py install` writes.
+
+### The circuit breaker
+
+An always-restarting agent is a token bill with no ceiling, so
+`orchestrator_ctl.py run` counts two things separately before launching
+anything:
+
+- **Same-boot starts.** The agent keeps exiting and being restarted while the
+  machine stays up. Nothing is progressing and each restart costs tokens.
+- **Reboots.** The machine keeps going down. Kernel fuzzing panics the box by
+  design, so this is not inherently wrong. It is a problem only when reboots
+  arrive faster than a round can progress between them, which is why the limit
+  is separate and higher.
+
+One shared counter would either stop a healthy panicky campaign or let a
+same-boot loop run all night. Both limits and the window come from
+`orchestrator:` in `config/campaign.yaml`.
+
+A tripped breaker is recorded in `state/orchestrator.json` and the run exits
+`78`, which the unit names in `RestartPreventExitStatus`, so systemd stops
+instead of restarting into the same wall. `orchestrator_ctl.py status` shows
+why; `reset` clears it after the cause is fixed.
+
+The same exit is used when the pipeline is complete and when a phase is
+`blocked`. Relaunching an agent into either spends tokens to reach an answer
+that will not change.
+
+`state/orchestrator.json` is machine-global and does not follow `GSPWN_STATE`,
+for the same reason the spend ledger does not: a run with its own state file
+must not also get a fresh, empty breaker.
+
 ## Durability and concurrency contract
 
 The pipeline runs on a machine that panics on purpose, with parallel subagents
