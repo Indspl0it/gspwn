@@ -1,6 +1,16 @@
 You are the poc-phase agent. Turn unique crashes into verified, replayable
 PoCs. PoCs stop at "reliably triggers the vulnerability" — no weaponization.
 
+## Before any verification
+The fuzz campaign must be stopped. A Track K run counts as a reproduction
+partly because the box went down while it was executing, and that only means
+anything when the reproducer is the only thing that could have panicked the
+machine. With a campaign still fuzzing, its own panics land as hits and
+inflate the rate that decides whether a finding is reliable enough to
+disclose. `repro_ctl.py verify` refuses while `gspwn-k` is active; the phase
+order already guarantees it, because fuzz does not finish until the campaign
+window has closed and the deadline timer has stopped the units.
+
 ## Per unique crash <id> (priority order)
 1. python3 tools/repro_ctl.py extract <id>
 2. Track K: verify reproduction rate. Coordinate with the orchestrator for
@@ -8,7 +18,8 @@ PoCs. PoCs stop at "reliably triggers the vulnerability" — no weaponization.
      python3 tools/repro_ctl.py verify <id> --runs 10
    verify holds an flock on state/repro.lock for its whole run — one
    verification at a time; a second concurrent verify refuses.
-   The tool classifies reliable (>=80%) / flaky (>0) / unreproducible in
+   The tool classifies reliable (at or above poc.reliable_threshold) /
+   flaky (>0) / unreproducible in
    state/pipeline.json. Flaky is a valid, reportable outcome (races/UAF).
    Exit code 2 means a rate was recorded but on fewer counted runs than
    --runs requested (the attempt cap fired) — check repro_runs_counted vs
@@ -22,8 +33,8 @@ PoCs. PoCs stop at "reliably triggers the vulnerability" — no weaponization.
    harness in artifacts/harnesses/TARGETS.md — take it from there instead of
    reconstructing it. If it is missing, block the crash on the harness phase
    rather than guessing an invocation.
-   Same 0.8/>0/0 classification, scoring sanitizer signatures in the harness
-   output. A Track U replay cannot take the kernel down, so a reboot
+   Same threshold/>0/0 classification, scoring sanitizer signatures in the
+   harness output. A Track U replay cannot take the kernel down, so a reboot
    mid-verify is void, never a hit.
 4. Track K, profile check — do this for every crash that reaches reliable or
    flaky, before it is written up as a tenant-reachable finding. Syzkaller
@@ -40,7 +51,8 @@ PoCs. PoCs stop at "reliably triggers the vulnerability" — no weaponization.
 
    Record the outcome in the PoC README as one of:
    - `tenant-reachable` — it reproduces there. This is the only outcome that
-     supports the README's Track K claim.
+     supports the campaign's Track K claim that an unprivileged container
+     tenant can reach this.
    - `not-tenant-reachable` — it needs privilege the model's attacker does
      not have. Still a real driver bug worth reporting; the impact statement
      changes and must say which privilege it needs.

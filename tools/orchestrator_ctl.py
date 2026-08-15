@@ -80,9 +80,19 @@ which tells the resumed agent its last turn predates the interruption and that
 `brief` is authoritative. Without it the agent continues from a half-finished
 tool call issued at the moment the kernel died.
 
+## Stalls
+
+The breaker counts starts, not stalls, so an agent blocked on an interactive
+prompt or a wedged tool would hold the pipeline open indefinitely while the
+instance billed. `orchestrator.max_agent_hours` bounds one launch and kills
+the whole process group when it is exceeded. It has to exceed
+`loop.campaign_hours`, because the fuzz phase legitimately waits out the whole
+campaign window inside one launch; the config refuses a value that does not.
+
 Subcommands:
   install [--command 'CMD']   write and enable gspwn-orchestrator.service
   run                         breaker check, harvest, then exec the agent
+  preflight [--user U]        config, agent command, passwordless sudo, disk
   status                      breaker state and recent starts
   reset                       clear a tripped breaker (after fixing the cause)
   remove                      stop, disable and delete the unit
@@ -95,6 +105,7 @@ import glob
 import json
 import os
 import pwd
+import signal
 import subprocess
 import sys
 import time
@@ -135,6 +146,16 @@ UNIT_TMPL = """[Unit]
 Description=gspwn orchestrator (drives the pipeline across panics)
 After=network-online.target
 Wants=network-online.target
+# The breaker in `run` is the real guard. These are the backstop for the case
+# it cannot see: a crash before its own state file can be written.
+#
+# They belong in [Unit], not [Service]: systemd.unit(5) documents them and
+# systemd.service(5) only cross-references them. Written under [Service] they
+# are an unknown key, silently ignored, and the manager default of 5 starts
+# per 10s applies instead — which RestartSec=60 can never reach, so the
+# backstop did nothing at all.
+StartLimitIntervalSec={limit_interval}
+StartLimitBurst={limit_burst}
 
 [Service]
 Type=simple
@@ -149,10 +170,6 @@ WorkingDirectory={root}
 ExecStart=/usr/bin/python3 {root}/tools/orchestrator_ctl.py run
 Restart=always
 RestartSec={restart_sec}
-# The breaker in `run` is the real guard. This is the backstop for the case
-# the breaker cannot see: a crash before its own state file can be written.
-StartLimitIntervalSec={limit_interval}
-StartLimitBurst={limit_burst}
 # A tripped breaker, a complete pipeline and a blocked phase all exit with
 # this. Restarting into any of them would spend tokens to reach the same wall.
 RestartPreventExitStatus={blocked_exit}
@@ -361,6 +378,61 @@ def render_command(template, session_id, anchor=None):
             .replace(ANCHOR_PLACEHOLDER, anchor))
 
 
+class _Exited:
+    """Minimal stand-in for CompletedProcess: only returncode is read."""
+
+    def __init__(self, returncode):
+        self.returncode = returncode
+
+
+def launch_agent(command, max_hours=0):
+    """Run the agent, killing it if it outlives max_hours (0 = no limit).
+
+    The circuit breaker counts starts, not stalls, so before this an agent
+    blocked on an interactive prompt or a wedged tool held the pipeline open
+    for as long as it liked while the instance kept billing, and nothing
+    anywhere noticed. A stall is the one failure mode the rest of this file's
+    supervision cannot see.
+
+    Killed by process group, not by pid: shell=True means the immediate child
+    is a shell, and killing only that leaves the agent itself running,
+    detached and still holding whatever it was stuck on.
+
+    shell=True because the configured value is a command line the operator
+    wrote, not an argv this tool assembled. Nothing user-controlled reaches it
+    at runtime: it comes from a config file only root can install a unit from,
+    and it is the whole point of the setting.
+    """
+    proc = subprocess.Popen(command, shell=True, cwd=REPO_ROOT,
+                            start_new_session=True)
+    if not max_hours:
+        proc.wait()
+        return proc
+    try:
+        proc.wait(timeout=max_hours * 3600.0)
+        return proc
+    except subprocess.TimeoutExpired:
+        pass
+    print("agent exceeded orchestrator.max_agent_hours (%s h) and is being "
+          "terminated. A launch that runs this long is stalled rather than "
+          "busy: the fuzz phase's own wait is bounded by loop.campaign_hours."
+          % max_hours)
+    for sig, grace in ((signal.SIGTERM, 30), (signal.SIGKILL, 10)):
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except OSError:
+            break
+        try:
+            proc.wait(timeout=grace)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    # Non-zero and distinct from BLOCKED_EXIT, so systemd restarts into a
+    # fresh session: a stalled agent is exactly the case a restart helps, and
+    # the breaker still counts the start.
+    return _Exited(proc.returncode if proc.returncode is not None else 124)
+
+
 def _block(state, reason, now):
     state["blocked"] = {"at": int(now), "reason": reason}
     _write(state)
@@ -482,11 +554,7 @@ def cmd_run(a):
     launched = render_command(template, session["id"], o["resume_anchor"])
     print("launching: %s" % launched)
     sys.stdout.flush()
-    # shell=True because the configured value is a command line the operator
-    # wrote, not an argv this tool assembled. Nothing user-controlled reaches
-    # it at runtime: it comes from a config file only root can install a unit
-    # from, and it is the whole point of the setting.
-    r = subprocess.run(launched, shell=True, cwd=REPO_ROOT)
+    r = launch_agent(launched, o.get("max_agent_hours") or 0)
     print("agent exited %d" % r.returncode)
     if resuming and r.returncode != 0:
         # Self-heal. A resume that fails is most likely a transcript that
@@ -511,6 +579,103 @@ def cmd_run(a):
 
 def _ts(v):
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(v)) if v else "?"
+
+
+# Commands the pipeline runs through sudo from a non-root agent session. The
+# harvest one is the load-bearing case: it runs on the post-panic recovery
+# path, where an interactive password prompt has nobody to answer it.
+SUDO_COMMANDS = [
+    ("crashlog_ctl.py harvest", "post-panic crash log capture"),
+    ("campaign_ctl.py install-k", "starting a Track K campaign"),
+    ("coverage_ctl.py install-timer", "installing the coverage sampler"),
+]
+
+
+def sudo_ok(user=None):
+    """-> (ok, detail). Can the agent use sudo without a password prompt?
+
+    This was a hard prerequisite that nothing established and nothing checked.
+    The orchestrator harvests crash logs with `sudo -n`, and every phase
+    prompt calls sudo for campaign installs and the sampler. A headless agent
+    cannot answer a password prompt, so without a passwordless rule the
+    harvest silently does nothing and every campaign install fails.
+    """
+    cmd = ["sudo", "-n", "true"]
+    if user:
+        cmd = ["sudo", "-n", "-u", user, "true"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, "could not run sudo: %s" % e
+    if r.returncode == 0:
+        return True, "sudo -n succeeds"
+    return False, (r.stderr or r.stdout or "sudo -n failed").strip()[:200]
+
+
+def cmd_preflight(a):
+    """Check the things an unattended run needs and nothing else verifies.
+
+    Deliberately not part of `run`: a preflight that blocks the supervisor
+    would turn a warning into an outage. This is what the provision phase
+    calls, and what `install` reports on.
+    """
+    problems = []
+    try:
+        conf = gspwn_config.load()
+    except gspwn_config.ConfigError as e:
+        print("config:    INVALID — %s" % e)
+        return 1
+    print("config:    valid")
+    o = conf["orchestrator"]
+    if o["command"]:
+        print("command:   %s" % o["command"])
+    else:
+        problems.append("orchestrator.command is unset, so the supervisor "
+                        "has nothing to launch")
+        print("command:   UNSET")
+
+    ok, detail = sudo_ok(a.user)
+    print("sudo -n:   %s (%s)" % ("ok" if ok else "FAILS", detail))
+    if not ok:
+        problems.append(
+            "the agent cannot use sudo without a password. Crash harvesting "
+            "after a panic, campaign installs and the coverage sampler all "
+            "go through sudo from a non-root session, so without this the "
+            "harvest reads nothing and every campaign install fails.\n"
+            "    Grant it for the pipeline tools only, e.g. in "
+            "/etc/sudoers.d/gspwn:\n"
+            "      %s ALL=(root) NOPASSWD: /usr/bin/python3 %s/tools/*.py\n"
+            "    SECURITY: those scripts must not be writable by that user, "
+            "or the rule is equivalent to unrestricted root. Keep the repo "
+            "root-owned on the SUT."
+            % (a.user or os.environ.get("SUDO_USER") or "<agent-user>",
+               REPO_ROOT))
+    for cmdline, why in SUDO_COMMANDS:
+        print("           needs it for: %s (%s)" % (cmdline, why))
+
+    try:
+        import coverage_ctl
+        free_mb = coverage_ctl.disk_free_mb()
+        warning = coverage_ctl.disk_warning(free_mb)
+    except Exception as e:
+        free_mb, warning = None, "could not measure free space: %s" % e
+    print("disk:      %s"
+          % ("unknown" if free_mb is None else "%.1f GB free" % (free_mb / 1024.0)))
+    if warning:
+        print("           " + warning)
+        problems.append("free disk space is below loop.min_free_disk_gb")
+
+    if o["resume_command"] and not o["session_transcript_glob"]:
+        problems.append("resume_command is set but session_transcript_glob is "
+                        "not, so sessions rotate on the resume count rather "
+                        "than on transcript size")
+    if not problems:
+        print("\npreflight clean")
+        return 0
+    print("\n%d problem(s):" % len(problems))
+    for p in problems:
+        print("  - " + p)
+    return 1
 
 
 def cmd_status(a):
@@ -620,6 +785,16 @@ def cmd_install(a):
         print("NOTE: %s/.claude does not exist. If the agent keeps its "
               "credentials elsewhere this is fine; if not, log it in as %s "
               "before starting the unit." % (home, user))
+    # The unit runs the agent as a non-root user, and that user needs
+    # passwordless sudo for the harvest on the post-panic path. Report it at
+    # install time rather than letting the first panic discover it.
+    ok, detail = sudo_ok(user)
+    if not ok:
+        print("WARNING: %s cannot use sudo without a password (%s). Crash "
+              "harvesting after a panic runs `sudo -n` and will silently "
+              "capture nothing. Run `python3 tools/orchestrator_ctl.py "
+              "preflight --user %s` for the remediation."
+              % (user, detail, user))
     if os.environ.get("ANTHROPIC_API_KEY"):
         print("WARNING: ANTHROPIC_API_KEY is set in this environment. If it "
               "is also set for the unit (via /etc/environment or a drop-in) "
@@ -692,6 +867,13 @@ def main(argv=None):
 
     q = sub.add_parser("status")
     q.set_defaults(fn=cmd_status)
+
+    q = sub.add_parser("preflight",
+                       help="check what an unattended run needs: config, the "
+                            "agent command, passwordless sudo, disk space")
+    q.add_argument("--user", default=None,
+                   help="check sudo as this user instead of the current one")
+    q.set_defaults(fn=cmd_preflight)
 
     q = sub.add_parser("reset")
     q.set_defaults(fn=cmd_reset)

@@ -26,6 +26,18 @@ uninteresting.
 4. Version persistence: replay every reliable PoC against one newer NVIDIA
    production driver branch; record persist/fixed per PoC. A finding that is
    already fixed upstream still belongs in the report, marked as such.
+
+   This is the most expensive step in the phase and the only one with no
+   tooling behind it: it means rebuilding the driver and rebooting, which
+   changes the machine every other measurement was taken on. Do it last, after
+   the coverage and findings artifacts are written.
+
+   It is also the step most easily skipped without anyone noticing, so its
+   outcome is not optional. Write `artifacts/eval/version-persistence.md`
+   containing either the per-PoC persist/fixed table, or the single line
+   `skipped: <why>` — for example that a newer branch would not build against
+   this kernel, or that no crash reached `reliable`. Both are acceptable
+   results. A missing file is not, and the gate below asks for it.
 5. Audit sample: re-verify a sample of [UNVERIFIED] RCA claims against
    source; log outcomes (confirmed/refuted) to artifacts/eval/rca-audit.md.
    A refuted claim is corrected in the crash registry, not just noted here.
@@ -44,14 +56,16 @@ uninteresting.
 
 ## Outputs
 artifacts/eval/: coverage CSVs, plots, findings table, round progression,
-rca-audit.md.
+rca-audit.md, version-persistence.md.
 
 ## State
 `python3 tools/pipeline_ctl.py set-phase eval in_progress|done|blocked`.
 
 ## Gate evidence
-File listing of artifacts/eval/ with a one-line description of each artifact.
-Name explicitly any run excluded from the numbers and why.
+File listing of artifacts/eval/ with a one-line description of each artifact,
+including version-persistence.md (a recorded `skipped: <why>` counts; a
+missing file does not). Name explicitly any run excluded from the numbers and
+why.
 
 ## Knowledge (cross-campaign)
 

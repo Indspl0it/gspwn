@@ -40,6 +40,10 @@ OUT_OF_SCOPE = {
 # Linux ioctl encoding: request = dir<<30 | size<<16 | type<<8 | nr.
 _IOC_DIR = {"_IOC_NONE": 0, "_IOC_WRITE": 1, "_IOC_READ": 2}
 
+# openat's first argument. syzkaller prints AT_FDCWD (-100) as the unsigned
+# 64-bit value, and a seed missing this argument does not parse at all.
+AT_FDCWD = "0xffffffffffffff9c"
+
 
 def parse_request(raw):
     """Return the ioctl request number for a strace-printed request
@@ -109,8 +113,13 @@ def convert(trace_text, ioctl_map):
             var = "r%d" % res_n
             res_n += 1
             fd_res[(pid, fd)] = var
-            lines.append('%s = %s(&AUTO=\'%s\\x00\', 0x2, 0x0)'
-                         % (var, desc, path))
+            # openat takes four arguments, the first being the directory fd.
+            # Emitting three produced seeds that syz-manager refuses to parse,
+            # so the whole bank failed the seeds gate for a reason that looked
+            # like a description problem. AT_FDCWD is -100, which syzkaller
+            # writes as the unsigned 64-bit value below.
+            lines.append('%s = %s(%s, &AUTO=\'%s\\x00\', 0x2, 0x0)'
+                         % (var, desc, AT_FDCWD, path))
             continue
         m = IOCTL_RE.search(raw)
         if m and (pid, m.group(1)) in fd_res:
@@ -155,8 +164,12 @@ def main():
     out = os.path.join(a.out_dir, "seed-%04d.syz" % n)
     with open(out, "w") as f:
         f.write(prog)
+    # Count emitted ioctl calls, not lines starting with a particular
+    # description prefix: the map's values are whatever the describe phase
+    # named its descriptions, and keying the count on "ioctl$" reported zero
+    # mapped while happily emitting them. The seeds gate reads this ratio.
     mapped = sum(1 for ln in prog.splitlines()
-                 if ln.startswith("ioctl$"))
+                 if re.match(r"^[A-Za-z_][\w$]*\(r\d+,", ln))
     unmapped = prog.count("# unmapped ioctl")
     print("wrote %s (%d mapped ioctls, %d unmapped)" % (out, mapped, unmapped))
 

@@ -43,6 +43,14 @@ loop:
   coverage_sample_min: 10    # sampler interval (systemd timer)
   corpus_policy: carry       # fresh | carry — carry builds each round on the last
   promote_seeds: true        # add coverage-advancing programs to the seed bank
+  # How often the per-run deadline timer asks whether the window is up. Kept
+  # separate from coverage_sample_min on purpose: raising the sampling
+  # interval must not delay every campaign stop past the window it enforces.
+  deadline_check_min: 2
+  # Free space below which the tools warn. Kernel dumps, the corpus, the
+  # coverage CSVs and the agent transcripts all land on one disk, and a full
+  # one stops the fuzzer, the sampler and every state write at once. 0 = off.
+  min_free_disk_gb: 20
 
 orchestrator:
   # The agent that drives the pipeline is supervised by systemd so it comes
@@ -96,6 +104,12 @@ orchestrator:
   window_min: 60
   max_same_boot_starts: 5
   max_reboots: 10
+  # Wall-clock ceiling on one agent launch. The breaker counts starts, not
+  # stalls, so without this an agent blocked on a prompt or a wedged tool
+  # holds the pipeline open indefinitely while the instance bills. It must
+  # exceed loop.campaign_hours, because the fuzz phase waits out the whole
+  # campaign window inside a single launch. 0 disables the timeout.
+  max_agent_hours: 0
   # Substituted for {anchor} in resume_command. The first thing a resumed
   # agent reads after a panic, and what stops it from continuing a
   # half-finished tool call issued at the moment the kernel died.
@@ -158,6 +172,25 @@ coverage:
                           # flat still reports a healthy exponent. 1.0 = all
   beta_tolerance: 0.05    # slack above beta=1 before the series is judged not
                           # to be an accumulation curve
+  # How long to wait for nvidia-smi before calling the driver wedged. A dead
+  # GPU fails fast; a hung one blocks, which is what this bounds. Track K
+  # only — the container-toolkit harnesses never touch the GPU, so their
+  # samples record the GPU column as not applicable.
+  gpu_probe_timeout_sec: 20
+
+poc:
+  # What counts as a reproduction, and how long one may take. A reliable
+  # classification is what a disclosure package is built on, so these are
+  # research knobs rather than tool internals.
+  repro_timeout_sec: 120   # per run; a hang past this is a hit only for a
+                           # hang-class crash title, otherwise a void run
+  reliable_threshold: 0.8  # at or above this hit rate: reliable, else flaky
+  default_runs: 10         # counted runs `verify` aims for without --runs
+  # Void runs (a wrapped dmesg ring, an interrupted run) do not advance the
+  # count, so verify retries. At most this many attempts per still-needed
+  # counted run, plus a small fixed slack, so a persistently wrapping ring
+  # cannot loop forever.
+  void_retry_factor: 2
 
 triage:
   # Dedup depth. These decide whether two reports are the same bug, which
