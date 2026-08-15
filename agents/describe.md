@@ -60,8 +60,14 @@ rather than being silently dropped from the next worklist.
    was imported vs authored — the eval phase reports this split, and a
    crash found only in imported descriptions is not this campaign's finding
    to claim. (Round 1 only; later rounds start from the worklist.)
-2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools],
-   nvidia-drm ioctls. Skip nvidia-modeset (out of scope).
+2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools].
+   Skip nvidia-drm, nvidia-modeset and /dev/dri/* — they are out of scope.
+   Those nodes exist only when the container asks for the `graphics` or
+   `display` capability, and the threat model is a default tenant
+   (`compute,utility`), which gets neither. A crash found there could not be
+   claimed under the model, so the descriptions are not worth the round.
+   Widening scope is a decision recorded in the README threat model first,
+   not something this phase does because the ioctls looked reachable.
 3. Create a header defining the NV_* ioctl command numbers via _IOWR macros;
    extract constants with syz-extract; compile with syz-compile.
 4. Model in this priority order — depth on the reachable surface beats
@@ -76,8 +82,8 @@ rather than being silently dropped from the next worklist.
       attach per-command parameter structs for the commands you cover. Pick
       the initial set by reachability from an unprivileged client, not by
       alphabetical order.
-   c. **UVM ioctls**, which take flat structs and are comparatively easy wins.
-   d. **DRM ioctls** on /dev/dri/*, last.
+   c. **UVM ioctls**, which take flat structs and are comparatively easy
+      wins.
 5. Chain handles with resources so generated programs build valid object
    trees: the root client handle is produced by the client allocation and
    consumed by every subsequent alloc/control/free; child objects produce

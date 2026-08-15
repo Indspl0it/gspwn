@@ -96,7 +96,7 @@ do not skip ahead to a later phase to keep making progress.
 | fuzz | agents/fuzz.md | both systemd units active; coverage increases within smoke window |
 | triage | agents/triage.md | every raw crash registered unique/duplicate/flagged; the flagged queue is empty (`crash-list --status flagged` returns nothing) |
 | rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC |
-| poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json |
+| poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json; every reliable/flaky Track K crash has a recorded profile-check outcome |
 | eval | agents/eval.md | `artifacts/eval/` holds the coverage series, findings table and round progression for every run in this round |
 | refine | agents/refine.md | gaps.md + worklist.md written; round outcome recorded via `round-end` |
 | report | agents/report.md | report + PSIRT packages exist; disclosure status recorded |
