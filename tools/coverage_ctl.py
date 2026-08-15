@@ -26,9 +26,15 @@ Subcommands:
   remove-timer                         stop and remove the sampling timer
   series --run-id ID [--track k|u]     summary of the recorded curve
   plateau --run-id ID [--track k|u] [--window-min N] [--min-growth F]
+          [--horizon-hours H]
                                        verdict: growing | plateaued | unknown
                                        (omit --track for the combined view)
                                        exit 0 growing, 3 plateaued, 1 unknown
+                                       The verdict extrapolates a fitted
+                                       species-accumulation curve: plateaued
+                                       means another H hours is expected to
+                                       find fewer than
+                                       coverage.plateau_new_edges new edges.
   compare --run-id A --against B [--track k|u]
                                        side-by-side endpoints (two runs)
   gpu-health                           probe the GPU now; exit 0 healthy, 1 not
@@ -51,6 +57,7 @@ syzkaller commit during the fuzz phase and record which source was used —
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import subprocess
@@ -516,13 +523,221 @@ def unhealthy_gpu_samples(window):
     return bad
 
 
-def plateau_verdict(rows, window_min, min_growth):
-    """-> (verdict, detail). Growth is measured over the trailing window.
+# ------------------------------------------------------------- discovery ---
+# Coverage growth is a species-discovery process: each edge is a species, each
+# executed input a sampled individual, and distinct-edges-against-inputs is a
+# species accumulation curve. That framing is Böhme's (STADS: Software Testing
+# as Species Discovery, TOSEM 2018) and it is what makes the question
+# answerable rather than a matter of taste.
+#
+# What it buys here and what it does not. The estimators the framing is known
+# for — Good-Turing discovery probability, Chao1 richness — need per-species
+# frequency counts: how many edges were hit exactly once (f1), exactly twice
+# (f2). syz-manager's stats endpoint reports an aggregate edge count and
+# nothing per-edge, so those estimators cannot be computed from this data and
+# this module does not pretend to. Anything claiming "we have covered X% of
+# the driver" would need f1 and f2 and would be invented here.
+#
+# What the aggregate series does support is a fitted accumulation curve and an
+# extrapolation from it, which is the question the loop actually asks: not
+# "how much is left" but "is another campaign of this length worth running".
+#
+# Two corrections to the obvious approach, both of which changed verdicts on
+# real-shaped data:
+#
+# 1. The x axis is executions, not wall-clock. Fuzzing progress is driven by
+#    inputs executed. This box panics by design, so a fixed wall-clock window
+#    can contain wildly different amounts of actual testing, and a slow or
+#    frequently-restarting hour looks exactly like saturation.
+#
+# 2. The y axis is the running maximum, not the reported count. syzkaller
+#    reloads and re-executes its corpus after every restart, so the edge count
+#    climbs steeply back towards where it was. That climb is replay, not
+#    discovery. Measured naively, a run that has genuinely saturated reports
+#    tens of percent of growth after each panic — which on this machine means
+#    a dead campaign can keep itself alive indefinitely through its own
+#    crashes. Accumulating with max() makes replay contribute exactly zero.
+#
+#    max() is a conservative estimate of the union: a post-restart process
+#    could cover an edge the earlier one missed while its total is still
+#    lower, and that edge is not counted. The bias is towards under-reporting
+#    discovery, which is the direction that stops a campaign early rather than
+#    running one forever, and it is stated here because it is a real limit of
+#    working from an aggregate counter.
 
-    'unknown' is a real answer: too few samples, too short a window, no edge
-    data, or not enough data since a restart means we must not claim a
-    plateau. The loop treats unknown as a stop, so a broken sampler cannot
-    silently authorise more spend.
+
+def _coverage_cfg():
+    """The stopping rule's tunables, or the defaults if config is unreadable.
+
+    Unlike the loop caps, a missing config here must not stop the tool: this
+    is called from plateau_verdict, which several other tools call in turn,
+    and the defaults are the same values the shipped config carries.
+    """
+    try:
+        return gspwn_config.coverage()
+    except Exception:
+        return dict(gspwn_config.DEFAULTS["coverage"])
+
+
+def accumulate(rows):
+    """-> [(cum_execs|None, cum_edges)], the species accumulation curve.
+
+    Both counters reset when the fuzzer restarts. Executions are work done, so
+    they accumulate: a reset means the delta is the new reading itself, not a
+    negative number. Edges are a set, not an amount of work, so they
+    accumulate as a running maximum — see the note above on replay.
+    """
+    out = []
+    cum_execs = 0
+    prev_execs = None
+    best = 0
+    have_execs = True
+    for r in rows:
+        edges = r.get("edges")
+        if edges is None:
+            continue
+        best = max(best, edges)
+        execs = r.get("execs")
+        if execs is None:
+            have_execs = False
+        elif have_execs:
+            if prev_execs is None or execs < prev_execs:
+                cum_execs += execs      # first sample, or a counter reset
+            else:
+                cum_execs += execs - prev_execs
+            prev_execs = execs
+        out.append((cum_execs if have_execs else None, best))
+    return out
+
+
+def _ols(xs, ys):
+    """Least-squares fit of y = slope*x + intercept -> (slope, intercept, r2).
+
+    Returns None when the fit is degenerate (fewer than three points, or no
+    spread in x or y), rather than a slope of zero that would read as a
+    perfectly flat and perfectly trusted curve.
+    """
+    n = len(xs)
+    if n < 3:
+        return None
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx <= 0 or syy <= 0:
+        return None
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    slope = sxy / sxx
+    intercept = my - slope * mx
+    r2 = (sxy * sxy) / (sxx * syy)
+    return slope, intercept, r2
+
+
+def fit_tail(points, fraction):
+    """The last `fraction` of the run measured in executions, not samples.
+
+    The decision is about what the next campaign will find, so it has to
+    reflect the regime the fuzzer is in now. A power law fitted over a whole
+    run is dominated by the early steep phase, where syzkaller is still
+    working through the seeds, and a run that climbed hard and then went
+    completely flat would still report a healthy exponent. Cutting by
+    executions rather than by sample count means a stretch where the box was
+    panicking and doing little work does not count as recent history.
+    """
+    pts = [(n, s) for n, s in points if n and n > 0 and s and s > 0]
+    if not pts or not (0 < fraction < 1):
+        return pts
+    cutoff = pts[-1][0] * (1.0 - fraction)
+    return [p for p in pts if p[0] >= cutoff] or pts
+
+
+def heaps_fit(points):
+    """Fit S(n) = K * n**beta to (executions, edges) -> dict, or None.
+
+    Heaps' law rather than an exponential saturation curve, because an
+    exponential assumes a finite asymptote and reporting one from this data
+    would be exactly the over-claim this module avoids. beta is the discovery
+    exponent: near 1 the run finds edges about as fast as it executes them,
+    near 0 it has saturated. Fitted by least squares on log S against log n,
+    which needs no dependency beyond the standard library.
+    """
+    pts = [(n, s) for n, s in points if n and n > 0 and s and s > 0]
+    if len(pts) < 3:
+        return None
+    fit = _ols([math.log(n) for n, _ in pts], [math.log(s) for _, s in pts])
+    if fit is None:
+        return None
+    beta, log_k, r2 = fit
+    return {"beta": beta, "k": math.exp(log_k), "r2": r2,
+            "n": pts[-1][0], "s": pts[-1][1], "points": len(pts)}
+
+
+def expected_new_edges(fit, extra_execs):
+    """Edges the fitted curve expects from `extra_execs` more executions.
+
+    K((n + dn)**beta - n**beta). This is the number the loop decides on: it is
+    in the same units as the thing being predicted, unlike a growth
+    percentage, whose meaning changes with how much coverage there already is.
+    """
+    if not fit or extra_execs <= 0:
+        return 0.0
+    n, k, b = fit["n"], fit["k"], fit["beta"]
+    return max(0.0, k * ((n + extra_execs) ** b - n ** b))
+
+
+def exec_rate_per_hour(rows):
+    """Executions per hour over the sampled span, or None if unmeasurable."""
+    acc = accumulate(rows)
+    if len(acc) < 2 or acc[-1][0] is None:
+        return None
+    span_h = (rows[-1]["ts"] - rows[0]["ts"]) / 3600.0
+    if span_h <= 0:
+        return None
+    return acc[-1][0] / span_h
+
+
+def _legacy_window_verdict(rows, acc, window_min, min_growth, why):
+    """The pre-model test, on the accumulation curve, for runs with no execs.
+
+    Kept because a source that does not report an execution count still has to
+    produce a verdict, and because the accumulation curve alone already fixes
+    the replay error. It is reported as a degraded measurement: a wall-clock
+    window cannot tell a slow hour from a saturated one, which is the whole
+    reason the model path exists.
+    """
+    span_min = (rows[-1]["ts"] - rows[0]["ts"]) / 60.0
+    if span_min < window_min:
+        return "unknown", ("%.0f min of samples, shorter than the %d min "
+                           "window" % (span_min, window_min))
+    cutoff = rows[-1]["ts"] - window_min * 60
+    window = [(r, s) for (r, (_n, s)) in zip(rows, acc) if r["ts"] >= cutoff]
+    if len(window) < 2:
+        return "unknown", "only %d sample(s) inside the window" % len(window)
+    start, end = window[0][1], window[-1][1]
+    if not start:
+        return "unknown", "no non-zero edge baseline in the window"
+    growth = (end - start) / float(start)
+    detail = ("%s: distinct edges %d -> %d over %.0f min = %.3f%% growth "
+              "(threshold %.3f%%)"
+              % (why, start, end, window_min, growth * 100, min_growth * 100))
+    return ("growing" if growth >= min_growth else "plateaued"), detail
+
+
+def plateau_verdict(rows, window_min, min_growth, horizon_hours=None,
+                    cov=None):
+    """-> (verdict, detail). The decision is an extrapolation, not a threshold.
+
+    The question is whether another campaign is worth running, so the answer
+    is the number of new edges the fitted discovery curve expects from another
+    campaign's worth of executions. That number is in the units of the thing
+    being predicted; a growth percentage is not, because the same percentage
+    means ten edges early in a run and a thousand late in one.
+
+    'unknown' is a real answer and the loop treats it as a stop, so a broken
+    sampler cannot silently authorise more spend. It is returned for too few
+    samples, no edge data, no execution data plus too short a span, and — the
+    case a threshold rule has no way to express — a curve the model does not
+    describe well enough to extrapolate from.
 
     A flat curve over a window where the GPU was not healthy is also
     'unknown'. A GPU that has fallen off the bus flattens the curve exactly
@@ -532,33 +747,111 @@ def plateau_verdict(rows, window_min, min_growth):
     GPU that is not answering, so growth is its own evidence the probe was
     only having a bad moment.
     """
+    cov = cov if cov is not None else _coverage_cfg()
     if len(rows) < 3:
         return "unknown", "only %d usable sample(s); need >= 3" % len(rows)
-    rows, restarted = since_last_reset(rows)
-    if restarted and len(rows) < 3:
-        return "unknown", ("only %d usable sample(s) since the fuzzer last "
-                           "restarted; need >= 3 since the restart to "
-                           "measure growth" % len(rows))
-    span_min = (rows[-1]["ts"] - rows[0]["ts"]) / 60.0
-    if span_min < window_min:
-        return "unknown", ("%s%.0f min of samples, shorter than the %d min "
-                           "window"
-                           % ("the fuzzer restarted and there is only "
-                              if restarted else "samples span ",
-                              span_min, window_min))
+    acc = accumulate(rows)
+    if not acc:
+        return "unknown", "no edge data in any sample"
+    _seg, restarted = since_last_reset(rows)
+    note = "; the fuzzer restarted during this run, so replay is excluded " \
+           "and only edges beyond the previous high-water mark count" \
+        if restarted else ""
+
+    # Still recovering. After a restart syzkaller re-executes its corpus, and
+    # until the reported count climbs back to where it was, every edge it
+    # reports is one already covered. The accumulation curve is flat through
+    # that phase, but flat-because-replaying is not the same as
+    # flat-because-saturated and must not be reported as a plateau. It is also
+    # not growth. The honest answer is that the round ended before the fuzzer
+    # got back to where it had been, and no verdict is available.
+    high_water = acc[-1][1]
+    latest = rows[-1].get("edges")
+    if latest is not None and high_water and latest < high_water:
+        return "unknown", (
+            "the fuzzer is still replaying its corpus after a restart: it "
+            "reports %d edges against a high-water mark of %d for this run, "
+            "so it has rediscovered nothing new yet. A flat accumulation "
+            "curve here means recovery, not saturation. Let the run reach %d "
+            "again before asking, or treat the round as unmeasured"
+            % (latest, high_water, high_water))
+
+    tail = fit_tail(acc, cov["fit_tail_fraction"])
+    rate = exec_rate_per_hour(rows)
+    horizon_h = horizon_hours if horizon_hours else cov["horizon_hours"]
+
+    # No new edge at all across the recent stretch of work. This is the
+    # clearest plateau there is, and it has to be handled before the fit,
+    # because a curve with no variance in S cannot be fitted at all and would
+    # otherwise fall through to the weaker clock-based test.
+    #
+    # `rate is not None` is what makes "the recent stretch" mean the end of the
+    # run. accumulate() stops carrying an execution axis at the first sample
+    # that reports no exec count and never resumes, so if the source stopped
+    # reporting them mid-run the tail covers only the prefix. Without this
+    # guard a run whose first hours were flat and whose last hours quadrupled
+    # its coverage reports a plateau, quoting the flat prefix as though it were
+    # the whole run — and the loop stops a campaign that is still learning.
+    flat_tail = (rate is not None and len(tail) >= cov["min_fit_samples"]
+                 and tail[-1][0] and len({s for _n, s in tail}) == 1)
+    fit = None if flat_tail else heaps_fit(tail)
+
+    if flat_tail:
+        verdict = "plateaued"
+        detail = ("no new edge in the last %.3g executions (%d distinct "
+                  "edges throughout, over %d samples). Not one input in that "
+                  "stretch reached code the run had not already reached%s"
+                  % (tail[-1][0] - tail[0][0], tail[-1][1], len(tail), note))
+    elif fit is None or rate is None:
+        # rate is None exactly when the run recorded no usable execution
+        # counts, which is also when heaps_fit has nothing to fit, so this one
+        # branch covers both.
+        verdict, detail = _legacy_window_verdict(
+            rows, acc, window_min, min_growth,
+            "no execution counts recorded, so growth is measured against the "
+            "clock rather than against work done")
+        detail += note
+    elif fit["points"] < cov["min_fit_samples"]:
+        return "unknown", ("only %d sample(s) usable for a discovery fit; "
+                           "need >= %d before extrapolating%s"
+                           % (fit["points"], cov["min_fit_samples"], note))
+    elif fit["r2"] < cov["model_min_r2"]:
+        # The curve is not a discovery curve: a stuck sampler, a source
+        # change mid-run, or a phase the model does not cover. Extrapolating
+        # anyway is how a confident wrong number gets into a report.
+        return "unknown", ("the discovery curve does not fit the model well "
+                           "enough to extrapolate from (R2 %.3f, need %.2f; "
+                           "beta %.3f over %d sample(s)). Plot the series "
+                           "before trusting any verdict here%s"
+                           % (fit["r2"], cov["model_min_r2"], fit["beta"],
+                              fit["points"], note))
+    elif not (0 < fit["beta"] <= 1.0 + cov["beta_tolerance"]):
+        return "unknown", ("discovery exponent beta=%.3f is outside (0, 1]; "
+                           "the series is not behaving like an accumulation "
+                           "curve, so no extrapolation from it is "
+                           "meaningful%s" % (fit["beta"], note))
+    else:
+        horizon_execs = rate * horizon_h
+        expected = expected_new_edges(fit, horizon_execs)
+        # The relative figure is reported alongside because the absolute
+        # threshold is the one number here still uncalibrated: what counts as
+        # enough new edges to justify another campaign is a judgement, and
+        # 2.5% of a run's coverage reads very differently from 37%.
+        share = (100.0 * expected / fit["s"]) if fit["s"] else 0.0
+        detail = ("%d distinct edges after %.3g executions; beta %.3f, R2 "
+                  "%.3f over %d samples. At %.3g exec/h another %.0f h is "
+                  "expected to find ~%.0f new edge(s), %.1f%% more (plateau "
+                  "below %d)%s"
+                  % (fit["s"], fit["n"], fit["beta"], fit["r2"],
+                     fit["points"], rate, horizon_h, expected, share,
+                     cov["plateau_new_edges"], note))
+        verdict = ("growing" if expected >= cov["plateau_new_edges"]
+                   else "plateaued")
+
+    if verdict != "plateaued":
+        return verdict, detail
     cutoff = rows[-1]["ts"] - window_min * 60
-    window = [r for r in rows if r["ts"] >= cutoff]
-    if len(window) < 2:
-        return "unknown", "only %d sample(s) inside the window" % len(window)
-    start, end = window[0]["edges"], window[-1]["edges"]
-    if not start:
-        return "unknown", "no non-zero edge baseline in the window"
-    growth = (end - start) / float(start)
-    detail = ("edges %d -> %d over %.0f min = %.3f%% growth (threshold %.3f%%)"
-              "%s" % (start, end, window_min, growth * 100, min_growth * 100,
-                      "; measured since a fuzzer restart" if restarted else ""))
-    if growth >= min_growth:
-        return "growing", detail
+    window = [r for r in rows if r["ts"] >= cutoff] or rows
     bad = unhealthy_gpu_samples(window)
     if bad:
         return "unknown", (
@@ -572,7 +865,8 @@ def plateau_verdict(rows, window_min, min_growth):
     return "plateaued", detail
 
 
-def run_verdict(run_id, window_min, min_growth, tracks=TRACKS):
+def run_verdict(run_id, window_min, min_growth, tracks=TRACKS,
+                horizon_hours=None):
     """Per-track verdicts plus the combined one for the loop decision.
 
     A round is still learning if ANY track is still finding edges: stopping
@@ -586,7 +880,8 @@ def run_verdict(run_id, window_min, min_growth, tracks=TRACKS):
         rows = metric_rows(run_id, "edges", t)
         if not read_rows(run_id, t):
             continue          # track not sampled at all: not evidence either way
-        per[t] = plateau_verdict(rows, window_min, min_growth)
+        per[t] = plateau_verdict(rows, window_min, min_growth,
+                                 horizon_hours=horizon_hours)
     decided = [v for v, _ in per.values() if v != "unknown"]
     if "growing" in decided:
         combined = "growing"
@@ -602,11 +897,15 @@ def run_verdict(run_id, window_min, min_growth, tracks=TRACKS):
 def cmd_plateau(a):
     if a.track:
         rows = metric_rows(a.run_id, "edges", a.track)
-        verdict, detail = plateau_verdict(rows, a.window_min, a.min_growth)
+        verdict, detail = plateau_verdict(rows, a.window_min, a.min_growth,
+                                          horizon_hours=a.horizon_hours)
         print("%s track %s: %s (%s)" % (a.run_id, a.track, verdict, detail))
     else:
-        verdict, detail, _ = run_verdict(a.run_id, a.window_min, a.min_growth)
+        verdict, detail, _ = run_verdict(a.run_id, a.window_min, a.min_growth,
+                                         horizon_hours=a.horizon_hours)
         print("%s: %s (%s)" % (a.run_id, verdict, detail))
+    print("Coverage is kernel-side reachable code only; GSP firmware is not "
+          "instrumented, so no verdict here says anything about it.")
     return {"growing": 0, "unknown": 1, "plateaued": 3}[verdict]
 
 
@@ -744,7 +1043,16 @@ def build_parser():
     p.add_argument("--min-growth", type=float,
                    default=loop_cfg["plateau_min_growth"],
                    help="fractional edge growth below which the run has "
-                        "plateaued (default loop.plateau_min_growth)")
+                        "plateaued. Only used for runs whose source records "
+                        "no execution count; otherwise the verdict comes "
+                        "from the fitted discovery curve "
+                        "(default loop.plateau_min_growth)")
+    p.add_argument("--horizon-hours", dest="horizon_hours", type=float,
+                   default=None,
+                   help="how far ahead to extrapolate: the run has plateaued "
+                        "when this many more hours is expected to find fewer "
+                        "than coverage.plateau_new_edges new edges "
+                        "(default coverage.horizon_hours)")
     p.set_defaults(fn=cmd_plateau)
 
     p = sub.add_parser("gpu-health")

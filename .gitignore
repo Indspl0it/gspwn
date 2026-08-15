@@ -3,6 +3,9 @@ artifacts/*
 !artifacts/**/.gitkeep
 state/*
 !state/.gitkeep
+# knowledge/ itself is committed on purpose — it is the only thing that
+# survives a rebuilt box. Its lock files are not.
+knowledge/*.lock
 __pycache__/
 *.pyc
 thoughts/

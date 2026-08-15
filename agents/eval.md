@@ -29,6 +29,18 @@ uninteresting.
 5. Audit sample: re-verify a sample of [UNVERIFIED] RCA claims against
    source; log outcomes (confirmed/refuted) to artifacts/eval/rca-audit.md.
    A refuted claim is corrected in the crash registry, not just noted here.
+6. Impact audit: `python3 tools/pipeline_ctl.py impact-list`. Two numbers
+   belong in the findings table — how many crashes have an impact record, and
+   how many of those can carry a severity. A round that analysed every crash
+   and produced no record able to carry a severity found crashes, not
+   vulnerabilities, and the write-up has to say so plainly.
+   Then re-check the strongest claims specifically. Every record with
+   consequence `privilege-escalation` or `container-escape` gets its evidence
+   read against source, because those are what a vendor challenges first and
+   they are the only ones where being wrong is expensive. Refuted ones are
+   corrected with `impact-set`, not annotated here. A high count of
+   `undetermined` is not a failure to report — an honest one is the expected
+   outcome for faults that vanish into GSP.
 
 ## Outputs
 artifacts/eval/: coverage CSVs, plots, findings table, round progression,
@@ -40,3 +52,31 @@ rca-audit.md.
 ## Gate evidence
 File listing of artifacts/eval/ with a one-line description of each artifact.
 Name explicitly any run excluded from the numbers and why.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase eval
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase eval "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase eval "..."
+```
+
+A **learning** is about the target — for this phase, typically measurement
+facts: a number that turned out to mean something other than it appeared to.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.

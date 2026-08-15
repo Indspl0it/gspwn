@@ -54,6 +54,28 @@ per item whether coverage actually moved — an item that stays uncovered after
 you modeled it is a finding about the model, and belongs in the audit file
 rather than being silently dropped from the next worklist.
 
+Items carry their source. A `[coverage]` item is somewhere nobody has looked.
+A `[finding crash-NNNN]` item is a call sharing an object, lock, refcount or
+teardown path with something that already broke in this campaign — a place
+that has already proven it yields. Model the `[finding ...]` items first.
+
+Read the record behind them for the context the worklist line cannot carry:
+
+```
+python3 tools/pipeline_ctl.py finding-list
+```
+
+Its `preconditions` tell you what object state the call needs, which is
+usually what decides whether your description reaches real work or bounces off
+a handle check. Its `hypothesis` is rca's theory about the underlying pattern:
+treat it as a reason to model more of that pattern, never as a reason to skip
+anything. Its `source_refs` point at the handler to cross-check against.
+
+Report per finding item what you modeled and whether the smoke run reached it.
+A round where rca produced records and describe modeled none of their adjacent
+calls has broken the feedback edge, and the campaign is back to following
+coverage alone.
+
 ## Do
 1. Check whether Interrupt Labs published their descriptions; if yes, import
    into artifacts/descriptions/ and extend instead of rewriting. Record what
@@ -71,7 +93,10 @@ rather than being silently dropped from the next worklist.
 3. Create a header defining the NV_* ioctl command numbers via _IOWR macros;
    extract constants with syz-extract; compile with syz-compile.
 4. Model in this priority order — depth on the reachable surface beats
-   breadth over stubs:
+   breadth over stubs. From round 2 on, the worklist's `[finding ...]` items
+   come ahead of this order for their own subsystem; the order below is how
+   you work an unexplored surface, not a reason to defer a call that is
+   adjacent to a live bug:
    a. **Object lifecycle first.** The RM alloc escape, the free escape, and
       the device-open path. Nothing else is reachable until a client handle
       exists, so these must be correct before anything else matters.
@@ -120,7 +145,9 @@ Record progress with the state tool, never by editing pipeline.json:
 
 ## Gate evidence
 syz-compile success output, smoke-run dmesg excerpt showing driver contact,
-audit file path with the sampled verdicts.
+audit file path with the sampled verdicts, and from round 2 on, per worklist
+item what you modeled and whether the smoke run reached it — with the
+`[finding ...]` items listed separately from the `[coverage]` ones.
 
 ## Errors
 A description that compiles but never reaches the driver is a failure, not a
@@ -129,3 +156,32 @@ device node after one retry, record what blocked you in
 artifacts/descriptions/BLOCKED.md, mark the phase blocked, and stop. Partial
 coverage that is accurately scoped is more useful than a green gate that
 overstates what was modeled.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase describe
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase describe "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase describe "..."
+```
+
+A **learning** is about the target — for this phase, typically ABI facts:
+where a number really lives, which header lies, which numbering scheme does
+not follow the obvious one.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.

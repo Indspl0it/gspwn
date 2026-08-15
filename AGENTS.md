@@ -17,17 +17,28 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
   and parallel subagents will otherwise lose each other's updates.
 - Phases run in dependency order (below). `describe`, `seeds`, `harness` may
   run in parallel with each other after `build`.
-- After any interruption (session restart, kernel panic, reboot):
+- After any interruption (session restart, kernel panic, reboot, or your own
+  context being compacted):
   1. `sudo python3 tools/crashlog_ctl.py harvest`
-  2. `python3 tools/pipeline_ctl.py show` (and `validate`)
-  3. resume at the phase reported by `python3 tools/pipeline_ctl.py next`
+  2. `python3 tools/pipeline_ctl.py brief`
+  3. resume at the phase it reports
 
   You do not need memory of the previous session to do this. The state file
-  is the orchestrator's memory: `next` says where the pipeline is, and that
-  answer does not depend on who was driving before the panic. When
-  `gspwn-orchestrator.service` is installed it performs steps 1 and 2 for you
-  and launches a fresh agent, so this sequence runs without a human. See
-  `tools/orchestrator_ctl.py`.
+  is the orchestrator's memory, and `brief` renders it: where the pipeline is,
+  what is blocked, what the crash registry holds, what the findings say to
+  target, and the tail of `knowledge/`. It is derived at read time, so it
+  cannot be stale — but for the same reason a copy of it goes out of date the
+  moment the pipeline moves, so re-run it rather than trusting one you were
+  handed. When `gspwn-orchestrator.service` is installed it performs steps 1
+  and 2 for you and launches an agent, so this sequence runs without a human.
+  See `tools/orchestrator_ctl.py`.
+- **Record what you learn, as you learn it.** `knowledge/learnings.md` and
+  `knowledge/mistakes.md` are committed and outlive the box, the campaign and
+  you: they are the only thing a rebuilt machine starts with. Append through
+  `tools/knowledge_ctl.py note` — never by hand, and never at the end of a
+  round from memory, because by then the detail that mattered is gone.
+  A learning is about the target; a mistake is about us. Both are read by the
+  next agent doing your job, so generalise: it will not have your context.
 
 ## Configuration (the only thing a human keys in)
 
@@ -63,13 +74,21 @@ the state file and never lowers recorded hours.
 | Need | Command |
 |---|---|
 | Create the state file (once, provision) | `python3 tools/pipeline_ctl.py init` |
+| Recover after a panic or a compaction | `python3 tools/pipeline_ctl.py brief` |
 | See where the pipeline stands | `python3 tools/pipeline_ctl.py show` |
 | Which phase to run next | `python3 tools/pipeline_ctl.py next` |
 | Advance / block a phase | `python3 tools/pipeline_ctl.py set-phase <phase> <status> --notes "..."` |
 | Inspect the crash registry | `python3 tools/pipeline_ctl.py crash-list [--status S] [--track K\|U]` |
 | Fix a triage decision | `python3 tools/pipeline_ctl.py crash-set <id> --duplicate-of <id>` |
-| Record disclosure status | `python3 tools/pipeline_ctl.py crash-set <id> --disclosure submitted` |
+| Record disclosure status | `python3 tools/pipeline_ctl.py crash-set <id> --disclosure pending` |
+| Attach rca's research record | `python3 tools/pipeline_ctl.py finding-set <id> --json -` |
+| What the findings say to target | `python3 tools/pipeline_ctl.py finding-list` |
+| Attach rca's impact record | `python3 tools/pipeline_ctl.py impact-set <id> --json -` |
+| What the report can argue | `python3 tools/pipeline_ctl.py impact-list` |
 | Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
+| Record a fact about the target | `python3 tools/knowledge_ctl.py note --kind learning --phase <p> "..."` |
+| Record a process error to avoid | `python3 tools/knowledge_ctl.py note --kind mistake --phase <p> "..."` |
+| Read the knowledge files | `python3 tools/knowledge_ctl.py show [--kind K] [--phase P]` |
 | Round history + loop budget | `python3 tools/pipeline_ctl.py round-show` |
 | Rebuild a lost spend ledger | `python3 tools/pipeline_ctl.py spend-init` |
 | Attach a run to this round | `python3 tools/pipeline_ctl.py round-add-run --run-id <id>` |
@@ -102,10 +121,10 @@ do not skip ahead to a later phase to keep making progress.
 | harness | agents/harness.md | Track U harnesses build and produce coverage on seeds |
 | fuzz | agents/fuzz.md | both systemd units active; coverage increases within smoke window |
 | triage | agents/triage.md | every raw crash registered unique/duplicate/flagged; the flagged queue is empty (`crash-list --status flagged` returns nothing) |
-| rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC |
+| rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC; each also has a research record (`finding-list`), which is what steers the next round, and an impact record (`impact-list`), which is what lets the report argue a severity |
 | poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json; every reliable/flaky Track K crash has a recorded profile-check outcome |
 | eval | agents/eval.md | `artifacts/eval/` holds the coverage series, findings table and round progression for every run in this round |
-| refine | agents/refine.md | gaps.md + worklist.md written; round outcome recorded via `round-end` |
+| refine | agents/refine.md | gaps.md + worklist.md written, every item tagged `[coverage]` or `[finding crash-NNNN]`; round outcome recorded via `round-end` |
 | report | agents/report.md | report + PSIRT packages exist; disclosure status recorded |
 
 ## The improvement loop
@@ -123,12 +142,48 @@ provision → build → ┌─ describe / seeds / harness → fuzz → triage
 ```
 
 Each round: fuzz a fresh or carried corpus, triage what it found, measure
-coverage on both tracks, then `refine` works out what was *not* covered and
-writes `artifacts/eval/<run-id>/worklist.md`, recording it with
+coverage on both tracks, then `refine` writes
+`artifacts/eval/<run-id>/worklist.md` and records it with
 `round-end --worklist <path>`. `round-advance` carries that path into the new
 round, where `describe` and `seeds` read it back with `pipeline_ctl.py
-worklist`. Coverage growth across rounds measures whether the loop is
-improving.
+worklist`.
+
+**Two signals steer the next round, and they are not interchangeable.**
+Coverage says where the fuzzer has *not been*: `refine` derives it from the
+run's own curve. Findings say where the bugs *have been*: `rca` records a
+research record per analysed crash (`finding-set`), naming the subsystem, the
+bug class, the calls involved, the state they needed, and the adjacent calls
+that share the same object, lock or teardown path. `refine` merges both into
+one worklist with every item tagged `[coverage]` or `[finding crash-NNNN]`.
+
+Without the second signal the loop only ever widens the surface and never
+returns to a place that already yielded, which is a fuzzing pipeline rather
+than a research loop. An `rca_done` crash with no research record is an
+integrity problem `validate` reports for exactly that reason: the analysis
+happened and nothing survived it.
+
+Coverage growth across rounds measures whether the loop is still learning; the
+per-subsystem rollup in `finding-list` measures where it has been paying off.
+
+**A reproducer is not yet a vulnerability.** It proves a crash condition,
+which is a bug report. What makes it a vulnerability is the weakness class and
+what the fault hands an attacker, and that has two halves recorded by two
+phases. `rca` records the impact record (`impact-set`): the primitive, which
+field the corruption lands on, whether the freed allocation can be reclaimed
+with attacker data, and what the attacker influences. `poc` answers who can
+reach it, with an experiment rather than an opinion — it re-runs the
+reproducer under the threat model's capability set. `report` joins them into
+an argued severity.
+
+The record stops at the primitive; no weaponization. `undetermined` is a valid
+outcome and costs nothing as long as `undetermined_reason` says what blocked
+the analysis, because a fault that disappears into GSP firmware genuinely
+cannot be followed further. What is not acceptable is a conclusion that
+outruns its evidence: `impact-list` closes with how many records can carry a
+severity and names the ones that cannot, and `validate` reports the same. An
+`rca_done` crash with no impact record is an integrity problem for the same
+reason as a missing research record — the report would carry a reproducer with
+no severity behind it.
 
 Ask `python3 tools/pipeline_ctl.py next` what to do; it returns a phase, or
 `decide`, or `advance-round`, or `complete`. The loop transition is:
