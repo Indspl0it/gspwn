@@ -939,6 +939,24 @@ class TestConfig(unittest.TestCase):
             gspwn_config.load(self.write(
                 "loop:\n  plateau_window_min: 10\n  coverage_sample_min: 10\n"))
 
+    def test_a_resume_anchor_carrying_a_quote_is_rejected(self):
+        """It is substituted into a shell line the operator already quoted, so
+        a quote would end that quoting and hand the rest to the shell. The
+        config is the wrong place to discover that, since the launch it breaks
+        is the one recovering from a panic."""
+        for bad in ('orchestrator:\n  resume_anchor: "the agent\'s brief"\n',
+                    'orchestrator:\n  resume_anchor: \'say "brief" first\'\n',
+                    'orchestrator:\n  resume_anchor: "   "\n'):
+            with self.assertRaises(gspwn_config.ConfigError, msg=bad) as cm:
+                gspwn_config.load(self.write(bad))
+            self.assertIn("resume_anchor", str(cm.exception))
+
+    def test_a_plain_resume_anchor_is_accepted(self):
+        cfg = gspwn_config.load(self.write(
+            "orchestrator:\n  resume_anchor: run brief, it is truth\n"))
+        self.assertEqual(cfg["orchestrator"]["resume_anchor"],
+                         "run brief, it is truth")
+
     def test_manager_url_follows_the_configured_port(self):
         p = self.write('track_k:\n  http: "127.0.0.1:9999"\n')
         self.assertEqual(gspwn_config.manager_url(p), "http://127.0.0.1:9999")
@@ -1412,34 +1430,48 @@ class TestPlateauAcrossRestarts(unittest.TestCase):
         return [{"ts": base + i * step, "edges": e, "gpu": gpu}
                 for i, e in enumerate(edges)]
 
-    def test_restart_inside_the_window_is_not_a_plateau(self):
-        # Climbing hard, then the fuzzer restarts and climbs again. Comparing
-        # across the reset gave -75% growth -> "plateaued" -> the loop stopped
-        # a campaign that was in fact still finding new edges fast.
+    def test_the_accumulation_curve_never_goes_backwards(self):
+        """The original bug: comparing across the reset gave -75% growth,
+        which read as a plateau and stopped a campaign that was in fact
+        finding new edges fast."""
         rows = self.rows([6000, 10000, 14000, 18000, 22000, 24000, 25000,
                           26000, 500, 2500, 4500, 6500])
-        verdict, detail = coverage_ctl.plateau_verdict(rows, 240, 0.02)
-        self.assertNotEqual(verdict, "plateaued", detail)
-        self.assertNotIn("-", detail.split("=")[-1])   # no negative growth
+        curve = [s for _n, s in coverage_ctl.accumulate(rows)]
+        self.assertEqual(curve, sorted(curve))
+        self.assertEqual(max(curve), 26000)
 
-    def test_growth_after_a_restart_is_measured_from_the_restart(self):
-        rows = self.rows([20000, 24000, 26000,
-                          500, 3000, 6000, 9000, 12000, 15000])
+    def test_a_run_mid_replay_is_unknown_not_plateaued(self):
+        """It has rediscovered nothing new, but it has not had the chance:
+        a flat curve during recovery is not evidence of saturation."""
+        rows = self.rows([6000, 14000, 22000, 26000, 500, 2500, 4500, 6500])
         verdict, detail = coverage_ctl.plateau_verdict(rows, 240, 0.02)
-        self.assertEqual(verdict, "growing")
-        self.assertIn("since a fuzzer restart", detail)
+        self.assertEqual(verdict, "unknown", detail)
+        self.assertIn("replaying", detail)
 
-    def test_a_flat_run_after_a_restart_still_plateaus(self):
-        rows = self.rows([20000, 24000, 26000,
-                          9000, 9010, 9020, 9030, 9040, 9050])
-        self.assertEqual(coverage_ctl.plateau_verdict(rows, 240, 0.02)[0],
-                         "plateaued")
+    def test_replay_after_a_restart_is_not_reported_as_growth(self):
+        """The expensive version of the same error. A saturated run panics,
+        replays its corpus, and the climb back reads as tens of percent of
+        growth — so on a box that panics by design, a dead campaign can keep
+        itself alive indefinitely through its own crashes."""
+        saturated = [int(20000 * (1 - 2.718 ** (-i / 8.0))) for i in range(40)]
+        replay = [int(19997 * (1 - 2.718 ** (-i / 40.0))) for i in range(60)]
+        verdict, detail = coverage_ctl.plateau_verdict(
+            self.rows(saturated + replay), 240, 0.02)
+        self.assertNotEqual(verdict, "growing", detail)
 
-    def test_too_little_data_since_a_restart_is_unknown(self):
-        rows = self.rows([20000, 24000, 26000, 28000, 30000, 500, 900])
+    def test_discovery_past_the_high_water_mark_is_growth(self):
+        """Recovery finished and the run went beyond where it had been. That
+        is the only thing after a restart that counts as discovery."""
+        rows = self.rows([20000, 24000, 26000, 500, 12000, 26000,
+                          30000, 34000, 38000, 42000])
         verdict, detail = coverage_ctl.plateau_verdict(rows, 240, 0.02)
-        self.assertEqual(verdict, "unknown")
-        self.assertIn("restarted", detail)
+        self.assertEqual(verdict, "growing", detail)
+
+    def test_a_flat_run_after_full_recovery_plateaus(self):
+        rows = self.rows([20000, 24000, 26000, 9000, 20000, 26000,
+                          26010, 26020, 26030, 26040])
+        verdict, detail = coverage_ctl.plateau_verdict(rows, 240, 0.02)
+        self.assertEqual(verdict, "plateaued", detail)
 
     def test_a_run_with_no_restart_is_unaffected(self):
         rows = self.rows([1000, 2000, 3000, 4000, 5000])
@@ -1452,6 +1484,165 @@ class TestPlateauAcrossRestarts(unittest.TestCase):
         seg, restarted = coverage_ctl.since_last_reset(rows)
         self.assertTrue(restarted)
         self.assertEqual(max(r["edges"] for r in rows), 26000)
+
+
+class TestDiscoveryModel(unittest.TestCase):
+    """The plateau decision is an extrapolation from a fitted species
+    accumulation curve, so it has to recover a known curve, refuse a curve it
+    does not describe, and measure against work rather than the clock."""
+
+    BASE = 1_700_000_000
+
+    def rows(self, pairs, gpu="ok", step=600):
+        """pairs: [(cumulative execs, reported edges)]"""
+        return [{"ts": self.BASE + i * step, "edges": e, "execs": x,
+                 "gpu": gpu} for i, (x, e) in enumerate(pairs)]
+
+    def power(self, beta, n=60, per=200_000, scale=2000):
+        return [(i * per, int(scale * i ** beta)) for i in range(1, n)]
+
+    def verdict(self, rows, horizon=24):
+        return coverage_ctl.plateau_verdict(rows, 240, 0.02,
+                                            horizon_hours=horizon)
+
+    def test_the_fit_recovers_a_known_discovery_exponent(self):
+        for beta in (0.2, 0.5, 0.9):
+            fit = coverage_ctl.heaps_fit(
+                coverage_ctl.accumulate(self.rows(self.power(beta))))
+            self.assertAlmostEqual(fit["beta"], beta, places=3)
+            self.assertGreater(fit["r2"], 0.999)
+
+    def test_executions_accumulate_across_a_counter_reset(self):
+        """A restart zeroes the exec counter. Work already done did happen,
+        and a negative delta would erase it."""
+        acc = coverage_ctl.accumulate(
+            self.rows([(1000, 10), (2000, 20), (3000, 30),
+                       (500, 5), (1500, 15)]))
+        self.assertEqual([n for n, _s in acc], [1000, 2000, 3000, 3500, 4500])
+
+    def test_edges_accumulate_as_a_running_maximum(self):
+        """Replay after a restart re-covers edges already counted, so the
+        curve must not move for them."""
+        acc = coverage_ctl.accumulate(
+            self.rows([(1000, 900), (2000, 26000), (3000, 500),
+                       (4000, 9000), (5000, 26050)]))
+        self.assertEqual([s for _n, s in acc],
+                         [900, 26000, 26000, 26000, 26050])
+
+    def test_a_near_linear_discovery_curve_is_growing(self):
+        self.assertEqual(self.verdict(self.rows(self.power(0.95)))[0],
+                         "growing")
+
+    def test_a_dead_flat_tail_is_a_plateau(self):
+        """The clearest plateau there is: not one input in the recent stretch
+        of work reached code the run had not already reached."""
+        climb = self.power(0.8, n=40)
+        flat = [((39 + i) * 200_000, climb[-1][1]) for i in range(1, 40)]
+        verdict, detail = self.verdict(self.rows(climb + flat))
+        self.assertEqual(verdict, "plateaued", detail)
+        self.assertIn("no new edge", detail)
+
+    def test_the_fit_follows_the_current_regime_not_the_whole_run(self):
+        """A run that climbed hard and then went flat would report a healthy
+        exponent if the early steep phase were allowed to dominate."""
+        climb = self.power(0.8, n=40)
+        flat = [((39 + i) * 200_000, climb[-1][1] + 1) for i in range(1, 40)]
+        rows = self.rows(climb + flat)
+        whole = coverage_ctl.heaps_fit(coverage_ctl.accumulate(rows))
+        tail = coverage_ctl.heaps_fit(
+            coverage_ctl.fit_tail(coverage_ctl.accumulate(rows), 0.5))
+        self.assertGreater(whole["beta"], tail["beta"])
+        self.assertLess(tail["beta"], 0.01)
+
+    def test_a_curve_the_model_does_not_describe_is_unknown(self):
+        """Extrapolating from a curve that is not a discovery curve is how a
+        confident wrong number reaches a report."""
+        noise = [500, 9000, 1200, 15000, 800, 20000, 3000, 40000, 1500, 60000]
+        rows = self.rows([(i * 100_000, noise[i % 10] + i)
+                          for i in range(1, 40)])
+        verdict, detail = self.verdict(rows)
+        self.assertEqual(verdict, "unknown", detail)
+        self.assertIn("does not fit the model", detail)
+
+    def test_a_superlinear_series_is_unknown(self):
+        """beta above 1 means edges are arriving faster than inputs, which an
+        accumulation curve cannot do — the series is something else."""
+        rows = self.rows([(i * 100_000, int(100 * i ** 2)) for i in range(1, 40)])
+        verdict, detail = self.verdict(rows)
+        self.assertEqual(verdict, "unknown", detail)
+        self.assertIn("beta", detail)
+
+    def test_too_few_points_is_unknown_not_plateaued(self):
+        rows = self.rows([(i * 100_000, 500 * i) for i in range(1, 6)])
+        verdict, detail = self.verdict(rows)
+        self.assertEqual(verdict, "unknown", detail)
+
+    def test_a_longer_horizon_expects_more_new_edges(self):
+        """The verdict answers 'is another campaign of THIS length worth
+        running', so the horizon has to move the number."""
+        fit = coverage_ctl.heaps_fit(
+            coverage_ctl.accumulate(self.rows(self.power(0.5))))
+        short = coverage_ctl.expected_new_edges(fit, 1_000_000)
+        long_ = coverage_ctl.expected_new_edges(fit, 10_000_000)
+        self.assertGreater(long_, short)
+
+    def test_discovery_slows_as_the_run_goes_on(self):
+        """Concavity: the same extra work buys fewer edges later. If this
+        fails the model is not a saturating one and the verdict is
+        meaningless."""
+        early = coverage_ctl.heaps_fit(
+            coverage_ctl.accumulate(self.rows(self.power(0.5, n=20))))
+        late = coverage_ctl.heaps_fit(
+            coverage_ctl.accumulate(self.rows(self.power(0.5, n=60))))
+        self.assertGreater(
+            coverage_ctl.expected_new_edges(early, 1_000_000),
+            coverage_ctl.expected_new_edges(late, 1_000_000))
+
+    def test_a_slow_stretch_is_not_mistaken_for_saturation(self):
+        """The reason the x axis is executions. Same wall-clock, same curve
+        shape, but one box did a hundredth of the work — measured against the
+        clock it looks saturated, measured against work it has barely
+        started."""
+        busy = self.rows(self.power(0.5))
+        idle = self.rows([(x // 100, e) for x, e in self.power(0.5)])
+        self.assertEqual(self.verdict(busy)[0], self.verdict(idle)[0])
+        self.assertLess(coverage_ctl.exec_rate_per_hour(idle),
+                        coverage_ctl.exec_rate_per_hour(busy))
+
+    def test_an_unhealthy_gpu_still_blocks_a_plateau_claim(self):
+        """A GPU off the bus flattens the curve exactly like saturation, and
+        only the plateau reading becomes a claim about the target."""
+        climb = self.power(0.8, n=40)
+        flat = [((39 + i) * 200_000, climb[-1][1]) for i in range(1, 40)]
+        rows = self.rows(climb + flat)
+        self.assertEqual(self.verdict(rows)[0], "plateaued")
+        for r in rows[-6:]:
+            r["gpu"] = "unreachable"
+        verdict, detail = self.verdict(rows)
+        self.assertEqual(verdict, "unknown", detail)
+        self.assertIn("GPU was not healthy", detail)
+
+    def test_a_flat_prefix_is_not_a_plateau_when_execs_stop_being_reported(self):
+        """accumulate() drops the execution axis at the first sample missing an
+        exec count and never picks it up again, so the tail can end long before
+        the run does. A flat prefix must not then be reported as a plateau: this
+        run quadrupled its coverage after the counts stopped."""
+        flat = [(i * 100_000, 1000) for i in range(1, 31)]
+        rows = self.rows(flat)
+        for i in range(20):
+            rows.append({"ts": rows[-1]["ts"] + 600, "edges": 1000 + 200 * i,
+                         "execs": None, "gpu": "ok"})
+        self.assertIsNone(coverage_ctl.exec_rate_per_hour(rows))
+        verdict, detail = self.verdict(rows)
+        self.assertNotEqual(verdict, "plateaued", detail)
+        self.assertNotIn("no new edge", detail)
+
+    def test_ols_refuses_a_degenerate_fit(self):
+        """A slope of zero from a flat series would read as a perfectly
+        trusted flat curve rather than as no information."""
+        self.assertIsNone(coverage_ctl._ols([1, 2, 3], [5, 5, 5]))
+        self.assertIsNone(coverage_ctl._ols([1, 1, 1], [1, 2, 3]))
+        self.assertIsNone(coverage_ctl._ols([1, 2], [1, 2]))
 
 
 class TestTrackUCorpusCounting(unittest.TestCase):
@@ -1844,9 +2035,13 @@ class TestOrchestratorRun(StateTempMixin, unittest.TestCase):
         self.addCleanup(lambda: setattr(orchestrator_ctl, "ORCH_PATH",
                                         self._orig_path))
         self._orig_cfg = orchestrator_ctl.cfg
+        # Built from DEFAULTS rather than hand-written, so a new orchestrator
+        # key cannot make cmd_run raise KeyError here while working in
+        # production, where load() always fills every key.
         orchestrator_ctl.cfg = lambda: {
-            "orchestrator": {"window_min": 60, "max_same_boot_starts": 2,
-                             "max_reboots": 10, "command": "true"}}
+            "orchestrator": dict(gspwn_config.DEFAULTS["orchestrator"],
+                                 window_min=60, max_same_boot_starts=2,
+                                 max_reboots=10, command="true")}
         self.addCleanup(lambda: setattr(orchestrator_ctl, "cfg",
                                         self._orig_cfg))
         # Harvest shells out to crashlog_ctl as root; this suite runs offline.
@@ -2080,6 +2275,247 @@ class TestFindingSteersSomewhere(StateTempMixin, unittest.TestCase):
         self.assertEqual([p for p in problems if "steers nothing" in p], [])
 
 
+GOOD_IMPACT = {"primitive": "controlled-write",
+               "consequence": "privilege-escalation",
+               "corrupted_object": "uvm_va_range_t",
+               "cache": "kmalloc-512",
+               "access_type": "write", "access_size": 8,
+               "overwrite_target": "function-pointer",
+               "reclaim_path": "UVM_CREATE_EXTERNAL_RANGE reallocates from "
+                               "kmalloc-512 with caller-sized data",
+               "allocation_site": "uvm_va_range.c:118",
+               "free_site": "uvm_va_range.c:412",
+               "access_site": "uvm_channel.c:906",
+               "attacker_control": ["allocation-timing", "written-data"],
+               "evidence": ["uvm_va_range.c:412", "uvm_channel.c:906"],
+               "unverified": ["that the reclaim wins the race in practice"],
+               "confidence": "medium"}
+
+
+class TestImpactRecord(StateTempMixin, unittest.TestCase):
+    """A reproducer proves a crash condition, which is a bug report. The
+    impact record is what makes it a vulnerability report, so its schema has
+    to refuse the shapes that would let an unargued severity through."""
+
+    def setUp(self):
+        super().setUp()
+        with ps.transaction() as st:
+            self.cid = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "unique", "dir": "d"})
+            ps.set_finding(st, self.cid, GOOD_FINDING)
+
+    def store(self, **over):
+        with ps.transaction() as st:
+            return ps.set_impact(st, self.cid, dict(GOOD_IMPACT, **over))
+
+    def refused(self, **over):
+        with self.assertRaises(ValueError) as e:
+            self.store(**over)
+        return str(e.exception)
+
+    def test_a_complete_record_is_stored(self):
+        im = self.store()
+        self.assertEqual(im["primitive"], "controlled-write")
+        self.assertEqual(im["access_size"], 8)
+
+    def test_a_misspelled_field_is_refused_rather_than_dropped(self):
+        """Dropping it would leave the real field at its default while the
+        command reported success."""
+        with self.assertRaises(ValueError) as e:
+            with ps.transaction() as st:
+                ps.set_impact(st, self.cid,
+                              dict(GOOD_IMPACT, primative="controlled-write"))
+        self.assertIn("unknown impact field", str(e.exception))
+
+    def test_an_unknown_primitive_is_refused(self):
+        """The vocabulary is closed so the report can group by it; 'rce' is
+        also exactly the word an over-claiming record would reach for."""
+        self.assertIn("unknown primitive", self.refused(primitive="rce"))
+
+    def test_an_unknown_consequence_is_refused(self):
+        self.assertIn("unknown consequence",
+                      self.refused(consequence="critical"))
+
+    def test_an_unknown_attacker_control_entry_is_refused(self):
+        self.assertIn("unknown attacker_control",
+                      self.refused(attacker_control=["everything"]))
+
+    def test_a_malformed_cwe_is_refused(self):
+        self.assertIn("CWE-416", self.refused(cwe="416"))
+
+    def test_a_negative_access_size_is_refused(self):
+        self.assertIn("access_size", self.refused(access_size=-4))
+
+    def test_a_boolean_access_size_is_refused(self):
+        """bool is an int subclass, so True would otherwise store as size 1."""
+        self.assertIn("access_size", self.refused(access_size=True))
+
+    def test_list_entries_are_deduped_and_blanks_dropped(self):
+        im = self.store(evidence=["a.c:1", "", "a.c:1", "  b.c:2  "])
+        self.assertEqual(im["evidence"], ["a.c:1", "b.c:2"])
+
+    def test_a_duplicate_is_not_counted_as_a_second_vulnerability(self):
+        self.store()
+        with ps.transaction() as st:
+            other = ps.register_crash(
+                st, {"track": "K", "title": "t2", "stack_hash": "h2",
+                     "status": "unique", "dir": "d"})
+            ps.set_impact(st, other, GOOD_IMPACT)
+        self.assertEqual(len(ps.impacts(ps.load())), 2)
+        with ps.transaction() as st:
+            st["crashes"][other]["status"] = "duplicate"
+            st["crashes"][other]["duplicate_of"] = self.cid
+        self.assertEqual(len(ps.impacts(ps.load())), 1)
+
+    def test_rca_done_without_an_impact_is_an_integrity_problem(self):
+        """Otherwise the report carries a reproducer with no argued severity,
+        which is the gap this record exists to close."""
+        with ps.transaction() as st:
+            st["crashes"][self.cid]["status"] = "rca_done"
+        problems = ps.validate(ps.load())
+        self.assertTrue(any("no impact record" in p for p in problems),
+                        problems)
+
+
+class TestImpactSupportsItsConclusion(StateTempMixin, unittest.TestCase):
+    """The expensive failure is not a malformed record, it is a well-formed
+    one whose conclusion outruns its evidence. A severity a vendor engineer
+    disproves discredits every other finding in the same report."""
+
+    def gap(self, **over):
+        return ps.impact_support_gap(dict(GOOD_IMPACT, **over))
+
+    def test_an_evidenced_record_supports_itself(self):
+        self.assertIsNone(self.gap())
+
+    def test_undetermined_without_a_reason_is_flagged(self):
+        """Unexplained undetermined is indistinguishable from analysis nobody
+        did."""
+        msg = self.gap(primitive="undetermined", consequence="undetermined")
+        self.assertIn("undetermined_reason", msg)
+
+    def test_undetermined_with_a_reason_is_accepted(self):
+        """A path that vanishes into GSP firmware genuinely cannot be followed
+        further, and that answer has to stay cheap — otherwise the agent
+        invents an impact story, which is the worst outcome available."""
+        self.assertIsNone(self.gap(
+            primitive="undetermined", consequence="undetermined",
+            undetermined_reason="the faulting path enters GSP firmware; the "
+                                "callee is not visible from the open modules"))
+
+    def test_a_primitive_with_no_evidence_is_flagged(self):
+        msg = self.gap(evidence=[])
+        self.assertIn("no evidence", msg)
+
+    def test_primitive_none_needs_no_evidence(self):
+        """A fault that only kills the machine is a complete answer, and most
+        kernel faults are that."""
+        self.assertIsNone(self.gap(primitive="none", consequence="dos-only",
+                                   evidence=[], attacker_control=[]))
+
+    def test_escalation_from_an_undetermined_primitive_is_flagged(self):
+        msg = self.gap(primitive="undetermined",
+                       consequence="container-escape",
+                       undetermined_reason="could not follow the callee")
+        self.assertIn("outruns the mechanism", msg)
+
+    def test_escalation_with_no_attacker_control_is_flagged(self):
+        msg = self.gap(attacker_control=["none"])
+        self.assertIn("above denial of service", msg)
+
+    def test_escalation_with_only_unknown_control_is_flagged(self):
+        self.assertIn("above denial of service",
+                      self.gap(attacker_control=["unknown"]))
+
+    def test_info_disclosure_needs_no_attacker_control(self):
+        """An out-of-bounds read can hand back adjacent memory without the
+        attacker influencing anything, so requiring control here would push
+        real findings down to dos-only."""
+        self.assertIsNone(self.gap(primitive="info-leak",
+                                   consequence="info-disclosure",
+                                   attacker_control=[]))
+
+    def test_a_consequence_weaker_than_the_primitive_is_not_flagged(self):
+        """Under-claiming costs nothing. Flagging it would push the agent
+        towards escalating, which is the direction that does cost something."""
+        self.assertIsNone(self.gap(consequence="dos-only",
+                                   attacker_control=[]))
+
+    def test_an_unsupported_record_is_reported_by_validate(self):
+        with ps.transaction() as st:
+            cid = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "unique", "dir": "d"})
+            ps.set_impact(st, cid, dict(GOOD_IMPACT, evidence=[]))
+        problems = ps.validate(ps.load())
+        self.assertTrue(any("does not support its conclusion" in p
+                            for p in problems), problems)
+
+    def test_an_unsupported_duplicate_is_not_reported(self):
+        """Duplicates never reach the report as their own finding, so an
+        unsupported one costs nothing and reporting it is noise."""
+        with ps.transaction() as st:
+            keep = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "unique", "dir": "d"})
+            ps.set_impact(st, keep, GOOD_IMPACT)
+            dup = ps.register_crash(
+                st, {"track": "K", "title": "t2", "stack_hash": "h2",
+                     "status": "unique", "dir": "d"})
+            ps.set_impact(st, dup, dict(GOOD_IMPACT, evidence=[]))
+        with ps.transaction() as st:
+            st["crashes"][dup]["status"] = "duplicate"
+            st["crashes"][dup]["duplicate_of"] = keep
+        problems = ps.validate(ps.load())
+        self.assertEqual([p for p in problems
+                          if "does not support its conclusion" in p], [])
+
+
+class TestCweDerivation(StateTempMixin, unittest.TestCase):
+    """CWE is derived from bug_class rather than typed in: the mapping is
+    mechanical, and a free-text field invites a plausible wrong number that
+    nobody re-checks."""
+
+    def crash_with(self, bug_class, **impact_over):
+        with ps.transaction() as st:
+            cid = ps.register_crash(
+                st, {"track": "K", "title": "t" + bug_class,
+                     "stack_hash": "h" + bug_class, "status": "unique",
+                     "dir": "d"})
+            ps.set_finding(st, cid, dict(GOOD_FINDING, bug_class=bug_class))
+            if impact_over is not None:
+                ps.set_impact(st, cid, dict(GOOD_IMPACT, **impact_over))
+            return st["crashes"][cid]
+
+    def test_uaf_derives_cwe_416(self):
+        self.assertEqual(ps.cwe_of(self.crash_with("uaf")), "CWE-416")
+
+    def test_oob_write_derives_cwe_787(self):
+        self.assertEqual(ps.cwe_of(self.crash_with("oob-write")), "CWE-787")
+
+    def test_bug_class_other_derives_nothing_rather_than_guessing(self):
+        self.assertEqual(ps.cwe_of(self.crash_with("other")), "")
+
+    def test_an_explicit_cwe_overrides_the_derived_one(self):
+        """For bug_class 'other', and for the cases where a more specific
+        child class is right."""
+        c = self.crash_with("integer-overflow", cwe="CWE-680")
+        self.assertEqual(ps.cwe_of(c), "CWE-680")
+
+    def test_every_bug_class_has_a_mapping_entry(self):
+        """A bug_class added later without a CWE entry would silently report
+        an empty weakness class for every finding of that kind."""
+        self.assertEqual(sorted(ps.CWE_OF_BUG_CLASS), sorted(ps.BUG_CLASS))
+
+    def test_a_crash_with_no_finding_has_no_cwe(self):
+        with ps.transaction() as st:
+            cid = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "unique", "dir": "d"})
+            self.assertEqual(ps.cwe_of(st["crashes"][cid]), "")
+
+
 class TestKnowledgeNotes(unittest.TestCase):
     """knowledge/ is committed to a public repo and appended by parallel
     agents on a machine that panics on purpose."""
@@ -2273,6 +2709,21 @@ class TestResumeCommandRendering(unittest.TestCase):
         quoted, so an apostrophe in it would end that quoting."""
         self.assertNotIn("'", orchestrator_ctl.RESUME_ANCHOR)
         self.assertNotIn('"', orchestrator_ctl.RESUME_ANCHOR)
+
+    def test_a_configured_anchor_replaces_the_default(self):
+        """The anchor is the first thing a resumed agent reads, so it is a
+        tuning knob and an operator must be able to change it."""
+        out = orchestrator_ctl.render_command("c -p '{anchor}'", "U1",
+                                              "read the brief first")
+        self.assertEqual(out, "c -p 'read the brief first'")
+
+    def test_the_shipped_config_anchor_matches_the_module_default(self):
+        """Two copies of the same prompt: campaign.yaml is what actually runs
+        and the module constant is only the unreadable-config fallback, so a
+        drift between them would change behaviour on the recovery path only."""
+        self.assertEqual(
+            gspwn_config.load()["orchestrator"]["resume_anchor"],
+            orchestrator_ctl.RESUME_ANCHOR)
 
 
 class TestBrief(StateTempMixin, unittest.TestCase):

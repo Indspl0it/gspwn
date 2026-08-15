@@ -5,9 +5,12 @@ disclosure packages.
 Write artifacts/report/<YYYY-MM-DD>-report.md. Penetration-test style,
 detailed vulnerability sections ONLY — no executive summary. Per finding:
 - title + track (K kernel driver / U container toolkit)
+- weakness class (CWE) and description, from the impact record
 - description and technical detail (from the RCA file)
 - affected code and versions (kernel, driver commit, GSP firmware — from
   manifest.json)
+- impact: the primitive, what it lands on, and what the attacker influences —
+  see "Arguing a severity" below
 - severity with justification, reproduction rate, reliable/flaky label
 - PoC: path, build/run steps, expected sanitizer signature (from the PoC
   README)
@@ -34,6 +37,36 @@ floor because the RCA prose reads complete without them:
 Report the record and the prose consistently. Where they disagree the record
 is the later and more structured statement, but a disagreement is itself worth
 resolving before the report goes out rather than picking one silently.
+
+## Arguing a severity
+`python3 tools/pipeline_ctl.py impact-list` prints what rca established about
+what each fault gives an attacker. A severity is argued from that record, not
+asserted alongside it.
+
+Impact has two halves and they come from different phases. rca's impact record
+says **what the fault is worth**: the primitive, which field the corruption
+lands on, whether the freed allocation can be reclaimed with attacker data,
+what the attacker influences. The poc phase's profile check says **who can
+reach it**. A severity needs both, and neither substitutes for the other — a
+controlled write nobody unprivileged can trigger and a trivially reachable
+null dereference are both real findings and neither is critical.
+
+Write the chain explicitly, in this order: weakness (CWE) → primitive → what
+it lands on → what the attacker controls → reachability → consequence. A
+reader who disagrees should be able to see which link they disagree with. A
+severity that arrives as a single adjective gives them nothing to check, and
+"we could not follow the chain past here" is a legitimate place to stop.
+
+Carry `unverified` from the record into the finding text. Those are the claims
+rca could not check against source, and a severity resting on one has to say
+so where the reader can see it.
+
+Findings whose record `impact-list` marks as unable to carry a severity are
+reported with their mechanism and **no severity claim at all**, in the same
+way an unreproducible crash is reported as unverified. Do not fill the gap
+with a judgement of your own: rca had the source open and stopped, and a
+severity invented at report time is the one a vendor disproves first, taking
+the credibility of everything else in the document with it.
 
 ## Scoping the impact claim
 Two claims are easy to overstate and both get challenged first.

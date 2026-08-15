@@ -13,6 +13,7 @@ flock for the whole cycle. Bare load()/save() pairs lose updates and are a bug.
 import fcntl
 import json
 import os
+import re
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -76,7 +77,12 @@ DEFAULT_CRASH = {"track": "K", "title": "", "stack_hash": "",
                  "signal": "unclassified",
                  # finding: the research record from rca, or None when the
                  # crash has not been analysed. See DEFAULT_FINDING.
-                 "finding": None}
+                 "finding": None,
+                 # impact: what the fault gives an attacker, or None. See
+                 # DEFAULT_IMPACT. Separate from finding because they answer
+                 # to different readers: finding steers the next round, impact
+                 # is what lets the report argue a severity.
+                 "impact": None}
 
 # The fields rca fills in. ioctls/preconditions/adjacent are what describe and
 # seeds consume; source_refs/hypothesis/confidence are what the report and the
@@ -95,6 +101,98 @@ FINDING_TEXT = ("subsystem", "hypothesis", "no_adjacent_reason")
 # the feedback edge look wired while carrying nothing. Not ioctls alone:
 # Track U findings are userspace and have none.
 FINDING_TARGETING = ("ioctls", "preconditions", "adjacent")
+
+# ---------------------------------------------------------------- impact ---
+# The second half of what rca produces. The finding says where to look next;
+# this says what the fault is worth.
+#
+# A reproducer proves a crash condition. That is a bug report: the software
+# faulted, here is the input. It is not yet a vulnerability report, which has
+# to name the weakness and say what the fault hands an attacker. Without that
+# second half a severity is an assertion, and an asserted severity that a
+# vendor engineer disproves costs the credibility of every other finding in
+# the same report.
+#
+# This record deliberately stops at the primitive. Describing that a UAF gives
+# a controlled write into a reclaimable allocation is analysis; building the
+# escalation is not, and is out of scope for this campaign.
+
+# Weakness class per bug_class. Derived rather than typed in: the mapping is
+# mechanical, and a free-text CWE field invites a plausible wrong number that
+# nobody re-checks. `cwe` on the record overrides it, for `other` and for the
+# cases where a more specific child class is right.
+CWE_OF_BUG_CLASS = {
+    "uaf": "CWE-416", "double-free": "CWE-415", "oob-read": "CWE-125",
+    "oob-write": "CWE-787", "race": "CWE-362", "refcount": "CWE-911",
+    "null-deref": "CWE-476", "uninit": "CWE-908", "deadlock": "CWE-833",
+    "leak": "CWE-401", "type-confusion": "CWE-843",
+    "integer-overflow": "CWE-190", "other": "",
+}
+CWE_RE = re.compile(r"^CWE-\d+$")
+
+# What the memory-safety violation actually hands an attacker. The field the
+# whole record exists for; everything else is evidence for this one.
+PRIMITIVE = ("none", "info-leak", "uncontrolled-write", "controlled-write",
+             "controlled-free", "refcount-imbalance", "type-confusion",
+             "undetermined")
+# The highest outcome the evidence supports — not a guess at the worst case
+# imaginable. `dos-only` is a complete answer for most kernel faults.
+CONSEQUENCE = ("dos-only", "info-disclosure", "privilege-escalation",
+               "container-escape", "undetermined")
+# What the sanitizer said about the bad access. KASAN reports all of this
+# verbatim, so it is transcription rather than judgement.
+ACCESS_TYPE = ("read", "write", "free", "unknown")
+# Which field the corruption lands on. This is what sets the ceiling: an
+# overwritten function pointer and an overwritten flags byte are the same
+# memory-safety bug and very different vulnerabilities.
+OVERWRITE_TARGET = ("function-pointer", "length-or-size", "refcount",
+                    "index-or-offset", "list-pointer", "flags-or-state",
+                    "data-buffer", "unknown", "not-applicable")
+# What an attacker influences. Closed so the report can group findings by it.
+ATTACKER_CONTROL = ("allocation-timing", "allocation-size", "written-data",
+                    "written-offset", "freed-pointer", "object-lifetime",
+                    "call-ordering", "none", "unknown")
+
+DEFAULT_IMPACT = {
+    "primitive": "undetermined",
+    "consequence": "undetermined",
+    # Empty means "derive from the finding's bug_class"; see cwe_of.
+    "cwe": "",
+    "corrupted_object": "",     # the struct or allocation the fault touches
+    "cache": "",                # slab cache / size class it comes from
+    "access_type": "unknown",
+    "access_size": None,        # bytes, from the sanitizer report
+    "overwrite_target": "unknown",
+    "reclaim_path": "",         # how a freed allocation can be re-occupied
+    "race_window": "",          # for race/UAF: what has to interleave
+    "allocation_site": "",      # file.c:line
+    "free_site": "",
+    "access_site": "",
+    "attacker_control": [],
+    "evidence": [],             # file.c:line or report refs behind the claim
+    "unverified": [],           # the specific claims not checked against source
+    "confidence": "low",
+    # Why the primitive or the consequence is undetermined. Required in that
+    # case: see impact_support_gap.
+    "undetermined_reason": "",
+}
+IMPACT_LISTS = ("attacker_control", "evidence", "unverified")
+IMPACT_TEXT = ("cwe", "corrupted_object", "cache", "reclaim_path",
+               "race_window", "allocation_site", "free_site", "access_site",
+               "undetermined_reason")
+IMPACT_VOCAB = (("primitive", PRIMITIVE), ("consequence", CONSEQUENCE),
+                ("access_type", ACCESS_TYPE),
+                ("overwrite_target", OVERWRITE_TARGET),
+                ("confidence", CONFIDENCE))
+# Consequences that require the attacker to influence something. An outcome
+# above denial of service argued from an attacker who controls nothing is the
+# claim that gets challenged first.
+CONSEQUENCE_NEEDS_CONTROL = ("privilege-escalation", "container-escape")
+# Primitives that are a claim about code rather than an absence of one, so
+# they need a source reference behind them.
+PRIMITIVE_NEEDS_EVIDENCE = tuple(p for p in PRIMITIVE
+                                 if p not in ("none", "undetermined"))
+
 DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  "ended": None, "run_ids": [], "coverage_verdict": "unknown",
                  "edges_start": None, "edges_end": None, "new_crashes": 0,
@@ -652,20 +750,20 @@ def register_crash(state, crash):
     return cid
 
 
-def _finding_strings(value, field):
-    """A finding list field, cleaned: non-empty strings, deduped, in order.
+def _finding_strings(value, field, kind="finding"):
+    """A record's list field, cleaned: non-empty strings, deduped, in order.
 
     Order is preserved because rca writes the ioctl sequence in the order the
     reproducer calls them, and describe models a sequence, not a set.
     """
     if isinstance(value, str) or not isinstance(value, (list, tuple)):
-        raise ValueError("finding field %r must be a list of strings, got %s"
-                         % (field, type(value).__name__))
+        raise ValueError("%s field %r must be a list of strings, got %s"
+                         % (kind, field, type(value).__name__))
     out = []
     for item in value:
         if not isinstance(item, str):
-            raise ValueError("finding field %r must contain strings, got %s"
-                             % (field, type(item).__name__))
+            raise ValueError("%s field %r must contain strings, got %s"
+                             % (kind, field, type(item).__name__))
         item = item.strip()
         if item and item not in out:
             out.append(item)
@@ -786,6 +884,162 @@ def findings(state, subsystem=None, bug_class=None):
     return out
 
 
+def normalize_impact(impact):
+    """Validate and fill in an impact record -> the stored dict.
+
+    Same contract as normalize_finding: unknown keys are refused rather than
+    dropped, so a misspelled field cannot leave the real one at its default
+    while the command reports success.
+    """
+    if not isinstance(impact, dict):
+        raise ValueError("an impact must be a JSON object, got %s"
+                         % type(impact).__name__)
+    unknown = sorted(set(impact) - set(DEFAULT_IMPACT))
+    if unknown:
+        raise ValueError("unknown impact field(s): %s (expected one of %s)"
+                         % (", ".join(unknown),
+                            ", ".join(sorted(DEFAULT_IMPACT))))
+    out = dict(DEFAULT_IMPACT)
+    for k in IMPACT_LISTS:
+        out[k] = []
+    out.update({k: v for k, v in impact.items() if v is not None})
+    for k in IMPACT_LISTS:
+        out[k] = _finding_strings(out[k], k, kind="impact")
+    for k in IMPACT_TEXT:
+        if not isinstance(out[k], str):
+            raise ValueError("impact field %r must be a string, got %s"
+                             % (k, type(out[k]).__name__))
+        out[k] = out[k].strip()
+    for k, vocab in IMPACT_VOCAB:
+        if out[k] not in vocab:
+            raise ValueError("unknown %s: %r (expected one of %s)"
+                             % (k, out[k], ", ".join(vocab)))
+    for item in out["attacker_control"]:
+        if item not in ATTACKER_CONTROL:
+            raise ValueError("unknown attacker_control: %r (expected one of "
+                             "%s)" % (item, ", ".join(ATTACKER_CONTROL)))
+    if out["cwe"] and not CWE_RE.match(out["cwe"]):
+        raise ValueError("cwe must look like 'CWE-416', got %r. Leave it "
+                         "empty to derive it from the finding's bug_class"
+                         % out["cwe"])
+    size = out["access_size"]
+    if size is not None and not (isinstance(size, int)
+                                 and not isinstance(size, bool) and size > 0):
+        raise ValueError("access_size must be a positive integer of bytes or "
+                         "absent, got %r" % (size,))
+    return out
+
+
+def cwe_of(crash):
+    """The weakness class for a crash: the impact's override, else derived.
+
+    Derived from the finding's bug_class, which is already a closed
+    vocabulary, so the two cannot disagree by drift. Returns "" when the crash
+    has no finding, or when bug_class is 'other' and nothing was recorded — an
+    empty CWE is honest, a guessed one is not.
+    """
+    impact = crash.get("impact") or {}
+    if impact.get("cwe"):
+        return impact["cwe"]
+    finding = crash.get("finding") or {}
+    return CWE_OF_BUG_CLASS.get(finding.get("bug_class") or "", "")
+
+
+def impact_support_gap(impact):
+    """Why this record does not support its own conclusion, or None.
+
+    Three ways an impact record goes wrong, in rising order of what they cost:
+
+    1. It concludes nothing and does not say why. The same escape hatch as
+       no_adjacent_reason, for the same reason: "the consequence cannot be
+       determined from outside GSP firmware" is a real answer and has to stay
+       cheap to give, or the agent invents an impact story instead. That is
+       the worst available outcome here, so undetermined is never penalised —
+       only unexplained undetermined is.
+    2. It claims a primitive with no evidence. A primitive is a claim about
+       code, and a claim about code with no file:line behind it is a guess
+       wearing a vocabulary.
+    3. Its consequence outruns its primitive, or rests on an attacker who
+       controls nothing. This is the expensive one. A privilege-escalation
+       conclusion drawn from an undetermined primitive is exactly the finding
+       a vendor engineer disproves in ten minutes, and it takes the
+       credibility of every other finding in the report with it.
+
+    Deliberately not flagged: a consequence weaker than the primitive would
+    support. Under-claiming costs nothing and flagging it would push the agent
+    towards escalating, which is the direction that does cost something.
+    """
+    primitive = impact.get("primitive") or "undetermined"
+    consequence = impact.get("consequence") or "undetermined"
+    reason = (impact.get("undetermined_reason") or "").strip()
+    evidence = impact.get("evidence") or []
+    control = set(impact.get("attacker_control") or [])
+
+    if (primitive == "undetermined" or consequence == "undetermined") \
+            and not reason:
+        return ("primitive=%s consequence=%s, and no undetermined_reason "
+                "saying what blocked the analysis. Undetermined is a valid "
+                "answer here; an unexplained one is not, because nobody "
+                "later can tell it apart from an analysis that was skipped"
+                % (primitive, consequence))
+    if primitive in PRIMITIVE_NEEDS_EVIDENCE and not evidence:
+        return ("claims primitive=%s with no evidence. That is a claim about "
+                "code, so it needs the file:line it rests on before a report "
+                "can put a severity on it" % primitive)
+    if consequence in CONSEQUENCE_NEEDS_CONTROL:
+        if primitive in ("none", "undetermined"):
+            return ("consequence=%s argued from primitive=%s. The conclusion "
+                    "outruns the mechanism: name what the fault actually "
+                    "gives an attacker, or lower the consequence"
+                    % (consequence, primitive))
+        if not control or control <= {"none", "unknown"}:
+            return ("consequence=%s with attacker_control=%s. An outcome "
+                    "above denial of service needs the attacker to influence "
+                    "something; if they influence nothing, the defensible "
+                    "answer is dos-only"
+                    % (consequence, ", ".join(sorted(control)) or "empty"))
+    return None
+
+
+def impacts_unsupported(state):
+    """[(crash_id, impact, why)] for records that do not support themselves."""
+    out = []
+    for cid, im in impacts(state):
+        why = impact_support_gap(im)
+        if why:
+            out.append((cid, im, why))
+    return out
+
+
+def set_impact(state, cid, impact):
+    """Attach rca's impact record to a crash (replaces any previous one)."""
+    if cid not in state["crashes"]:
+        raise ValueError("unknown crash id: %s" % cid)
+    state["crashes"][cid]["impact"] = normalize_impact(impact)
+    return state["crashes"][cid]["impact"]
+
+
+def impacts(state, primitive=None, consequence=None):
+    """Every recorded impact record, as [(crash_id, impact)].
+
+    Duplicates are skipped for the same reason findings() skips them: they
+    describe the same bug as their surviving entry, and counting both would
+    report one vulnerability as several.
+    """
+    out = []
+    for cid in sorted(state["crashes"]):
+        c = state["crashes"][cid]
+        im = c.get("impact")
+        if not im or c.get("status") == "duplicate":
+            continue
+        if primitive and im.get("primitive") != primitive:
+            continue
+        if consequence and im.get("consequence") != consequence:
+            continue
+        out.append((cid, im))
+    return out
+
+
 def validate(state):
     """Return a list of human-readable integrity problems (empty == clean)."""
     problems = []
@@ -860,6 +1114,25 @@ def validate(state):
                             "learned nothing from it (record one with: "
                             "pipeline_ctl.py finding-set %s --json ...)"
                             % (cid, cid))
+        if c.get("impact") is not None:
+            try:
+                im = normalize_impact(c["impact"])
+            except ValueError as e:
+                problems.append("%s has an invalid impact: %s" % (cid, e))
+            else:
+                gap = (None if c.get("status") == "duplicate"
+                       else impact_support_gap(im))
+                if gap:
+                    problems.append("%s has an impact record that does not "
+                                    "support its conclusion: %s" % (cid, gap))
+        elif c.get("status") == "rca_done":
+            # A crash analysed but never assessed reaches the report as a
+            # reproducer with no severity behind it, which is a bug report
+            # rather than a vulnerability report.
+            problems.append("%s is rca_done but has no impact record — the "
+                            "report would carry a reproducer with no argued "
+                            "severity (record one with: pipeline_ctl.py "
+                            "impact-set %s --json ...)" % (cid, cid))
     for i, r in enumerate(state.get("rounds", []), start=1):
         if r.get("round") != i:
             problems.append("round %d is numbered %r (rounds must be "

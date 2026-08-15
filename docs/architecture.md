@@ -473,17 +473,66 @@ stand in for coverage.
 
 ### The plateau test
 
-Growth is measured over the trailing `plateau_window_min` of the curve:
+Coverage growth is a species-discovery process: each edge is a species, each
+executed input a sampled individual, and distinct-edges-against-inputs is a
+species accumulation curve. That framing is Böhme's (*STADS: Software Testing
+as Species Discovery*, TOSEM 2018) and it is what makes the question
+answerable rather than a matter of taste.
+
+The curve is built on two axes, and both differ from the obvious choice:
+
+- **x is executions, not wall-clock.** Fuzzing progress is driven by inputs
+  executed. This box panics by design, so a fixed time window can contain
+  wildly different amounts of real testing, and a slow or frequently
+  restarting hour would look exactly like saturation.
+- **y is the running maximum, not the reported count.** syzkaller reloads and
+  re-executes its corpus after every restart, so the edge count climbs back
+  towards where it was. That climb is replay, not discovery. Accumulating with
+  `max()` makes it contribute exactly zero.
+
+Both counters reset when the fuzzer restarts. Executions accumulate (a reset
+means the delta is the new reading itself); edges accumulate as a maximum.
+
+Heaps' law is fitted to the recent stretch of the curve by least squares on
+`log S` against `log n`:
 
 ```
-growth = (edges_at_end - edges_at_window_start) / edges_at_window_start
-plateaued  if  growth < plateau_min_growth
+S(n) = K * n**beta,  0 < beta <= 1
+plateaued  if  K((n + dn)**beta - n**beta) < plateau_new_edges
+           where dn = observed exec rate * horizon_hours
 ```
 
-`unknown` is a real answer, returned when there are fewer than three usable
-samples, when the samples span less than the window, or when there is no
-non-zero edge baseline. The loop treats `unknown` as a **stop**, so a broken
-sampler can never authorize another campaign.
+`beta` is the discovery exponent: near 1 the run finds edges about as fast as
+it executes inputs, near 0 it has saturated. The decision is an
+**extrapolation**, not a threshold on a percentage — the question the loop
+asks is how many new edges another campaign is expected to find, which is in
+the units of the thing being predicted. A growth percentage is not: the same
+percentage means ten edges early in a run and a thousand late in one.
+
+Only the last `fit_tail_fraction` of the run's executions is fitted. A fit over
+the whole run is dominated by the early steep phase, so a run that climbed hard
+and then went flat would still report a healthy exponent.
+
+**What this cannot tell you.** The estimators this framing is known for —
+Good-Turing discovery probability, Chao1 richness — need per-species frequency
+counts: how many edges were hit exactly once, exactly twice. syz-manager
+reports an aggregate edge count and nothing per-edge, so no "we have covered
+X% of the driver" claim is available here, and none is made. `max()` is also a
+conservative estimate of the union: a post-restart process could cover an edge
+the earlier one missed while its total is still lower. The bias runs towards
+under-reporting discovery.
+
+`unknown` is a real answer, and the loop treats it as a **stop** so a broken
+sampler can never authorize another campaign. It is returned when there are
+fewer than three usable samples, when there are too few points to fit, when
+the fuzzer is still replaying its corpus after a restart and has not yet
+returned to its own high-water mark, when `beta` falls outside `(0, 1]`, and —
+the case a threshold rule has no way to express — when the curve does not fit
+the model well enough (`R2 < model_min_r2`) to extrapolate from at all.
+
+A run whose source records no execution count falls back to the older
+window-based growth test, on the accumulation curve, and says so in its detail
+line.
 
 A flat window over an unhealthy GPU is also `unknown`. Every sample records
 the GPU's state in the curve's `gpu` column, probed with `nvidia-smi`. A GPU
