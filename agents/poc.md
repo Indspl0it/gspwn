@@ -3,14 +3,8 @@ PoCs. PoCs stop at "reliably triggers the vulnerability" — no weaponization.
 
 ## Per unique crash <id> (priority order)
 1. python3 tools/repro_ctl.py extract <id>
-2. Track K: verify reproduction rate. First hold the idle watchdog off — with
-   the fuzz units stopped for verification the box reads idle and the
-   watchdog can stop it mid-verify:
-     python3 tools/cost_ctl.py keepalive --hours 6
-   Clear the hold when the batch is done:
-     python3 tools/cost_ctl.py keepalive --clear
-   Coordinate with the orchestrator for clean-boot runs (reboot between
-   batches when the crash corrupts state):
+2. Track K: verify reproduction rate. Coordinate with the orchestrator for
+   clean-boot runs (reboot between batches when the crash corrupts state):
      python3 tools/repro_ctl.py verify <id> --runs 10
    verify holds an flock on state/repro.lock for its whole run — one
    verification at a time; a second concurrent verify refuses.
@@ -31,10 +25,37 @@ PoCs. PoCs stop at "reliably triggers the vulnerability" — no weaponization.
    Same 0.8/>0/0 classification, scoring sanitizer signatures in the harness
    output. A Track U replay cannot take the kernel down, so a reboot
    mid-verify is void, never a hit.
-4. Write artifacts/pocs/<id>/README.md: build steps, run steps, expected
-   sanitizer signature, reproduction rate, preconditions (Track U:
-   attacker-controlled image; state the exact privileges required).
-5. If syz-manager never produced a reproducer (no repro.syz in the workdir),
+4. Track K, profile check — do this for every crash that reaches reliable or
+   flaky, before it is written up as a tenant-reachable finding. Syzkaller
+   runs under `sandbox: namespace`, which holds a full capability set inside a
+   fresh user namespace. The threat model's attacker does not: a container
+   tenant has dropped capabilities, a seccomp filter and a device cgroup
+   allowlist. Syzkaller therefore reaches paths the attacker cannot, and the
+   gap runs in the direction that produces over-claims.
+
+   Re-run the reproducer inside a container matching the model, as a
+   non-root user, with the default capability set:
+
+     docker run --rm --gpus all        -e NVIDIA_DRIVER_CAPABILITIES=compute,utility        --user 1000:1000        -v $PWD/artifacts/pocs/<id>:/poc:ro        <cuda-runtime-image> /poc/repro
+
+   Record the outcome in the PoC README as one of:
+   - `tenant-reachable` — it reproduces there. This is the only outcome that
+     supports the README's Track K claim.
+   - `not-tenant-reachable` — it needs privilege the model's attacker does
+     not have. Still a real driver bug worth reporting; the impact statement
+     changes and must say which privilege it needs.
+   - `profile-check-blocked` — the check could not be run (no suitable image,
+     no Docker, the reproducer needs a kernel-side harness). Say why. Never
+     record this as tenant-reachable by default.
+
+   Confirm what the container actually received before trusting the result:
+   `ls /dev/nvidia*` inside it. If `/dev/dri` is present, the capability set
+   is wider than the model and the check does not prove what it looks like.
+5. Write artifacts/pocs/<id>/README.md: build steps, run steps, expected
+   sanitizer signature, reproduction rate, the profile-check outcome from
+   step 4, and preconditions (Track U: attacker-controlled image; state the
+   exact privileges required).
+6. If syz-manager never produced a reproducer (no repro.syz in the workdir),
    say so in the README and mark the crash unreproducible — do not
    hand-craft one from scratch.
 
@@ -73,4 +94,5 @@ check `python3 tools/pipeline_ctl.py validate` before declaring the gate.
 
 ## Gate evidence
 per-crash classification summary from
-`python3 tools/pipeline_ctl.py crash-list`; PoC README paths.
+`python3 tools/pipeline_ctl.py crash-list`; PoC README paths; the
+profile-check outcome for every Track K crash that reached reliable or flaky.

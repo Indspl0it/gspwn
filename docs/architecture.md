@@ -38,11 +38,11 @@ file. That keeps the file small enough to rewrite atomically on every update.
 
 A second state file sits beside it: `state/spend.json`, the run-hour ledger,
 keyed by run id and written under its own lock. `pipeline.json` follows the
-`GSPWN_STATE` redirect so an ablation can keep its own registry, but the
-budget belongs to the machine rather than to whichever registry is in use,
-so the ledger ignores that redirect. It also fails closed: if the state file
-records billed hours and no ledger is present, every command that reads
-spend refuses instead of presenting a spent budget as untouched.
+`GSPWN_STATE` redirect so a side run can keep its own registry, but the
+run-hour cap belongs to the machine rather than to whichever registry is in
+use, so the ledger ignores that redirect. It also fails closed: if the state
+file records hours and no ledger is present, every command that reads it
+refuses instead of presenting a spent cap as untouched.
 `pipeline_ctl.py spend-init` rebuilds it from the state file.
 
 ### Phase statuses
@@ -85,6 +85,58 @@ Each round records what it measured and what it produced:
 `worklist` → `worklist_in` is the learning handoff. `round-advance` copies one
 to the other so the next round's `describe` and `seeds` agents can find their
 input with `pipeline_ctl.py worklist` instead of guessing a run id.
+
+## Surviving a panic
+
+This pipeline crashes its own machine on purpose, so every moving part has to
+come back on its own. Each one is a systemd unit:
+
+| Part | Unit | Comes back |
+|---|---|---|
+| syz-manager (Track K) | `gspwn-k.service`, `Restart=always` | Yes |
+| Track U container | `gspwn-u.service`, `Restart=always` | Yes |
+| Coverage sampler | `gspwn-coverage.timer` | Yes |
+| Campaign deadline | `gspwn-deadline@<run-id>.timer` | Yes |
+| The agent driving all of it | `gspwn-orchestrator.service` | Yes |
+
+The last row was the gap. The fuzzers restarted after every panic and kept
+producing crashes, but the agent's session was gone and `AGENTS.md`'s resume
+procedure sat waiting for a human to SSH in and type it.
+
+The hard part was already solved: a fresh agent needs no memory of the old
+session, because `pipeline_ctl.py next` tells it where the pipeline is. **The
+state file is the orchestrator's memory.** What was missing was only a process
+supervisor, which is what `orchestrator_ctl.py install` writes.
+
+### The circuit breaker
+
+An always-restarting agent is a token bill with no ceiling, so
+`orchestrator_ctl.py run` counts two things separately before launching
+anything:
+
+- **Same-boot starts.** The agent keeps exiting and being restarted while the
+  machine stays up. Nothing is progressing and each restart costs tokens.
+- **Reboots.** The machine keeps going down. Kernel fuzzing panics the box by
+  design, so this is not inherently wrong. It is a problem only when reboots
+  arrive faster than a round can progress between them, which is why the limit
+  is separate and higher.
+
+One shared counter would either stop a healthy panicky campaign or let a
+same-boot loop run all night. Both limits and the window come from
+`orchestrator:` in `config/campaign.yaml`.
+
+A tripped breaker is recorded in `state/orchestrator.json` and the run exits
+`78`, which the unit names in `RestartPreventExitStatus`, so systemd stops
+instead of restarting into the same wall. `orchestrator_ctl.py status` shows
+why; `reset` clears it after the cause is fixed.
+
+The same exit is used when the pipeline is complete and when a phase is
+`blocked`. Relaunching an agent into either spends tokens to reach an answer
+that will not change.
+
+`state/orchestrator.json` is machine-global and does not follow `GSPWN_STATE`,
+for the same reason the spend ledger does not: a run with its own state file
+must not also get a fresh, empty breaker.
 
 ## Durability and concurrency contract
 
@@ -147,6 +199,33 @@ a different title. Either can be a real second bug or the same bug reported
 twice. Every flag must end in an explicit decision; an unreviewed flag is an
 open gate item, not a default-distinct crash.
 
+### The `signal` field, and why Xids need one
+
+A fuzzer generates illegal instructions and bad pointers on purpose, and the
+driver reports exactly that as Xid 13 and Xid 31. Harvesting every `NVRM:`
+line as a finding buries the interesting entries under thousands of rows and
+makes any "crashes found" number meaningless.
+
+So every NVRM registration carries a `signal` set from its Xid number, using
+the table in `crash_parse.XID_CLASS`:
+
+| `signal` | Meaning | What triage does |
+|---|---|---|
+| `noise` | The fuzzer caused it by design (13, 31, 43, 45, 8, 69) | Not a finding; not counted |
+| `signal` | Memory-integrity or firmware boundary (ECC classes, 119/120 GSP, 32 push buffer) | Queue for RCA |
+| `health` | The GPU or box is degraded (79 fallen off the bus, NVLink, page retirement) | Not a finding; the measurement path is broken |
+| `review` | Anything else, **including every Xid not in the table** | Read it before deciding |
+| `unclassified` | Not an NVRM entry, or an NVRM line with no Xid number | No verdict was made |
+
+The default for an unrecognized Xid is `review`, never `noise`. A driver
+branch can introduce an Xid this table predates, and defaulting it to exhaust
+would silently discard the one class of finding the campaign exists to
+produce. Filter with `pipeline_ctl.py crash-list --signal <class>`.
+
+The numbers come from NVIDIA's published Xid documentation, not from this
+repo's sources; confirm them against the branch under test before leaning on
+a classification in a report.
+
 ### What `verify` actually counts
 
 Reproduction rate is `hits / counted runs`. What counts is deliberately
@@ -177,9 +256,9 @@ and stdout says so), and 1 when no run could be counted at all.
 
 ## Run directory layout
 
-Every campaign is isolated. The eval reports variance across independent
-runs, and two runs sharing a workdir share an evolved corpus, so they are not
-independent and every ablation arm drawn from them is contaminated.
+Every campaign is isolated. Two runs sharing a workdir share an evolved
+corpus, so neither one's coverage curve describes what that run actually
+reached.
 
 Only one run's campaign may be live at a time. `install-k` / `install-u`
 refuse while another run's units are active or its deadline timer is still
@@ -212,7 +291,7 @@ run independence the eval protocol depends on.
 
 | Policy | Effect |
 |---|---|
-| `--corpus fresh` | Empty corpus. Required for the vanilla-baseline ablation arm |
+| `--corpus fresh` | Empty corpus. Ignores whatever earlier rounds built |
 | `--corpus carry --from-run <id>` | Copies the previous run's `corpus.db`. This is how a round builds on the last |
 | `--seeds artifacts/seeds` | Packs the seed bank into `corpus.db` with `syz-db pack`, merging with anything carried |
 
@@ -276,6 +355,20 @@ plateaued  if  growth < plateau_min_growth
 samples, when the samples span less than the window, or when there is no
 non-zero edge baseline. The loop treats `unknown` as a **stop**, so a broken
 sampler can never authorize another campaign.
+
+A flat window over an unhealthy GPU is also `unknown`. Every sample records
+the GPU's state in the curve's `gpu` column, probed with `nvidia-smi`. A GPU
+that has fallen off the bus (Xid 79) does not stop the fuzzer: syz-manager
+keeps executing, the sampler keeps appending rows, and the edge count stops
+moving, which looks exactly like a finished round. Only the `plateaued`
+reading is gated this way. `growing` needs no guard, because coverage cannot
+climb on a card that is not answering, so growth is its own evidence the
+probe was only having a bad moment.
+
+Rows from a curve written before the `gpu` column existed report no status,
+which counts as unhealthy: absence of evidence that the GPU was alive is not
+evidence that it was. Such a run reads `unknown` until its window fills with
+newly sampled rows.
 
 The verdict the loop acts on combines both tracks: the round is still learning
 if **either** track is still finding edges. A track that was never sampled is

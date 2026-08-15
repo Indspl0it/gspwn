@@ -5,8 +5,27 @@ Status: Approved architecture; critique revisions applied
 Origin: Extends https://www.interruptlabs.co.uk/articles/fuzzing-the-nvidia-gpu-drivers
 Intended output: working fuzzing pipeline + technical paper (approach, evaluation, findings)
 
-> **Historical design document.** This is the dated design record — the
-> paper's design history — not the current reference. Since it was approved:
+> **Historical design document.** This is the dated design record, not the
+> current reference. Since it was approved:
+>
+> - **There is no paper.** This is a vulnerability research campaign. If the
+>   findings are real, a technical write-up of the method and results may
+>   follow, but nothing in the pipeline is shaped to support a publication
+>   any more. The ablation arms, per-configuration variance and
+>   "publication-grade" evaluation described below were removed; `eval` is
+>   now a plain per-round measurement.
+> - **The threat model is narrower.** The attacker is a tenant in a container
+>   started with the default capability set (`compute,utility`), which
+>   receives `/dev/nvidiactl`, `/dev/nvidiaX` and `/dev/nvidia-uvm[-tools]`.
+>   `nvidia-drm`, `nvidia-modeset` and `/dev/dri` are out of scope: they
+>   appear only with the `graphics` or `display` capability. §3's device list
+>   is wider than what the campaign now claims against, and a finding is only
+>   claimed under the model once its reproducer has been re-run inside a
+>   matching container.
+> - **The cost machinery is gone.** §5's idle auto-stop watchdog, the dollar
+>   budget and `cost_ctl.py` no longer exist. `loop.max_rounds`,
+>   `max_total_run_hours` and `campaign_hours` remain, as declared stopping
+>   rules rather than a spend ceiling.
 >
 > - The orchestrator is any `AGENTS.md`-aware coding agent — "Kimi Code"
 >   below names the agent in use when the design was approved, not a

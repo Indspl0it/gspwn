@@ -3,14 +3,15 @@
 
 The outer improvement loop needs a memory. syzkaller's corpus.db lives inside
 one run's workdir and dies with it; artifacts/seeds/ is the bank that outlives
-rounds and is what later rounds (and the seeded ablation arm) start from.
+rounds and is what later rounds start from.
 
 Promotion is deliberately additive and deduplicated by content hash: a program
 already in the bank is never written twice, so repeated promotion across rounds
 converges instead of growing without bound.
 
 Promotion honours loop.promote_seeds in config/campaign.yaml: when the config
-freezes the bank (e.g. to hold an ablation baseline stable), promote refuses.
+freezes the bank (e.g. to re-run a round from a known corpus), promote
+refuses.
 
 Subcommands:
   promote --run-id ID [--seeds DIR] [--limit N] [--dry-run]
@@ -113,8 +114,8 @@ def cmd_promote(a):
         sys.exit("error: %s" % e)
     if not promote_allowed:
         sys.exit("loop.promote_seeds is false in config/campaign.yaml: the "
-                 "seed bank is frozen (e.g. to hold an ablation baseline "
-                 "stable), so promotion is refused. Set it to true to "
+                 "seed bank is frozen (e.g. to re-run a round from a "
+                 "known corpus), so promotion is refused. Set it to true to "
                  "promote this run's corpus.")
     db = corpus_db(a.run_id)
     if not os.path.exists(db):

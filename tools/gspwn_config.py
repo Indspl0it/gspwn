@@ -34,10 +34,6 @@ DEFAULTS = {
         "memory_max": "8G",
         "targets": [],
     },
-    "eval": {
-        # Run length is loop.campaign_hours; it is not duplicated here.
-        "runs_per_config": 3,
-    },
     "loop": {
         "max_rounds": 3,
         "max_total_run_hours": 216,
@@ -49,19 +45,24 @@ DEFAULTS = {
         "corpus_policy": "carry",
         "promote_seeds": True,
     },
-    "cost": {
-        "idle_stop_minutes": 120,
-        "idle_check_minutes": 30,
-        "monthly_budget_usd": 0,
-        "estimated_hourly_usd": 0.0,
-        "budget_alerts_usd": [50, 150],
+    "orchestrator": {
+        # The headless agent invocation the supervisor launches. Empty on
+        # purpose: this repo is not tied to one coding-agent CLI, and a
+        # default here would be a guess about what is installed on the SUT.
+        # orchestrator_ctl.py install refuses until it is set.
+        "command": "",
+        # Circuit-breaker window and its two limits. Same-boot restarts and
+        # reboots are counted separately because they mean different things:
+        # kernel fuzzing panics the box by design, so reboots are expected and
+        # a single shared limit would stop a healthy campaign.
+        "window_min": 60,
+        "max_same_boot_starts": 5,
+        "max_reboots": 10,
     },
 }
 
 # (section, key, predicate, message) — checked on every load.
 _POSITIVE = ("must be a positive number", lambda v: _num(v) and v > 0)
-_NON_NEGATIVE = ("must be zero or a positive number",
-                 lambda v: _num(v) and v >= 0)
 # Caps that count things (rounds, processes, minutes) are integers: a float
 # like max_rounds: 2.5 must fail loudly, not silently truncate in one place
 # and compare as 2.5 in another. bool is an int subclass — exclude it.
@@ -73,7 +74,6 @@ _BOOL = ("must be true or false (unquoted — a quoted string is truthy and "
 _RULES = [
     ("track_k", "procs", _POSITIVE_INT),
     ("track_k", "smoke_window_minutes", _POSITIVE_INT),
-    ("eval", "runs_per_config", _POSITIVE_INT),
     ("loop", "max_rounds", _POSITIVE_INT),
     ("loop", "max_total_run_hours", _POSITIVE),
     ("loop", "campaign_hours", _POSITIVE),
@@ -85,10 +85,9 @@ _RULES = [
       lambda v: _num(v) and 0 < v < 1)),
     ("loop", "stop_on_plateau", _BOOL),
     ("loop", "promote_seeds", _BOOL),
-    ("cost", "idle_stop_minutes", _POSITIVE_INT),
-    ("cost", "idle_check_minutes", _POSITIVE_INT),
-    ("cost", "monthly_budget_usd", _NON_NEGATIVE),
-    ("cost", "estimated_hourly_usd", _NON_NEGATIVE),
+    ("orchestrator", "window_min", _POSITIVE_INT),
+    ("orchestrator", "max_same_boot_starts", _POSITIVE_INT),
+    ("orchestrator", "max_reboots", _POSITIVE_INT),
 ]
 
 
@@ -134,10 +133,11 @@ def validate(cfg):
     if policy not in ("fresh", "carry"):
         problems.append("loop.corpus_policy = %r must be 'fresh' or 'carry'"
                         % policy)
-    if not isinstance(cfg["cost"]["budget_alerts_usd"], list) or any(
-            not _num(a) or a < 0 for a in cfg["cost"]["budget_alerts_usd"]):
-        problems.append("cost.budget_alerts_usd must be a list of "
-                        "non-negative amounts")
+    # Empty is valid (nothing installed yet); a non-string is not, and would
+    # otherwise reach subprocess as whatever YAML parsed it into.
+    if not isinstance(cfg["orchestrator"]["command"], str):
+        problems.append("orchestrator.command must be a string (quote it if "
+                        "it contains a colon)")
     # A per-campaign duration longer than the total budget can never complete a
     # round, so the loop would spend the whole ceiling on run 1 and stop.
     if (_num(cfg["loop"]["campaign_hours"])
@@ -195,10 +195,6 @@ def loop(path=None):
     return load(path)["loop"]
 
 
-def cost(path=None):
-    return load(path)["cost"]
-
-
 def manager_url(path=None):
     """syz-manager HTTP base URL, derived from track_k.http.
 
@@ -218,18 +214,16 @@ def main():
     import json
     print("effective configuration (%s):" % CONFIG_PATH)
     print(json.dumps(cfg, indent=2, sort_keys=True))
-    lp, cs = cfg["loop"], cfg["cost"]
-    print("\nspend ceiling: %d round(s) x campaigns of %s h, "
+    lp, orch = cfg["loop"], cfg["orchestrator"]
+    print("\nstopping rules: at most %d round(s) x campaigns of %s h, "
           "total <= %s run-hours"
           % (lp["max_rounds"], lp["campaign_hours"],
              lp["max_total_run_hours"]))
-    if cs["estimated_hourly_usd"]:
-        print("estimated cost ceiling: %.2f USD (%s run-hours x %.2f USD/h)"
-              % (lp["max_total_run_hours"] * cs["estimated_hourly_usd"],
-                 lp["max_total_run_hours"], cs["estimated_hourly_usd"]))
-    print("idle auto-stop after %s min; monthly budget %s USD (alerts at %s)"
-          % (cs["idle_stop_minutes"], cs["monthly_budget_usd"] or "unset",
-             ", ".join(str(a) for a in cs["budget_alerts_usd"]) or "none"))
+    print("orchestrator: %s; breaker blocks at %d same-boot start(s) or %d "
+          "reboot(s) per %d min"
+          % (orch["command"] or "command unset (supervisor not installable)",
+             orch["max_same_boot_starts"], orch["max_reboots"],
+             orch["window_min"]))
     return 0
 
 

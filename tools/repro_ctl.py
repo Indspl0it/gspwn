@@ -661,8 +661,8 @@ def _acquire_lock():
     start against a ring full of the other session's crashes anyway.
 
     The lock lives in the machine's own state dir and does not follow
-    GSPWN_STATE: what it protects is the one dmesg ring, so two ablation runs
-    with separate registries must still exclude each other."""
+    GSPWN_STATE: what it protects is the one dmesg ring, so two runs with
+    separate registries must still exclude each other."""
     d = ps.STATE_DIR
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, REPRO_LOCK)

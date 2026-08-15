@@ -71,6 +71,14 @@ description for, and supplying valid object-chain seeds it cannot invent.
   `unknown`. Say so and do not infer a plateau from corpus size alone — the
   loop treats `unknown` as a stop precisely so a broken sampler cannot
   authorise more spend.
+- An `unknown` naming the GPU means the card was not healthy across the
+  window, so the flat curve is not evidence of anything about the target.
+  Run `python3 tools/coverage_ctl.py gpu-health`, check the run's Xid
+  entries, and recover the GPU before drawing any conclusion: `nvidia-smi -r`
+  first, then reloading the modules, then a guest reboot. A guest reboot does
+  not power-cycle a passthrough GPU; if none of those bring it back the
+  instance needs a stop/start from the AWS console, which is a human step.
+  Never record a plateau for a round whose GPU died.
 - Do not pad the worklist. A short, correct worklist that
   says "three ioctls are mismodeled, everything else reachable is covered" is
   a better result than twenty speculative items, and it is what lets the

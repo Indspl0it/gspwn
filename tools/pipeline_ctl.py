@@ -172,13 +172,13 @@ def _derive_run(run_id, cfg):
         run_id, cfg["plateau_window_min"], cfg["plateau_min_growth"])
     out = {"run_id": run_id, "coverage_verdict": verdict, "detail": detail,
            "run_hours": None}
-    # Edge totals are reported for Track K, the instrumented-kernel number the
-    # paper cites; Track U's per-harness bitmaps are not comparable to it.
+    # Edge totals are reported for Track K, the instrumented-kernel number
+    # the report cites; Track U's per-harness bitmaps are not comparable.
     rows = coverage_ctl.metric_rows(run_id, "edges", "k")
     if rows:
         # Peak, not the last sample: a fuzzer restart zeroes the counter, and
         # recording edges_end below edges_start would show the round losing
-        # coverage in the history the paper's progression table cites.
+        # coverage in the per-round history the report is built from.
         out["edges_start"] = rows[0]["edges"]
         out["edges_end"] = max(r["edges"] for r in rows)
     # Wall-clock of the campaign, from the first to the last sample on any
@@ -376,6 +376,8 @@ def cmd_crash_list(a):
             continue
         if a.track and c["track"] != a.track:
             continue
+        if a.signal and c.get("signal", "unclassified") != a.signal:
+            continue
         rows.append((cid, c))
     if a.json:
         json.dump({cid: c for cid, c in rows}, sys.stdout, indent=2,
@@ -389,8 +391,11 @@ def cmd_crash_list(a):
         rate = "" if c["repro_rate"] is None else " %.0f%%" % (
             c["repro_rate"] * 100)
         dup = " dup_of=%s" % c["duplicate_of"] if c["duplicate_of"] else ""
-        print("%s [%s] %-14s%s%s  %s"
-              % (cid, c["track"], c["status"], rate, dup, c["title"][:70]))
+        sig = c.get("signal", "unclassified")
+        sig = "" if sig == "unclassified" else " <%s>" % sig
+        print("%s [%s] %-14s%s%s%s  %s"
+              % (cid, c["track"], c["status"], rate, dup, sig,
+                 c["title"][:70]))
     return 0
 
 
@@ -519,6 +524,8 @@ def build_parser():
     p = sub.add_parser("crash-list", help="list registered crashes")
     p.add_argument("--status", choices=sorted(ps.CRASH_STATUS))
     p.add_argument("--track", choices=sorted(ps.TRACKS))
+    p.add_argument("--signal", choices=sorted(ps.CRASH_SIGNAL),
+                   help="filter by Xid classification (crash_parse.XID_CLASS)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_crash_list)
 
