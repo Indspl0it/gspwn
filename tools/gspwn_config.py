@@ -164,9 +164,10 @@ DEFAULTS = {
     # decides what reaches `rca` and what the next round hunts, so they are
     # research knobs rather than parser internals.
     #
-    # CAUTION: changing either mid-campaign applies only to crashes registered
-    # afterwards. Already-registered hashes are not recomputed, so the same bug
-    # can register twice across the change. Change them between campaigns.
+    # CAUTION: changing any of them mid-campaign applies only to crashes
+    # registered afterwards. Already-registered hashes are not recomputed, so
+    # the same bug can register twice across the change. Change them between
+    # campaigns.
     "triage": {
         # Frames hashed for the secondary dedup key. Fewer merges distinct
         # bugs that share a common caller; more splits one bug whose stack
@@ -174,6 +175,23 @@ DEFAULTS = {
         "stack_hash_frames": 3,
         # Frames a reproduction must match to count as the same crash.
         "signature_frames": 5,
+        # The two below govern the fallback identity for a report with no
+        # usable stack at all — a lone "BUG: unable to handle ..." or a
+        # trace-less panic. With no frames to hash, the only distinguishing
+        # evidence is the wording around the report's start line, normalized
+        # so timestamps, hex addresses and pids do not make every occurrence
+        # unique. They are a dedup decision like the frame counts, and they
+        # fail in opposite directions: too narrow and one trace-less panic
+        # registers as many bugs, burying the real ones in the queue; too wide
+        # and two different panics that share a prologue merge into one, so
+        # the second never reaches rca at all.
+        #
+        # Report lines that form the signature. Small on purpose: later lines
+        # of a trace-less report are usually register dumps, which vary per
+        # occurrence and would split one bug into many.
+        "frameless_signature_lines": 5,
+        # Characters of that normalized wording actually hashed.
+        "frameless_signature_chars": 300,
     },
 }
 
@@ -221,6 +239,12 @@ _RULES = [
     ("agent", "crash_title_chars", _POSITIVE_INT),
     ("triage", "stack_hash_frames", _POSITIVE_INT),
     ("triage", "signature_frames", _POSITIVE_INT),
+    ("triage", "frameless_signature_lines", _POSITIVE_INT),
+    ("triage", "frameless_signature_chars",
+     ("must be an integer >= 32. Below that the hash covers little more than "
+      "the report's first few words, and unrelated trace-less panics sharing "
+      "a prologue would merge into one bug",
+      lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 32)),
     ("coverage", "plateau_new_edges", _POSITIVE_INT),
     ("coverage", "horizon_hours", _POSITIVE),
     ("coverage", "min_fit_samples",
@@ -457,8 +481,11 @@ def main():
           "%d integrity problem(s)"
           % (ag["brief_knowledge_entries"], ag["brief_knowledge_line_chars"],
              ag["brief_max_problems"]))
-    print("dedup: %d stack frame(s) hashed, %d frame(s) matched on repro"
-          % (tr["stack_hash_frames"], tr["signature_frames"]))
+    print("dedup: %d stack frame(s) hashed, %d frame(s) matched on repro; "
+          "with no stack at all, %d report line(s) cut to %d chars"
+          % (tr["stack_hash_frames"], tr["signature_frames"],
+             tr["frameless_signature_lines"],
+             tr["frameless_signature_chars"]))
     cv = cfg["coverage"]
     print("plateau: fit the last %.0f%% of executions (>= %d samples, R2 >= "
           "%.2f); plateaued when another %.0f h is expected to find < %d new "

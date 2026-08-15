@@ -113,6 +113,28 @@ TS_RE = re.compile(r"^\s*(?:\[\s*\d+\.\d+\]\s*)+")
 TITLE_PREFIX_RE = re.compile(r"^(?:kernel|NVRM)\s+", re.I)
 HEX_RE = re.compile(r"0x[0-9a-fA-F]+|\b[0-9a-fA-F]{8,}\b")
 
+# Fields a kernel report prologue prints that differ on every occurrence of the
+# SAME bug. They have to be blanked before the frameless signature is hashed,
+# or one recurring trace-less panic registers as a brand-new bug each time it
+# fires. That is the expensive direction: triage and rca both run per
+# registered crash, so the flood costs the phases that matter and buries the
+# real findings underneath it.
+#
+# Only the standard oops prologue is covered. A frameless report is all
+# prologue by definition, which is why this matters here and not for the frame
+# hash, where these lines are never reached.
+REPORT_VOLATILE_RE = re.compile(
+    r"\bpid=\S+"                # NVRM's lowercase form
+    r"|\[#\d+\]"                # oops counter: increments per oops per boot
+    r"|\bCPU:\s*\d+"            # whichever core happened to fault
+    r"|\bPID:\s*\d+"            # the faulting task
+    r"|\bTainted:(?:\s+[A-Z-])+"  # gains D after the first die on this boot
+)
+# syz-executor.4 -> syz-executor. The suffix is the executor index, which is
+# per-occurrence; the name is not, and a panic in modprobe is not the same bug
+# as a panic in syz-executor.
+COMM_INDEX_RE = re.compile(r"(\bComm:\s*\S+?)\.\d+\b")
+
 
 def norm_title(t):
     return re.sub(r"\s+", " ", t.strip())
@@ -350,16 +372,29 @@ def report_blocks(text):
         yield strip_ts(block[0]), "\n".join(block)
 
 
-def block_signature(block):
+def block_signature(block, lines=None, chars=None):
     """Title+context hash for a report block with no usable frames.
 
     Generic prologue lines (a lone 'BUG: unable to handle ...', a trace-less
     panic) carry no stack, so the distinguishing evidence is the normalized
     wording around the start line — timestamps, hex and pids blanked out.
+
+    How many lines and how much of them is triage.frameless_signature_lines /
+    _chars in config/campaign.yaml, because this is the whole of what decides
+    whether two trace-less panics are the same bug. `lines` and `chars`
+    override them for callers comparing two settings.
     """
-    lines = [strip_ts(l) for l in block.splitlines()[:5]]
-    ctx = re.sub(r"\bpid=\S+", "", HEX_RE.sub("0xADDR", " ".join(lines)))
-    return hashlib.sha1(norm_title(ctx)[:300].encode()).hexdigest()[:16]
+    cfg = gspwn_config.triage()
+    lines = cfg["frameless_signature_lines"] if lines is None else lines
+    chars = cfg["frameless_signature_chars"] if chars is None else chars
+    head = [strip_ts(l) for l in block.splitlines()[:lines]]
+    # Volatile fields go before the hex blanking, not after: an 8-digit pid
+    # would otherwise be eaten as an address first and never recognised as a
+    # pid, so the same panic would split on task id alone.
+    ctx = COMM_INDEX_RE.sub(r"\1", REPORT_VOLATILE_RE.sub("", " ".join(head)))
+    return hashlib.sha1(
+        norm_title(HEX_RE.sub("0xADDR", ctx))[:chars].encode()
+    ).hexdigest()[:16]
 
 
 def scan_dmesg(state, path):
