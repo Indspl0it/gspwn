@@ -33,3 +33,32 @@ Rung fails build or boot: harvest crash logs (`sudo python3
 tools/crashlog_ctl.py harvest`),
 record findings in artifacts/builds/rung-N-failed.md, proceed to next rung.
 All rungs fail: write artifacts/builds/FAILED.md, mark phase blocked.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase build
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase build "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase build "..."
+```
+
+A **learning** is about the target — for this phase, typically build and
+kernel facts: config options that matter, instrumentation that silently does
+nothing.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.

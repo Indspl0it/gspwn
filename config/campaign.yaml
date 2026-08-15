@@ -50,9 +50,45 @@ orchestrator:
   #   sudo python3 tools/orchestrator_ctl.py install
   #
   # No default command: this repo works with any AGENTS.md-aware coding agent
-  # and will not guess which one is on the box. Set the headless invocation,
-  # e.g. command: "claude -p 'run the pipeline'"
+  # and will not guess which one is on the box. Set the headless invocation.
+  #
+  # {session} is replaced with a UUID this tool assigns. {anchor} is replaced
+  # with a paragraph telling a resumed agent that its last turn predates the
+  # interruption and that `pipeline_ctl.py brief` is authoritative.
+  #
+  # With Claude Code:
+  #   command: "claude --session-id {session} -p 'Drive the pipeline per AGENTS.md.'"
+  #   resume_command: "claude --resume {session} -p '{anchor}'"
+  #   session_transcript_glob: "~/.claude/projects/*/{session}.jsonl"
   command: ""
+  # Empty resume_command keeps every start fresh, which is always correct:
+  # the state file, not the transcript, says where the pipeline is. Setting it
+  # also carries the previous session's reasoning across a panic — what was
+  # tried, what was ruled out — which the state file was never meant to hold.
+  # When it is set, BOTH invocations must contain {session}: the id is
+  # assigned and passed in, never discovered afterwards, because parsing it
+  # out of agent output or globbing for the newest transcript races anything
+  # else running on the box.
+  resume_command: ""
+  # Rotation is by transcript SIZE, because size is what drives auto-
+  # compaction. Restart count does not: a campaign that panics twenty times in
+  # an hour writes almost nothing, one that panics twice in three days writes
+  # a lot.
+  #
+  # Measured on one real 20-hour session: compaction fired three times, after
+  # 1.66, 2.01 and 2.54 MB of new transcript, so roughly every 2 MB. One
+  # compaction is survivable; the damage is compound, because the third
+  # summarises the second's summary. 6 MB is about three compactions, which is
+  # where re-anchoring from `brief` starts to beat another lossy pass. n=1, so
+  # revisit it once real campaigns have run. 0 turns the size check off.
+  max_session_mb: 6
+  # Where the transcript lives, with {session} substituted. Without it the
+  # size check cannot run and the orchestrator warns rather than silently
+  # falling back to counting restarts.
+  session_transcript_glob: ""
+  # Backstop for when the transcript cannot be measured. Deliberately loose:
+  # it is a poor proxy and should rarely be what rotates a session.
+  max_resumes: 40
   # Circuit breaker. Same-boot restarts and reboots are counted separately:
   # this pipeline panics the machine by design, so reboots are expected, while
   # an agent restarting on one boot means nothing is progressing and every
@@ -60,3 +96,92 @@ orchestrator:
   window_min: 60
   max_same_boot_starts: 5
   max_reboots: 10
+  # Substituted for {anchor} in resume_command. The first thing a resumed
+  # agent reads after a panic, and what stops it from continuing a
+  # half-finished tool call issued at the moment the kernel died.
+  #
+  # No apostrophes or double quotes: it goes into a shell command line the
+  # operator has already quoted, and a quote here would end that quoting.
+  # Validation refuses one rather than letting an edit break the launch.
+  resume_anchor: >-
+    This session has resumed after an interruption. Your most recent turn
+    predates a kernel panic, a reboot or a restart, so anything it says about
+    what is running or what phase you were in is stale. Do not act on it.
+    Run: python3 tools/pipeline_ctl.py brief -- its output is authoritative
+    and your memory is not. Then continue from the phase it reports,
+    following AGENTS.md. Your earlier reasoning about the target is still
+    useful; your earlier belief about the machine is not.
+
+agent:
+  # What the agent actually reads. `pipeline_ctl.py brief` is the resume
+  # anchor: after a panic it is the whole of what a fresh context knows, so
+  # how much it carries is a tuning knob for the agent's effectiveness, not a
+  # display preference. Carry too little and the agent re-derives what an
+  # earlier round already settled; carry too much and the anchor costs the
+  # context it exists to save.
+  brief_knowledge_entries: 3    # per file (learnings, mistakes)
+  brief_knowledge_line_chars: 100  # first line of each, cut to this
+  brief_max_problems: 5         # before deferring to `validate`
+  # Crash titles in `crash-list`. Kernel report titles put the distinguishing
+  # part at the end often enough that cutting early makes two different bugs
+  # look like the same line of output.
+  crash_title_chars: 70
+
+coverage:
+  # How the plateau decision is made. Coverage is the only signal that decides
+  # whether to run another round, so these are the numbers the campaign's
+  # stopping rule rests on.
+  #
+  # The verdict is an extrapolation from a fitted species-accumulation curve
+  # (edges discovered against inputs executed), not a growth threshold. The
+  # question the loop asks is how many new edges another campaign is expected
+  # to find, which is in the units of the thing being predicted. A growth
+  # percentage is not: the same percentage means ten edges early in a run and
+  # a thousand late in one.
+  #
+  # Two limits worth knowing. Coverage is kernel-side reachable code only, and
+  # GSP firmware is not instrumented, so no verdict here says anything about
+  # it. And an aggregate edge counter cannot support a "we have covered X% of
+  # the driver" claim — that needs per-edge frequency counts syz-manager does
+  # not report.
+  plateau_new_edges: 50   # expected new edges over one more campaign, below
+                          # which the run has plateaued. Set it to what would
+                          # actually justify another campaign of machine time
+  horizon_hours: 24       # how far ahead to extrapolate; match campaign_hours
+  model_min_r2: 0.90      # below this the curve is not described well enough
+                          # to extrapolate from, and the verdict is unknown
+  min_fit_samples: 8      # points required before extrapolating at all
+  fit_tail_fraction: 0.5  # share of the run's EXECUTIONS the fit covers. The
+                          # decision is about the regime the fuzzer is in now:
+                          # fitting the whole run lets the early steep phase
+                          # dominate, so a run that climbed hard then went
+                          # flat still reports a healthy exponent. 1.0 = all
+  beta_tolerance: 0.05    # slack above beta=1 before the series is judged not
+                          # to be an accumulation curve
+
+triage:
+  # Dedup depth. These decide whether two reports are the same bug, which
+  # decides what reaches rca and what the next round hunts.
+  #
+  # CAUTION: changing either mid-campaign applies only to crashes registered
+  # afterwards — existing hashes are not recomputed, so one bug can register
+  # twice across the change. Change them between campaigns.
+  stack_hash_frames: 3   # fewer merges distinct bugs sharing a caller;
+                         # more splits one bug whose stack varies by inlining
+  signature_frames: 5    # frames a reproduction must match to count as a hit
+  # Fallback identity for a report with no usable stack at all: a lone
+  # "BUG: unable to handle ..." or a trace-less panic. With no frames to hash,
+  # the only distinguishing evidence is the wording around the start line,
+  # normalized so timestamps, hex addresses and pids do not make every
+  # occurrence unique. Too narrow and one panic registers as many bugs,
+  # burying the real ones in the queue; too wide and two different panics
+  # sharing a prologue merge, so the second never reaches rca.
+  # Known limit of the default: RIP sits around line 8 of a real x86 oops, so
+  # at 5 two different faulting functions behind the same fault type share a
+  # signature and the second is a dup. Raising this to ~8 separates them and
+  # reaches lines that vary more. Nothing here has been measured against real
+  # reports from this driver yet, which is why it is a knob and why the
+  # default was left alone.
+  frameless_signature_lines: 5   # report lines that form the signature
+  frameless_signature_chars: 300 # of that normalized wording, how much is
+                                 # actually hashed

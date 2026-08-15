@@ -10,6 +10,22 @@ that needs a real object/handle chain random generation will not build. Those
 are exactly what tracing buys, so target your workloads at them rather than
 re-tracing the same CUDA sample each round.
 
+Items carry their source. A `[finding crash-NNNN]` item comes from the
+`preconditions` of a research record: the object state that had to exist
+before a real bug in this campaign could be reached. Those come first, and
+they are the most specific brief you will get — "channel bound with async work
+in flight" says exactly which workload to trace and at what moment. Read the
+full record for the rest of the context:
+
+```
+python3 tools/pipeline_ctl.py finding-list
+```
+
+If a precondition cannot be reached from any CUDA workload you can run, say so
+in the gate rather than substituting a seed that is merely nearby. A seed that
+does not establish the precondition does not exercise the path, and reporting
+it as covered is how the next round loses the target.
+
 The persistent seed bank at artifacts/seeds/ also accumulates programs
 promoted from previous rounds' corpora (`corpus_ctl.py promote`). Check what
 is already there with `python3 tools/corpus_ctl.py stats` before generating
@@ -54,3 +70,34 @@ Record progress with the state tool, never by editing pipeline.json:
 seed count, mapped/unmapped ioctl counts, smoke-run log excerpt showing no
 seed parse errors. Report the unmapped count — a high unmapped ratio
 means the ioctl_map is incomplete and the seeds cover less than they appear to.
+From round 2 on, also report per `[finding ...]` item whether a seed now
+establishes its precondition, and name the ones you could not reach.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase seeds
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase seeds "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase seeds "..."
+```
+
+A **learning** is about the target — for this phase, typically workload facts:
+which CUDA calls reach which ioctls, which object chains a trace can and
+cannot produce.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.

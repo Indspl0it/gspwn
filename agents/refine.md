@@ -7,11 +7,19 @@ The output of this phase is what the next round's describe and seeds agents
 execute. A refine pass that produces no specific, checkable work items has not
 met its gate.
 
+You steer on two signals, and they are not interchangeable. Coverage says
+where the fuzzer has not been. Findings say where the bugs have been. A round
+that only follows coverage will keep widening the surface and never go back to
+the place that already yielded.
+
 ## Inputs
 - artifacts/runs/<run-id>/coverage.csv (via tools/coverage_ctl.py)
 - artifacts/runs/<run-id>/workdir (syz-manager corpus and logs)
 - artifacts/descriptions/ (what is currently modeled)
 - artifacts/seeds/ (the persistent seed bank)
+- `python3 tools/pipeline_ctl.py finding-list` — every research record rca has
+  produced, in this round and every previous one, with the per-subsystem
+  rollup
 - state/pipeline.json rounds history
 - config/campaign.yaml loop settings
 
@@ -30,6 +38,13 @@ description for, and supplying valid object-chain seeds it cannot invent.
    which one is carrying the round before concluding anything about the
    other. `round-end --from-run` records the same verdict, so you do not
    transcribe it.
+   Read the detail line, not just the verdict. It carries the discovery
+   exponent, the fit quality, and how many new edges another campaign is
+   expected to find — that last number is the decision, and it belongs in
+   gaps.md. A `plateaued` verdict means this grammar has stopped reaching new
+   code, which is a statement about the descriptions as much as about the
+   driver: it is the strongest argument for what to model next, not a reason
+   to conclude the subsystem is covered.
 2. Identify what did not get covered, and be specific. Useful sources:
    - enabled syscalls in the campaign config that show little or no execution
    - ioctl command numbers present in the driver's dispatch switches but
@@ -46,22 +61,43 @@ description for, and supplying valid object-chain seeds it cannot invent.
      generation will not build. Fix: a seed from a real workload (seeds).
    - **out of scope / firmware** — lives behind GSP, or is modeset. Fix:
      nothing; record it so the report's coverage claims stay correctly scoped.
-4. Write artifacts/eval/<run-id>/gaps.md: one row per gap with the ioctl or
+4. Derive the finding-adjacent work. Run `python3 tools/pipeline_ctl.py
+   finding-list` and, for every record:
+   - its `adjacent` calls become describe items. These are calls that share an
+     object, lock, refcount or teardown path with something that already broke
+     and were not exercised. They are the highest-value items in the worklist
+     and nothing else in the pipeline produces them.
+   - its `preconditions` become seeds items: the object or handle state that
+     has to exist before the bug class can be reached at all.
+   - its `hypothesis` may suggest further items in the same subsystem. A
+     hypothesis only ever **adds** targets. Never drop or deprioritise an item
+     because a hypothesis suggests it is not where the bug is: rca is the only
+     judgement in this loop, and a confident wrong one would otherwise
+     narrow every remaining round.
+   Weigh the rollup: a subsystem with several findings has proven it yields,
+   and its items go above a coverage gap in an area that has produced nothing.
+   A subsystem that has produced no finding across two rounds despite good
+   coverage goes below them — say so in gaps.md, because that is a real
+   result and the next round should not rediscover it.
+5. Write artifacts/eval/<run-id>/gaps.md: one row per gap with the ioctl or
    subsystem, the evidence it is uncovered, the classification, and the
    specific next action. No action may be "investigate further" — say what to
    model or what to trace.
-5. Write artifacts/eval/<run-id>/worklist.md: the ordered, deduplicated work
+6. Write artifacts/eval/<run-id>/worklist.md: the ordered, deduplicated work
    items for the next round, split into a describe section and a seeds
    section. The next round's agents are prompted with this file, so write it
-   for them, not as a report for a human.
-6. Promote the round's corpus into the seed bank so the next round starts
+   for them, not as a report for a human. Every item carries its source —
+   `[coverage]` or `[finding crash-NNNN]` — so the next round's agents can
+   tell a place nobody has looked from a place that has already yielded, and
+   so a later round can see which kind of item actually paid off.
+7. Promote the round's corpus into the seed bank so the next round starts
    ahead: `python3 tools/corpus_ctl.py promote --run-id <id>`. The tool
    honours `loop.promote_seeds` in config/campaign.yaml and refuses when it
    is false — record that in gaps.md rather than working around it. If it
    reports zero new programs, say so in gaps.md — a corpus that adds nothing
    new is direct evidence the round stopped learning, and it is a strong
    input to the stop decision.
-7. Check the loop is still buying anything: compare this round's edge total
+8. Check the loop is still buying anything: compare this round's edge total
    with the previous round's from `pipeline_ctl.py round-show`. Rounds that
    add crashes but no coverage, or coverage but no crashes, are both worth
    noting explicitly in gaps.md.
@@ -71,6 +107,14 @@ description for, and supplying valid object-chain seeds it cannot invent.
   `unknown`. Say so and do not infer a plateau from corpus size alone — the
   loop treats `unknown` as a stop precisely so a broken sampler cannot
   authorise more spend.
+- An `unknown` saying the curve does not fit the model means exactly that: the
+  series is not behaving like a discovery curve. Plot it before concluding
+  anything. A stuck sampler, a source that changed mid-run, and a genuine
+  regime change all look like this, and they need different responses.
+- An `unknown` saying the fuzzer is still replaying its corpus means the round
+  ended before it got back to its own high-water mark after a restart. Nothing
+  about saturation can be read from it. Report the round as unmeasured rather
+  than reaching for a number from somewhere else.
 - An `unknown` naming the GPU means the card was not healthy across the
   window, so the flat curve is not evidence of anything about the target.
   Run `python3 tools/coverage_ctl.py gpu-health`, check the run's Xid
@@ -111,4 +155,37 @@ design — fix the sampler and re-run rather than supplying a verdict yourself.
 
 ## Gate evidence
 gaps.md and worklist.md paths, the plateau verdict with its detail line, the
-corpus promotion count, and the round-end summary.
+corpus promotion count, the round-end summary, and the split of worklist items
+by source: how many came from coverage gaps and how many from findings. A
+round in which rca recorded findings but the worklist carries no
+`[finding ...]` item has broken the feedback edge, and the next round will
+repeat this one's search.
+
+## Knowledge (cross-campaign)
+
+Read what earlier campaigns established before you start:
+
+```
+python3 tools/knowledge_ctl.py show --phase refine
+```
+
+Record what you learn **as you learn it**, not at the end from memory:
+
+```
+python3 tools/knowledge_ctl.py note --kind learning --phase refine "..."
+python3 tools/knowledge_ctl.py note --kind mistake  --phase refine "..."
+```
+
+A **learning** is about the target — for this phase, typically loop facts:
+which kind of worklist item paid off and which did not, which gap
+classification keeps being wrong.
+A **mistake** is about us: something that cost time, produced a wrong number,
+or would repeat. Both are read by whoever runs this phase next, on another box
+months from now, so write for someone without your context. Recording nothing
+across a whole phase is itself worth questioning.
+
+`knowledge/` is committed to a **public repository**. It carries ABI and
+process facts and never findings: `note` refuses text naming a crash id or a
+path under `artifacts/crashes|pocs|rca`, and the specifics belong in the crash
+registry instead. Record the general form — it is also the more useful one,
+because the next agent is looking at a different crash.

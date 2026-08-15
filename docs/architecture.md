@@ -5,6 +5,34 @@ document covers the level below that: the data model, the on-disk layout, and
 the lifecycle of a crash. It is the reference for modifying the tools or
 tracing a number in the report back to its source.
 
+## Four planes, and the rule that keeps them apart
+
+Every fact this system holds belongs to exactly one of four places, chosen by
+how long it is true for:
+
+| Plane | Answers | Store | Lifetime | Authority |
+|---|---|---|---|---|
+| Execution | what is running right now? | systemd units | seconds to hours | systemd |
+| State | where is this campaign? | `state/pipeline.json` | one campaign | `pipeline_ctl.py` |
+| Knowledge | what have we learned? | `knowledge/*.md`, committed | forever | git |
+| Continuity | who is driving? | `state/orchestrator.json` | one session | `orchestrator_ctl.py` |
+
+**One fact, one plane.** A fact stored in two places has two answers after a
+panic, and the one that looks authoritative is whichever was written more
+carefully, not whichever is true.
+
+Two consequences that are easy to get wrong:
+
+- A hand-maintained "current status" document would put State-plane data in
+  the Knowledge plane. It drifts the moment a phase changes without the
+  document being rewritten, and a stale file that reads as authoritative is
+  the same failure as a coverage curve sampled from a dead GPU. So
+  `pipeline_ctl.py brief` is **derived** at read time and stamps its own
+  clock: it cannot be stale, only old, and you can see how old.
+- Execution position must never be duplicated into `knowledge/`. Position is a
+  cursor, not something worth remembering; `knowledge/` is for facts that are
+  still true on a different box next month.
+
 ## The blackboard
 
 There is no shared memory between agents and no message passing. Every agent
@@ -67,6 +95,35 @@ with it — the pipeline cannot route around a failure to keep making progress.
 Disclosure is tracked separately: `pending` → `submitted` → `resolved`, or
 `not_applicable`.
 
+### The research record
+
+Every analysed crash carries a `finding`: the structured record `rca` produces
+alongside its prose write-up. The prose is what the report is built from; the
+record is what the *next round* can act on.
+
+| Field | What reads it |
+|---|---|
+| `subsystem` | `refine` groups by it; it is the key of the per-subsystem rollup |
+| `bug_class`, `trigger` | closed vocabularies (`pipeline_state.BUG_CLASS`, `TRIGGER`) so records from different rounds group together |
+| `ioctls` | the calls the reproducer made, in call order — `describe` models a sequence, not a set |
+| `preconditions` | the object state that had to exist first; `seeds` builds exactly this |
+| `adjacent` | calls **not** exercised that share an object, lock, refcount or teardown path — the highest-value field, and nothing else in the pipeline derives it |
+| `source_refs`, `hypothesis`, `confidence` | the report, and the next round's `rca` |
+
+A record is refused if it names no `subsystem`, or if `ioctls`,
+`preconditions` and `adjacent` are all empty. A taxonomy with nothing to
+target would let the feedback edge look wired while carrying nothing, and the
+failure would be silent for the rest of the campaign. Not `ioctls` alone:
+Track U findings are userspace and have none.
+
+`validate` reports an `rca_done` crash with no record as an integrity problem.
+The analysis happened and nothing survived it, which is the exact failure this
+whole path exists to prevent.
+
+Records from `duplicate` crashes are excluded from `findings()`. They describe
+the same bug as their surviving entry, so counting both would weight a
+subsystem by how many times the fuzzer happened to rediscover one bug.
+
 ### Rounds
 
 Each round records what it measured and what it produced:
@@ -86,6 +143,45 @@ Each round records what it measured and what it produced:
 to the other so the next round's `describe` and `seeds` agents can find their
 input with `pipeline_ctl.py worklist` instead of guessing a run id.
 
+Two signals travel that road, tagged per item so the receiving agent can tell
+them apart:
+
+- `[coverage]` — derived from the run's own curve. Where the fuzzer has not
+  been.
+- `[finding crash-NNNN]` — derived from a research record's `adjacent` and
+  `preconditions`. Where a bug has already been.
+
+Coverage alone widens the surface indefinitely and never returns to a place
+that yielded. That is the difference between a fuzzing pipeline and a research
+loop, and it is one payload on a road that already existed.
+
+## Knowledge that outlives the campaign
+
+`state/pipeline.json` is gitignored and describes one campaign on one box.
+Everything in it is gone when the instance is rebuilt. `knowledge/` is the
+other half: two committed files that carry forward.
+
+| File | About | Read by |
+|---|---|---|
+| `knowledge/learnings.md` | the target — ABI facts, driver behaviour, tooling quirks | `describe`, `seeds`, `rca` in later rounds and later campaigns |
+| `knowledge/mistakes.md` | us — process errors and what avoids them | the next agent running that phase |
+
+Both are appended through `tools/knowledge_ctl.py note`, never by hand. The
+tool timestamps in UTC, holds an exclusive lock, and rewrites through a
+tempfile and rename, for the same reason the state file does: this machine
+panics on purpose and runs phase agents in parallel, so a plain append can be
+torn by a panic or interleaved by a second writer.
+
+**These files are committed to a public repository.** They carry ABI facts and
+process notes and never findings. `note` refuses text naming a crash id or a
+path into `artifacts/crashes|pocs|rca`, and points at the crash registry
+instead. The refusal is not only a disclosure control: the generalised form of
+such a note is the more useful one anyway, because the next agent will be
+looking at a different crash.
+
+`pipeline_ctl.py brief` renders the tail of both alongside the state summary,
+which is what a fresh session reads after a panic.
+
 ## Surviving a panic
 
 This pipeline crashes its own machine on purpose, so every moving part has to
@@ -102,6 +198,39 @@ come back on its own. Each one is a systemd unit:
 The last row was the gap. The fuzzers restarted after every panic and kept
 producing crashes, but the agent's session was gone and `AGENTS.md`'s resume
 procedure sat waiting for a human to SSH in and type it.
+
+### What comes back, and what is merely sufficient
+
+A fresh agent is always **sufficient**. `pipeline_ctl.py brief` says where the
+pipeline is, so nothing that affects correctness depends on the previous
+session. What a fresh agent loses is the *reasoning*: what was tried, what was
+ruled out, why an approach was abandoned. The state file was never meant to
+hold that.
+
+Setting `orchestrator.resume_command` carries it across. Three properties keep
+that from becoming its own failure mode:
+
+| Property | Why |
+|---|---|
+| The id is **assigned**, not discovered | `orchestrator_ctl.py` generates a UUID and substitutes it for `{session}` in both invocations. Parsing it out of the agent's output, or globbing for the newest transcript, races anything else running on the box. |
+| Resumes are **bounded** | After `max_resumes` the session rotates. An unbounded transcript is re-read on every restart and eventually auto-compacts, dropping detail unpredictably. |
+| A failed resume **self-heals** | A resume exiting non-zero clears the id, so the next start is clean instead of retrying an unresumable transcript every `RestartSec` until the breaker trips. |
+
+The resume counter increments *before* the launch. A panic kills the agent
+with no exit code at all, and that is precisely when the transcript is growing
+fastest — counting only clean exits would mean a panicky campaign never
+rotates.
+
+`{anchor}` in the invocation expands to a paragraph telling the resumed agent
+that its last turn predates the interruption and that `brief` is
+authoritative. Without it the agent picks up from a half-finished tool call
+issued at the moment the kernel died, and its most confident belief about the
+machine is the most stale thing in its context.
+
+Because both invocations must carry `{session}`, `gspwn_config` refuses a
+configuration where `resume_command` is set and either command lacks the
+placeholder: each restart would silently open a new session while the resume
+counter believed it was continuing one.
 
 The hard part was already solved: a fresh agent needs no memory of the old
 session, because `pipeline_ctl.py next` tells it where the pipeline is. **The
@@ -344,17 +473,66 @@ stand in for coverage.
 
 ### The plateau test
 
-Growth is measured over the trailing `plateau_window_min` of the curve:
+Coverage growth is a species-discovery process: each edge is a species, each
+executed input a sampled individual, and distinct-edges-against-inputs is a
+species accumulation curve. That framing is Böhme's (*STADS: Software Testing
+as Species Discovery*, TOSEM 2018) and it is what makes the question
+answerable rather than a matter of taste.
+
+The curve is built on two axes, and both differ from the obvious choice:
+
+- **x is executions, not wall-clock.** Fuzzing progress is driven by inputs
+  executed. This box panics by design, so a fixed time window can contain
+  wildly different amounts of real testing, and a slow or frequently
+  restarting hour would look exactly like saturation.
+- **y is the running maximum, not the reported count.** syzkaller reloads and
+  re-executes its corpus after every restart, so the edge count climbs back
+  towards where it was. That climb is replay, not discovery. Accumulating with
+  `max()` makes it contribute exactly zero.
+
+Both counters reset when the fuzzer restarts. Executions accumulate (a reset
+means the delta is the new reading itself); edges accumulate as a maximum.
+
+Heaps' law is fitted to the recent stretch of the curve by least squares on
+`log S` against `log n`:
 
 ```
-growth = (edges_at_end - edges_at_window_start) / edges_at_window_start
-plateaued  if  growth < plateau_min_growth
+S(n) = K * n**beta,  0 < beta <= 1
+plateaued  if  K((n + dn)**beta - n**beta) < plateau_new_edges
+           where dn = observed exec rate * horizon_hours
 ```
 
-`unknown` is a real answer, returned when there are fewer than three usable
-samples, when the samples span less than the window, or when there is no
-non-zero edge baseline. The loop treats `unknown` as a **stop**, so a broken
-sampler can never authorize another campaign.
+`beta` is the discovery exponent: near 1 the run finds edges about as fast as
+it executes inputs, near 0 it has saturated. The decision is an
+**extrapolation**, not a threshold on a percentage — the question the loop
+asks is how many new edges another campaign is expected to find, which is in
+the units of the thing being predicted. A growth percentage is not: the same
+percentage means ten edges early in a run and a thousand late in one.
+
+Only the last `fit_tail_fraction` of the run's executions is fitted. A fit over
+the whole run is dominated by the early steep phase, so a run that climbed hard
+and then went flat would still report a healthy exponent.
+
+**What this cannot tell you.** The estimators this framing is known for —
+Good-Turing discovery probability, Chao1 richness — need per-species frequency
+counts: how many edges were hit exactly once, exactly twice. syz-manager
+reports an aggregate edge count and nothing per-edge, so no "we have covered
+X% of the driver" claim is available here, and none is made. `max()` is also a
+conservative estimate of the union: a post-restart process could cover an edge
+the earlier one missed while its total is still lower. The bias runs towards
+under-reporting discovery.
+
+`unknown` is a real answer, and the loop treats it as a **stop** so a broken
+sampler can never authorize another campaign. It is returned when there are
+fewer than three usable samples, when there are too few points to fit, when
+the fuzzer is still replaying its corpus after a restart and has not yet
+returned to its own high-water mark, when `beta` falls outside `(0, 1]`, and —
+the case a threshold rule has no way to express — when the curve does not fit
+the model well enough (`R2 < model_min_r2`) to extrapolate from at all.
+
+A run whose source records no execution count falls back to the older
+window-based growth test, on the accumulation curve, and says so in its detail
+line.
 
 A flat window over an unhealthy GPU is also `unknown`. Every sample records
 the GPU's state in the curve's `gpu` column, probed with `nvidia-smi`. A GPU
