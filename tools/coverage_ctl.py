@@ -39,8 +39,8 @@ Subcommands:
                                        side-by-side endpoints (two runs)
   gpu-health                           probe the GPU now; exit 0 healthy, 1 not
 
-Coverage is kernel-side reachable code only. GSP firmware is not instrumented
-(spec §3); every consumer of these numbers must say so.
+Coverage is kernel-side reachable code only. GSP firmware is not instrumented;
+every consumer of these numbers must say so.
 
 Every Track K sample records the GPU's state alongside the counters. A GPU that
 has fallen off the bus does not stop the fuzzer: the curve simply flattens, and

@@ -2,7 +2,6 @@
 
 You are the orchestrator of an agentic fuzzing workflow targeting the NVIDIA
 GPU kernel driver (Track K) and NVIDIA Container Toolkit (Track U).
-Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-design.md`.
 
 ## Ground rules
 

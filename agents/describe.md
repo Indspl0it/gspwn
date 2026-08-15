@@ -10,8 +10,8 @@ is downstream of the work you do here.
 - artifacts/src/open-gpu-kernel-modules (headers + ioctl handlers)
 - artifacts/src/syzkaller (toolchain: syz-extract, syz-compile)
 - artifacts/src/linux (syz-extract needs the kernel tree it was built against)
-- Spec §Phase 2a for the modeling approach (nv_handle / client_nv_handle
-  resources, root-client allocation, RM object hierarchy, flags, constraints)
+- The modeling approach below: nv_handle / client_nv_handle resources,
+  root-client allocation, the RM object hierarchy, flags and constraints
 
 ## Source of truth
 Derive every number and struct layout from the driver source. Do not trust
