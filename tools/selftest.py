@@ -29,6 +29,7 @@ import corpus_ctl
 import coverage_ctl
 import crash_parse
 import gspwn_config
+import orchestrator_ctl
 import repro_ctl
 import pipeline_state as ps
 import trace2seed
@@ -1545,6 +1546,378 @@ class TestWorklistHandoff(StateTempMixin, unittest.TestCase):
             rc = pipeline_ctl.cmd_worklist(args)
         self.assertEqual(rc, 1)              # recorded but not on disk
         self.assertIn("MISSING", out.getvalue())
+
+
+class TestGpuHealthGatesThePlateau(unittest.TestCase):
+    """A dead GPU flattens the curve exactly like a finished round.
+
+    The fuzzer keeps executing against a card that has fallen off the bus, the
+    sampler keeps appending rows, and edge growth stops. Without the GPU
+    column that reads as "plateaued", the loop stops, and the round is written
+    up as having reached a coverage ceiling it never reached.
+    """
+
+    B = 1_700_000_000
+
+    def rows(self, edges, gpu="ok", step=3600):
+        """gpu: one status for every row, or a per-row list, or None to model
+        a curve written before the column existed."""
+        out = []
+        for i, e in enumerate(edges):
+            r = {"ts": self.B + i * step, "edges": e}
+            g = gpu[i] if isinstance(gpu, list) else gpu
+            if g is not None:
+                r["gpu"] = g
+            out.append(r)
+        return out
+
+    FLAT = [9000, 9010, 9020, 9030, 9040, 9050]
+    GROWING = [1000, 3000, 6000, 10000, 15000, 21000]
+
+    def verdict(self, rows):
+        return coverage_ctl.plateau_verdict(rows, 240, 0.02)
+
+    def test_a_flat_curve_on_a_healthy_gpu_is_still_a_plateau(self):
+        # The gate must not fire on the case it is not meant to catch.
+        self.assertEqual(self.verdict(self.rows(self.FLAT))[0], "plateaued")
+
+    def test_a_flat_curve_over_a_dead_gpu_is_unknown_not_plateaued(self):
+        verdict, detail = self.verdict(self.rows(self.FLAT, "dead"))
+        self.assertEqual(verdict, "unknown")
+        self.assertIn("dead", detail)
+
+    def test_one_unhealthy_sample_in_the_window_blocks_the_claim(self):
+        """A window is contaminated by any sample taken while the GPU was out.
+
+        Growth measured across a period the card was not answering is not a
+        measurement of the target, however few samples are affected.
+        """
+        gpu = ["ok", "ok", "ok", "ok", "hung", "ok"]
+        verdict, detail = self.verdict(self.rows(self.FLAT, gpu))
+        self.assertEqual(verdict, "unknown")
+        self.assertIn("hung x1", detail)
+
+    def test_a_curve_with_no_gpu_column_cannot_report_a_plateau(self):
+        """Absence of evidence that the GPU was alive is not evidence it was.
+
+        Curves written before the column existed fail closed, so a run in
+        flight across the upgrade stops the loop instead of asserting a
+        plateau nothing checked.
+        """
+        verdict, detail = self.verdict(self.rows(self.FLAT, None))
+        self.assertEqual(verdict, "unknown")
+        self.assertIn("unrecorded", detail)
+
+    def test_growth_is_still_growth_when_the_gpu_probe_failed(self):
+        """The carve-out: only the plateau reading is gated.
+
+        Coverage cannot climb on a card that is not answering, so growth is
+        its own evidence the probe was having a bad moment. Gating this too
+        would let one transient nvidia-smi failure end a campaign that was
+        still finding edges.
+        """
+        self.assertEqual(self.verdict(self.rows(self.GROWING, "dead"))[0],
+                         "growing")
+
+
+class TestCoverageCsvSchema(StateTempMixin, unittest.TestCase):
+    """The gpu column was added to a file format already in use.
+
+    These go through cmd_sample rather than reproducing its append by hand.
+    The behaviour being guarded is how the sampler chooses its fieldnames, so
+    a test that picks the fieldnames itself would pass no matter what the
+    sampler does.
+    """
+
+    OLD_FIELDS = ["ts", "uptime_s", "edges", "corpus", "corpus_bytes",
+                  "crashes", "execs", "source"]
+
+    def setUp(self):
+        super().setUp()
+        self.runs = tempfile.TemporaryDirectory()
+        self.addCleanup(self.runs.cleanup)
+        self._orig = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = self.runs.name
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR", self._orig))
+        # No syz-manager and no GPU in this suite: stub both collectors so
+        # these exercise the CSV write path and nothing else.
+        self._orig_collect = coverage_ctl.collect
+        self._orig_gpu = coverage_ctl.gpu_health
+        self.edges = 100
+        coverage_ctl.collect = lambda rid, url, track: (
+            {"edges": self.edges}, "json:/stats")
+        coverage_ctl.gpu_health = lambda: ("ok", "stub")
+        self.addCleanup(lambda: setattr(coverage_ctl, "collect",
+                                        self._orig_collect))
+        self.addCleanup(lambda: setattr(coverage_ctl, "gpu_health",
+                                        self._orig_gpu))
+        st = ps.default_state()
+        st["campaigns"].append({"track": "k", "action": "install",
+                                "run_id": "r1", "at": ps._now(), "hours": 1,
+                                "note": ""})
+        ps.save(st)
+
+    def sample(self):
+        args = types.SimpleNamespace(run_id="r1", track="k", url="http://x",
+                                     force=False)
+        with redirect_stdout(io.StringIO()) as out:
+            rc = coverage_ctl.cmd_sample(args)
+        return rc, out.getvalue()
+
+    def write_old_csv(self):
+        import csv as _csv
+        os.makedirs(os.path.join(self.runs.name, "r1"), exist_ok=True)
+        path = coverage_ctl.csv_path("r1")
+        with open(path, "w", newline="") as f:
+            w = _csv.DictWriter(f, fieldnames=self.OLD_FIELDS)
+            w.writeheader()
+            w.writerow({"ts": 1, "edges": 50, "source": "json:/stats"})
+        return path
+
+    def test_a_sample_records_the_gpu_status_alongside_the_counters(self):
+        """gpu is text, not a count: putting it through _to_int would turn
+        "ok" into None and silently un-record every healthy sample."""
+        self.sample()
+        row = coverage_ctl.read_rows("r1")[0]
+        self.assertEqual(row["gpu"], "ok")
+        self.assertEqual(row["source"], "json:/stats")
+        self.assertEqual(row["edges"], 100)
+
+    def test_sampling_a_pre_gpu_csv_keeps_its_column_count(self):
+        """Writing 9 values under an 8-column header shifts every later read
+        by one, which would corrupt the edge counts the loop decides on."""
+        path = self.write_old_csv()
+        self.edges = 110
+        rc, out = self.sample()
+        self.assertEqual(rc, 0)
+        with open(path) as f:
+            widths = {len(l.split(",")) for l in f.read().strip().splitlines()}
+        self.assertEqual(widths, {len(self.OLD_FIELDS)})
+        rows = coverage_ctl.read_rows("r1")
+        self.assertEqual(rows[1]["edges"], 110)   # not shifted a column
+        self.assertIsNone(rows[1]["gpu"])         # and not invented either
+        self.assertIn("predates the gpu column", out)
+
+    def test_an_unhealthy_gpu_is_reported_at_sample_time(self):
+        """The operator should not have to wait for a plateau verdict to
+        learn the card stopped answering four hours ago."""
+        coverage_ctl.gpu_health = lambda: ("dead", "nvidia-smi exit 9")
+        rc, out = self.sample()
+        self.assertIn("GPU is dead", out)
+        self.assertEqual(coverage_ctl.read_rows("r1")[0]["gpu"], "dead")
+
+
+class TestXidClassification(StateTempMixin, unittest.TestCase):
+    """A fuzzer makes Xid 13 and 31 by design; those are not findings.
+
+    Harvesting every NVRM line as a crash buries the interesting entries and
+    makes any "crashes found" number meaningless.
+    """
+
+    def cls(self, title):
+        return crash_parse.xid_class(title)[0]
+
+    def test_the_xid_number_is_read_past_the_bus_id_colons(self):
+        """Regression: skipping to the number with [^:]* stops at the first
+        colon inside (PCI:0000:00:1e), reads the bus id's first field as the
+        Xid, and classifies every crash as an unknown Xid 0."""
+        cls, why = crash_parse.xid_class(
+            "Xid (PCI:0000:00:1e): 13, pid=1234, Graphics Exception")
+        self.assertEqual(cls, "noise")
+        self.assertIn("Xid 13", why)
+
+    def test_fuzzer_generated_xids_are_classed_as_noise(self):
+        for t in ("Xid (PCI:0000:00:1e): 13, Graphics Exception",
+                  "Xid (PCI:0000:00:1e): 31, Ch 00000008, MMU Fault",
+                  "Xid (PCI:0000:00:1e): 43, Channel Error"):
+            self.assertEqual(self.cls(t), "noise", t)
+
+    def test_memory_integrity_xids_are_classed_as_signal(self):
+        for t in ("Xid (PCI:0000:00:1e): 48, Double Bit ECC",
+                  "Xid (PCI:0000:00:1e): 119, GSP RPC Timeout",
+                  "Xid (PCI:0000:00:1e): 120, GSP Error"):
+            self.assertEqual(self.cls(t), "signal", t)
+
+    def test_a_gpu_off_the_bus_is_a_health_problem_not_a_finding(self):
+        self.assertEqual(
+            self.cls("Xid (PCI:0000:00:1e): 79, GPU has fallen off the bus"),
+            "health")
+
+    def test_an_unlisted_xid_is_never_classed_as_noise(self):
+        """The property the whole table exists to guarantee.
+
+        A driver branch can introduce an Xid this table predates. Defaulting
+        it to exhaust would silently discard the one class of finding the
+        campaign exists to produce.
+        """
+        for n in (222, 999, 7, 150):
+            cls = self.cls("Xid (PCI:0000:00:1e): %d, something new" % n)
+            self.assertEqual(cls, "review", n)
+
+    def test_an_nvrm_line_without_an_xid_number_is_not_classified(self):
+        self.assertIsNone(
+            self.cls("GPU at PCI:0000:00:1e has an internal error"))
+
+    def test_registering_an_nvrm_crash_records_its_signal(self):
+        st = ps.default_state()
+        path = os.path.join(self.tmp.name, "dmesg.txt")
+        with open(path, "w") as f:
+            f.write("[ 1.0] NVRM: Xid (PCI:0000:00:1e): 31, pid=1, MMU Fault\n"
+                    "[ 2.0] NVRM: Xid (PCI:0000:00:1e): 119, RPC Timeout\n")
+        with redirect_stdout(io.StringIO()):
+            crash_parse.scan_dmesg(st, path)
+        got = sorted((c["signal"], c["title"]) for c in st["crashes"].values())
+        self.assertEqual([s for s, _ in got], ["noise", "signal"])
+        # The reason travels with the crash, so triage does not have to
+        # re-derive why an entry was set aside.
+        notes = " ".join(c["notes"] for c in st["crashes"].values())
+        self.assertIn("Xid 31", notes)
+
+
+class TestOrchestratorBreaker(unittest.TestCase):
+    """The supervisor restarts the agent forever unless something stops it.
+
+    Two counters, not one: this pipeline panics the box on purpose, so a
+    shared limit would either stop a healthy campaign or let a same-boot loop
+    run all night.
+    """
+
+    NOW = 1_700_000_000.0
+    CONF = {"orchestrator": {"window_min": 60, "max_same_boot_starts": 5,
+                             "max_reboots": 10, "command": "true"}}
+
+    def state(self, spec):
+        """spec: [(minutes_ago, boot_id)]"""
+        return {"starts": [{"ts": int(self.NOW - m * 60), "boot_id": b}
+                           for m, b in spec], "blocked": None}
+
+    def tripped(self, spec, this_boot):
+        reason, _ = orchestrator_ctl.check(self.state(spec), self.CONF,
+                                           self.NOW, this_boot)
+        return reason
+
+    def test_a_rebooting_campaign_is_not_a_restart_loop(self):
+        """Eight panics an hour is a working kernel fuzzer, not a fault."""
+        spec = [(i * 7, "boot%d" % i) for i in range(8)]
+        self.assertIsNone(self.tripped(spec, "boot0"))
+
+    def test_repeated_starts_on_one_boot_trip_the_breaker(self):
+        spec = [(i * 5, "same") for i in range(6)]
+        reason = self.tripped(spec, "same")
+        self.assertIsNotNone(reason)
+        self.assertIn("on this boot", reason)
+
+    def test_reboots_faster_than_the_limit_trip_the_breaker(self):
+        spec = [(i * 4, "boot%d" % i) for i in range(12)]
+        reason = self.tripped(spec, "boot0")
+        self.assertIsNotNone(reason)
+        self.assertIn("booted", reason)
+
+    def test_starts_older_than_the_window_do_not_count(self):
+        spec = [(90 + i * 5, "same") for i in range(6)]
+        self.assertIsNone(self.tripped(spec, "same"))
+
+    def test_exactly_at_the_limit_is_allowed(self):
+        """Off-by-one here either blocks a campaign a start early or lets one
+        extra through; the limit is the number of starts allowed."""
+        spec = [(i * 5, "same") for i in range(5)]
+        self.assertIsNone(self.tripped(spec, "same"))
+
+    def test_an_unreadable_boot_id_counts_against_the_same_boot_limit(self):
+        """Treating an unknown boot as a fresh one is what would let a
+        same-boot loop run forever on a box where boot_id cannot be read."""
+        spec = [(i * 5, None) for i in range(6)]
+        reason = self.tripped(spec, None)
+        self.assertIsNotNone(reason)
+        self.assertIn("on this boot", reason)
+
+
+class TestOrchestratorRun(StateTempMixin, unittest.TestCase):
+    """`run` is what the systemd unit calls: what it returns decides whether
+    the unit restarts or stops."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_path = orchestrator_ctl.ORCH_PATH
+        orchestrator_ctl.ORCH_PATH = os.path.join(self.tmp.name, "orch.json")
+        self.addCleanup(lambda: setattr(orchestrator_ctl, "ORCH_PATH",
+                                        self._orig_path))
+        self._orig_cfg = orchestrator_ctl.cfg
+        orchestrator_ctl.cfg = lambda: {
+            "orchestrator": {"window_min": 60, "max_same_boot_starts": 2,
+                             "max_reboots": 10, "command": "true"}}
+        self.addCleanup(lambda: setattr(orchestrator_ctl, "cfg",
+                                        self._orig_cfg))
+        # Harvest shells out to crashlog_ctl as root; this suite runs offline.
+        self._orig_harvest = orchestrator_ctl.harvest
+        orchestrator_ctl.harvest = lambda: None
+        self.addCleanup(lambda: setattr(orchestrator_ctl, "harvest",
+                                        self._orig_harvest))
+        ps.save(ps.default_state())
+
+    def run_once(self, command="true"):
+        args = types.SimpleNamespace(command=command)
+        with redirect_stdout(io.StringIO()) as out:
+            rc = orchestrator_ctl.cmd_run(args)
+        return rc, out.getvalue()
+
+    def test_a_healthy_start_launches_the_agent(self):
+        rc, out = self.run_once()
+        self.assertEqual(rc, 0)
+        self.assertIn("launching", out)
+
+    def test_a_tripped_breaker_stops_the_unit_instead_of_restarting(self):
+        """BLOCKED_EXIT is named in RestartPreventExitStatus. Returning
+        anything else here restarts into the same wall every RestartSec."""
+        for _ in range(2):
+            self.run_once()
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("circuit breaker tripped", out)
+        # And it stays blocked without re-deciding.
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("is blocked", out)
+
+    def test_reset_clears_the_start_history_as_well_as_the_trip(self):
+        """Clearing only the flag re-trips on the very next start, because
+        the counted window has not moved."""
+        for _ in range(3):
+            self.run_once()
+        with redirect_stdout(io.StringIO()):
+            orchestrator_ctl.cmd_reset(types.SimpleNamespace())
+        rc, out = self.run_once()
+        self.assertEqual(rc, 0)
+        self.assertIn("launching", out)
+
+    def test_a_complete_pipeline_stops_the_unit(self):
+        """Relaunching an agent to read 'complete' costs tokens to reach an
+        answer that will not change."""
+        st = ps.load()
+        for p in ps.PHASES:
+            st["phases"][p]["status"] = "done"
+        st["rounds"][-1]["decision"] = "stop"
+        ps.save(st)
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("complete", out)
+
+    def test_a_blocked_phase_stops_the_unit(self):
+        st = ps.load()
+        st["phases"]["fuzz"]["status"] = "blocked"
+        ps.save(st)
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("blocked", out)
+
+    def test_no_configured_command_stops_rather_than_looping(self):
+        """Only a human can supply this, so retrying every 60s is pure burn."""
+        orchestrator_ctl.cfg = lambda: {
+            "orchestrator": {"window_min": 60, "max_same_boot_starts": 2,
+                             "max_reboots": 10, "command": ""}}
+        rc, out = self.run_once(command=None)
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("orchestrator.command", out)
 
 
 def pipeline_ctl_cmd_round_end(args):
