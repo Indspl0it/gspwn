@@ -360,18 +360,50 @@ class TestFramelessSignature(unittest.TestCase):
         self.assertEqual(self.sig(a), self.sig(b))
         self.assertEqual(self.sig(a, lines=6), self.sig(b, lines=6))
 
-    def test_the_default_depth_stops_short_of_the_faulting_function(self):
-        """Documents a real limit of the shipped default rather than asserting
-        it is right. RIP sits around line 8 of a real oops, so at the default
-        of 5 two different faulting functions behind the same fault type share
-        a signature. Raising frameless_signature_lines separates them, at the
-        cost of reaching lines that vary more. Nothing here has been measured
-        against real reports from this driver yet, which is why the knob is in
-        config and the default was left where it was."""
+    def test_two_faulting_functions_are_two_bugs(self):
+        """The whole reason RIP is in the signature. Without it these two
+        produce the same canonical title AND the same signature, so the second
+        registers as a duplicate and never reaches rca — a lost finding, not
+        queue noise."""
         a = self.block(tail="RIP: 0010:nv_open+0x40/0x120")
         b = self.block(tail="RIP: 0010:uvm_va_range_destroy+0x88/0x300")
+        self.assertNotEqual(self.sig(a), self.sig(b))
+
+    def test_the_faulting_function_is_found_wherever_it_sits(self):
+        """How much prologue precedes RIP varies with the fault type, so a
+        line count cannot reach it reliably. It is matched by pattern, and
+        stays in the identity no matter how far down the report it is."""
+        near = self.block(tail="RIP: 0010:nv_open+0x40/0x120")
+        far = near.replace("RIP: 0010:nv_open",
+                           "Call Trace:\n<TASK>\nRIP: 0010:nv_open")
+        self.assertEqual(self.sig(near), self.sig(far))
+        self.assertEqual(self.sig(near, lines=1), self.sig(far, lines=1))
+
+    def test_the_faulting_function_survives_the_character_cut(self):
+        """It is appended after the cut, never inside it: a long prologue must
+        not be able to push the strongest evidence out of the identity."""
+        a = self.block(tail="RIP: 0010:nv_open+0x40/0x120")
+        b = self.block(tail="RIP: 0010:uvm_va_range_destroy+0x88/0x300")
+        self.assertNotEqual(self.sig(a, chars=32), self.sig(b, chars=32))
+
+    def test_the_same_function_at_a_different_offset_is_one_bug(self):
+        """Offsets move with the build. stack_frames strips them for the same
+        reason, and the same bug in two builds is one bug."""
+        self.assertEqual(self.sig(self.block(tail="RIP: 0010:nv_open+0x40/0x120")),
+                         self.sig(self.block(tail="RIP: 0010:nv_open+0x9c/0x120")))
+
+    def test_the_older_bracketed_rip_format_is_read_the_same_way(self):
+        a = self.block(tail="RIP: 0010:nv_open+0x40/0x120")
+        b = self.block(tail="RIP: 0010:[<ffffffff81234567>] nv_open+0x40/0x120")
         self.assertEqual(self.sig(a), self.sig(b))
-        self.assertNotEqual(self.sig(a, lines=6), self.sig(b, lines=6))
+
+    def test_an_unresolved_rip_falls_back_to_the_prologue(self):
+        """A bare address names nothing (module not loaded, no symbols), so
+        there is nothing to add and the signature is what it was."""
+        a = self.block(tail="RIP: 0010:0xffffffffc0a12345")
+        b = self.block(tail="RIP: 0010:0xffffffffc0b98765")
+        self.assertEqual(self.sig(a), self.sig(b))
+        self.assertEqual(self.sig(a), self.sig(self.block(tail="Code: 48 8b")))
 
     def test_too_few_hashed_characters_merges_distinct_bugs(self):
         """Why the config floor exists. Cut short enough and the hash covers
@@ -415,6 +447,79 @@ class TestFramelessSignature(unittest.TestCase):
         self.assertTrue(crash_parse.stack_hash(framed))
         self.assertNotEqual(crash_parse.stack_hash(framed),
                             self.sig(framed))
+
+
+class TestTriageSettingsDrift(StateTempMixin, unittest.TestCase):
+    """Changing a dedup depth mid-campaign does not recompute the hashes
+    already stored, so across the change one bug can register twice and two
+    bugs can merge into one that never reaches rca. A comment saying so is not
+    a check."""
+
+    def reg(self, state, title="KASAN: UAF in nv_free", shash="h1"):
+        with redirect_stdout(io.StringIO()):
+            crash_parse.register(state, "K", title, shash, "/tmp/d")
+
+    def test_the_settings_are_stamped_at_the_first_registration(self):
+        st = ps.default_state()
+        self.assertFalse(st["triage_settings"])
+        self.reg(st)
+        self.assertEqual(st["triage_settings"],
+                         dict(gspwn_config.triage()))
+
+    def test_the_stamp_is_not_rewritten_by_later_registrations(self):
+        """Rewriting it would erase the evidence that the stored hashes were
+        built under something else, which is the only thing it is for."""
+        st = ps.default_state()
+        self.reg(st)
+        st["triage_settings"]["stack_hash_frames"] = 99
+        self.reg(st, title="KASAN: UAF in nv_other", shash="h2")
+        self.assertEqual(st["triage_settings"]["stack_hash_frames"], 99)
+
+    def test_a_changed_depth_is_reported_by_validate(self):
+        st = ps.default_state()
+        self.reg(st)
+        current = dict(gspwn_config.triage(), stack_hash_frames=7)
+        drift = ps.triage_drift(st, current)
+        self.assertEqual(drift, [("stack_hash_frames", 3, 7)])
+        problems = ps.validate(st, current)
+        self.assertTrue(any("stack_hash_frames" in p for p in problems),
+                        problems)
+
+    def test_unchanged_settings_are_not_reported(self):
+        st = ps.default_state()
+        self.reg(st)
+        self.assertEqual(ps.triage_drift(st, dict(gspwn_config.triage())), [])
+        self.assertEqual(ps.validate(st, dict(gspwn_config.triage())), [])
+
+    def test_an_unstamped_registry_reports_nothing(self):
+        """A state file from before this existed has no recorded settings, and
+        inventing a comparison against the current ones would report drift
+        that nobody caused."""
+        st = ps.default_state()
+        self.assertEqual(ps.triage_drift(st, dict(gspwn_config.triage())), [])
+
+    def test_validate_still_works_without_the_settings(self):
+        """The caller that cannot read config still gets every other check."""
+        st = ps.default_state()
+        self.reg(st)
+        self.assertEqual(ps.validate(st), [])
+
+    def test_the_validate_command_reports_the_drift(self):
+        """Testing ps.validate directly proves the check works; it does not
+        prove the command the agents actually run passes the config into it.
+        That wiring is the whole feature from the outside."""
+        st = ps.default_state()
+        self.reg(st)
+        ps.save(st)
+        cfg = os.path.join(self.tmp.name, "drift.yaml")
+        with open(cfg, "w") as f:
+            f.write("triage:\n  stack_hash_frames: 7\n")
+        env = dict(os.environ, GSPWN_STATE=ps.STATE_PATH, GSPWN_CONFIG=cfg)
+        r = subprocess.run(
+            [sys.executable, os.path.join(HERE, "pipeline_ctl.py"),
+             "validate"], env=env, capture_output=True, text=True)
+        self.assertIn("stack_hash_frames", r.stdout + r.stderr)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
 
 
 class TestTrace2Seed(unittest.TestCase):

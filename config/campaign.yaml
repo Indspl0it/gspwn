@@ -163,9 +163,11 @@ triage:
   # Dedup depth. These decide whether two reports are the same bug, which
   # decides what reaches rca and what the next round hunts.
   #
-  # CAUTION: changing either mid-campaign applies only to crashes registered
-  # afterwards — existing hashes are not recomputed, so one bug can register
-  # twice across the change. Change them between campaigns.
+  # CAUTION: change them between campaigns, not during one. Existing hashes
+  # are not recomputed, so across a mid-campaign change one bug can register
+  # twice and two bugs can merge into one that never reaches rca. The settings
+  # in force at the first registration are recorded in the state file, and
+  # `pipeline_ctl.py validate` reports it if they move underneath the registry.
   stack_hash_frames: 3   # fewer merges distinct bugs sharing a caller;
                          # more splits one bug whose stack varies by inlining
   signature_frames: 5    # frames a reproduction must match to count as a hit
@@ -176,12 +178,9 @@ triage:
   # occurrence unique. Too narrow and one panic registers as many bugs,
   # burying the real ones in the queue; too wide and two different panics
   # sharing a prologue merge, so the second never reaches rca.
-  # Known limit of the default: RIP sits around line 8 of a real x86 oops, so
-  # at 5 two different faulting functions behind the same fault type share a
-  # signature and the second is a dup. Raising this to ~8 separates them and
-  # reaches lines that vary more. Nothing here has been measured against real
-  # reports from this driver yet, which is why it is a knob and why the
-  # default was left alone.
+  # These bound the prologue wording only. The faulting function (RIP) is
+  # always part of the identity, matched by pattern wherever it sits in the
+  # report, so neither knob can drop it.
   frameless_signature_lines: 5   # report lines that form the signature
   frameless_signature_chars: 300 # of that normalized wording, how much is
                                  # actually hashed
