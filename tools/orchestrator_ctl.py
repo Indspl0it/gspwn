@@ -43,6 +43,38 @@ stops rather than restarting into the same wall. A human clears it with
 phase is blocked. A finished pipeline that keeps relaunching an agent is the
 same unbounded token loop by a different route.
 
+## Session resume
+
+A fresh agent is always *sufficient*: `pipeline_ctl.py brief` says where the
+pipeline is, so nothing is lost that matters to correctness. What is lost is
+the reasoning — what was tried, what was ruled out, why an approach was
+abandoned — which the state file was never meant to hold.
+
+So when `orchestrator.resume_command` is set, a restart reuses the previous
+session. Three properties make that safe:
+
+  assigned, not discovered   The id is a UUID generated here and substituted
+                             into the invocation. Parsing it out of the
+                             agent's output, or globbing for the newest
+                             transcript, races every other agent on the box.
+  bounded                    After `max_resumes` the session rotates. A
+                             transcript that grows forever is re-read on every
+                             restart and eventually auto-compacts, dropping
+                             detail unpredictably.
+  self-healing               A resume that exits non-zero clears the id, so
+                             the next start is clean rather than looping
+                             against a transcript that cannot be resumed.
+
+The resume count is incremented *before* the launch, not after. A panic kills
+the agent without an exit code, and that is the case where the transcript is
+growing fastest — counting only clean exits would mean a panicky campaign
+never rotates.
+
+`{anchor}` in the invocation is replaced with RESUME_ANCHOR, which tells the
+resumed agent its last turn predates the interruption and that `brief` is
+authoritative. Without it the agent continues from a half-finished tool call
+issued at the moment the kernel died.
+
 Subcommands:
   install [--command 'CMD']   write and enable gspwn-orchestrator.service
   run                         breaker check, harvest, then exec the agent
@@ -60,6 +92,7 @@ import pwd
 import subprocess
 import sys
 import time
+import uuid
 from contextlib import contextmanager
 
 import fcntl
@@ -81,6 +114,22 @@ ORCH_PATH = os.environ.get("GSPWN_ORCH") or os.path.join(
 # EX_CONFIG, which is close enough in meaning and not something python or a
 # shell produces on its own.
 BLOCKED_EXIT = 78
+
+SESSION_PLACEHOLDER = gspwn_config.SESSION_PLACEHOLDER
+ANCHOR_PLACEHOLDER = "{anchor}"
+# Substituted for {anchor} in a resume invocation. The resumed agent's last
+# turn is whatever it was mid-way through when the kernel died, so its own
+# account of what is running is the least reliable thing in its context.
+# Deliberately free of apostrophes and double quotes: it is substituted into a
+# shell command line the operator has already quoted.
+RESUME_ANCHOR = (
+    "This session has resumed after an interruption. Your most recent turn "
+    "predates a kernel panic, a reboot or a restart, so anything it says "
+    "about what is running or what phase you were in is stale. Do not act on "
+    "it. Run: python3 tools/pipeline_ctl.py brief -- its output is "
+    "authoritative and your memory is not. Then continue from the phase it "
+    "reports, following AGENTS.md. Your earlier reasoning about the target is "
+    "still useful; your earlier belief about the machine is not.")
 
 UNIT_TMPL = """[Unit]
 Description=gspwn orchestrator (drives the pipeline across panics)
@@ -178,8 +227,12 @@ def _read():
         raise ValueError("%s must contain a JSON object" % ORCH_PATH)
     raw.setdefault("starts", [])
     raw.setdefault("blocked", None)
+    # session: {"id", "resumes", "started"} or None for "start fresh".
+    raw.setdefault("session", None)
     if not isinstance(raw["starts"], list):
         raise ValueError("%s: 'starts' must be a list" % ORCH_PATH)
+    if raw["session"] is not None and not isinstance(raw["session"], dict):
+        raise ValueError("%s: 'session' must be an object or null" % ORCH_PATH)
     return raw
 
 
@@ -221,6 +274,42 @@ def check(state, conf, now, this_boot):
                 "`orchestrator_ctl.py reset`."
                 % (len(boots), o["window_min"], o["max_reboots"]), None)
     return None, counts
+
+
+def resolve_session(state, conf, now, new_id=None):
+    """-> (session, resuming, why). Pure; mutates nothing.
+
+    `session` is the dict to store before launching. `resuming` says which of
+    the two configured invocations to use. `why` is the one-line explanation
+    printed to the journal, which is the only place an operator can see why a
+    restart did or did not carry the previous context.
+    """
+    o = conf["orchestrator"]
+    prev = state.get("session")
+    fresh = {"id": new_id or str(uuid.uuid4()), "resumes": 0,
+             "started": int(now)}
+    if not o.get("resume_command"):
+        return fresh, False, ("resume_command is unset, so every start is "
+                              "fresh; brief carries the position")
+    if not prev or not prev.get("id"):
+        return fresh, False, "no previous session on record"
+    used = int(prev.get("resumes") or 0)
+    if used >= o["max_resumes"]:
+        return fresh, False, ("previous session reached the resume limit "
+                              "(%d), rotating to a fresh one" % o["max_resumes"])
+    return (dict(prev, resumes=used + 1), True,
+            "resuming session %s (%d of %d)"
+            % (prev["id"][:8], used + 1, o["max_resumes"]))
+
+
+def render_command(template, session_id):
+    """Substitute the placeholders into an operator-written command line.
+
+    str.replace, not str.format: these invocations routinely carry a prompt
+    containing braces, and format() would raise on the first one.
+    """
+    return (template.replace(SESSION_PLACEHOLDER, session_id)
+            .replace(ANCHOR_PLACEHOLDER, RESUME_ANCHOR))
 
 
 def _block(state, reason, now):
@@ -279,7 +368,8 @@ def pipeline_stop_reason():
 
 def cmd_run(a):
     conf = cfg()
-    command = a.command or conf["orchestrator"]["command"]
+    o = conf["orchestrator"]
+    command = a.command or o["command"]
     if not command:
         # Exit BLOCKED_EXIT, not 1: restarting every 60s against a config
         # value that only a human can supply is the loop this tool exists to
@@ -301,19 +391,24 @@ def cmd_run(a):
             print("orchestrator is blocked (since %s): %s"
                   % (_ts(state["blocked"]["at"]), state["blocked"]["reason"]))
             return BLOCKED_EXIT
-        state["starts"] = _recent(state["starts"],
-                                  conf["orchestrator"]["window_min"], now)
+        state["starts"] = _recent(state["starts"], o["window_min"], now)
         state["starts"].append({"ts": int(now), "boot_id": this_boot})
         reason, counts = check(state, conf, now, this_boot)
         if reason:
             _block(state, reason, now)
             print("circuit breaker tripped: %s" % reason)
             return BLOCKED_EXIT
+        # Resolved and stored BEFORE the launch. A panic kills the agent with
+        # no exit code, so anything recorded afterwards is not recorded at all
+        # on exactly the restarts this exists for.
+        session, resuming, why = resolve_session(state, conf, now)
+        state["session"] = session
         _write(state)
     print("orchestrator start: %d in the last %d min (%d on this boot, "
           "%d distinct boot(s))"
           % (counts["recent"], counts["window_min"], counts["same_boot"],
              counts["boots"]))
+    print("session: %s" % why)
 
     stop = pipeline_stop_reason()
     if stop:
@@ -321,14 +416,36 @@ def cmd_run(a):
         return BLOCKED_EXIT
 
     harvest()
-    print("launching: %s" % command)
+    template = (o["resume_command"] if resuming else command)
+    if a.command:
+        template = a.command      # an explicit --command always wins
+    launched = render_command(template, session["id"])
+    print("launching: %s" % launched)
     sys.stdout.flush()
     # shell=True because the configured value is a command line the operator
     # wrote, not an argv this tool assembled. Nothing user-controlled reaches
     # it at runtime: it comes from a config file only root can install a unit
     # from, and it is the whole point of the setting.
-    r = subprocess.run(command, shell=True, cwd=REPO_ROOT)
+    r = subprocess.run(launched, shell=True, cwd=REPO_ROOT)
     print("agent exited %d" % r.returncode)
+    if resuming and r.returncode != 0:
+        # Self-heal. A resume that fails is most likely a transcript that
+        # cannot be resumed (deleted, corrupt, from another machine), and
+        # retrying it would fail identically every RestartSec until the
+        # breaker trips. Dropping the id costs the reasoning history; not
+        # dropping it costs the campaign.
+        with _breaker_lock():
+            try:
+                st2 = _read()
+            except ValueError:
+                st2 = None
+            if st2 is not None and (st2.get("session") or {}).get("id") \
+                    == session["id"]:
+                st2["session"] = None
+                _write(st2)
+                print("cleared the session id: a resume that exits non-zero "
+                      "is treated as an unresumable transcript, so the next "
+                      "start begins fresh and re-anchors from `brief`.")
     return r.returncode
 
 
@@ -349,6 +466,15 @@ def cmd_status(a):
     print("unit:      %s" % ("installed" if os.path.exists(UNIT_PATH)
                              else "not installed"))
     print("command:   %s" % (o["command"] or "(unset — install will refuse)"))
+    sess = state.get("session")
+    if not o["resume_command"]:
+        print("session:   every start is fresh (resume_command unset)")
+    elif sess and sess.get("id"):
+        print("session:   %s, %d of %d resume(s) used, opened %s"
+              % (sess["id"], int(sess.get("resumes") or 0), o["max_resumes"],
+                 _ts(sess.get("started"))))
+    else:
+        print("session:   none on record; the next start opens one")
     print("window:    %d min; limits: %d same-boot start(s), %d reboot(s)"
           % (o["window_min"], o["max_same_boot_starts"], o["max_reboots"]))
     print("in window: %d start(s) across %d boot(s)" % (len(recent),
@@ -372,14 +498,21 @@ def cmd_reset(a):
         except ValueError:
             # reset is the documented way out of a corrupt breaker file, so
             # it is the one command allowed to start over.
-            state = {"starts": [], "blocked": None}
+            state = {"starts": [], "blocked": None, "session": None}
         was = state["blocked"]
         state["blocked"] = None
         # Clearing the trip without clearing the history would re-trip on the
         # very next start, since the counted window has not moved.
         state["starts"] = []
+        # And start a fresh session. A breaker trip means the agent kept
+        # failing, and a transcript it kept failing to resume is one of the
+        # likelier causes — resuming into it again would re-trip.
+        had_session = bool((state.get("session") or {}).get("id"))
+        state["session"] = None
         _write(state)
     print("breaker cleared%s" % (" (was: %s)" % was["reason"] if was else ""))
+    if had_session:
+        print("session cleared too; the next start opens a fresh one")
     if os.path.exists(UNIT_PATH):
         print("start it again with: sudo systemctl start %s" % UNIT_NAME)
     return 0
@@ -441,6 +574,13 @@ def cmd_install(a):
     print("installed and enabled %s" % UNIT_NAME)
     print("  runs as:  %s (HOME=%s)" % (user, home))
     print("  command:  %s" % command)
+    if o["resume_command"]:
+        print("  resume:   %s" % o["resume_command"])
+        print("            rotates to a fresh session after %d resume(s)"
+              % o["max_resumes"])
+    else:
+        print("  resume:   off — every restart starts a fresh session. Set "
+              "orchestrator.resume_command to carry the previous one.")
     print("  restart:  every %ss, blocked at %d same-boot start(s) or %d "
           "reboot(s) per %d min"
           % (a.restart_sec, o["max_same_boot_starts"], o["max_reboots"],
