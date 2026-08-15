@@ -50,9 +50,23 @@ round they were meant to steer:
   seeds builds exactly this. For a Track U finding this may be the only
   targeting field, which is fine.
 - `adjacent` — calls you did **not** exercise that share the same object,
-  lock, refcount or teardown path. This is the highest-value field: it is
-  where the next round goes hunting, and nothing else in the pipeline can
-  derive it.
+  lock, refcount or teardown path. **This is the only field that carries
+  anything the crash does not already contain.** `ioctls` is transcribed from
+  the reproducer and `preconditions` mostly from the same place; a round
+  cannot use either to look anywhere it has not already looked. Everything the
+  feedback edge does, it does with this field.
+  Finding it means reading source, not the crash: take the object the bug
+  touches, find its other callers, and list the ones this reproducer never
+  reached. If `adjacent` comes back empty, or repeats calls already in
+  `ioctls`, the record is inert — `finding-list` and `validate` both say so by
+  name, and `refine` will have nothing from it to put in the worklist.
+- `no_adjacent_reason` — required when `adjacent` is genuinely empty. A bug
+  with no siblings on its lock or teardown path is a real answer, and so is a
+  path that disappears into GSP where you cannot see the other callers. Say
+  which. Do not invent a neighbouring call to fill the field: a wrong target
+  costs the next round more than an honest empty one, because it will be
+  modelled and measured before anyone notices it was never adjacent to
+  anything.
 - `source_refs` — `file.c:line` into the driver source.
 - `hypothesis` — the underlying pattern, not a restatement of this crash.
   "teardown paths skip the in-flight refcount check" is a hypothesis;
@@ -64,6 +78,12 @@ round they were meant to steer:
 A record is refused if it names no subsystem, or if it carries none of
 `ioctls`/`preconditions`/`adjacent` — a taxonomy with nothing to target is a
 label, not an instruction.
+
+A record that is accepted can still be inert. `python3
+tools/pipeline_ctl.py finding-list` ends with how many of your records can
+send the next round somewhere new, and names the ones that cannot. That line
+is the honest measure of this phase: a round where every record was accepted
+and none of them steer is a round that produced paperwork.
 
 Nothing downstream may **remove** a target because of a hypothesis; a
 hypothesis only adds. You are the only judgement in this loop, so a confident
@@ -83,7 +103,10 @@ paths of completed RCA files, the count of [UNVERIFIED] claims per file — the
 eval phase samples from exactly that set, so an RCA reporting zero unverified
 claims must have verified all of them against source — and
 `python3 tools/pipeline_ctl.py finding-list`, which must show one record per
-crash marked rca_done this round.
+crash marked rca_done this round, and its closing count of how many records
+can steer the next round. Report that count in the gate even when it is low;
+`validate` will report it anyway, and a phase that hides it has spent the
+round for nothing.
 
 ## Knowledge (cross-campaign)
 

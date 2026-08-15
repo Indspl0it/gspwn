@@ -57,10 +57,15 @@ session. Three properties make that safe:
                              into the invocation. Parsing it out of the
                              agent's output, or globbing for the newest
                              transcript, races every other agent on the box.
-  bounded                    After `max_resumes` the session rotates. A
-                             transcript that grows forever is re-read on every
-                             restart and eventually auto-compacts, dropping
-                             detail unpredictably.
+  bounded                    The session rotates once its transcript passes
+                             `max_session_mb`, measured through
+                             `session_transcript_glob`. Size is the rule
+                             because size is what drives auto-compaction;
+                             restart count does not, since twenty restarts may
+                             write less than one long uninterrupted stretch.
+                             `max_resumes` remains only as a backstop for when
+                             the transcript cannot be measured, and the run
+                             says so loudly when it falls back to it.
   self-healing               A resume that exits non-zero clears the id, so
                              the next start is clean rather than looping
                              against a transcript that cannot be resumed.
@@ -86,6 +91,7 @@ Requires root for install/remove. `run` is what the unit calls; running it by
 hand does the same thing in the foreground.
 """
 import argparse
+import glob
 import json
 import os
 import pwd
@@ -276,13 +282,42 @@ def check(state, conf, now, this_boot):
     return None, counts
 
 
-def resolve_session(state, conf, now, new_id=None):
+def transcript_bytes(glob_pattern, session_id):
+    """Total size of the session's transcript, or None when it cannot be read.
+
+    None is not zero. A missing or unreadable transcript means the size test
+    cannot be applied, and treating that as "small" would silently disable the
+    only rotation rule that tracks what actually matters.
+    """
+    if not glob_pattern or not session_id:
+        return None
+    pattern = os.path.expanduser(
+        glob_pattern.replace(SESSION_PLACEHOLDER, session_id))
+    paths = glob.glob(pattern)
+    if not paths:
+        return None
+    total = 0
+    for p in paths:
+        try:
+            total += os.path.getsize(p)
+        except OSError:
+            return None
+    return total
+
+
+def resolve_session(state, conf, now, new_id=None, size_bytes=None):
     """-> (session, resuming, why). Pure; mutates nothing.
 
     `session` is the dict to store before launching. `resuming` says which of
     the two configured invocations to use. `why` is the one-line explanation
     printed to the journal, which is the only place an operator can see why a
     restart did or did not carry the previous context.
+
+    `size_bytes` is the previous transcript's measured size, or None when it
+    could not be measured. Size is the primary rotation rule because it is
+    what drives auto-compaction; the resume count is only a backstop for when
+    the measurement is unavailable. Measured on one real session, compaction
+    fired roughly every 2 MB regardless of how many times anything restarted.
     """
     o = conf["orchestrator"]
     prev = state.get("session")
@@ -293,13 +328,23 @@ def resolve_session(state, conf, now, new_id=None):
                               "fresh; brief carries the position")
     if not prev or not prev.get("id"):
         return fresh, False, "no previous session on record"
+    limit_mb = o.get("max_session_mb") or 0
+    if limit_mb and size_bytes is not None:
+        mb = size_bytes / 1048576.0
+        if mb >= limit_mb:
+            return fresh, False, (
+                "previous transcript is %.1f MB (limit %s), which is several "
+                "auto-compactions in; rotating rather than carrying a summary "
+                "of a summary" % (mb, limit_mb))
     used = int(prev.get("resumes") or 0)
     if used >= o["max_resumes"]:
-        return fresh, False, ("previous session reached the resume limit "
+        return fresh, False, ("previous session reached the resume backstop "
                               "(%d), rotating to a fresh one" % o["max_resumes"])
+    size = ("unmeasured" if size_bytes is None
+            else "%.1f MB" % (size_bytes / 1048576.0))
     return (dict(prev, resumes=used + 1), True,
-            "resuming session %s (%d of %d)"
-            % (prev["id"][:8], used + 1, o["max_resumes"]))
+            "resuming session %s (resume %d of %d, transcript %s)"
+            % (prev["id"][:8], used + 1, o["max_resumes"], size))
 
 
 def render_command(template, session_id):
@@ -401,7 +446,10 @@ def cmd_run(a):
         # Resolved and stored BEFORE the launch. A panic kills the agent with
         # no exit code, so anything recorded afterwards is not recorded at all
         # on exactly the restarts this exists for.
-        session, resuming, why = resolve_session(state, conf, now)
+        prev_id = (state.get("session") or {}).get("id")
+        size = transcript_bytes(o.get("session_transcript_glob"), prev_id)
+        session, resuming, why = resolve_session(state, conf, now,
+                                                 size_bytes=size)
         state["session"] = session
         _write(state)
     print("orchestrator start: %d in the last %d min (%d on this boot, "
@@ -409,6 +457,14 @@ def cmd_run(a):
           % (counts["recent"], counts["window_min"], counts["same_boot"],
              counts["boots"]))
     print("session: %s" % why)
+    if o.get("resume_command") and o.get("max_session_mb") and size is None \
+            and prev_id:
+        # Loud, because the fallback is the proxy this measurement replaced.
+        print("  WARN: could not measure the previous transcript (%s). "
+              "Rotation falls back to the resume count, which does not track "
+              "transcript growth."
+              % (o.get("session_transcript_glob")
+                 or "session_transcript_glob is unset"))
 
     stop = pipeline_stop_reason()
     if stop:
@@ -470,9 +526,15 @@ def cmd_status(a):
     if not o["resume_command"]:
         print("session:   every start is fresh (resume_command unset)")
     elif sess and sess.get("id"):
-        print("session:   %s, %d of %d resume(s) used, opened %s"
-              % (sess["id"], int(sess.get("resumes") or 0), o["max_resumes"],
-                 _ts(sess.get("started"))))
+        size = transcript_bytes(o.get("session_transcript_glob"), sess["id"])
+        print("session:   %s, opened %s"
+              % (sess["id"], _ts(sess.get("started"))))
+        print("           transcript %s (rotates at %s MB)"
+              % ("unmeasured — set session_transcript_glob" if size is None
+                 else "%.1f MB" % (size / 1048576.0),
+                 o["max_session_mb"] or "off"))
+        print("           %d of %d resume(s) used (backstop)"
+              % (int(sess.get("resumes") or 0), o["max_resumes"]))
     else:
         print("session:   none on record; the next start opens one")
     print("window:    %d min; limits: %d same-boot start(s), %d reboot(s)"

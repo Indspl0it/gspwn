@@ -57,11 +57,30 @@ DEFAULTS = {
         # is what says where the pipeline is. Setting it carries the previous
         # session's reasoning across a panic as well.
         "resume_command": "",
-        # Rotate to a fresh session after this many resumes. A transcript that
-        # grows forever is re-read on every restart and eventually auto-
-        # compacts, which drops detail unpredictably; a bounded one is re-
-        # anchored from `pipeline_ctl.py brief` instead.
-        "max_resumes": 20,
+        # Rotation is primarily by transcript SIZE, because that is what
+        # actually drives auto-compaction. Restart count does not: a campaign
+        # that panics twenty times in an hour writes almost nothing, while one
+        # that panics twice in three days writes a great deal.
+        #
+        # Measured on one real 20-hour session: compaction fired three times,
+        # after 1.66, 2.01 and 2.54 MB of new transcript, so roughly every
+        # 2 MB. One compaction is survivable — its summary is decent. The
+        # damage is compound: the third summarises the second's summary. 6 MB
+        # is about three compactions, which is where re-anchoring from `brief`
+        # starts beating another lossy pass. n=1, so treat it as a starting
+        # point and not a constant of nature.
+        #
+        # 0 disables the size check and leaves max_resumes as the only bound.
+        "max_session_mb": 6,
+        # Where the agent's transcript lives, with {session} substituted. Empty
+        # means the size check cannot run, and the tool says so rather than
+        # silently falling back to counting. For Claude Code:
+        #   "~/.claude/projects/*/{session}.jsonl"
+        "session_transcript_glob": "",
+        # Backstop for when the transcript cannot be measured at all. Kept
+        # deliberately loose: it is a poor proxy and should rarely be what
+        # rotates a session.
+        "max_resumes": 40,
         # Circuit-breaker window and its two limits. Same-boot restarts and
         # reboots are counted separately because they mean different things:
         # kernel fuzzing panics the box by design, so reboots are expected and
@@ -100,6 +119,9 @@ _RULES = [
     ("orchestrator", "max_same_boot_starts", _POSITIVE_INT),
     ("orchestrator", "max_reboots", _POSITIVE_INT),
     ("orchestrator", "max_resumes", _POSITIVE_INT),
+    ("orchestrator", "max_session_mb",
+     ("must be a number >= 0 (0 disables the size check)",
+      lambda v: _num(v) and v >= 0)),
 ]
 
 # Substituted into orchestrator.command and resume_command. Not str.format:
@@ -153,10 +175,18 @@ def validate(cfg):
     # Empty is valid (nothing installed yet); a non-string is not, and would
     # otherwise reach subprocess as whatever YAML parsed it into.
     orch = cfg["orchestrator"]
-    for key in ("command", "resume_command"):
+    for key in ("command", "resume_command", "session_transcript_glob"):
         if not isinstance(orch[key], str):
             problems.append("orchestrator.%s must be a string (quote it if "
                             "it contains a colon)" % key)
+    if (isinstance(orch.get("session_transcript_glob"), str)
+            and orch["session_transcript_glob"]
+            and SESSION_PLACEHOLDER not in orch["session_transcript_glob"]):
+        problems.append(
+            "orchestrator.session_transcript_glob must contain %s — without "
+            "it the pattern matches every session's transcript, and the size "
+            "check would rotate on some other run's history"
+            % SESSION_PLACEHOLDER)
     # Session resume needs the id to reach BOTH invocations. The id is
     # assigned here and passed in, never discovered afterwards: parsing it out
     # of the agent's stdout, or globbing for the newest transcript, is a race
@@ -258,11 +288,16 @@ def main():
           % (orch["command"] or "command unset (supervisor not installable)",
              orch["max_same_boot_starts"], orch["max_reboots"],
              orch["window_min"]))
-    print("session resume: %s"
-          % ("off — every restart starts a fresh session"
-             if not orch["resume_command"] else
-             "%s, rotating after %d resume(s)"
-             % (orch["resume_command"], orch["max_resumes"])))
+    if not orch["resume_command"]:
+        print("session resume: off — every restart starts a fresh session")
+    else:
+        print("session resume: %s" % orch["resume_command"])
+        print("  rotates at %s MB of transcript%s; backstop %d resume(s)"
+              % (orch["max_session_mb"] or "(size check off)",
+                 "" if orch["session_transcript_glob"]
+                 else " — but session_transcript_glob is unset, so the size "
+                      "cannot be measured and only the backstop applies",
+                 orch["max_resumes"]))
     return 0
 
 

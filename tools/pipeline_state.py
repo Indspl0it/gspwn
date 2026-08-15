@@ -84,8 +84,12 @@ DEFAULT_CRASH = {"track": "K", "title": "", "stack_hash": "",
 # ("uaf in nvidia_uvm") tells the next round nothing it can act on.
 DEFAULT_FINDING = {"subsystem": "", "bug_class": "other", "trigger": "other",
                    "ioctls": [], "preconditions": [], "adjacent": [],
-                   "source_refs": [], "hypothesis": "", "confidence": "low"}
+                   "source_refs": [], "hypothesis": "", "confidence": "low",
+                   # Why `adjacent` is empty, when it is. Required in that
+                   # case: see finding_target_gap.
+                   "no_adjacent_reason": ""}
 FINDING_LISTS = ("ioctls", "preconditions", "adjacent", "source_refs")
+FINDING_TEXT = ("subsystem", "hypothesis", "no_adjacent_reason")
 # At least one of these must be non-empty. A finding that names no call and no
 # state cannot steer describe or seeds, and silently accepting one would let
 # the feedback edge look wired while carrying nothing. Not ioctls alone:
@@ -689,7 +693,7 @@ def normalize_finding(finding):
     out.update({k: v for k, v in finding.items() if v is not None})
     for k in FINDING_LISTS:
         out[k] = _finding_strings(out[k], k)
-    for k in ("subsystem", "hypothesis"):
+    for k in FINDING_TEXT:
         if not isinstance(out[k], str):
             raise ValueError("finding field %r must be a string, got %s"
                              % (k, type(out[k]).__name__))
@@ -708,6 +712,48 @@ def normalize_finding(finding):
                          "names no call and no state cannot steer describe or "
                          "seeds, and the feedback edge would carry nothing"
                          % ", ".join(FINDING_TARGETING))
+    return out
+
+
+def finding_target_gap(finding):
+    """Why this record steers nothing new, or None when it steers something.
+
+    `adjacent` is the only field that carries information the crash does not
+    already contain. `ioctls` is transcribed from the reproducer and
+    `preconditions` largely from the same place; a round can act on neither to
+    look anywhere it has not already looked. So a record whose `adjacent` is
+    empty, or whose `adjacent` only repeats calls already in `ioctls`, adds
+    nothing to the next round's worklist even though every other field is
+    filled in and `finding-list` prints it happily.
+
+    That is the failure this whole path is most likely to die of, and it is
+    invisible: the edge stays wired, the records accumulate, and the campaign
+    quietly goes back to following coverage alone. So an empty `adjacent` is
+    allowed only when rca says why — a bug with no siblings on its lock or
+    teardown path is a real answer, and writing that down is cheap. Guessing a
+    neighbouring call to fill the field would be worse than either.
+    """
+    adjacent = set(finding.get("adjacent") or [])
+    if not adjacent:
+        if (finding.get("no_adjacent_reason") or "").strip():
+            return None
+        return ("no adjacent calls, and no no_adjacent_reason explaining why. "
+                "This record cannot send the next round anywhere it has not "
+                "already been")
+    if adjacent <= set(finding.get("ioctls") or []):
+        return ("every adjacent call is already in ioctls, so the record "
+                "names no call the reproducer did not already make and adds "
+                "nothing to the next round's worklist")
+    return None
+
+
+def findings_steering_nothing(state):
+    """[(crash_id, finding, why)] for records that cannot steer a next round."""
+    out = []
+    for cid, f in findings(state):
+        why = finding_target_gap(f)
+        if why:
+            out.append((cid, f, why))
     return out
 
 
@@ -795,9 +841,17 @@ def validate(state):
             problems.append("%s has out-of-range repro_rate %r" % (cid, rate))
         if c.get("finding") is not None:
             try:
-                normalize_finding(c["finding"])
+                f = normalize_finding(c["finding"])
             except ValueError as e:
                 problems.append("%s has an invalid finding: %s" % (cid, e))
+            else:
+                # Duplicates are excluded from findings() and from the
+                # worklist, so a duplicate that steers nothing costs nothing.
+                gap = (None if c.get("status") == "duplicate"
+                       else finding_target_gap(f))
+                if gap:
+                    problems.append("%s has a finding that steers nothing: %s"
+                                    % (cid, gap))
         elif c.get("status") == "rca_done":
             # rca_done without a research record is the failure this whole
             # edge exists to prevent: the analysis happened and nothing

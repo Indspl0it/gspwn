@@ -512,8 +512,13 @@ def _print_finding(cid, f):
                        ("adjacent", "adjacent"), ("source", "source_refs")):
         if f[key]:
             print("    %-14s %s" % (label + ":", ", ".join(f[key])))
-    if f["hypothesis"]:
-        print("    %-14s %s" % ("hypothesis:", f["hypothesis"]))
+    for label, key in (("hypothesis:", "hypothesis"),
+                       ("no adjacent:", "no_adjacent_reason")):
+        if f.get(key):
+            print("    %-14s %s" % (label, f[key]))
+    gap = ps.finding_target_gap(f)
+    if gap:
+        print("    %-14s %s" % ("STEERS NOTHING:", gap))
 
 
 def cmd_finding_list(a):
@@ -544,6 +549,18 @@ def cmd_finding_list(a):
         classes = by_sub[sub]
         print("  %-24s %d finding(s)  %s"
               % (sub, len(classes), ", ".join(sorted(set(classes)))))
+    # The count that says whether the feedback edge is carrying anything. A
+    # record with no usable `adjacent` looks identical to a good one in the
+    # rollup above, which is exactly how this path would fail quietly.
+    dead = [(cid, why) for cid, f, why in ps.findings_steering_nothing(st)
+            if not a.subsystem or f["subsystem"] == a.subsystem]
+    live = len(rows) - len(dead)
+    print("\n%d of %d record(s) can send the next round somewhere new."
+          % (live, len(rows)))
+    if dead:
+        print("These cannot, and rca should revisit them:")
+        for cid, why in dead:
+            print("  %s: %s" % (cid, why))
     return 0
 
 
@@ -622,6 +639,11 @@ def cmd_brief(a):
         for sub in sorted(by_sub, key=lambda s: (-len(by_sub[s]), s)):
             print("  %-24s %d  %s" % (sub, len(by_sub[sub]),
                                       ", ".join(sorted(set(by_sub[sub])))))
+        dead = ps.findings_steering_nothing(st)
+        if dead:
+            print("  %d of %d steer nothing new (finding-list says which) — "
+                  "the loop is back on coverage alone for those"
+                  % (len(dead), len(rows)))
 
     print("\n## Recent knowledge (cross-campaign)")
     try:
