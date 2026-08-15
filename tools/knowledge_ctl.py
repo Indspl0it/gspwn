@@ -158,8 +158,11 @@ def _entries(kind):
     path = _path(kind)
     if not os.path.exists(path):
         return []
-    with open(path, encoding="utf-8") as f:
-        text = f.read()
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError as e:
+        raise ValueError("cannot read %s: %s" % (path, e))
     out = []
     for chunk in text.split("\n## ")[1:]:
         head, _, body = chunk.partition("\n")

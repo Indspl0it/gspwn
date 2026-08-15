@@ -29,6 +29,7 @@ import corpus_ctl
 import coverage_ctl
 import crash_parse
 import gspwn_config
+import knowledge_ctl
 import orchestrator_ctl
 import repro_ctl
 import pipeline_state as ps
@@ -1918,6 +1919,437 @@ class TestOrchestratorRun(StateTempMixin, unittest.TestCase):
         rc, out = self.run_once(command=None)
         self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
         self.assertIn("orchestrator.command", out)
+
+
+GOOD_FINDING = {"subsystem": "nvidia_uvm", "bug_class": "uaf",
+                "trigger": "ioctl-sequence",
+                "ioctls": ["UVM_CREATE_RANGE_GROUP", "UVM_FREE"],
+                "preconditions": ["channel bound", "async work in flight"],
+                "adjacent": ["UVM_DESTROY_RANGE_GROUP"],
+                "source_refs": ["uvm_range_group.c:412"],
+                "hypothesis": "teardown skips the in-flight refcount check",
+                "confidence": "medium"}
+
+
+class TestFindingClass(StateTempMixin, unittest.TestCase):
+    """The research record is the only path from a finding back into
+    targeting. Every rule here exists because the failure it prevents is
+    silent: the edge stays wired and carries nothing."""
+
+    def setUp(self):
+        super().setUp()
+        with ps.transaction() as st:
+            self.cid = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "unique", "dir": "d"})
+
+    def store(self, **over):
+        f = dict(GOOD_FINDING, **over)
+        with ps.transaction() as st:
+            return ps.set_finding(st, self.cid, f)
+
+    def refused(self, **over):
+        with self.assertRaises(ValueError) as e:
+            self.store(**over)
+        return str(e.exception)
+
+    def test_a_complete_record_is_stored_with_call_order_preserved(self):
+        f = self.store()
+        self.assertEqual(f["ioctls"],
+                         ["UVM_CREATE_RANGE_GROUP", "UVM_FREE"])
+
+    def test_a_misspelled_field_is_refused_rather_than_dropped(self):
+        """Dropping it would leave ioctls empty while the command reported
+        success, which is the whole failure mode this schema guards."""
+        with self.assertRaises(ValueError) as e:
+            with ps.transaction() as st:
+                ps.set_finding(st, self.cid,
+                               dict(GOOD_FINDING, ioctl=["UVM_FREE"]))
+        self.assertIn("unknown finding field", str(e.exception))
+
+    def test_a_record_without_a_subsystem_is_refused(self):
+        self.assertIn("subsystem", self.refused(subsystem=""))
+
+    def test_a_taxonomy_with_nothing_to_target_is_refused(self):
+        msg = self.refused(ioctls=[], preconditions=[], adjacent=[])
+        self.assertIn("at least one of", msg)
+
+    def test_a_track_u_record_may_carry_preconditions_alone(self):
+        """Userspace findings have no ioctls; requiring them would make the
+        whole Track U half of the pipeline unable to record anything."""
+        f = self.store(ioctls=[], adjacent=[],
+                       preconditions=["4096-byte path component"],
+                       no_adjacent_reason="userspace, no sibling ioctls")
+        self.assertEqual(f["preconditions"], ["4096-byte path component"])
+
+    def test_an_unknown_bug_class_is_refused(self):
+        self.assertIn("unknown bug_class", self.refused(bug_class="use-after-free"))
+
+    def test_a_list_field_given_as_a_bare_string_is_refused(self):
+        self.assertIn("must be a list", self.refused(ioctls="UVM_FREE"))
+
+    def test_list_entries_are_deduped_and_blanks_dropped(self):
+        f = self.store(ioctls=["C", "A", "C", "  B  ", ""])
+        self.assertEqual(f["ioctls"], ["C", "A", "B"])
+
+    def test_rca_done_without_a_record_is_an_integrity_problem(self):
+        """The analysis happened and nothing survived it."""
+        with ps.transaction() as st:
+            st["crashes"][self.cid]["status"] = "rca_done"
+        problems = ps.validate(ps.load())
+        self.assertTrue(any("no finding" in p for p in problems), problems)
+
+    def test_a_duplicate_does_not_inflate_its_subsystem(self):
+        """Weighting a subsystem by how often the fuzzer rediscovered one bug
+        would send every later round after the noisiest crash, not the most
+        productive area."""
+        self.store()
+        with ps.transaction() as st:
+            other = ps.register_crash(
+                st, {"track": "K", "title": "t2", "stack_hash": "h2",
+                     "status": "unique", "dir": "d"})
+            ps.set_finding(st, other, GOOD_FINDING)
+        self.assertEqual(len(ps.findings(ps.load())), 2)
+        with ps.transaction() as st:
+            st["crashes"][other]["status"] = "duplicate"
+            st["crashes"][other]["duplicate_of"] = self.cid
+        self.assertEqual(len(ps.findings(ps.load())), 1)
+
+
+class TestFindingSteersSomewhere(StateTempMixin, unittest.TestCase):
+    """`adjacent` is the only field carrying anything the crash does not
+    already contain, so a record can pass every schema rule and still be
+    inert. That is the likeliest way this whole path dies, and it is
+    invisible unless something counts it."""
+
+    def gap(self, **over):
+        return ps.finding_target_gap(dict(GOOD_FINDING, **over))
+
+    def test_a_record_with_real_adjacent_calls_steers(self):
+        self.assertIsNone(self.gap())
+
+    def test_empty_adjacent_with_no_reason_steers_nothing(self):
+        msg = self.gap(adjacent=[])
+        self.assertIsNotNone(msg)
+        self.assertIn("no_adjacent_reason", msg)
+
+    def test_empty_adjacent_with_a_reason_is_accepted(self):
+        """A bug with no siblings on its teardown path is a real answer, and
+        guessing a neighbour to fill the field would be worse than saying so."""
+        self.assertIsNone(self.gap(adjacent=[],
+                                   no_adjacent_reason="single-call bug, no "
+                                                      "other callers of the "
+                                                      "object"))
+
+    def test_adjacent_that_only_repeats_ioctls_steers_nothing(self):
+        """The perfunctory case: every field filled in, nothing new named."""
+        msg = self.gap(adjacent=["UVM_FREE"])
+        self.assertIsNotNone(msg)
+        self.assertIn("already in ioctls", msg)
+
+    def test_adjacent_adding_one_new_call_is_enough(self):
+        self.assertIsNone(self.gap(adjacent=["UVM_FREE", "UVM_UNMAP_EXTERNAL"]))
+
+    def test_an_inert_record_is_reported_by_validate(self):
+        with ps.transaction() as st:
+            cid = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "unique", "dir": "d"})
+            ps.set_finding(st, cid, dict(GOOD_FINDING,
+                                         adjacent=["UVM_FREE"]))
+        problems = ps.validate(ps.load())
+        self.assertTrue(any("steers nothing" in p for p in problems), problems)
+
+    def test_an_inert_duplicate_is_not_reported(self):
+        """Duplicates are already excluded from the worklist, so an inert one
+        costs nothing and reporting it would be noise the operator learns to
+        ignore."""
+        with ps.transaction() as st:
+            keep = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "unique", "dir": "d"})
+            ps.set_finding(st, keep, GOOD_FINDING)
+            dup = ps.register_crash(
+                st, {"track": "K", "title": "t2", "stack_hash": "h2",
+                     "status": "unique", "dir": "d"})
+            ps.set_finding(st, dup, dict(GOOD_FINDING, adjacent=["UVM_FREE"]))
+        with ps.transaction() as st:
+            st["crashes"][dup]["status"] = "duplicate"
+            st["crashes"][dup]["duplicate_of"] = keep
+        problems = ps.validate(ps.load())
+        self.assertEqual([p for p in problems if "steers nothing" in p], [])
+
+
+class TestKnowledgeNotes(unittest.TestCase):
+    """knowledge/ is committed to a public repo and appended by parallel
+    agents on a machine that panics on purpose."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, knowledge_ctl, "KNOWLEDGE_DIR",
+                        knowledge_ctl.KNOWLEDGE_DIR)
+        knowledge_ctl.KNOWLEDGE_DIR = self.tmp.name
+
+    def note(self, text, kind="learning", phase="describe", tags=""):
+        args = types.SimpleNamespace(text=text, kind=kind, phase=phase,
+                                     tags=tags)
+        with redirect_stdout(io.StringIO()):
+            return knowledge_ctl.cmd_note(args)
+
+    def test_a_note_round_trips_through_the_file(self):
+        self.note("UVM numbering does not follow the RM convention",
+                  tags="abi,uvm")
+        entries = knowledge_ctl._entries("learning")
+        self.assertEqual(len(entries), 1)
+        _ts, phase, tags, body = entries[0]
+        self.assertEqual(phase, "describe")
+        self.assertEqual(tags, "abi, uvm")
+        self.assertIn("RM convention", body)
+
+    def test_a_note_naming_a_crash_id_is_refused(self):
+        """These files are public. The generalised form is also the useful
+        one, because the next agent is looking at a different crash."""
+        with self.assertRaises(SystemExit) as e:
+            self.note("marked crash-0003 a duplicate too early", kind="mistake")
+        self.assertIn("crash-0003", str(e.exception))
+
+    def test_a_note_naming_a_crash_artifact_path_is_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            self.note("see artifacts/crashes/0012/report.txt for the layout")
+        self.assertIn("artifacts/crashes/", str(e.exception))
+
+    def test_the_generalised_form_of_a_refused_note_is_accepted(self):
+        self.note("do not mark a crash a duplicate before its repro rate is "
+                  "measured", kind="mistake")
+        self.assertEqual(len(knowledge_ctl._entries("mistake")), 1)
+
+    def test_a_refused_note_writes_nothing(self):
+        with self.assertRaises(SystemExit):
+            self.note("crash-0001 was mishandled")
+        self.assertEqual(knowledge_ctl._entries("learning"), [])
+
+    def test_learnings_and_mistakes_are_separate_files(self):
+        self.note("a target fact", kind="learning")
+        self.note("a process error", kind="mistake")
+        self.assertEqual(len(knowledge_ctl._entries("learning")), 1)
+        self.assertEqual(len(knowledge_ctl._entries("mistake")), 1)
+
+    def test_appending_keeps_one_header_and_loses_nothing(self):
+        """Each append rewrites the file; a header re-emitted per entry, or an
+        entry dropped, would only show up after the file had grown."""
+        for i in range(12):
+            self.note("entry number %d" % i)
+        with io.open(knowledge_ctl._path("learning"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(text.count("# Learnings"), 1)
+        self.assertEqual(len(knowledge_ctl._entries("learning")), 12)
+        for i in range(12):
+            self.assertIn("entry number %d" % i, text)
+
+    def test_a_note_is_written_atomically(self):
+        """Rewrite through a tempfile and rename, so a panic mid-append leaves
+        the previous good file rather than a torn one."""
+        self.note("first")
+        leftovers = [n for n in os.listdir(self.tmp.name)
+                     if n.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+
+
+class TestSessionRotation(unittest.TestCase):
+    """Rotation is by transcript size because size is what drives
+    auto-compaction. Restart count does not: twenty restarts may write less
+    than one long uninterrupted stretch."""
+
+    NOW = 1_700_000_000.0
+    MB = 1048576
+
+    def conf(self, **over):
+        o = {"resume_command": "claude --resume {session}", "max_resumes": 40,
+             "max_session_mb": 6, "session_transcript_glob": ""}
+        o.update(over)
+        return {"orchestrator": o}
+
+    def resolve(self, prev, size=None, **over):
+        state = {"session": prev}
+        return orchestrator_ctl.resolve_session(state, self.conf(**over),
+                                                self.NOW, "NEW", size)
+
+    def prev(self, resumes=0, sid="OLD"):
+        return {"id": sid, "resumes": resumes, "started": 1}
+
+    def test_no_previous_session_starts_fresh(self):
+        s, resuming, _ = self.resolve(None)
+        self.assertEqual((s["id"], s["resumes"], resuming), ("NEW", 0, False))
+
+    def test_a_small_transcript_resumes(self):
+        s, resuming, why = self.resolve(self.prev(), size=2 * self.MB)
+        self.assertEqual((s["id"], s["resumes"], resuming), ("OLD", 1, True))
+        self.assertIn("2.0 MB", why)
+
+    def test_a_transcript_past_the_size_limit_rotates(self):
+        s, resuming, why = self.resolve(self.prev(), size=7 * self.MB)
+        self.assertEqual((s["id"], resuming), ("NEW", False))
+        self.assertIn("7.0 MB", why)
+
+    def test_exactly_at_the_size_limit_rotates(self):
+        s, resuming, _ = self.resolve(self.prev(), size=6 * self.MB)
+        self.assertEqual((s["id"], resuming), ("NEW", False))
+
+    def test_size_rotates_even_when_the_resume_count_is_low(self):
+        """The point of the change: one restart with a huge transcript must
+        rotate, where counting restarts would have carried it on."""
+        s, resuming, _ = self.resolve(self.prev(resumes=1), size=20 * self.MB)
+        self.assertEqual((s["id"], resuming), ("NEW", False))
+
+    def test_the_resume_count_still_backstops_an_unmeasurable_transcript(self):
+        s, resuming, _ = self.resolve(self.prev(resumes=40), size=None)
+        self.assertEqual((s["id"], resuming), ("NEW", False))
+
+    def test_an_unmeasurable_transcript_still_resumes_below_the_backstop(self):
+        s, resuming, why = self.resolve(self.prev(resumes=3), size=None)
+        self.assertEqual((s["id"], resuming), ("OLD", True))
+        self.assertIn("unmeasured", why)
+
+    def test_a_zero_size_limit_disables_the_size_check(self):
+        s, resuming, _ = self.resolve(self.prev(), size=99 * self.MB,
+                                      max_session_mb=0)
+        self.assertEqual((s["id"], resuming), ("OLD", True))
+
+    def test_resume_off_never_resumes(self):
+        s, resuming, why = self.resolve(self.prev(), size=1,
+                                        resume_command="")
+        self.assertEqual((s["id"], resuming), ("NEW", False))
+        self.assertIn("unset", why)
+
+    def test_resolve_session_mutates_nothing(self):
+        """It is called inside the breaker lock; a mutation here would be
+        written whether or not the launch went ahead."""
+        state = {"session": self.prev(resumes=2)}
+        before = json.dumps(state, sort_keys=True)
+        orchestrator_ctl.resolve_session(state, self.conf(), self.NOW, "NEW",
+                                         self.MB)
+        self.assertEqual(json.dumps(state, sort_keys=True), before)
+
+    def test_transcript_size_is_summed_across_matching_files(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for n in ("a", "b"):
+            with io.open(os.path.join(tmp.name, "%s-SID.jsonl" % n), "w") as f:
+                f.write("x" * 100)
+        pattern = os.path.join(tmp.name, "*-{session}.jsonl")
+        self.assertEqual(
+            orchestrator_ctl.transcript_bytes(pattern, "SID"), 200)
+
+    def test_a_missing_transcript_measures_as_unknown_not_zero(self):
+        """Zero would read as a small transcript and silently disable the only
+        rotation rule that tracks what actually matters."""
+        self.assertIsNone(
+            orchestrator_ctl.transcript_bytes("/nonexistent/{session}.jsonl",
+                                              "SID"))
+        self.assertIsNone(orchestrator_ctl.transcript_bytes("", "SID"))
+
+
+class TestResumeCommandRendering(unittest.TestCase):
+    def test_the_session_id_is_substituted(self):
+        self.assertEqual(
+            orchestrator_ctl.render_command("claude --resume {session}", "U1"),
+            "claude --resume U1")
+
+    def test_a_prompt_containing_braces_survives(self):
+        """str.format would raise on the first brace of an embedded JSON
+        example, and these invocations carry prompts."""
+        self.assertEqual(
+            orchestrator_ctl.render_command('c -p \'emit {"a": 1} for '
+                                            '{session}\'', "U1"),
+            'c -p \'emit {"a": 1} for U1\'')
+
+    def test_the_anchor_expands_and_points_at_brief(self):
+        out = orchestrator_ctl.render_command("c -p '{anchor}'", "U1")
+        self.assertIn("pipeline_ctl.py brief", out)
+
+    def test_the_anchor_carries_no_shell_quote_characters(self):
+        """It is substituted into a command line the operator already
+        quoted, so an apostrophe in it would end that quoting."""
+        self.assertNotIn("'", orchestrator_ctl.RESUME_ANCHOR)
+        self.assertNotIn('"', orchestrator_ctl.RESUME_ANCHOR)
+
+
+class TestBrief(StateTempMixin, unittest.TestCase):
+    """`brief` is what a fresh or compacted session reads to recover, so it
+    has to work on a state file in any condition."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, knowledge_ctl, "KNOWLEDGE_DIR",
+                        knowledge_ctl.KNOWLEDGE_DIR)
+        knowledge_ctl.KNOWLEDGE_DIR = os.path.join(self.tmp.name, "knowledge")
+        ps.save(ps.default_state())
+
+    def brief(self, last=3):
+        import pipeline_ctl
+        with redirect_stdout(io.StringIO()) as out:
+            pipeline_ctl.cmd_brief(types.SimpleNamespace(last=last))
+        return out.getvalue()
+
+    def test_it_works_on_a_fresh_pipeline(self):
+        out = self.brief()
+        self.assertIn("run phase provision", out)
+        self.assertIn("none registered", out)
+
+    def test_it_names_the_next_action_and_the_blocked_phase(self):
+        with ps.transaction() as st:
+            ps.update_phase(st, "provision", "done")
+            ps.update_phase(st, "build", "blocked", "kernel would not boot")
+        out = self.brief()
+        self.assertIn("blocked", out)
+        self.assertIn("kernel would not boot", out)
+
+    def test_it_reports_the_findings_rollup(self):
+        with ps.transaction() as st:
+            cid = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "unique", "dir": "d"})
+            ps.set_finding(st, cid, GOOD_FINDING)
+        self.assertIn("nvidia_uvm", self.brief())
+
+    def test_it_says_when_nothing_steers_the_next_round(self):
+        self.assertIn("only steer on coverage", self.brief())
+
+    def test_it_surfaces_integrity_problems(self):
+        with ps.transaction() as st:
+            cid = ps.register_crash(
+                st, {"track": "K", "title": "t", "stack_hash": "h",
+                     "status": "rca_done", "dir": "d"})
+            st["crashes"][cid]["finding"] = None
+        self.assertIn("Integrity", self.brief())
+
+    def test_it_stamps_its_own_time_so_a_stale_copy_is_visible(self):
+        out = self.brief()
+        self.assertIn("generated", out)
+        self.assertIn("Re-run it", out)
+
+    def test_an_absent_knowledge_dir_is_simply_empty(self):
+        """Nothing recorded yet is the normal first-campaign state, not a
+        failure, so it must not read as one."""
+        knowledge_ctl.KNOWLEDGE_DIR = "/nonexistent/nope"
+        out = self.brief()
+        self.assertIn("run phase provision", out)
+        self.assertNotIn("knowledge unavailable", out)
+
+    def test_an_unreadable_knowledge_file_does_not_cost_the_state_summary(self):
+        """A corrupt or unreadable knowledge file must not take down the part
+        of the brief the reader cannot get anywhere else. An absent directory
+        does not exercise this: it returns empty without raising, which is why
+        the failure has to be injected."""
+        def boom(_kind):
+            raise ValueError("simulated unreadable knowledge file")
+        self.addCleanup(setattr, knowledge_ctl, "_entries",
+                        knowledge_ctl._entries)
+        knowledge_ctl._entries = boom
+        out = self.brief()
+        self.assertIn("run phase provision", out)
+        self.assertIn("knowledge unavailable", out)
 
 
 def pipeline_ctl_cmd_round_end(args):

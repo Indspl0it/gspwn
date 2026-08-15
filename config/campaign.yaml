@@ -59,6 +59,7 @@ orchestrator:
   # With Claude Code:
   #   command: "claude --session-id {session} -p 'Drive the pipeline per AGENTS.md.'"
   #   resume_command: "claude --resume {session} -p '{anchor}'"
+  #   session_transcript_glob: "~/.claude/projects/*/{session}.jsonl"
   command: ""
   # Empty resume_command keeps every start fresh, which is always correct:
   # the state file, not the transcript, says where the pipeline is. Setting it
@@ -69,10 +70,25 @@ orchestrator:
   # out of agent output or globbing for the newest transcript races anything
   # else running on the box.
   resume_command: ""
-  # Rotate to a fresh session after this many resumes. An unbounded transcript
-  # is re-read on every restart and eventually auto-compacts, which drops
-  # detail unpredictably; the fresh session re-anchors from `brief` instead.
-  max_resumes: 20
+  # Rotation is by transcript SIZE, because size is what drives auto-
+  # compaction. Restart count does not: a campaign that panics twenty times in
+  # an hour writes almost nothing, one that panics twice in three days writes
+  # a lot.
+  #
+  # Measured on one real 20-hour session: compaction fired three times, after
+  # 1.66, 2.01 and 2.54 MB of new transcript, so roughly every 2 MB. One
+  # compaction is survivable; the damage is compound, because the third
+  # summarises the second's summary. 6 MB is about three compactions, which is
+  # where re-anchoring from `brief` starts to beat another lossy pass. n=1, so
+  # revisit it once real campaigns have run. 0 turns the size check off.
+  max_session_mb: 6
+  # Where the transcript lives, with {session} substituted. Without it the
+  # size check cannot run and the orchestrator warns rather than silently
+  # falling back to counting restarts.
+  session_transcript_glob: ""
+  # Backstop for when the transcript cannot be measured. Deliberately loose:
+  # it is a poor proxy and should rarely be what rotates a session.
+  max_resumes: 40
   # Circuit breaker. Same-boot restarts and reboots are counted separately:
   # this pipeline panics the machine by design, so reboots are expected, while
   # an agent restarting on one boot means nothing is progressing and every
