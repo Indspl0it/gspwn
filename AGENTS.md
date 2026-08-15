@@ -17,17 +17,28 @@ Full design: `docs/superpowers/specs/2026-08-12-nvidia-driver-fuzzing-workflow-d
   and parallel subagents will otherwise lose each other's updates.
 - Phases run in dependency order (below). `describe`, `seeds`, `harness` may
   run in parallel with each other after `build`.
-- After any interruption (session restart, kernel panic, reboot):
+- After any interruption (session restart, kernel panic, reboot, or your own
+  context being compacted):
   1. `sudo python3 tools/crashlog_ctl.py harvest`
-  2. `python3 tools/pipeline_ctl.py show` (and `validate`)
-  3. resume at the phase reported by `python3 tools/pipeline_ctl.py next`
+  2. `python3 tools/pipeline_ctl.py brief`
+  3. resume at the phase it reports
 
   You do not need memory of the previous session to do this. The state file
-  is the orchestrator's memory: `next` says where the pipeline is, and that
-  answer does not depend on who was driving before the panic. When
-  `gspwn-orchestrator.service` is installed it performs steps 1 and 2 for you
-  and launches a fresh agent, so this sequence runs without a human. See
-  `tools/orchestrator_ctl.py`.
+  is the orchestrator's memory, and `brief` renders it: where the pipeline is,
+  what is blocked, what the crash registry holds, what the findings say to
+  target, and the tail of `knowledge/`. It is derived at read time, so it
+  cannot be stale — but for the same reason a copy of it goes out of date the
+  moment the pipeline moves, so re-run it rather than trusting one you were
+  handed. When `gspwn-orchestrator.service` is installed it performs steps 1
+  and 2 for you and launches an agent, so this sequence runs without a human.
+  See `tools/orchestrator_ctl.py`.
+- **Record what you learn, as you learn it.** `knowledge/learnings.md` and
+  `knowledge/mistakes.md` are committed and outlive the box, the campaign and
+  you: they are the only thing a rebuilt machine starts with. Append through
+  `tools/knowledge_ctl.py note` — never by hand, and never at the end of a
+  round from memory, because by then the detail that mattered is gone.
+  A learning is about the target; a mistake is about us. Both are read by the
+  next agent doing your job, so generalise: it will not have your context.
 
 ## Configuration (the only thing a human keys in)
 
@@ -63,6 +74,7 @@ the state file and never lowers recorded hours.
 | Need | Command |
 |---|---|
 | Create the state file (once, provision) | `python3 tools/pipeline_ctl.py init` |
+| Recover after a panic or a compaction | `python3 tools/pipeline_ctl.py brief` |
 | See where the pipeline stands | `python3 tools/pipeline_ctl.py show` |
 | Which phase to run next | `python3 tools/pipeline_ctl.py next` |
 | Advance / block a phase | `python3 tools/pipeline_ctl.py set-phase <phase> <status> --notes "..."` |
@@ -72,6 +84,9 @@ the state file and never lowers recorded hours.
 | Attach rca's research record | `python3 tools/pipeline_ctl.py finding-set <id> --json -` |
 | What the findings say to target | `python3 tools/pipeline_ctl.py finding-list` |
 | Check registry integrity | `python3 tools/pipeline_ctl.py validate` |
+| Record a fact about the target | `python3 tools/knowledge_ctl.py note --kind learning --phase <p> "..."` |
+| Record a process error to avoid | `python3 tools/knowledge_ctl.py note --kind mistake --phase <p> "..."` |
+| Read the knowledge files | `python3 tools/knowledge_ctl.py show [--kind K] [--phase P]` |
 | Round history + loop budget | `python3 tools/pipeline_ctl.py round-show` |
 | Rebuild a lost spend ledger | `python3 tools/pipeline_ctl.py spend-init` |
 | Attach a run to this round | `python3 tools/pipeline_ctl.py round-add-run --run-id <id>` |

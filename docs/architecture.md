@@ -5,6 +5,34 @@ document covers the level below that: the data model, the on-disk layout, and
 the lifecycle of a crash. It is the reference for modifying the tools or
 tracing a number in the report back to its source.
 
+## Four planes, and the rule that keeps them apart
+
+Every fact this system holds belongs to exactly one of four places, chosen by
+how long it is true for:
+
+| Plane | Answers | Store | Lifetime | Authority |
+|---|---|---|---|---|
+| Execution | what is running right now? | systemd units | seconds to hours | systemd |
+| State | where is this campaign? | `state/pipeline.json` | one campaign | `pipeline_ctl.py` |
+| Knowledge | what have we learned? | `knowledge/*.md`, committed | forever | git |
+| Continuity | who is driving? | `state/orchestrator.json` | one session | `orchestrator_ctl.py` |
+
+**One fact, one plane.** A fact stored in two places has two answers after a
+panic, and the one that looks authoritative is whichever was written more
+carefully, not whichever is true.
+
+Two consequences that are easy to get wrong:
+
+- A hand-maintained "current status" document would put State-plane data in
+  the Knowledge plane. It drifts the moment a phase changes without the
+  document being rewritten, and a stale file that reads as authoritative is
+  the same failure as a coverage curve sampled from a dead GPU. So
+  `pipeline_ctl.py brief` is **derived** at read time and stamps its own
+  clock: it cannot be stale, only old, and you can see how old.
+- Execution position must never be duplicated into `knowledge/`. Position is a
+  cursor, not something worth remembering; `knowledge/` is for facts that are
+  still true on a different box next month.
+
 ## The blackboard
 
 There is no shared memory between agents and no message passing. Every agent
@@ -126,6 +154,33 @@ them apart:
 Coverage alone widens the surface indefinitely and never returns to a place
 that yielded. That is the difference between a fuzzing pipeline and a research
 loop, and it is one payload on a road that already existed.
+
+## Knowledge that outlives the campaign
+
+`state/pipeline.json` is gitignored and describes one campaign on one box.
+Everything in it is gone when the instance is rebuilt. `knowledge/` is the
+other half: two committed files that carry forward.
+
+| File | About | Read by |
+|---|---|---|
+| `knowledge/learnings.md` | the target — ABI facts, driver behaviour, tooling quirks | `describe`, `seeds`, `rca` in later rounds and later campaigns |
+| `knowledge/mistakes.md` | us — process errors and what avoids them | the next agent running that phase |
+
+Both are appended through `tools/knowledge_ctl.py note`, never by hand. The
+tool timestamps in UTC, holds an exclusive lock, and rewrites through a
+tempfile and rename, for the same reason the state file does: this machine
+panics on purpose and runs phase agents in parallel, so a plain append can be
+torn by a panic or interleaved by a second writer.
+
+**These files are committed to a public repository.** They carry ABI facts and
+process notes and never findings. `note` refuses text naming a crash id or a
+path into `artifacts/crashes|pocs|rca`, and points at the crash registry
+instead. The refusal is not only a disclosure control: the generalised form of
+such a note is the more useful one anyway, because the next agent will be
+looking at a different crash.
+
+`pipeline_ctl.py brief` renders the tail of both alongside the state summary,
+which is what a fresh session reads after a panic.
 
 ## Surviving a panic
 
