@@ -13,6 +13,9 @@ Subcommands:
   crash-list [--status S] [--track K|U] [--json]
   crash-set <id> [--status S] [--duplicate-of ID|none] [--disclosure S]
             [--repro-rate F] [--notes TEXT]
+  finding-set <id> --json PATH|-  attach rca's research record to a crash
+  finding-list [--subsystem S] [--bug-class C] [--json]
+                                 the records refine and describe steer from
   campaign-add --track k|u --note TEXT
   round-show [--json]            round history + loop budget
   round-add-run --run-id ID      attach a campaign run to the current round
@@ -457,6 +460,80 @@ def cmd_crash_set(a):
     return 0
 
 
+def cmd_finding_set(a):
+    """Attach rca's research record to a crash.
+
+    JSON rather than a flag per field: the record is nine fields, four of them
+    lists, and rca authors it as a whole. A dozen repeatable flags would be
+    filled in one call at a time, and a half-written record is the one thing
+    this must not store.
+    """
+    src = a.json_path
+    try:
+        raw = sys.stdin.read() if src == "-" else open(src).read()
+    except OSError as e:
+        sys.exit("error: cannot read finding from %s: %s" % (src, e))
+    try:
+        finding = json.loads(raw)
+    except json.JSONDecodeError as e:
+        sys.exit("error: finding from %s is not valid JSON: %s" % (src, e))
+    with ps.transaction() as st:
+        try:
+            f = ps.set_finding(st, a.crash_id, finding)
+        except ValueError as e:
+            sys.exit("error: %s" % e)
+        targets = sorted(set(f["ioctls"]) | set(f["adjacent"]))
+    print("%s: %s %s/%s (confidence %s)"
+          % (a.crash_id, f["subsystem"], f["bug_class"], f["trigger"],
+             f["confidence"]))
+    print("  next round can target: %s" % (", ".join(targets) or
+                                           "(preconditions only)"))
+    return 0
+
+
+def _print_finding(cid, f):
+    print("%s [%s] %s/%s  confidence=%s"
+          % (cid, f["subsystem"], f["bug_class"], f["trigger"],
+             f["confidence"]))
+    for label, key in (("ioctls", "ioctls"), ("preconditions", "preconditions"),
+                       ("adjacent", "adjacent"), ("source", "source_refs")):
+        if f[key]:
+            print("    %-14s %s" % (label + ":", ", ".join(f[key])))
+    if f["hypothesis"]:
+        print("    %-14s %s" % ("hypothesis:", f["hypothesis"]))
+
+
+def cmd_finding_list(a):
+    """The research records, plus the per-subsystem rollup refine steers from.
+
+    The rollup is the target register: it is what says nvidia_uvm has produced
+    three findings and nvidia_rm none, which is the only evidence the loop has
+    for where to look next that is not coverage.
+    """
+    st = ps.load()
+    rows = ps.findings(st, subsystem=a.subsystem, bug_class=a.bug_class)
+    if a.json:
+        json.dump({cid: f for cid, f in rows}, sys.stdout, indent=2,
+                  sort_keys=True)
+        print()
+        return 0
+    if not rows:
+        print("no findings recorded — rca has not produced a research record "
+              "yet, so this round can only steer on coverage")
+        return 0
+    for cid, f in rows:
+        _print_finding(cid, f)
+    by_sub = {}
+    for _cid, f in rows:
+        by_sub.setdefault(f["subsystem"], []).append(f["bug_class"])
+    print("\nby subsystem (what refine raises priority from):")
+    for sub in sorted(by_sub, key=lambda s: (-len(by_sub[s]), s)):
+        classes = by_sub[sub]
+        print("  %-24s %d finding(s)  %s"
+              % (sub, len(classes), ", ".join(sorted(set(classes)))))
+    return 0
+
+
 def cmd_campaign_add(a):
     track = a.track.upper()
     if track not in ps.TRACKS:
@@ -538,6 +615,25 @@ def build_parser():
     p.add_argument("--repro-rate", dest="repro_rate", type=float)
     p.add_argument("--notes")
     p.set_defaults(fn=cmd_crash_set)
+
+    p = sub.add_parser("finding-set",
+                       help="attach rca's research record to a crash")
+    p.add_argument("crash_id")
+    p.add_argument("--json", dest="json_path", required=True, metavar="PATH",
+                   help="file holding the research record, or - for stdin. "
+                        "Fields: subsystem (required), bug_class %s, "
+                        "trigger %s, ioctls[], preconditions[], adjacent[], "
+                        "source_refs[], hypothesis, confidence %s"
+                        % ("|".join(ps.BUG_CLASS), "|".join(ps.TRIGGER),
+                           "|".join(ps.CONFIDENCE)))
+    p.set_defaults(fn=cmd_finding_set)
+
+    p = sub.add_parser("finding-list",
+                       help="research records + the per-subsystem rollup")
+    p.add_argument("--subsystem")
+    p.add_argument("--bug-class", dest="bug_class", choices=ps.BUG_CLASS)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_finding_list)
 
     p = sub.add_parser("campaign-add", help="record a campaign event")
     p.add_argument("--track", required=True,

@@ -43,6 +43,18 @@ PHASES = SETUP_PHASES + ROUND_PHASES + FINAL_PHASES
 
 PHASE_STATUS = {"pending", "in_progress", "done", "blocked", "failed"}
 CRASH_SIGNAL = ("signal", "review", "health", "noise", "unclassified")
+
+# The research record rca produces per analysed crash. It is the only path by
+# which a finding steers the next round: without it the loop can only follow
+# coverage, which says where the fuzzer has not been, never where the bugs are.
+# Closed vocabularies so refine can group across rounds; free text alone would
+# make "uaf", "UAF" and "use-after-free" three different subsystems to it.
+BUG_CLASS = ("uaf", "double-free", "oob-read", "oob-write", "race",
+             "refcount", "null-deref", "uninit", "deadlock", "leak",
+             "type-confusion", "integer-overflow", "other")
+TRIGGER = ("single-ioctl", "ioctl-sequence", "mmap-touch", "concurrency",
+           "fd-lifecycle", "other")
+CONFIDENCE = ("low", "medium", "high")
 CRASH_STATUS = {"unique", "duplicate", "flagged", "reliable", "flaky",
                 "unreproducible", "rca_done", "reported"}
 DISCLOSURE_STATUS = {"pending", "submitted", "resolved", "not_applicable"}
@@ -61,7 +73,24 @@ DEFAULT_PHASE = {"status": "pending", "updated": None, "notes": ""}
 DEFAULT_CRASH = {"track": "K", "title": "", "stack_hash": "",
                  "status": "unique", "dir": "", "repro_rate": None,
                  "duplicate_of": None, "disclosure": "pending", "notes": "",
-                 "signal": "unclassified"}
+                 "signal": "unclassified",
+                 # finding: the research record from rca, or None when the
+                 # crash has not been analysed. See DEFAULT_FINDING.
+                 "finding": None}
+
+# The fields rca fills in. ioctls/preconditions/adjacent are what describe and
+# seeds consume; source_refs/hypothesis/confidence are what the report and the
+# next round's rca read. Both halves matter: a record with only a taxonomy
+# ("uaf in nvidia_uvm") tells the next round nothing it can act on.
+DEFAULT_FINDING = {"subsystem": "", "bug_class": "other", "trigger": "other",
+                   "ioctls": [], "preconditions": [], "adjacent": [],
+                   "source_refs": [], "hypothesis": "", "confidence": "low"}
+FINDING_LISTS = ("ioctls", "preconditions", "adjacent", "source_refs")
+# At least one of these must be non-empty. A finding that names no call and no
+# state cannot steer describe or seeds, and silently accepting one would let
+# the feedback edge look wired while carrying nothing. Not ioctls alone:
+# Track U findings are userspace and have none.
+FINDING_TARGETING = ("ioctls", "preconditions", "adjacent")
 DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  "ended": None, "run_ids": [], "coverage_verdict": "unknown",
                  "edges_start": None, "edges_end": None, "new_crashes": 0,
@@ -619,6 +648,98 @@ def register_crash(state, crash):
     return cid
 
 
+def _finding_strings(value, field):
+    """A finding list field, cleaned: non-empty strings, deduped, in order.
+
+    Order is preserved because rca writes the ioctl sequence in the order the
+    reproducer calls them, and describe models a sequence, not a set.
+    """
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise ValueError("finding field %r must be a list of strings, got %s"
+                         % (field, type(value).__name__))
+    out = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError("finding field %r must contain strings, got %s"
+                             % (field, type(item).__name__))
+        item = item.strip()
+        if item and item not in out:
+            out.append(item)
+    return out
+
+
+def normalize_finding(finding):
+    """Validate and fill in a research record -> the stored dict.
+
+    Rejects unknown keys rather than dropping them: a misspelled `ioctl` would
+    otherwise be accepted, leave `ioctls` empty, and hand the next round a
+    finding with nothing to model while every command reported success.
+    """
+    if not isinstance(finding, dict):
+        raise ValueError("a finding must be a JSON object, got %s"
+                         % type(finding).__name__)
+    unknown = sorted(set(finding) - set(DEFAULT_FINDING))
+    if unknown:
+        raise ValueError("unknown finding field(s): %s (expected one of %s)"
+                         % (", ".join(unknown),
+                            ", ".join(sorted(DEFAULT_FINDING))))
+    out = dict(DEFAULT_FINDING)
+    for k in FINDING_LISTS:
+        out[k] = []
+    out.update({k: v for k, v in finding.items() if v is not None})
+    for k in FINDING_LISTS:
+        out[k] = _finding_strings(out[k], k)
+    for k in ("subsystem", "hypothesis"):
+        if not isinstance(out[k], str):
+            raise ValueError("finding field %r must be a string, got %s"
+                             % (k, type(out[k]).__name__))
+        out[k] = out[k].strip()
+    for k, vocab in (("bug_class", BUG_CLASS), ("trigger", TRIGGER),
+                     ("confidence", CONFIDENCE)):
+        if out[k] not in vocab:
+            raise ValueError("unknown %s: %r (expected one of %s)"
+                             % (k, out[k], ", ".join(vocab)))
+    if not out["subsystem"]:
+        raise ValueError("a finding needs a subsystem — it is the key refine "
+                         "groups by, so a finding without one cannot raise "
+                         "any target's priority")
+    if not any(out[k] for k in FINDING_TARGETING):
+        raise ValueError("a finding needs at least one of %s — a record that "
+                         "names no call and no state cannot steer describe or "
+                         "seeds, and the feedback edge would carry nothing"
+                         % ", ".join(FINDING_TARGETING))
+    return out
+
+
+def set_finding(state, cid, finding):
+    """Attach rca's research record to a crash (replaces any previous one)."""
+    if cid not in state["crashes"]:
+        raise ValueError("unknown crash id: %s" % cid)
+    state["crashes"][cid]["finding"] = normalize_finding(finding)
+    return state["crashes"][cid]["finding"]
+
+
+def findings(state, subsystem=None, bug_class=None):
+    """Every recorded research record, as [(crash_id, finding)].
+
+    Duplicates are skipped: they describe the same bug as their surviving
+    entry, and counting both would inflate a subsystem's weight in refine by
+    however many times the fuzzer happened to rediscover it.
+    """
+    out = []
+    for cid in sorted(state["crashes"]):
+        c = state["crashes"][cid]
+        f = c.get("finding")
+        if not f or c.get("status") == "duplicate":
+            continue
+        if subsystem and f.get("subsystem") != subsystem:
+            continue
+        if bug_class and f.get("bug_class") != bug_class:
+            continue
+        out.append((cid, f))
+    return out
+
+
 def validate(state):
     """Return a list of human-readable integrity problems (empty == clean)."""
     problems = []
@@ -672,6 +793,19 @@ def validate(state):
         if rate is not None and not (isinstance(rate, (int, float))
                                      and 0.0 <= rate <= 1.0):
             problems.append("%s has out-of-range repro_rate %r" % (cid, rate))
+        if c.get("finding") is not None:
+            try:
+                normalize_finding(c["finding"])
+            except ValueError as e:
+                problems.append("%s has an invalid finding: %s" % (cid, e))
+        elif c.get("status") == "rca_done":
+            # rca_done without a research record is the failure this whole
+            # edge exists to prevent: the analysis happened and nothing
+            # survived it for the next round to act on.
+            problems.append("%s is rca_done but has no finding — the round "
+                            "learned nothing from it (record one with: "
+                            "pipeline_ctl.py finding-set %s --json ...)"
+                            % (cid, cid))
     for i, r in enumerate(state.get("rounds", []), start=1):
         if r.get("round") != i:
             problems.append("round %d is numbered %r (rounds must be "

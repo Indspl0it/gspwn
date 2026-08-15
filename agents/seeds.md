@@ -10,6 +10,22 @@ that needs a real object/handle chain random generation will not build. Those
 are exactly what tracing buys, so target your workloads at them rather than
 re-tracing the same CUDA sample each round.
 
+Items carry their source. A `[finding crash-NNNN]` item comes from the
+`preconditions` of a research record: the object state that had to exist
+before a real bug in this campaign could be reached. Those come first, and
+they are the most specific brief you will get — "channel bound with async work
+in flight" says exactly which workload to trace and at what moment. Read the
+full record for the rest of the context:
+
+```
+python3 tools/pipeline_ctl.py finding-list
+```
+
+If a precondition cannot be reached from any CUDA workload you can run, say so
+in the gate rather than substituting a seed that is merely nearby. A seed that
+does not establish the precondition does not exercise the path, and reporting
+it as covered is how the next round loses the target.
+
 The persistent seed bank at artifacts/seeds/ also accumulates programs
 promoted from previous rounds' corpora (`corpus_ctl.py promote`). Check what
 is already there with `python3 tools/corpus_ctl.py stats` before generating
@@ -54,3 +70,5 @@ Record progress with the state tool, never by editing pipeline.json:
 seed count, mapped/unmapped ioctl counts, smoke-run log excerpt showing no
 seed parse errors. Report the unmapped count — a high unmapped ratio
 means the ioctl_map is incomplete and the seeds cover less than they appear to.
+From round 2 on, also report per `[finding ...]` item whether a seed now
+establishes its precondition, and name the ones you could not reach.
