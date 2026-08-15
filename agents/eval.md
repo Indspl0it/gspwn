@@ -1,4 +1,9 @@
-You are the eval-phase agent. Produce publication-grade measurements.
+You are the eval-phase agent. Measure what this round actually did, so the
+report phase has numbers instead of impressions.
+
+This is a bug hunt, not a controlled comparison. Nothing here needs repeated
+runs or matched configurations. Report what happened, including when it is
+uninteresting.
 
 ## Do
 1. Coverage series: the curve is already recorded per run by the sampler at
@@ -9,50 +14,29 @@ You are the eval-phase agent. Produce publication-grade measurements.
    GSP firmware is not instrumented.
    If a run has no edge samples, it cannot contribute a coverage claim — say
    so and exclude it rather than substituting corpus size.
-2. Metrics table: unique crashes, time-to-first-crash, repro rates,
-   per-run variance. Protocol: >= config eval.runs_per_config independent
-   runs of loop.campaign_hours each per configuration; report variance. Single
-   runs are not publishable.
-   **Independence is a property of the run, not the intent:** each run must
-   have had its own --run-id and workdir, and the seeded/unseeded arms must
-   have used the right --corpus policy. Check the run ids in
-   `pipeline_ctl.py round-show` before computing variance; runs that shared a
-   corpus are not independent and must not be pooled.
-3. Ablations (each is a fresh campaign via the fuzz phase, with its own run
-   id — `--corpus fresh` for every arm, so no arm inherits another's corpus):
-   a. with vs without artifacts/seeds/ (trace-derived seeds): the "without"
-      arm omits --seeds AND uses --corpus fresh
-   b. agent-authored descriptions vs manually-refined descriptions
-   c. baseline: vanilla syzkaller without NVIDIA descriptions
-4. Cross-round progression (the improvement-loop result): edges and unique
-   crashes per round from `pipeline_ctl.py round-show`, with what each
-   round's refine phase changed. This is the evidence that the loop learned
-   anything — a flat progression is a publishable negative result, not
-   something to bury.
-5. Version persistence: replay every reliable PoC against one newer NVIDIA
-   production driver branch; record persist/fixed per PoC.
-6. Audit sample: re-verify a sample of [UNVERIFIED] RCA claims against
+2. Findings table: unique crashes, time-to-first-crash, repro rate, and how
+   many crashes survived triage into the crash registry. Take the counts from
+   the registry, not from a syz-manager screenshot: the registry is what
+   report and PSIRT packaging read.
+3. Cross-round progression: edges and unique crashes per round from
+   `pipeline_ctl.py round-show`, alongside what that round's refine phase
+   changed. This is what shows whether grammar expansion reached new code.
+   A flat round is a real result — record it and say which descriptions were
+   added that did not pay off, so the next round does not repeat them.
+4. Version persistence: replay every reliable PoC against one newer NVIDIA
+   production driver branch; record persist/fixed per PoC. A finding that is
+   already fixed upstream still belongs in the report, marked as such.
+5. Audit sample: re-verify a sample of [UNVERIFIED] RCA claims against
    source; log outcomes (confirmed/refuted) to artifacts/eval/rca-audit.md.
-   Agent failure modes observed here are paper data — keep them.
+   A refuted claim is corrected in the crash registry, not just noted here.
 
 ## Outputs
-artifacts/eval/: coverage CSVs, plots, metrics table, ablation results,
+artifacts/eval/: coverage CSVs, plots, findings table, round progression,
 rca-audit.md.
 
 ## State
 `python3 tools/pipeline_ctl.py set-phase eval in_progress|done|blocked`.
-Ablation runs that need their own registry can redirect state with the
-GSPWN_STATE env var instead of overwriting the main pipeline.json:
-`GSPWN_STATE=artifacts/eval/<run>/pipeline.json python3 tools/...`
-
-The redirect covers the registry only. Run-hours still bill the machine-wide
-ledger (`state/spend.json`), which does not follow GSPWN_STATE, so ablation
-campaigns count against `loop.max_total_run_hours` like any other and will be
-refused once the cap is reached. Size the ablation matrix against the budget
-before starting it, not after a campaign is refused mid-sweep.
 
 ## Gate evidence
-file listing of artifacts/eval/ with one-line description of each artifact.
-State explicitly which configurations reached the configured runs_per_config
-and which did not — an under-powered ablation is reported as such, not
-presented alongside complete ones.
+File listing of artifacts/eval/ with a one-line description of each artifact.
+Name explicitly any run excluded from the numbers and why.

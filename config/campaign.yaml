@@ -22,14 +22,11 @@ track_u:
   memory_max: "8G"
   targets: []              # agent-facing: written by harness phase, read by fuzz phase
 
-eval:
-  runs_per_config: 3       # independent runs per configuration (variance)
-  # Run length comes from loop.campaign_hours below — one duration, one place.
-
 loop:
-  # Caps on the autonomous improvement loop. These are the spend ceiling: the
-  # loop runs unattended until one of them trips, so set them before starting a
-  # campaign, not after. AWS Budgets alerts remain the backstop for real money.
+  # The campaign's declared stopping rules. The loop runs unattended until one
+  # of them trips, so set them before starting, not after. They bound the
+  # search, not the bill: this repo has no view of what an instance costs.
+  # Watch real money in the AWS console.
   max_rounds: 3              # hard cap on rounds, whatever coverage does
   # Total run-hour budget, checked against the spend ledger state/spend.json.
   # round-end bills every campaign's measured hours there per run id (a run
@@ -44,14 +41,3 @@ loop:
   coverage_sample_min: 10    # sampler interval (systemd timer)
   corpus_policy: carry       # fresh | carry — carry builds each round on the last
   promote_seeds: true        # add coverage-advancing programs to the seed bank
-
-cost:
-  # EC2 guardrails. The idle watchdog is what stops a forgotten instance.
-  idle_stop_minutes: 120     # stop the box after this long with no fuzzer
-  idle_check_minutes: 30     # how often the watchdog checks
-  monthly_budget_usd: 0      # 0 = unset; record your ceiling here
-  # Your instance's hourly price (0.0 = unset). Informational: gspwn_config
-  # prints the run-hour budget converted to dollars so the ceiling is visible
-  # in money terms, not just hours. AWS Budgets remains the enforcement.
-  estimated_hourly_usd: 0.0
-  budget_alerts_usd: [50, 150]

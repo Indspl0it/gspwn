@@ -32,28 +32,24 @@ Before the first campaign, confirm what actually took effect:
 python3 tools/gspwn_config.py
 ```
 
-It prints the effective configuration and the resulting spend ceiling, and
+It prints the effective configuration and the resulting stopping rules, and
 exits non-zero on a bad value. An unknown key is an error rather than a
 warning, so a misspelled key fails loudly instead of leaving the default in
 force. If it exits non-zero, stop and report; do not proceed on defaults.
 
-The caps that bound an unattended run: `loop.max_rounds`,
-`loop.max_total_run_hours`, `loop.campaign_hours` (each campaign self-stops
-after this long), and `cost.idle_stop_minutes` (the box stops itself when no
-fuzzer is running), and `cost.monthly_budget_usd`. The dollar cap is enforced
-at campaign install: when it is non-zero and `cost.estimated_hourly_usd` is
-set, a campaign whose projected spend would exceed it is refused. Leave
-`estimated_hourly_usd` at 0 and only the run-hour cap applies; the tool warns
-that it cannot price the campaign instead of assuming a rate. AWS Budgets
-remains the real-money backstop, set up per `docs/cloud-setup.md`.
+Three declared stopping rules bound an unattended run: `loop.max_rounds`,
+`loop.max_total_run_hours`, and `loop.campaign_hours` (each campaign
+self-stops after this long). They bound the search, not the bill. This repo
+has no view of what the instance costs and does not try to guess; watch real
+money in the AWS console.
 
-Run-hours are billed to `state/spend.json`, a ledger keyed by run id. It is
+Run-hours are recorded in `state/spend.json`, a ledger keyed by run id. It is
 machine-global on purpose: unlike `pipeline.json` it does not follow
-`GSPWN_STATE`, so a run with its own state file still spends the one budget.
-If the ledger goes missing while rounds still record hours, every command
-that reads spend refuses instead of treating the budget as unspent. Clear
-that with `pipeline_ctl.py spend-init`, which rebuilds the ledger from the
-state file and never lowers recorded spend.
+`GSPWN_STATE`, so a run with its own state file still counts against the one
+cap. If the ledger goes missing while rounds still record hours, every
+command that reads it refuses rather than treating the cap as untouched.
+Clear that with `pipeline_ctl.py spend-init`, which rebuilds the ledger from
+the state file and never lowers recorded hours.
 
 ## State commands
 
@@ -101,7 +97,7 @@ do not skip ahead to a later phase to keep making progress.
 | triage | agents/triage.md | every raw crash registered unique/duplicate/flagged; the flagged queue is empty (`crash-list --status flagged` returns nothing) |
 | rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC |
 | poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json |
-| eval | agents/eval.md | `artifacts/eval/` contains metrics for all configured runs/ablations |
+| eval | agents/eval.md | `artifacts/eval/` holds the coverage series, findings table and round progression for every run in this round |
 | refine | agents/refine.md | gaps.md + worklist.md written; round outcome recorded via `round-end` |
 | report | agents/report.md | report + PSIRT packages exist; disclosure status recorded |
 
@@ -154,13 +150,14 @@ self-stops after `loop.campaign_hours` (a deadline on disk, enforced by
 survives the panics this pipeline expects), and
 `round-end --from-run <run-id>` derives the coverage verdict, edge counts,
 run-hours and new-crash count from the run's `coverage.csv` and the registry.
-Do not hand-type those values: `run_hours` *is* the budget, and a run that
-died after three hours must not bill the configured twenty-four.
+Do not hand-type those values: `run_hours` *is* what the cap is measured
+against, and a run that died after three hours must not bill the configured
+twenty-four.
 
 Run isolation is mandatory, not optional: every campaign gets its own
 `--run-id` and workdir via `campaign_ctl.py`. Runs that share a workdir share
-an evolved corpus, which makes the eval's independent-runs protocol invalid
-and contaminates every ablation arm.
+an evolved corpus, so neither run's coverage numbers describe what that run
+actually did.
 
 ## Dispatching
 

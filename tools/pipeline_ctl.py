@@ -172,13 +172,13 @@ def _derive_run(run_id, cfg):
         run_id, cfg["plateau_window_min"], cfg["plateau_min_growth"])
     out = {"run_id": run_id, "coverage_verdict": verdict, "detail": detail,
            "run_hours": None}
-    # Edge totals are reported for Track K, the instrumented-kernel number the
-    # paper cites; Track U's per-harness bitmaps are not comparable to it.
+    # Edge totals are reported for Track K, the instrumented-kernel number
+    # the report cites; Track U's per-harness bitmaps are not comparable.
     rows = coverage_ctl.metric_rows(run_id, "edges", "k")
     if rows:
         # Peak, not the last sample: a fuzzer restart zeroes the counter, and
         # recording edges_end below edges_start would show the round losing
-        # coverage in the history the paper's progression table cites.
+        # coverage in the per-round history the report is built from.
         out["edges_start"] = rows[0]["edges"]
         out["edges_end"] = max(r["edges"] for r in rows)
     # Wall-clock of the campaign, from the first to the last sample on any
