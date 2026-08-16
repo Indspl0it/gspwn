@@ -79,8 +79,8 @@ raise an Xid.
 
 | Effect | Detail |
 | --- | --- |
-| Usable capacity | Reduced, where the ECC bits are stored in the same memory. HBM parts with in-band ECC lose part of the advertised capacity. |
-| Bandwidth | Slightly reduced, for the same reason |
+| Usable capacity on HBM parts | Unchanged. HBM2e and HBM3 carry dedicated ECC storage, so the check bits cost no user-visible capacity or bandwidth. |
+| Usable capacity on GDDR parts | Reduced. Where ECC is implemented by reserving part of the same memory, both capacity and bandwidth fall. |
 | Counters | Volatile and aggregate counts, per memory location, from `nvidia-smi -q -d ECC` |
 | Retirement | Pages accumulating errors are retired so allocations avoid them |
 
