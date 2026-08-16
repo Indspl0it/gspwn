@@ -19,7 +19,7 @@ the sole writer of `artifacts/crashes/`.
 | An empty harvest means the sources were readable and empty | `cmd_harvest` refuses to run as non-root, where the globs return empty and the copies raise |
 | "Nothing to harvest" and "could not read a source" are distinguishable | The two conditions carry different exit codes |
 | pstore is left with space for the next panic | Every copied record is deleted from `/sys/fs/pstore` |
-| Several panics between harvests are all captured | Every `/var/crash` dump is taken, not only the newest |
+| Several panics between harvests are all captured | Every `/var/crash` dump present is taken |
 | A harvest already taken is not re-copied | `harvested_kdumps` recognises the `kdump-` prefixed directories of earlier harvests |
 | Evidence is never deleted without an explicit command | `prune` is the only deletion path |
 

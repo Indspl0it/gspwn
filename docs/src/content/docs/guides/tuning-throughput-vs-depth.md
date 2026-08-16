@@ -33,7 +33,7 @@ then has to work around.
 Changing these changes what the campaign concludes from identical work. Two
 runs measured under different values are not comparable.
 
-| Key | What it decides |
+| Key | Effect |
 |---|---|
 | `coverage.plateau_new_edges` | How many expected new edges justify another campaign |
 | `coverage.horizon_hours` | How far ahead the extrapolation reaches |

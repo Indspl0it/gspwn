@@ -1,0 +1,99 @@
+---
+title: Product lines
+description: "How NVIDIA segments its GPUs, how parts are named, and which capabilities follow from the architecture generation against the market segment."
+---
+
+import SegmentGrid from '../../../components/SegmentGrid.astro';
+
+NVIDIA sells the same architecture into three segments. Two independent axes
+decide what a given part can do. The architecture generation sets the compute
+feature set. The segment sets partitioning, reliability and support terms.
+
+<SegmentGrid />
+
+## Naming
+
+Data centre parts are named by a letter and a number. The letter is the initial
+of the architecture, which makes the generation readable from the part name.
+
+| Letter | Architecture | Named after | Examples |
+| --- | --- | --- | --- |
+| `K` | Kepler | Johannes Kepler | K80 |
+| `M` | Maxwell | James Clerk Maxwell | M60 |
+| `P` | Pascal | Blaise Pascal | P100, P4 |
+| `V` | Volta | Alessandro Volta | V100 |
+| `T` | Turing | Alan Turing | T4 |
+| `A` | Ampere | André-Marie Ampère | A100, A10, A40 |
+| `H` | Hopper | Grace Hopper | H100, H200 |
+| `L` | Ada Lovelace | Ada Lovelace | L4, L40S |
+| `B` | Blackwell | David Blackwell | B100, B200 |
+
+Consumer parts use the `GeForce RTX` name with a generation-leading number:
+the RTX 20 series is Turing, 30 is Ampere, 40 is Ada Lovelace, 50 is Blackwell.
+Workstation parts were `Quadro` through Turing and are now `RTX A`, `RTX Ada`
+or `RTX PRO`.
+
+`Tesla` was the data centre brand name through Volta and is no longer used:
+the A100 shipped as `NVIDIA A100`. `nvidia-smi` still reports older parts under
+the old brand, as `Tesla T4`.
+
+## Architecture generations
+
+Compute capability is the identifier the toolchain uses for the generation. It
+gates language and hardware features, so it appears in `nvcc` flags as
+`-arch=sm_XX`.
+
+| Generation | Compute capability | Examples | Notable additions |
+| --- | --- | --- | --- |
+| Volta | 7.0 | V100 | First tensor cores, independent thread scheduling |
+| Turing | 7.5 | T4, RTX 20 series | Ray tracing cores, INT8 and INT4 tensor operations |
+| Ampere | 8.0, 8.6 | A100 at 8.0; A10G, A40 and RTX 30 series at 8.6 | TF32, BF16, structured sparsity, asynchronous copy, MIG |
+| Ada Lovelace | 8.9 | L4, L40S, RTX 40 series | FP8 tensor operations, shader execution reordering |
+| Hopper | 9.0 | H100, H200 | Thread block clusters, the tensor memory accelerator, transformer engine |
+| Blackwell | 10.x, 12.x | B200 at 10.x; RTX 50 series at 12.x | FP4 and FP6 tensor operations, second generation transformer engine |
+
+Compiled device code carries the capability it was built for. Binary
+compatibility holds within a major version at an equal or higher minor
+version, so a cubin built for `sm_80` runs on 8.6 and 8.9 and fails on 7.5. A
+binary that also embeds PTX can be compiled just in time for a capability that
+did not exist when it was built.
+
+## Memory and form factor
+
+The form factor decides power, interconnect and cooling, and follows from the
+segment more than from the generation.
+
+| Form factor | Interconnect | Memory | Cooling | Typical parts |
+| --- | --- | --- | --- | --- |
+| SXM module | NVLink to its neighbours, plus PCIe to the host | HBM | Passive, chassis-provided | A100, H100, B200 |
+| PCIe card, data centre | PCIe, with an optional NVLink bridge | HBM or GDDR | Passive, chassis-provided | A100 PCIe, L40S, T4 |
+| PCIe card, workstation | PCIe | GDDR with ECC on some parts | Active blower | RTX A6000, RTX PRO |
+| PCIe card, consumer | PCIe | GDDR | Active, multi-fan | GeForce RTX |
+
+HBM is stacked beside the die on the same package and carries far higher
+bandwidth per watt than GDDR. Its power and thermal envelope is what puts the
+highest-bandwidth parts on a chassis-cooled module and keeps them off a
+self-cooled card.
+
+## Instance families
+
+Rented instances are advertised by family. The GPU each family carries is
+fixed.
+
+| Instance family | GPU | Generation | Form factor |
+| --- | --- | --- | --- |
+| `p3` | V100 | Volta | SXM |
+| `g4dn` | T4 | Turing | PCIe |
+| `g5` | A10G | Ampere | PCIe |
+| `g6` | L4 | Ada Lovelace | PCIe |
+| `p4d` | A100 | Ampere | SXM |
+| `p5` | H100 | Hopper | SXM |
+
+The `g` families are graphics and inference parts on PCIe. The `p` families are
+training parts on SXM modules with NVLink between them.
+
+## See also
+
+- [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/)
+- [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/)
+- [Installed stack](/gspwn/knowledgebase/installed-stack/)

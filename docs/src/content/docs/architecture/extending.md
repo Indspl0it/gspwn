@@ -141,7 +141,7 @@ looks like for that phase, and repeats the public-repository constraint. See
 
 ## Non-extension points
 
-| Change | Why it is refused |
+| Change | Reason for refusal |
 |---|---|
 | Editing `state/pipeline.json` by hand | The tool validates, locks and writes atomically |
 | Adding a phase that skips a gate | A gate makes the phase's evidence checkable on disk |

@@ -88,7 +88,7 @@ Track U has no configuration list of targets. The `harness` sub-agent
 enumerates candidates from the checked-out source and ranks them by how
 directly attacker-controlled bytes reach them.
 
-| Target | Priority | What qualifies |
+| Target | Priority | Qualifying surface |
 |---|---|---|
 | `libnvidia-container` (C) | Primary | The memory-safety surface: config parsing, ldcache handling, ELF and library inspection, mount and path construction, capability and option string parsing |
 | `nvidia-container-toolkit` (Go) | Secondary | Panic and denial-of-service surface only: OCI `config.json` handling, CDI spec parsing, environment variable processing |

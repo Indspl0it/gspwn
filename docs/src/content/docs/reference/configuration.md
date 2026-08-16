@@ -12,7 +12,7 @@ Every key table below carries these six columns.
 | Column | Contents |
 |---|---|
 | Key | Section-qualified, as it is written in prose and in error messages |
-| What it controls | The behaviour that changes when the value changes |
+| Effect | The behaviour that changes when the value changes |
 | Type | `integer`, `number`, `boolean`, `string`, `list of strings`, or a named format |
 | Accepted values | The validator's exact bound, or the closed set |
 | Default | The built-in default, which applies when the key is absent |
@@ -28,7 +28,7 @@ default. `python3 tools/gspwn_config.py` prints what is in force.
 
 The Track K campaign: syzkaller against the instrumented kernel.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `track_k.enabled_syscalls` | The syscall set syz-manager is allowed to generate. Written into the run's `syz-manager.cfg` as `enable_syscalls`. An empty list enables everything syzkaller knows | list of strings | Non-empty strings. A bare scalar reaches syz-manager as a one-character list | `[]` | `campaign_ctl.cmd_gen_config` |
 | `track_k.sandbox` | syzkaller's sandbox mode, which decides the capability set executed programs hold | string | `none`, `setuid`, `namespace`, `android` | `namespace` | `campaign_ctl.cmd_gen_config` |
@@ -41,7 +41,7 @@ The Track K campaign: syzkaller against the instrumented kernel.
 
 The Track U campaign: harnesses against the NVIDIA Container Toolkit.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `track_u.docker_image` | The image `gspwn-u.service` runs, which is where the harnesses are built and executed | string | Non-empty | `aflplusplus/aflplusplus:latest` | `campaign_ctl.cmd_install_u` |
 | `track_u.memory_max` | The container memory limit and the systemd `MemoryMax` on `gspwn-u.service` | systemd byte spec | As `track_k.memory_max` | `8G` | `campaign_ctl.cmd_install_u` |
@@ -51,7 +51,7 @@ The Track U campaign: harnesses against the NVIDIA Container Toolkit.
 
 The stopping rules and the round-level policy.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `loop.max_rounds` | The hard cap on rounds, whatever coverage does. A round-cap stop cannot be overridden | integer | `> 0` | `3` | `pipeline_state.hard_cap_reason` |
 | `loop.max_total_run_hours` | The run-hour budget across every campaign, checked against `state/spend.json`. A budget stop cannot be overridden | number | `> 0`, and at least `loop.campaign_hours` | `216` | `pipeline_state.hard_cap_reason`, `campaign_ctl.check_budget` |
@@ -69,7 +69,7 @@ The stopping rules and the round-level policy.
 
 The unattended supervisor and its circuit breaker.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `orchestrator.command` | The headless agent invocation the supervisor launches. Empty on purpose: the repository does not guess which coding-agent CLI is installed, and `install` refuses until it is set | string | Any string. Must contain `{session}` when `resume_command` is set | `(none)` | `orchestrator_ctl.cmd_run`, `orchestrator_ctl.cmd_install` |
 | `orchestrator.resume_command` | The invocation for a restart that reuses the previous session, with `{session}` and `{anchor}` substituted. Empty keeps every start fresh | string | Any string. Must contain `{session}` when non-empty | `(none)` | `orchestrator_ctl.resolve_session` |
@@ -86,7 +86,7 @@ The unattended supervisor and its circuit breaker.
 
 The content the tools put in front of the agent.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `agent.brief_knowledge_entries` | Knowledge entries `brief` shows per file. After a panic `brief` is the whole of what a fresh context knows | integer | `> 0` | `3` | `pipeline_ctl.cmd_brief` |
 | `agent.brief_knowledge_line_chars` | How much of each entry's first line `brief` prints. `knowledge_ctl.py show` always has the full text | integer | `> 0` | `100` | `pipeline_ctl.cmd_brief` |
@@ -98,7 +98,7 @@ The content the tools put in front of the agent.
 How the plateau decision is made. The campaign's stopping rule rests on these
 numbers.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `coverage.plateau_new_edges` | Expected new edges over one more campaign, below which the run has plateaued. Set it to what would justify another campaign of machine time | integer | `> 0` | `50` | `coverage_ctl.plateau_verdict` |
 | `coverage.horizon_hours` | How far ahead the fitted curve is extrapolated. Matching `loop.campaign_hours` scopes the verdict to exactly one further campaign | number | `> 0` | `24` | `coverage_ctl.plateau_verdict` |
@@ -113,7 +113,7 @@ numbers.
 The criteria for a reproduction. A disclosure package is built on a `reliable`
 classification.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `poc.repro_timeout_sec` | Seconds one reproducer run may take before it counts as a hang. A hang is a hit only for a hang-class crash title | integer | `> 0` | `120` | `repro_ctl._prepare_k`, `repro_ctl._prepare_u` |
 | `poc.reliable_threshold` | The hit rate at or above which a crash is `reliable`. A lower non-zero rate makes it `flaky`. Both are reportable, and the label travels into the report | number | `(0, 1]` | `0.8` | `repro_ctl._verify_session` |
@@ -125,7 +125,7 @@ classification.
 Dedup depth. These decide whether two reports are the same bug, which decides
 what reaches `rca`.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `triage.stack_hash_frames` | Top frames hashed for the secondary dedup key. Fewer merges distinct bugs sharing a caller; more splits one bug whose stack varies by an inlined frame | integer | `> 0` | `3` | `crash_parse.stack_hash` |
 | `triage.signature_frames` | Frames a reproduction must match to count as the same crash | integer | `> 0` | `5` | `repro_ctl.crash_signature` |
@@ -143,7 +143,7 @@ first registration are stamped into `state/pipeline.json`, and
 Written by the `provision` phase and pasted into every sub-agent's prompt by
 the orchestrator. No tool reads this file, and no validator checks it.
 
-| Key | What it controls | Type | Accepted values | Default | Read by |
+| Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `distro` | The distribution id from `/etc/os-release`, which decides package names | string | Free text, e.g. `debian`, `kali` | `(none)` | sub-agent context only |
 | `environment` | Which crash-capture path applies. `crashlog_ctl.py --env auto` detects the same thing at run time | string | `ec2` or `baremetal` | `(none)` | sub-agent context only |
@@ -160,7 +160,7 @@ the orchestrator. No tool reads this file, and no validator checks it.
 
 Five conditions are checked across keys. Each refuses the whole configuration.
 
-| Rule | Condition | What it prevents |
+| Rule | Condition | Failure prevented |
 |---|---|---|
 | 1 | `loop.corpus_policy` is `fresh` or `carry` | A campaign install with a policy no code path implements |
 | 2 | `loop.campaign_hours` does not exceed `loop.max_total_run_hours` | A loop that spends the whole ceiling on run 1 and stops, because no round could finish inside the budget |

@@ -21,7 +21,7 @@ isolation that keeps a test run from touching a real campaign.
 | The spend ledger is redirected explicitly | The ledger does not follow `GSPWN_STATE`, so redirecting the state file alone would leave the suite writing the real `state/spend.json` |
 | The fail-closed fallback is redirected too | `DEFAULT_STATE_PATH` is what `spend_for_budget` reads when the ledger is absent |
 | A CSV fixture matches the current schema | Fixtures are built from `coverage_ctl.FIELDS` |
-| A test exercises the tool, not a copy of it | Assertions call the tool and capture its output |
+| A test exercises the tool itself | Assertions call the tool and capture its output |
 | Corpus paths are testable without syzkaller | A `syz-db` stand-in packs and unpacks a directory of programs through a JSON blob |
 
 ## Coverage

@@ -81,7 +81,11 @@ export default defineConfig({
         {
           label: 'Knowledgebase',
           items: [
+            { label: 'Overview', slug: 'knowledgebase' },
             { label: 'NVIDIA GPU stack', slug: 'knowledgebase/gpu-stack' },
+            { label: 'Product lines', slug: 'knowledgebase/product-lines' },
+            { label: 'Driver and toolkit versions', slug: 'knowledgebase/driver-versions' },
+            { label: 'Installed stack', slug: 'knowledgebase/installed-stack' },
           ],
         },
         {

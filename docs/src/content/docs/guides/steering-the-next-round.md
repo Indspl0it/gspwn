@@ -51,7 +51,7 @@ crash-0001: nvidia_uvm uaf/ioctl-sequence (confidence medium)
 
 Three fields do the steering:
 
-| Field | Consumed by | What it carries |
+| Field | Consumed by | Contents |
 |---|---|---|
 | `adjacent` | `describe` | Calls sharing an object, lock, refcount or teardown path with the fault, that this reproducer never exercised |
 | `preconditions` | `seeds` | The object state that must exist before the bug class is reachable |

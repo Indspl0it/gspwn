@@ -6,8 +6,8 @@
 //
 // Colours come from Starlight's own tokens where a token exists, so the panel
 // and the text follow the reader's colour scheme without a second palette.
-// The four accent hues are stated per scheme below, because a single hue that
-// reads on #0d1117 washes out on white.
+// The accent hues come from the --gs-hue-* set in custom.css, which is already
+// stated once per scheme.
 ---
 
 <div class="gpu-stack" role="group" aria-label="NVIDIA GPU stack by layer">
@@ -83,19 +83,13 @@
 
 <style>
 	.gpu-stack {
-		--k: #e8813a;
-		--live: #3cc088;
-		--blind: #d8455a;
-		--cy: #58c4dd;
+		--k: var(--gs-hue-amber);
+		--live: var(--gs-hue-green);
+		--blind: var(--gs-hue-red);
+		--cy: var(--gs-hue-cyan);
 		--panel: var(--sl-color-gray-6);
 		--edge: var(--sl-color-gray-5);
 		margin-block: 1.5rem;
-	}
-	:global(:root[data-theme='light']) .gpu-stack {
-		--k: #b45309;
-		--live: #15803d;
-		--blind: #b91c1c;
-		--cy: #0e7490;
 	}
 
 	.rig {
