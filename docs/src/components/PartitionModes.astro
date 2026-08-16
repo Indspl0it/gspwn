@@ -1,0 +1,189 @@
+---
+// One GPU drawn five times, once per sharing mode, with the isolation line in
+// a different place each time.
+//
+// The comparison is the content. A table of five rows states the same facts
+// and leaves the reader to build the picture; drawing the same card five times
+// puts the boundary where it actually falls in each mode.
+
+const MODES = [
+	{
+		name: 'Passthrough',
+		sub: 'one guest owns the card',
+		tenants: ['Guest'],
+		line: 'PCIe and IOMMU',
+		where: 'below the card',
+		grade: 'hard',
+		note: 'The whole GPU is assigned to one virtual machine.',
+	},
+	{
+		name: 'Time-slicing',
+		sub: 'contexts take turns',
+		tenants: ['A', 'B', 'C'],
+		line: 'context switch',
+		where: 'in the scheduler',
+		grade: 'soft',
+		note: 'Each context runs in its own turn. Memory is per-context, and a fault can reset the device for everyone.',
+	},
+	{
+		name: 'MPS',
+		sub: 'one context, many clients',
+		tenants: ['A', 'B', 'C'],
+		line: 'none by default',
+		where: 'shared context',
+		grade: 'none',
+		note: 'Clients submit into a single shared context, which removes the switch cost and the boundary with it.',
+	},
+	{
+		name: 'MIG',
+		sub: 'hardware partitions',
+		tenants: ['GI 1', 'GI 2', 'GI 3'],
+		line: 'SMs, L2 slices, memory controllers',
+		where: 'in silicon',
+		grade: 'hard',
+		note: 'Each instance holds its own SMs, cache slices and memory paths. A fault stays inside its instance.',
+	},
+	{
+		name: 'vGPU',
+		sub: 'mediated passthrough',
+		tenants: ['VM 1', 'VM 2'],
+		line: 'host mediation',
+		where: 'hypervisor',
+		grade: 'hard',
+		note: 'A host-side manager schedules guests onto the physical GPU and mediates their register access.',
+	},
+];
+---
+
+<div class="pm" role="group" aria-label="GPU sharing modes and where isolation falls in each">
+	{
+		MODES.map((m) => (
+			<div class="mode">
+				<div class="hd">
+					<span class="nm">{m.name}</span>
+					<span class="sub">{m.sub}</span>
+				</div>
+
+				<div class="card">
+					<div class="tenants">
+						{m.tenants.map((t) => <span class="t">{t}</span>)}
+					</div>
+					<div class={`iso ${m.grade}`}>
+						<span class="lbl">{m.line}</span>
+					</div>
+					<div class="gpu">GPU</div>
+				</div>
+
+				<p class="note">{m.note}</p>
+				<p class="where">
+					isolation at: <b>{m.where}</b>
+				</p>
+			</div>
+		))
+	}
+</div>
+
+<style>
+	.pm {
+		--edge: var(--sl-color-gray-5);
+		--panel: var(--sl-color-gray-6);
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+		gap: 0.7rem;
+		margin-block: 1.5rem;
+	}
+
+	.mode {
+		display: flex;
+		flex-direction: column;
+		padding: 0.75rem 0.8rem 0.85rem;
+		border: 1px solid var(--edge);
+		border-radius: 0.6rem;
+		background: var(--panel);
+	}
+
+	.hd { margin-bottom: 0.6rem; }
+	.nm {
+		display: block;
+		font-size: 0.88rem;
+		font-weight: 650;
+		color: var(--sl-color-white);
+	}
+	.sub {
+		display: block;
+		font-family: var(--sl-font-mono);
+		font-size: 0.63rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.card { display: flex; flex-direction: column; gap: 0.3rem; }
+
+	.tenants { display: flex; gap: 0.25rem; }
+	.t {
+		flex: 1;
+		padding: 0.3rem 0.2rem;
+		border: 1px solid var(--sl-color-gray-4);
+		border-radius: 0.3rem;
+		background: var(--sl-color-bg);
+		font-family: var(--sl-font-mono);
+		font-size: 0.63rem;
+		color: var(--sl-color-gray-1);
+		text-align: center;
+	}
+
+	.iso {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 1.4rem;
+		border-radius: 0.2rem;
+	}
+	.iso .lbl {
+		font-family: var(--sl-font-mono);
+		font-size: 0.58rem;
+		letter-spacing: 0.04em;
+		text-align: center;
+		line-height: 1.3;
+		padding: 0 0.2rem;
+	}
+	.iso.hard {
+		border-top: 2px solid var(--gs-hue-green);
+		border-bottom: 2px solid var(--gs-hue-green);
+	}
+	.iso.hard .lbl { color: var(--gs-hue-green); }
+	.iso.soft {
+		border-top: 2px dashed var(--gs-hue-amber);
+		border-bottom: 2px dashed var(--gs-hue-amber);
+	}
+	.iso.soft .lbl { color: var(--gs-hue-amber); }
+	.iso.none {
+		border-top: 1px dotted var(--gs-hue-red);
+		border-bottom: 1px dotted var(--gs-hue-red);
+	}
+	.iso.none .lbl { color: var(--gs-hue-red); }
+
+	.gpu {
+		padding: 0.35rem;
+		border: 1px solid var(--sl-color-gray-4);
+		border-radius: 0.3rem;
+		background: var(--sl-color-bg);
+		font-family: var(--sl-font-mono);
+		font-size: 0.65rem;
+		color: var(--sl-color-gray-2);
+		text-align: center;
+	}
+
+	.note {
+		margin: 0.6rem 0 0;
+		font-size: 0.73rem;
+		line-height: 1.5;
+		color: var(--sl-color-gray-2);
+	}
+	.where {
+		margin: 0.45rem 0 0;
+		font-family: var(--sl-font-mono);
+		font-size: 0.62rem;
+		color: var(--sl-color-gray-3);
+	}
+	.where b { color: var(--sl-color-gray-1); font-weight: 600; }
+</style>

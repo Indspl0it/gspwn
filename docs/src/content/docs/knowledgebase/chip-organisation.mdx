@@ -1,0 +1,122 @@
+---
+title: Chip organisation
+description: "The containment chain from die to processing block, what one SM holds, what changes per architecture, and one launch traced onto the hardware."
+---
+
+import ChipFloorplan from '../../../components/ChipFloorplan.astro';
+
+A GPU die is one unit repeated. The streaming multiprocessor is that unit, and
+almost every number quoted for a part is an SM count multiplied by something.
+The levels above the SM exist to feed it, and the levels below it exist to
+issue instructions to it.
+
+<ChipFloorplan />
+
+## The containment chain
+
+| Level | Contains | Role |
+| --- | --- | --- |
+| Die | GPCs, memory partitions, the GigaThread engine, fixed-function engines | The physical chip |
+| GPC | TPCs, a raster engine on graphics parts | The unit of work distribution |
+| TPC | Two SMs and, on graphics parts, a polymorph engine | A grouping inherited from the graphics pipeline |
+| SM | Four processing blocks, a shared L1 and shared-memory array, load and store units | The unit a thread block is placed on |
+| Processing block | A warp scheduler, a dispatch unit, a register file slice, execution lanes, one tensor core | The unit a warp is issued from |
+
+A thread block never spans two SMs. A warp never spans two processing blocks.
+Both facts follow from where the storage lives: a block's shared memory is
+physically in one SM's array, and a warp's registers are physically in one
+processing block's register file.
+
+## Inside one SM
+
+| Resource | Per SM on recent data centre parts |
+| --- | --- |
+| Warp schedulers | 4, one per processing block |
+| Register file | 256 KB, split as 64 KB per processing block |
+| L1 data cache and shared memory | 256 KB, configurable split |
+| Resident warps | 64, so 2048 threads |
+| Resident thread blocks | 32 |
+| Tensor cores | 4, one per processing block |
+
+The four caps interact. A block requesting 64 KB of shared memory leaves room
+for three more blocks at most, whatever the warp cap allows. A kernel using 128
+registers per thread caps residency at 16 warps per processing block. Occupancy
+is the minimum across all four constraints, and the compiler reports the
+register figure it chose in `ptxas -v` output.
+
+## Warps
+
+The hardware scheduling unit is 32 threads. A block of 250 threads occupies 8
+warps, and the last warp runs with 6 lanes masked off for its whole lifetime.
+Block sizes that are not multiples of 32 waste lanes for that reason.
+
+| Property | Behaviour |
+| --- | --- |
+| Issue | One instruction per warp per cycle, from one warp scheduler |
+| Divergence | Threads taking different branches are executed in separate passes with lanes masked |
+| Reconvergence | Independent thread scheduling, from Volta onward, gives each thread its own program counter, so divergent threads can make forward progress independently |
+| Latency hiding | A stalled warp is set aside and another resident warp issues in its place. This is why occupancy matters. |
+
+Independent thread scheduling is the change that broke implicit warp
+synchronisation. Code written before Volta that relied on lockstep execution
+within a warp requires `__syncwarp` to remain correct, which is what the
+`_sync` suffixed intrinsics exist for.
+
+## Variation by architecture
+
+| Architecture | Compute capability | Notable change at the SM |
+| --- | --- | --- |
+| Volta | 7.0 | Independent thread scheduling. First tensor cores. Unified L1 and shared memory. |
+| Turing | 7.5 | Tensor cores gain integer types. RT cores added on graphics parts. |
+| Ampere | 8.0, 8.6 | Asynchronous copy from global memory to shared memory, bypassing registers. Third generation tensor cores. |
+| Ada Lovelace | 8.9 | Fourth generation tensor cores with FP8. Larger L2. |
+| Hopper | 9.0 | Thread block clusters, distributed shared memory across an SM group, the tensor memory accelerator. |
+| Blackwell | 10.x, 12.x | Fifth generation tensor cores, further reduced precision formats. |
+
+Compute capability names the SM's instruction set and resource limits. Two
+parts sharing a compute capability accept the same compiled code and expose the
+same per-SM limits, whatever their SM count.
+
+## Partial dies
+
+A shipping part rarely uses the whole die. Manufacturing defects are handled by
+disabling the affected units and selling the result as a lower SKU, which is
+why the SM count on a product page is smaller than the count in the
+architecture whitepaper, and why two SKUs from one die differ in SM count,
+memory bus width and clock.
+
+| Reported by | Query |
+| --- | --- |
+| SM count | `cudaDeviceProp.multiProcessorCount` |
+| Compute capability | `cudaDeviceProp.major` and `.minor` |
+| Both, from the command line | `nvidia-smi --query-gpu=name,compute_cap --format=csv` |
+
+## Worked example: a launch placed on hardware
+
+A kernel launched with 4096 blocks of 256 threads, using 40 registers per
+thread and 16 KB of shared memory per block, on an A100 with 108 SMs.
+
+1. Each block is 256 threads, so 8 warps. The register demand is
+   256 × 40 = 10,240 registers per block, well inside the 65,536 an SM holds.
+2. Shared memory allows 164 KB per block at most on this part; 16 KB per block
+   allows up to 10 blocks per SM from that constraint alone.
+3. The warp cap is 64 per SM, so 8 blocks of 8 warps each. That constraint
+   binds, and the occupancy is 8 blocks per SM.
+4. The GigaThread engine distributes blocks across the 108 SMs. The first wave
+   places 108 × 8 = 864 blocks.
+5. Each SM's four warp schedulers hold 16 warps each. On every cycle, each
+   scheduler picks one eligible warp and issues one instruction from it.
+6. A warp issuing a global load stalls for hundreds of cycles. Its scheduler
+   issues from another of its 16 warps in the meantime, which is the entire
+   mechanism by which the memory latency is absorbed.
+7. As blocks retire, the GigaThread engine places waiting blocks onto the freed
+   slots. 4096 blocks over 864 slots is roughly five waves.
+8. The last wave is partial. 4096 is not a multiple of 864, so some SMs finish
+   early and idle, which is the tail effect that makes grid sizes near a
+   multiple of the wave size run faster than slightly larger ones.
+
+## See also
+
+- [Execution model](/gspwn/knowledgebase/execution-model/)
+- [Memory hierarchy](/gspwn/knowledgebase/memory-hierarchy/)
+- [Scheduling and preemption](/gspwn/knowledgebase/scheduling/)

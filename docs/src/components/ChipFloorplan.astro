@@ -1,0 +1,181 @@
+---
+// The containment chain from die to processing block, drawn as nested boxes.
+//
+// A tree drawn as a tree loses the fact that each level is physically inside
+// the one above it and repeated some number of times. Nesting preserves both:
+// the box is the unit, the count on its edge is the repetition. Counts are for
+// a full GH100 die; shipping parts have units disabled for yield.
+
+const RIM = [
+	{ name: 'Memory partitions', note: 'HBM stacks, L2 slices, memory controllers' },
+	{ name: 'Copy engines', note: 'DMA between host and device, and device to device' },
+	{ name: 'Fixed-function engines', note: 'video decode, encode, JPEG, optical flow' },
+	{ name: 'GigaThread engine', note: 'distributes thread blocks to GPCs' },
+];
+---
+
+<div class="floor" role="group" aria-label="GPU containment chain from die to processing block">
+	<div class="die">
+		<span class="lbl">GPU die</span>
+
+		<div class="gpc">
+			<span class="lbl">GPC, graphics processing cluster<em>×8</em></span>
+
+			<div class="tpc">
+				<span class="lbl">TPC, texture processing cluster<em>×9 per GPC</em></span>
+
+				<div class="sm">
+					<span class="lbl">SM, streaming multiprocessor<em>×2 per TPC</em></span>
+
+					<div class="blocks">
+						{
+							[0, 1, 2, 3].map(() => (
+								<div class="blk">
+									<span class="bname">Processing block</span>
+									<span class="bnote">warp scheduler, dispatch, register file</span>
+									<span class="bnote">FP32, FP64 and INT32 lanes</span>
+									<span class="bnote">one tensor core</span>
+								</div>
+							))
+						}
+					</div>
+					<p class="shared">Shared across the four blocks: L1 data cache and shared memory, load and store units, special function units</p>
+				</div>
+			</div>
+		</div>
+
+		<div class="rim">
+			{
+				RIM.map((r) => (
+					<div class="rimbox">
+						<span class="rname">{r.name}</span>
+						<span class="rnote">{r.note}</span>
+					</div>
+				))
+			}
+		</div>
+	</div>
+	<p class="cap">Counts are for a full GH100 die. Shipping parts disable units for yield.</p>
+</div>
+
+<style>
+	.floor {
+		--edge: var(--sl-color-gray-5);
+		margin-block: 1.5rem;
+	}
+
+	.die,
+	.gpc,
+	.tpc,
+	.sm {
+		border: 1px solid var(--edge);
+		border-radius: 0.5rem;
+		padding: 0.55rem 0.6rem 0.6rem;
+	}
+	.die { background: var(--sl-color-gray-7); }
+	.gpc { background: var(--sl-color-gray-6); border-color: var(--gs-hue-cyan); }
+	.tpc { background: var(--sl-color-gray-7); border-color: var(--gs-hue-violet); }
+	.sm { background: var(--sl-color-gray-6); border-color: var(--gs-hue-green); }
+
+	.lbl {
+		display: block;
+		margin-bottom: 0.5rem;
+		font-family: var(--sl-font-mono);
+		font-size: 0.68rem;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+		color: var(--sl-color-white);
+	}
+	.lbl em {
+		float: inline-end;
+		font-style: normal;
+		font-weight: 400;
+		color: var(--sl-color-gray-3);
+	}
+
+	.blocks {
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		gap: 0.4rem;
+	}
+
+	.blk {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		padding: 0.45rem 0.5rem;
+		border: 1px solid var(--edge);
+		border-radius: 0.35rem;
+		background: var(--sl-color-gray-7);
+	}
+
+	.bname {
+		font-size: 0.7rem;
+		font-weight: 600;
+		color: var(--sl-color-white);
+		line-height: 1.3;
+	}
+
+	.bnote {
+		font-family: var(--sl-font-mono);
+		font-size: 0.6rem;
+		color: var(--sl-color-gray-3);
+		line-height: 1.4;
+	}
+
+	.shared {
+		margin: 0.45rem 0 0;
+		padding: 0.35rem 0.5rem;
+		border: 1px dashed var(--edge);
+		border-radius: 0.35rem;
+		font-size: 0.68rem;
+		color: var(--sl-color-gray-2);
+		line-height: 1.4;
+	}
+
+	.rim {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+		gap: 0.4rem;
+		margin-top: 0.55rem;
+	}
+
+	.rimbox {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		padding: 0.45rem 0.5rem;
+		border: 1px solid var(--edge);
+		border-inline-start: 3px solid var(--gs-hue-amber);
+		border-radius: 0.35rem;
+		background: var(--sl-color-gray-6);
+	}
+
+	.rname {
+		font-size: 0.72rem;
+		font-weight: 600;
+		color: var(--sl-color-white);
+		line-height: 1.3;
+	}
+
+	.rnote {
+		font-family: var(--sl-font-mono);
+		font-size: 0.6rem;
+		color: var(--sl-color-gray-3);
+		line-height: 1.4;
+	}
+
+	.cap {
+		margin: 0.7rem 0 0;
+		font-family: var(--sl-font-mono);
+		font-size: 0.63rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	@media (max-width: 50rem) {
+		.blocks { grid-template-columns: repeat(2, 1fr); }
+	}
+	@media (max-width: 30rem) {
+		.blocks { grid-template-columns: 1fr; }
+	}
+</style>

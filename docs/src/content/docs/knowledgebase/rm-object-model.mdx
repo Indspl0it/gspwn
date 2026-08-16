@@ -1,0 +1,130 @@
+---
+title: Resource Manager object model
+description: "The handle hierarchy the NVIDIA driver exposes through ioctl, the four escapes that act on it, how class numbers select an object type, and one channel traced from root to submission."
+---
+
+Every operation on an NVIDIA GPU is an operation on an object. Objects form a
+tree, each one is named by a handle, and a handle is only meaningful to the
+client that allocated it. The ioctl interface is small: four escapes cover
+almost everything, and the variety comes from the class numbers and parameter
+structures passed through them.
+
+```mermaid
+flowchart TB
+  ROOT["Client<br/>NV01_ROOT<br/>the process's session"]
+  DEV["Device<br/>one physical GPU"]
+  SUB["Subdevice<br/>one GPU within the device"]
+  VASPACE["Address space<br/>the context's virtual memory"]
+  MEM["Memory objects<br/>allocations"]
+  CGRP["Channel group<br/>a time-slice group"]
+  CHAN["Channel<br/>a submission queue"]
+  ENG["Engine objects<br/>compute, copy, decode"]
+
+  ROOT --> DEV
+  DEV --> SUB
+  DEV --> VASPACE
+  VASPACE --> MEM
+  DEV --> CGRP
+  CGRP --> CHAN
+  CHAN --> ENG
+```
+
+## The hierarchy
+
+| Object | Parent | Represents |
+| --- | --- | --- |
+| Client | None. It is the root. | One process's session with the driver |
+| Device | Client | A physical GPU as the client sees it |
+| Subdevice | Device | One GPU, where a device may span several |
+| Address space | Device | A virtual address space for a context |
+| Memory | Address space | An allocation, host or device |
+| Channel group | Device | A group of channels scheduled together |
+| Channel | Channel group | A queue that work is pushed into |
+| Engine object | Channel | A class binding the channel to compute, copy or a codec |
+
+A handle is a 32-bit value chosen by the caller and validated by the driver
+against the client that owns it. Handles are not global: the same numeric value
+in two clients names two different objects, and a handle from one client
+presented by another is rejected.
+
+Destruction is recursive. Freeing the client frees everything under it, which
+is what makes process exit clean up the GPU without cooperation from the
+process.
+
+## The escapes
+
+The character devices under `/dev` accept a small set of ioctl commands. Their
+numbers are defined in `kernel-open/common/inc/nv-ioctl-numbers.h`.
+
+| Escape | Does |
+| --- | --- |
+| Allocate | Creates an object of a given class under a given parent, returning a handle |
+| Free | Destroys an object and everything under it |
+| Control | Invokes a numbered command on an object. This is the large surface. |
+| Map memory | Maps an allocation into a process or a device address space |
+
+Control commands are where most of the interface lives. Each is a number
+selecting an operation on a class, with its own parameter structure. The
+numbering is organised per class under
+`src/common/sdk/nvidia/inc/ctrl/`, and the class numbers themselves under
+`src/common/sdk/nvidia/inc/class/`.
+
+The parameter structures for allocate, free and control are in
+`src/common/sdk/nvidia/inc/nvos.h`. The values are not reproduced here: they
+move between driver branches, and reading them from a tree checked out at the
+matching tag is the only reliable way to obtain them.
+
+## Class numbers
+
+An allocate call names the class of object to create. The class decides the
+parameter structure, the valid parents, and which control commands the result
+accepts.
+
+| Class family | Selects |
+| --- | --- |
+| Root and device classes | The top of the tree |
+| Address space and memory classes | How an allocation is backed and mapped |
+| Channel classes | The submission mechanism, which is architecture-specific |
+| Engine classes | Compute, copy, video decode and encode |
+| Display classes | The display engine, absent on data centre parts |
+
+Channel and engine classes carry the architecture in their names, because the
+command formats differ per generation. A driver supporting several generations
+carries several channel classes and picks the one matching the part.
+
+## UVM has its own interface
+
+`nvidia-uvm.ko` does not use the escapes above. It exposes its own ioctl
+numbering through `/dev/nvidia-uvm`, defined in
+`kernel-open/nvidia-uvm/uvm_ioctl.h`, with its own conventions. Anything
+reading the RM interface and assuming UVM follows it will be wrong.
+
+## Worked example: from root to a submitted kernel
+
+1. Open `/dev/nvidiactl`. Allocate a client. The driver returns a handle
+   naming this process's session.
+2. Allocate a device under the client, naming which GPU. Allocate a subdevice
+   under the device.
+3. Allocate an address space object. This is the context's virtual memory, and
+   every device pointer the process later holds is an offset in it.
+4. Allocate memory objects for the kernel's data and map them into the address
+   space. The mapping call returns the device virtual address.
+5. Allocate a channel group, then a channel inside it. The channel owns a
+   pushbuffer: a ring in memory that commands are written into.
+6. Allocate an engine object on the channel, using the compute class for this
+   architecture. The channel is now bound to the compute engine.
+7. Write the launch into the pushbuffer: the kernel's address, its grid and
+   block dimensions, and its arguments.
+8. Ring the doorbell. The GPU's scheduler picks the channel up on its next
+   turn and the compute engine begins executing.
+
+Every step from 1 to 6 is an allocate escape. Step 4 also uses map memory.
+Steps 7 and 8 involve no ioctl at all: the pushbuffer and the doorbell are
+memory the process already has mapped, which is why submission is cheap and
+setup is not.
+
+## See also
+
+- [API split and contexts](/gspwn/knowledgebase/api-split/)
+- [GSP offload](/gspwn/knowledgebase/gsp-offload/)
+- [Scheduling and preemption](/gspwn/knowledgebase/scheduling/)

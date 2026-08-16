@@ -1,0 +1,154 @@
+---
+// The stages a GPU container passes through before its first process runs,
+// with the privilege each stage holds drawn as a band down the left.
+//
+// The band is the reason this is a figure and not a list: the privilege is not
+// monotonic. It rises to root in the middle of the path, at the point where
+// attacker-supplied configuration is being parsed, and drops again before the
+// container's own process starts.
+
+const STAGES = [
+	{
+		n: '1',
+		name: 'Image and OCI config',
+		what: 'The image, its labels, and the environment variables set on it',
+		who: 'Supplied by the caller',
+		priv: 'input',
+	},
+	{
+		n: '2',
+		name: 'Container runtime',
+		what: 'containerd or Docker resolves the request and calls the shim',
+		who: 'root, daemon',
+		priv: 'root',
+	},
+	{
+		n: '3',
+		name: 'nvidia-container-runtime',
+		what: 'A runc shim. Reads NVIDIA_* variables and edits the OCI spec.',
+		who: 'root',
+		priv: 'root',
+	},
+	{
+		n: '4',
+		name: 'nvidia-container-runtime-hook',
+		what: 'The prestart hook runc invokes, which calls the CLI below',
+		who: 'root',
+		priv: 'root',
+	},
+	{
+		n: '5',
+		name: 'libnvidia-container',
+		what: 'Resolves driver libraries and device nodes, then mounts them into the container namespace',
+		who: 'root, inside the target namespaces',
+		priv: 'root',
+	},
+	{
+		n: '6',
+		name: 'Container process',
+		what: 'The image entrypoint, with the device nodes and libraries in place',
+		who: 'The image user, unprivileged by default',
+		priv: 'user',
+	},
+];
+---
+
+<div class="path" role="group" aria-label="Container admission path with privilege at each stage">
+	{
+		STAGES.map((s) => (
+			<div class={`stage ${s.priv}`}>
+				<span class="n">{s.n}</span>
+				<span class="body">
+					<span class="nm">{s.name}</span>
+					<span class="wh">{s.what}</span>
+				</span>
+				<span class="who">{s.who}</span>
+			</div>
+		))
+	}
+
+	<div class="legend">
+		<span class="lg"><span class="sw input" />caller-supplied</span>
+		<span class="lg"><span class="sw root" />runs as root</span>
+		<span class="lg"><span class="sw user" />unprivileged</span>
+	</div>
+</div>
+
+<style>
+	.path {
+		--edge: var(--sl-color-gray-5);
+		--panel: var(--sl-color-gray-6);
+		margin-block: 1.5rem;
+	}
+
+	.stage {
+		display: grid;
+		grid-template-columns: 1.6rem minmax(0, 1fr) minmax(7rem, 11rem);
+		gap: 0.8rem;
+		align-items: center;
+		margin-bottom: 0.4rem;
+		padding: 0.6rem 0.9rem;
+		border: 1px solid var(--edge);
+		border-inline-start-width: 3px;
+		border-radius: 0.5rem;
+		background: var(--panel);
+	}
+	.stage.input { border-inline-start-color: var(--gs-hue-cyan); }
+	.stage.root {
+		border-inline-start-color: var(--gs-hue-red);
+		background: color-mix(in srgb, var(--gs-hue-red) 7%, var(--panel));
+	}
+	.stage.user { border-inline-start-color: var(--gs-hue-green); }
+
+	.n {
+		font-family: var(--sl-font-mono);
+		font-size: 0.85rem;
+		font-weight: 600;
+		color: var(--sl-color-gray-3);
+		text-align: center;
+	}
+
+	.body { display: flex; flex-direction: column; min-width: 0; }
+	.nm {
+		font-size: 0.88rem;
+		font-weight: 620;
+		color: var(--sl-color-white);
+		line-height: 1.3;
+	}
+	.wh {
+		font-size: 0.78rem;
+		color: var(--sl-color-gray-2);
+		line-height: 1.45;
+	}
+
+	.who {
+		font-family: var(--sl-font-mono);
+		font-size: 0.68rem;
+		color: var(--sl-color-gray-3);
+		text-align: right;
+		line-height: 1.4;
+	}
+
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin-top: 0.8rem;
+	}
+	.lg {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.72rem;
+		color: var(--sl-color-gray-2);
+	}
+	.sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+	.sw.input { background: var(--gs-hue-cyan); }
+	.sw.root { background: var(--gs-hue-red); }
+	.sw.user { background: var(--gs-hue-green); }
+
+	@media (max-width: 45rem) {
+		.stage { grid-template-columns: 1.4rem minmax(0, 1fr); }
+		.who { grid-column: 2; text-align: left; }
+	}
+</style>

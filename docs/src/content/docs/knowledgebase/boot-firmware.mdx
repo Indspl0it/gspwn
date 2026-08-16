@@ -1,0 +1,157 @@
+---
+title: Boot and firmware chain
+description: "What runs between power-on and a usable device, the microcontrollers inside a GPU, where signatures are checked, and one cold boot traced to the first CUDA call."
+---
+
+A GPU runs code before the host driver exists. Several microcontrollers inside
+the package initialise the memory system, verify signatures and bring up the
+main engines, and every one of them runs firmware signed by NVIDIA. The kernel
+module joins the sequence late.
+
+```mermaid
+flowchart TB
+  PWR["Power-on reset"]
+  BROM["Boot ROM<br/>immutable, in silicon"]
+  VBIOS["VBIOS on board flash<br/>signature verified by the boot ROM"]
+  DEVINIT["devinit<br/>memory training, clocks, straps"]
+  ENUM["PCIe enumeration<br/>BARs assigned by platform firmware"]
+  DRV["nvidia.ko loads<br/>binds to the PCI device"]
+  FW["GSP firmware loaded from<br/>/lib/firmware/nvidia/version/"]
+  VER["Signature verified<br/>on the GPU"]
+  RM["GSP runs the Resource Manager"]
+  READY["Device ready<br/>nodes usable"]
+
+  PWR --> BROM --> VBIOS --> DEVINIT --> ENUM --> DRV --> FW --> VER --> RM --> READY
+
+  VER -.->|"verification fails"| FAIL["No initialisation.<br/>The device stays unusable."]
+```
+
+## The microcontrollers
+
+A GPU package contains several processors besides the SMs. Older ones are
+Falcon cores; newer designs use RISC-V.
+
+| Processor | Responsibility |
+| --- | --- |
+| Boot ROM | Immutable first-stage code. Verifies the VBIOS signature. |
+| GSP | Runs the bulk of the Resource Manager after handoff |
+| SEC2 | Security operations, including key handling for encrypted paths |
+| PMU | Power and thermal management, clock and voltage control |
+| Display controller firmware | Display engine bring-up, on parts that have one |
+| NVDEC, NVENC, NVJPEG controllers | Their own codec firmware |
+
+Firmware for these is either resident in board flash as part of the VBIOS or
+supplied by the host from `/lib/firmware/nvidia/<version>/`. Everything loaded
+from the host is signed and verified on the GPU before it executes.
+
+## The trust boundary
+
+| Stage | Verified by | Replaceable |
+| --- | --- | --- |
+| Boot ROM | Nothing. It is the root. | No. It is fixed in silicon. |
+| VBIOS | The boot ROM, against a key fused into the part | Only by a signed image from the vendor |
+| GSP firmware | The GPU, at load time | Only by a signed image, shipped with the matching driver |
+| Kernel module | The host kernel's module signing policy, where enforced | Yes. The source is published. |
+| Userspace libraries | Nothing beyond ordinary file permissions | Yes |
+
+The boundary sits between the kernel module and the GSP firmware. Everything on
+the module's side is inspectable and modifiable; everything on the far side is
+signed, unpublished, and unavailable to any host tooling.
+
+## VBIOS
+
+The VBIOS holds the board's identity and its initialisation tables.
+
+| Contents | Use |
+| --- | --- |
+| devinit tables | The register write sequences that train memory and set clocks |
+| Board identity | Device IDs, subsystem IDs, the board's SKU |
+| Power and thermal tables | Default and maximum limits, fan curves |
+| Straps | Board-level configuration read at reset |
+| Signed firmware images | The microcontroller code resident on the board |
+
+`nvidia-smi -q` reports the VBIOS version. A mismatch between VBIOS version and
+driver expectations shows as an initialisation failure with no further
+attribution, because the failure occurs before any interface capable of
+reporting detail exists.
+
+## Driver-side initialisation
+
+| Step | Performed by |
+| --- | --- |
+| PCI probe, BAR mapping, interrupt setup | `nvidia.ko` |
+| GSP firmware load and handoff | `nvidia.ko`, writing into device memory |
+| Resource Manager bring-up | GSP firmware |
+| Device node creation | `nvidia.ko` and the userspace helper, or `nvidia-modprobe` on demand |
+| UVM initialisation | `nvidia-uvm.ko`, on first open of its node |
+| Display bring-up | `nvidia-modeset.ko` and `nvidia-drm.ko`, on parts with a display engine |
+
+Without a process holding the device open, the driver tears this state down and
+repeats it on the next open. `nvidia-persistenced` holds a handle so the
+sequence runs once, which is why the first CUDA call on an idle machine can
+take seconds without it and milliseconds with it.
+
+## Reset
+
+| Reset | Scope | Requires |
+| --- | --- | --- |
+| `nvidia-smi -r` | The GPU, back to a post-devinit state | No process holding the device |
+| Function-level reset over PCIe | The PCI function | Platform support, and the same exclusivity |
+| Host reboot | Everything, including board state a GPU reset leaves alone | Nothing |
+
+A GPU in an unrecoverable state after an Xid often clears with a GPU reset. A
+state that survives a reset generally requires a full power cycle, because the
+board's own state is only cleared at power-on.
+
+## Confidential computing
+
+Hopper and later parts support a mode where device memory is encrypted and the
+GPU attests to its own firmware state.
+
+| Element | Provides |
+| --- | --- |
+| Attestation report | A signed statement of the firmware versions running on the part |
+| Encrypted device memory | Data unreadable by the host, including by a privileged host |
+| Protected PCIe transfers | Data encrypted in transit between host and device |
+| Disabled interfaces | Debug and profiling paths that would expose protected state are turned off |
+
+The mode is set per GPU and reported by `nvidia-smi -q`. Peer-to-peer and some
+profiling capabilities are unavailable while it is active.
+
+## Worked example: a cold boot to the first kernel
+
+1. Power is applied. The boot ROM executes from immutable storage inside the
+   part.
+2. The boot ROM reads the VBIOS from board flash and verifies its signature
+   against a key fused into the die. A failure here stops the sequence with no
+   host-visible reporting beyond the device failing to enumerate correctly.
+3. devinit runs: memory is trained, clocks and voltages are set, straps are
+   applied. Device memory becomes usable.
+4. Platform firmware enumerates the PCIe bus and assigns BAR windows. A
+   platform without resizable BAR support assigns a BAR1 smaller than device
+   memory here, and nothing later can change it.
+5. The operating system boots. `nvidia.ko` binds to the PCI device, maps BAR0
+   and installs its interrupt handler.
+6. The module reads the GSP firmware image matching its own version from
+   `/lib/firmware/nvidia/<version>/`, writes it into device memory, and signals
+   the GSP to begin.
+7. The GSP verifies the image's signature. On failure it does not execute it,
+   and the module reports an initialisation error.
+8. The GSP runs the Resource Manager: engines are initialised, the runlists are
+   built, the fault buffers are allocated.
+9. `nvidia.ko` and the GSP complete their handshake. The character devices
+   become usable.
+10. A process opens `/dev/nvidiactl`, allocates a client, and the first CUDA
+    call proceeds.
+
+Steps 1 through 3 leave no host-side trace. Steps 5 through 9 appear in the
+kernel log. An error arising anywhere in steps 1 through 4 presents at step 5
+or later as a failure with a cause the host never observed, which is why
+initialisation failures on new hardware are diagnosed from `lspci` and platform
+firmware settings before the driver is suspected.
+
+## See also
+
+- [GSP offload](/gspwn/knowledgebase/gsp-offload/)
+- [Installed stack](/gspwn/knowledgebase/installed-stack/)
+- [Interconnect](/gspwn/knowledgebase/interconnect/)

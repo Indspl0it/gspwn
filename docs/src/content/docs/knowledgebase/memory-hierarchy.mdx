@@ -1,0 +1,125 @@
+---
+title: Memory hierarchy
+description: "Capacity against bandwidth from the register file to host memory, the transaction sizes that decide effective bandwidth, shared memory banking, and one warp's load traced through the cache."
+---
+
+import MemoryPyramid from '../../../components/MemoryPyramid.astro';
+
+Every level of GPU storage trades capacity against bandwidth in the same
+direction, and the trade is steep. The register file delivers thousands of
+times the bandwidth of HBM at a hundred-thousandth of the capacity. Performance
+work on a GPU is largely the work of keeping data at the highest level it fits.
+
+<MemoryPyramid />
+
+## Levels
+
+| Level | Scope | Managed by |
+| --- | --- | --- |
+| Registers | One thread | The compiler, at compile time |
+| Shared memory | One thread block | The programmer, explicitly |
+| L1 data cache | One SM | Hardware, sharing the array with shared memory |
+| L2 cache | The whole device | Hardware, with a programmer-settable residency policy |
+| Device memory | The whole device, and peers over NVLink | The driver's allocator |
+| Host memory | The system | The operating system, reached over PCIe or NVLink |
+
+The L1 array and shared memory are one physical structure with a configurable
+split. Raising the shared memory carve-out lowers the L1 available to the same
+SM, which is the trade `cudaFuncSetAttribute` with
+`cudaFuncAttributePreferredSharedMemoryCarveout` exposes.
+
+## Transaction sizes
+
+Device memory is not accessed a byte at a time. The hardware moves fixed
+quantities, and the ratio of bytes requested to bytes moved is the effective
+bandwidth.
+
+| Quantity | Size |
+| --- | --- |
+| Sector | 32 bytes. The unit of an L2 to device-memory transfer. |
+| Cache line | 128 bytes, four sectors. The unit of L1 tagging. |
+| Warp memory instruction | Serviced as the set of sectors the 32 lanes touch |
+
+A warp whose 32 lanes read consecutive 4-byte values covers 128 contiguous
+bytes, which is 4 sectors. The same warp reading with a 128-byte stride touches
+32 separate sectors and moves 1024 bytes to deliver 128, an eightfold loss with
+no change to the source apart from an index expression.
+
+## Shared memory banking
+
+Shared memory is divided into 32 banks of 4-byte words, addressed so that
+consecutive words fall in consecutive banks.
+
+| Access pattern across a warp | Cost |
+| --- | --- |
+| Each lane hits a different bank | One transaction |
+| Several lanes hit the same address in one bank | One transaction, broadcast |
+| Several lanes hit different addresses in one bank | Serialised, one transaction per distinct address |
+
+The last row is a bank conflict. A two-dimensional array of 32 floats per row,
+accessed column-wise, puts every lane in the same bank and serialises 32 ways.
+Padding the row to 33 floats shifts each row by one bank and removes the
+conflict, which is why padded strides appear throughout tiled kernels.
+
+## L2 residency control
+
+From Ampere onward, a portion of L2 can be reserved for a named address range
+so that repeatedly read data is not evicted by streaming traffic.
+
+| Control | Sets |
+| --- | --- |
+| `cudaDeviceSetLimit` with `cudaLimitPersistingL2CacheSize` | How much L2 is set aside |
+| `cudaStreamSetAttribute` with an access policy window | Which address range is treated as persisting, and the hit ratio to aim for |
+
+## ECC
+
+Data centre parts carry error-correcting codes on device memory. Single-bit
+errors are corrected and counted; double-bit errors are uncorrectable and
+raise an Xid.
+
+| Effect | Detail |
+| --- | --- |
+| Usable capacity | Reduced, where the ECC bits are stored in the same memory. HBM parts with in-band ECC lose part of the advertised capacity. |
+| Bandwidth | Slightly reduced, for the same reason |
+| Counters | Volatile and aggregate counts, per memory location, from `nvidia-smi -q -d ECC` |
+| Retirement | Pages accumulating errors are retired so allocations avoid them |
+
+`nvidia-smi -e 0` disables ECC and requires a GPU reset to take effect. Consumer
+parts have no ECC on device memory.
+
+## Worked example: one warp's load
+
+A kernel where each thread reads one `float` from a global array.
+
+```
+float v = data[base + threadIdx.x * STRIDE];
+```
+
+| STRIDE | Bytes requested by the warp | Sectors moved | Bytes moved | Efficiency |
+| --- | --- | --- | --- | --- |
+| 1 | 128 | 4 | 128 | 100% |
+| 2 | 128 | 8 | 256 | 50% |
+| 8 | 128 | 32 | 1024 | 12.5% |
+| 32 | 128 | 32 | 1024 | 12.5% |
+
+Tracing the first row through the hierarchy:
+
+1. The warp issues one load instruction. The memory subsystem inspects the 32
+   lane addresses and finds they cover 128 contiguous bytes.
+2. The request is split into 4 sector requests and presented to L1.
+3. On an L1 miss, the 4 sectors are requested from L2. L2 is device-wide, so a
+   sector another SM has already fetched is served from there.
+4. On an L2 miss, the sectors are requested from the memory controller owning
+   that address, and read from HBM.
+5. The line is filled into L1, the 32 lane values are extracted, and the warp
+   resumes.
+
+Step 4 costs several hundred cycles. During it the warp is set aside and the
+scheduler issues from other resident warps, which is why the loss in the last
+table row shows up as a bandwidth ceiling and not as a latency figure.
+
+## See also
+
+- [Memory model](/gspwn/knowledgebase/memory-model/)
+- [Chip organisation](/gspwn/knowledgebase/chip-organisation/)
+- [Interconnect](/gspwn/knowledgebase/interconnect/)

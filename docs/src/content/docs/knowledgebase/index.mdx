@@ -25,7 +25,7 @@ What NVIDIA ships, how the parts are named, and how the pieces are versioned.
 | [Product lines](/gspwn/knowledgebase/product-lines/) | Segments against architecture generations, part naming, form factors and memory | Built |
 | [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/) | The three version lanes, the couplings between them, and the compatibility mechanisms | Built |
 | [Installed stack](/gspwn/knowledgebase/installed-stack/) | Every artefact an installation leaves, where it lives, and the module dependency order | Built |
-| Telemetry and health | NVML, DCGM, Xid events, ECC counters, clocks and throttle reasons | Planned |
+| [Telemetry](/gspwn/knowledgebase/telemetry/) | NVML, DCGM, Xid events, ECC counters, clocks and throttle reasons | Built |
 
 ## Tier 2, sharing one GPU
 
@@ -33,9 +33,9 @@ How a single card is divided between processes and tenants.
 
 | Page | Contents | Status |
 | --- | --- | --- |
-| Container admission path | Image to runtime to hook to injected mounts, with the privilege level of each stage | Planned |
-| Orchestration | The device plugin and GPU operator components on one node | Planned |
-| Partitioning modes | Passthrough, time-slicing, MPS, MIG and vGPU, with the isolation line drawn in each | Planned |
+| [Container admission path](/gspwn/knowledgebase/container-admission/) | Image to runtime to hook to injected mounts, with the privilege level of each stage | Built |
+| [Orchestration](/gspwn/knowledgebase/orchestration/) | The device plugin protocol and the GPU Operator components on one node | Built |
+| [Partitioning modes](/gspwn/knowledgebase/partitioning/) | Passthrough, time-slicing, MPS, MIG and vGPU, with the isolation line drawn in each | Built |
 
 ## Tier 3, programming model
 
@@ -43,9 +43,9 @@ How work is expressed before any of it reaches the driver.
 
 | Page | Contents | Status |
 | --- | --- | --- |
-| Execution model | Grid, block, warp and thread, and the mapping onto streaming multiprocessors | Planned |
-| Memory model and unified memory | Address spaces by scope and latency, and the migration path | Planned |
-| Compilation pipeline | Source to PTX to SASS to fatbin, with the just-in-time branch | Planned |
+| [Execution model](/gspwn/knowledgebase/execution-model/) | Grid, block, warp and thread, and the mapping onto streaming multiprocessors | Built |
+| [Memory model](/gspwn/knowledgebase/memory-model/) | Address spaces by scope and latency, and the migration path | Built |
+| [Compilation pipeline](/gspwn/knowledgebase/compilation/) | Source to PTX to SASS to fatbin, with the just-in-time branch | Built |
 
 ## Tier 4, runtime and driver
 
@@ -53,10 +53,10 @@ How that work crosses into the kernel.
 
 | Page | Contents | Status |
 | --- | --- | --- |
-| API split and contexts | One call descending from the runtime to the driver API to the ioctl | Planned |
-| Resource Manager object model | The handle hierarchy, the class number space, and the ioctl families that act on it | Planned |
-| UVM subsystem | The fault path: touch, fault, migrate, replay | Planned |
-| GSP offload | Kernel-side RM against firmware-side RM, and the RPC queue between them | Planned |
+| [API split and contexts](/gspwn/knowledgebase/api-split/) | One call descending from the runtime to the driver API to the ioctl | Built |
+| [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/) | The handle hierarchy, the class number space, and the ioctl families that act on it | Built |
+| [UVM subsystem](/gspwn/knowledgebase/uvm/) | The fault path: touch, fault, migrate, replay | Built |
+| [GSP offload](/gspwn/knowledgebase/gsp-offload/) | The split between kernel-side and firmware-side RM, and the RPC queue between them | Built |
 
 ## Tier 5, device architecture
 
@@ -64,16 +64,16 @@ What executes the work once it arrives.
 
 | Page | Contents | Status |
 | --- | --- | --- |
-| Chip organisation | Graphics processing clusters down to one streaming multiprocessor | Planned |
-| Memory hierarchy | Capacity, bandwidth and latency from registers to device memory | Planned |
-| Scheduling and preemption | Channels, time-slice groups, runlists, and where preemption is possible | Planned |
-| Interconnect and apertures | The host address map, the BAR windows, the IOMMU, and NVLink topology | Planned |
+| [Chip organisation](/gspwn/knowledgebase/chip-organisation/) | Graphics processing clusters down to one streaming multiprocessor | Built |
+| [Memory hierarchy](/gspwn/knowledgebase/memory-hierarchy/) | Capacity, bandwidth and latency from registers to device memory | Built |
+| [Scheduling and preemption](/gspwn/knowledgebase/scheduling/) | Channels, time-slice groups, runlists, and where preemption is possible | Built |
+| [Interconnect](/gspwn/knowledgebase/interconnect/) | The BAR windows, the IOMMU, NVLink topology and the peer-to-peer paths | Built |
 
 ## Tier 6, firmware and boot
 
 | Page | Contents | Status |
 | --- | --- | --- |
-| Boot and firmware chain | VBIOS, the microcontrollers, signature gates, and the point at which the GSP is running | Planned |
+| [Boot and firmware chain](/gspwn/knowledgebase/boot-firmware/) | VBIOS, the microcontrollers, signature gates, and the point at which the GSP is running | Built |
 
 ## Sourcing
 
