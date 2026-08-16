@@ -5,10 +5,10 @@ description: "The containment chain from die to processing block, what one SM ho
 
 import ChipFloorplan from '../../../components/ChipFloorplan.astro';
 
-A GPU die is one unit repeated. The streaming multiprocessor is that unit, and
-almost every number quoted for a part is an SM count multiplied by something.
-The levels above the SM exist to feed it, and the levels below it exist to
-issue instructions to it.
+The streaming multiprocessor is the unit a GPU die repeats. Levels above the SM
+distribute work to it and levels below it issue instructions within it. A
+part's SM count and its compute capability together fix most of its compute
+behaviour, and `cudaGetDeviceProperties` reports both.
 
 <ChipFloorplan />
 
@@ -40,11 +40,11 @@ processing block's register file.
 | Tensor cores | 4, one per processing block | 4 |
 
 The caps interact, and occupancy is the minimum across all of them. The
-register file is the one that binds most often and least visibly: 65,536
-registers per SM divided by threads-per-block times registers-per-thread gives
-a block count that the launch configuration never states. `ptxas -v` reports the
-register count the compiler chose, and `cudaOccupancyMaxActiveBlocksPerMultiprocessor`
-computes the resulting figure.
+register file binds most often, and it does so without appearing anywhere in
+the source: 65,536 registers per SM divided by threads-per-block times
+registers-per-thread gives a block count the launch configuration never states.
+`ptxas -v` reports the register count the compiler chose, and
+`cudaOccupancyMaxActiveBlocksPerMultiprocessor` computes the resulting figure.
 
 ## Warps
 

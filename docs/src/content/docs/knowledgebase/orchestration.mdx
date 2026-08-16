@@ -4,8 +4,8 @@ description: "How Kubernetes discovers, advertises and allocates GPUs on a node,
 ---
 
 Kubernetes has no built-in knowledge of GPUs. A node advertises them as an
-extended resource, and the components that make that happen are installed on
-top. Everything below runs on one node.
+extended resource named `nvidia.com/gpu`, supplied by a device plugin installed
+on top of the cluster. Everything below runs on one node.
 
 ```mermaid
 flowchart TB
@@ -71,9 +71,8 @@ everything device-specific.
 | `Allocate` | Kubelet to plugin | The device ids the kubelet chose for one container |
 | `Allocate` response | Plugin to kubelet | Environment variables, device nodes and mounts to apply |
 
-The response to `Allocate` is where the two halves meet. The plugin returns
-`NVIDIA_VISIBLE_DEVICES` set to the chosen UUIDs, and the container admission
-path reads that variable when the container is created.
+The plugin returns `NVIDIA_VISIBLE_DEVICES` set to the chosen UUIDs. That
+variable is the entire interface between the plugin and the container toolkit.
 
 ## Resource names
 
@@ -115,8 +114,9 @@ resources:
    device nodes for that one UUID.
 8. The container starts and `nvidia-smi -L` inside it lists exactly one GPU.
 
-Steps 5 through 7 join orchestration to the container admission path. The
-plugin decides which GPU; the toolkit makes it visible.
+Steps 5 through 7 cross from orchestration into the admission path. A plugin
+reporting a UUID that does not match the device it allocated produces a
+container holding the wrong GPU, with no error raised at either layer.
 
 ## See also
 

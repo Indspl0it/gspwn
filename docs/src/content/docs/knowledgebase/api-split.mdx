@@ -4,8 +4,8 @@ description: "The runtime API against the driver API, what a context owns, how t
 ---
 
 Two APIs reach the GPU. Almost all CUDA code calls the higher one and never
-names the lower one, which is why the boundary between them is usually
-discovered during debugging.
+names the lower one, so the boundary appears in stack traces and linker errors
+before it appears in source.
 
 ```mermaid
 flowchart TB

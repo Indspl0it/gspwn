@@ -96,8 +96,8 @@ NVLink counts, a PCIe host bridge, a CPU socket traversal, or a shared switch.
 
 `nvidia-peermem.ko` exists to register GPU memory with the kernel's RDMA
 subsystem so that a NIC can DMA into it without a bounce through host memory.
-Its absence is the usual reason a working NVLink setup still moves data through
-the CPU when the network is involved.
+Without it, a NIC writing to GPU memory stages through a host bounce buffer,
+whatever NVLink topology the GPUs have between them.
 
 Virtualisation affects peer-to-peer over PCIe. With an IOMMU translating device
 addresses, one GPU's view of another's BAR may not be routable, and

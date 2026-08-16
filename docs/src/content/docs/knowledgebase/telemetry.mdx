@@ -3,10 +3,11 @@ title: Telemetry
 description: "Where GPU counters originate, what the utilisation figure actually measures, the throttle reasons, Xid and ECC reporting, and one low-throughput device diagnosed from counters alone."
 ---
 
-Every number a monitoring stack shows for a GPU originates in the same place
-and travels the same path. Knowing the path explains why some figures are exact,
-some are sampled, and one widely quoted figure means something other than its
-name suggests.
+GPU counters originate in hardware registers and reach every consumer through
+one interface. The Resource Manager reads the registers, NVML exposes them, and
+`nvidia-smi`, DCGM and the Prometheus exporters are clients of NVML. CUPTI
+reaches the performance monitors on a separate path and requires privileges
+NVML does not.
 
 ```mermaid
 flowchart LR
@@ -24,10 +25,9 @@ flowchart LR
   HW --> CUPTI
 ```
 
-NVML is the interface. `nvidia-smi` is a client of it, DCGM is a larger client
-of it, and every exporter worth using is a client of one of those two. CUPTI
-takes a separate path to the performance monitors and requires privileges that
-NVML does not.
+Field values are sampled on a driver-internal interval. A query returns the most
+recent sample, so two consecutive queries can return identical figures, and a
+spike shorter than the interval falls between samples and is never reported.
 
 ## Utilisation
 
@@ -152,9 +152,10 @@ An inference service reports a third of its expected throughput. The GPU shows
    power limit recovers clock headroom; the throughput ceiling requires larger
    batches or concurrent streams to fill the SMs.
 
-The step that mattered was step 4. Steps 1 through 3 are available from
-`nvidia-smi` alone and would have suggested a power problem as the whole
-answer.
+Steps 1 through 3 use `nvidia-smi` alone and identify the power cap. Step 4
+requires DCGM and identifies the occupancy ceiling, which accounts for the
+larger part of the shortfall. A diagnosis stopping at step 3 raises the power
+limit and recovers the clock, leaving most of the throughput gap in place.
 
 ## See also
 

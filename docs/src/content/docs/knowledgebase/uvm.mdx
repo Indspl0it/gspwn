@@ -4,9 +4,9 @@ description: "How nvidia-uvm.ko tracks managed memory, the two fault classes, th
 ---
 
 `nvidia-uvm.ko` is a separate driver from `nvidia.ko` with its own device node,
-its own ioctl numbering and its own view of memory. It exists to make one
-allocation addressable from the CPU and from every GPU in the system, and to
-move the pages so that whoever touches them finds them local.
+its own ioctl numbering and its own view of memory. It makes one allocation
+addressable from the CPU and from every GPU in the system, and migrates pages so
+that the processor accessing them holds them locally.
 
 ```mermaid
 flowchart TB
@@ -43,7 +43,7 @@ flowchart TB
 | VA range | One allocation | The range's policy: preferred location, accessed-by set, read-duplication |
 | VA block | 2 MB of a range | Per-page residency and mapping state for every processor |
 
-The VA block is where the work happens. It tracks, for each page it covers,
+The VA block carries the per-page state. It tracks, for each page it covers,
 which processors hold a copy and which have it mapped. A migration is a change
 to that state plus the page table updates that follow from it.
 
@@ -70,8 +70,8 @@ unusable.
 | Read mostly | `cudaMemAdvise` with `SetReadMostly` | Read-only copies are duplicated to each reader, with no migration |
 | Prefetch | `cudaMemPrefetchAsync` | An explicit bulk migration ahead of use |
 
-Read duplication is the one that changes the shape of the problem. Under first
-touch, two GPUs reading the same page in a loop migrate it back and forth. With
+Read duplication removes a migration loop. Under first touch, two GPUs reading
+the same page alternate ownership and migrate it on every access. With
 read-mostly set, each holds its own copy and neither faults.
 
 ## Thrashing

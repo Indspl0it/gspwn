@@ -3,10 +3,10 @@ title: Boot and firmware chain
 description: "What runs between power-on and a usable device, the microcontrollers inside a GPU, where signatures are checked, and one cold boot traced to the first CUDA call."
 ---
 
-A GPU runs code before the host driver exists. Several microcontrollers inside
-the package initialise the memory system, verify signatures and bring up the
-main engines, and every one of them runs firmware signed by NVIDIA. The kernel
-module joins the sequence late.
+Several microcontrollers inside a GPU package execute before the host driver
+loads. They train the memory system, verify signatures and bring up the main
+engines, and each runs firmware signed by NVIDIA. `nvidia.ko` enters the
+sequence only after PCIe enumeration has completed.
 
 ```mermaid
 flowchart TB
@@ -54,9 +54,9 @@ from the host is signed and verified on the GPU before it executes.
 | Kernel module | The host kernel's module signing policy, where enforced | Yes. The source is published. |
 | Userspace libraries | Nothing beyond ordinary file permissions | Yes |
 
-The boundary sits between the kernel module and the GSP firmware. Everything on
-the module's side is inspectable and modifiable; everything on the far side is
-signed, unpublished, and unavailable to any host tooling.
+The boundary sits between the kernel module and the GSP firmware. Code on the
+module's side is inspectable and modifiable. Code on the far side is signed and
+unpublished, and no host tool can read or alter it.
 
 ## VBIOS
 

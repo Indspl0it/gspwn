@@ -71,10 +71,29 @@ constructions the writing register bans.
 | Contrastive constructions | `rather than`, `instead of`, `not only X`, `X, not the Y,` |
 | Typographic tells | Em dashes, en dashes, curly quotes, emoji |
 | Register tells | Second person, filler openers, copula avoidance, marketing adjectives |
+| Meta-commentary | `it is worth noting`, `as discussed above`, `this page covers` |
+| Narrative framing | `the usual surprise`, `turns out`, `is the one that`, `means something other than` |
 
 The heading and column categories are the reason the check exists. Both scan as
 labels during a read-through, and one reference table carried the same
 question-shaped column header ten times before the check was written.
+
+## Limits of the check
+
+The tool matches fixed forms. The register's structural rules have no fixed
+form, and a page can pass every category above while breaking all of them:
+
+| Defect | Specimen |
+|---|---|
+| An opening that announces what the page will do | `Knowing the path explains why some figures are exact and some are sampled` |
+| A fact withheld to set it up | `one widely quoted figure means something other than its name suggests` |
+| A rule-of-three assembled for rhythm | Three clauses where the content has two or four |
+| A closing sentence that summarises without adding a fact | `The plugin decides which GPU; the toolkit makes it visible` |
+| An aphorism in place of a mechanism | `Performance work is the work of keeping data at the highest level it fits` |
+
+Every specimen is real, taken from a page that passed the check. A clean run
+means the mechanical categories are clear and nothing more. The structural
+rules still require a read.
 
 Code is skipped: fenced blocks, inline code spans, and the style and script
 blocks in a component. Everything in a code span is a reproduction, so a
