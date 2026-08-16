@@ -3,11 +3,11 @@ title: GSP offload
 description: "What moved from the host kernel onto the GPU System Processor, the RPC queue between them, what stayed behind, and one allocation traced across the boundary."
 ---
 
-The Resource Manager used to run entirely in the host kernel. Since the R515
-driver on Turing and later, most of it runs on a RISC-V processor inside the
-GPU called the GSP, and the kernel module became a client of it. The open
-kernel modules require this arrangement: they are the thin half of a driver
-whose thick half is signed firmware.
+The Resource Manager ran entirely in the host kernel before the R515 driver. On
+Turing and later from R515 onward, most of it runs on a RISC-V processor inside
+the GPU, the GPU System Processor, and the kernel module is a client of it. The
+open kernel modules require this arrangement: the code they omit runs as signed
+firmware on the GSP.
 
 ```mermaid
 sequenceDiagram
@@ -72,9 +72,9 @@ absolute.
 | Latency changed shape | Operations that were function calls became message round trips, so batching matters more |
 | The open modules became possible | Publishing the thin half discloses no hardware programming detail, because that detail moved into the firmware |
 
-The last row is the reason the open kernel modules exist at all, and it is
-worth stating plainly: `open-gpu-kernel-modules` is open because the part that
-NVIDIA does not publish moved to the other side of the queue.
+`open-gpu-kernel-modules` is publishable because the unpublished code moved to
+the far side of the RPC queue. The kernel-side module discloses no hardware
+programming detail, because it no longer contains any.
 
 ## Xid
 

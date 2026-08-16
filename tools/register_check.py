@@ -81,6 +81,21 @@ PATTERNS = [
                             r"\bdelve\b|\bshowcase\b|\bunderscore\b|"
                             r"\btestament\b"),
     ("emoji", "[\U0001F300-\U0001FAFF☀-➿]"),
+    # Text about the text. A page states its subject; it does not announce
+    # what it is about to state, or point back at what it already stated.
+    ("meta-commentary", r"\bit is worth (noting|stating|saying|mentioning)\b|"
+                       r"\bworth stating plainly\b|"
+                       r"\bas (noted|discussed|mentioned|stated) (above|earlier|below)\b|"
+                       r"\bin other words\b|\bthat said\b|"
+                       r"\bat the end of the day\b|"
+                       r"\bthis (page|section) (will|covers|explains)\b"),
+    # Withholding a fact to set it up, or narrating a reaction to it. Both
+    # read as a magazine feature. The fact goes in the sentence that
+    # introduces it.
+    ("narrative framing", r"\bthe (usual|real|actual) (surprise|catch|trick|question|answer|reason)\b|"
+                         r"\bturns out\b|\bis the one that\b|"
+                         r"\bmeans something other than\b|\bthe (trick|catch) is\b|"
+                         r"\bis where the .{0,30}happens\b"),
 ]
 
 QUESTION_START = re.compile(r"^(what|why|how|where|when|who|which)\b", re.I)

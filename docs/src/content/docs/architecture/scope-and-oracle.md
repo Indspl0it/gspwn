@@ -8,7 +8,7 @@ only when one of the four oracles below fires on it, and reports that condition
 only when every stage in the bounding chain carried it through.
 
 Scope exclusions decided by the attacker definition live in
-[Threat model](/gspwn/architecture/threat-model/). This page covers the limits
+[Threat model](/gspwn/architecture/threat-model/). The limits below are those
 imposed by the detection mechanism itself.
 
 ## Oracle inventory

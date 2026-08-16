@@ -49,7 +49,7 @@ flowchart TB
 | Produced by | `nvcc`, from NVVM IR | `ptxas`, from PTX |
 | Inspected with | Read directly, or `cuobjdump -ptx` | `cuobjdump -sass`, `nvdisasm` |
 
-PTX is not what the GPU runs. Every path ends in SASS; the question is only
+PTX is not what the GPU runs. Every path ends in SASS. The only variable is
 whether `ptxas` ran when the binary was built or when it was loaded.
 
 ## Compatibility rules
@@ -100,9 +100,9 @@ PTX to `libnvidia-ptxjitcompiler.so`. The result is cached.
 | Cost | A pause on first load, once per binary and architecture |
 | Failure mode | An older driver cannot compile PTX from a newer toolkit |
 
-The last row is the direction that does break. Forward compatibility is a
-property of PTX against newer hardware, and it does not make a newer toolkit's
-output loadable by an older driver.
+Forward compatibility is a property of PTX against newer hardware. It does not
+make a newer toolkit's output loadable by an older driver, which is the failure
+in the last row.
 
 ## Inspecting a binary
 

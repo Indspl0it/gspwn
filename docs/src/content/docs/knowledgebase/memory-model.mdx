@@ -7,8 +7,7 @@ import MemoryScopes from '../../../components/MemoryScopes.astro';
 
 CUDA exposes seven address spaces. They differ in how many threads can reach a
 value and in where that value physically sits, and those two properties are
-independent: one space has the narrowest possible scope and the slowest
-possible storage.
+independent of each other.
 
 <MemoryScopes />
 
@@ -24,11 +23,11 @@ possible storage.
 | Texture and surface | Every thread, read-only for texture | The allocation | Device memory, through a cache with filtering and addressing hardware |
 | Host | The host | The allocation | System memory |
 
-Local memory is the one that misleads. The name suggests on-chip storage next
-to the thread; it is device memory. Local is where the compiler spills
+Local memory is device memory. The name states the scope, one thread, and says
+nothing about where the storage sits. Local is where the compiler spills
 registers, and where a thread-local array lands when it is indexed dynamically
-so it cannot live in registers. A kernel that suddenly slows down after a small
-edit has usually started spilling.
+so it cannot live in registers. A kernel that slows down after a small edit has
+usually started spilling.
 
 Shared memory and L1 share one physical block of storage on the SM. On Volta
 and later the split is configurable, so a kernel using little shared memory

@@ -5,10 +5,11 @@ description: "Capacity against bandwidth from the register file to host memory, 
 
 import MemoryPyramid from '../../../components/MemoryPyramid.astro';
 
-Every level of GPU storage trades capacity against bandwidth in the same
-direction, and the trade is steep. The register file delivers thousands of
-times the bandwidth of HBM at a hundred-thousandth of the capacity. Performance
-work on a GPU is largely the work of keeping data at the highest level it fits.
+GPU storage is layered, and capacity and bandwidth move in opposite directions
+at every step. The register file delivers thousands of times the bandwidth of
+HBM at a hundred-thousandth of the capacity. Each level below the registers
+costs roughly an order of magnitude of bandwidth and buys roughly an order of
+magnitude of capacity.
 
 <MemoryPyramid />
 

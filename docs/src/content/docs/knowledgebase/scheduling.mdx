@@ -3,10 +3,10 @@ title: Scheduling and preemption
 description: "How work reaches an engine through channels and runlists, the three preemption granularities, what a context switch saves, and one time slice traced from expiry to resumption."
 ---
 
-Work reaches a GPU engine through a queue the process writes into directly.
-Nothing in the submission path is a system call, which is what makes launches
-cheap and also what makes the scheduler entirely a hardware and firmware
-concern.
+Work reaches a GPU engine through a queue the process writes into directly. The
+submission path contains no system call: the pushbuffer and the doorbell are
+memory the process has already mapped. Scheduling between queues is therefore
+performed by hardware and firmware, with no host involvement per launch.
 
 ```mermaid
 flowchart LR
@@ -50,7 +50,7 @@ runlist.
 | Priority | Channels carry a priority; higher levels are serviced first |
 | Yield | A group with no runnable work releases the remainder of its slice |
 
-Time slicing gives isolation in time and none in space. Two contexts sharing an
+Time slicing serialises contexts and partitions nothing. Two contexts sharing an
 engine never run simultaneously, and each sees the full device while it runs.
 The alternatives are covered in [partitioning modes](/gspwn/knowledgebase/partitioning/).
 

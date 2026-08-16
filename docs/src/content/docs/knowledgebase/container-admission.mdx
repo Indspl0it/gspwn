@@ -6,10 +6,10 @@ description: "The stages a GPU container passes through before its first process
 import AdmissionPath from '../../../components/AdmissionPath.astro';
 
 A container has no access to a GPU by default. Device nodes and driver
-libraries live on the host, and nothing puts them inside a namespace unless
-something is asked to. The NVIDIA Container Toolkit is what does the asking,
-and it does most of its work as root, in the window after the namespaces exist
-and before the container's own process starts.
+libraries live on the host and enter a mount namespace only when something
+bind-mounts them there. The NVIDIA Container Toolkit performs that injection,
+as root, in the window after the namespaces exist and before the container's
+own process starts.
 
 <AdmissionPath />
 

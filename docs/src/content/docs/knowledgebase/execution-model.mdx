@@ -7,7 +7,8 @@ import ExecutionModel from '../../../components/ExecutionModel.astro';
 
 A CUDA launch describes work as a grid of thread blocks. The hardware sees
 streaming multiprocessors, warp schedulers and lanes. Four correspondences
-connect the two, and most of the model's behaviour follows from the second one.
+connect the two. The block-to-SM correspondence determines occupancy, because a
+block's registers and shared memory are drawn from one SM's budget.
 
 <ExecutionModel />
 
@@ -111,8 +112,9 @@ A kernel over one million elements, with 256 threads per block.
    threads read consecutive addresses, so each warp's 32 reads fall in one or
    two 128-byte transactions.
 
-Step 5 is the usual surprise. Block slots, warp slots, register file and shared
-memory are four separate limits, and the smallest one decides.
+Block slots, warp slots, register file and shared memory are four separate
+limits and the smallest one decides. The block-slot figure is the one most
+often quoted for a part and the one least often binding.
 
 ## See also
 
