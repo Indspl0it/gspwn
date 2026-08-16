@@ -79,6 +79,12 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Knowledgebase',
+          items: [
+            { label: 'NVIDIA GPU stack', slug: 'knowledgebase/gpu-stack' },
+          ],
+        },
+        {
           label: 'Architecture',
           items: [
             { label: 'Overview', slug: 'architecture/overview' },

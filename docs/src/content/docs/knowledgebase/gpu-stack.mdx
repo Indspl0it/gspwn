@@ -1,0 +1,69 @@
+---
+title: NVIDIA GPU stack
+description: "The eight layers between application code and GPU silicon, where the fuzzer enters, and why the campaign needs real hardware."
+---
+
+import GpuStack from '../../../components/GpuStack.astro';
+
+A GPU workload passes through eight layers between application code and silicon.
+Track K enters at L4 and lands in L3 and L2. Everything above L4 is replaced by
+the fuzzer; everything below L2 carries no instrumentation and therefore
+supports no finding.
+
+<GpuStack />
+
+## Layer detail
+
+| Layer | Name and components | Executes as | Instrumentation |
+| --- | --- | --- | --- |
+| L7 | Application: PyTorch, TensorFlow, a CUDA binary, an inference server | Tenant, unprivileged | Out of scope |
+| L6 | CUDA runtime and math libraries: `libcudart.so`, cuBLAS, cuDNN, NCCL | Tenant, unprivileged | Out of scope |
+| L5 | CUDA driver API: `libcuda.so`, `libnvidia-ptxjitcompiler.so`. Closed source, and the component that normally builds the ioctl payloads | Tenant, unprivileged | Bypassed |
+| L4 | Device nodes and the ioctl ABI: `/dev/nvidiactl`, `/dev/nvidiaX`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` | Boundary. The tenant writes here | The source |
+| L3 | Kernel modules from `open-gpu-kernel-modules`: `nvidia.ko`, `nvidia-uvm.ko`, `nvidia-drm.ko` | Host kernel, ring 0 | KASAN and KCOV |
+| L2 | Resource Manager, kernel side: object and handle management, then an RPC client that forwards most work to the GSP | Host kernel, ring 0 | KASAN and KCOV |
+| L1 | GSP firmware: a signed RISC-V image running most of the Resource Manager on a microcontroller inside the GPU | GPU System Processor | None |
+| L0 | GPU silicon: SMs, GMMU, copy engines, memory controllers | Hardware | None |
+
+The device nodes at L4 are granted to a default container by the
+`compute,utility` capability set, so a tenant reaches them without any elevated
+privilege. That is the reachability the threat model assumes.
+
+## Instrumentation boundary
+
+The instrumentation boundary sits at L2. KCOV counts kernel-side reachable
+edges alone. A defect inside the GSP is invisible to it and surfaces only as a
+symptom such as an Xid. A campaign reports edge growth and a plateau estimate,
+and states no fraction of the driver as covered.
+
+## Emulation requirements
+
+Running Track K against an emulated GPU requires a model of three layers before
+a single ioctl reaches parsing code.
+
+| Layer | Emulator requirement | Consequence when absent |
+| --- | --- | --- |
+| L0 silicon | A model of the register aperture, BAR windows, doorbells and interrupt behaviour of a specific NVIDIA part. No public model exists. | Module load and device probe fail. |
+| L1 GSP | The firmware itself, plus its RPC protocol, since L2 is an RPC client and expects replies from a live GSP. | Almost every allocation and object call returns an error before reaching parsing code. |
+| L2 RM | Valid handles, object hierarchies and completion semantics for every request the fuzzer sends. | The campaign measures the error path. Edge growth stops near device init. |
+| L3 modules | Nothing. This layer is open source and builds with instrumentation. | Emulation still permits this layer. It is the current target. |
+
+Track U carries no such dependency. It executes no GPU code, so libFuzzer and
+AFL++ drive `libnvidia-container` and `nvidia-container-toolkit` on any Linux
+machine.
+
+## Rented instance properties
+
+| Property | Mechanism |
+| --- | --- |
+| Disposable machine | The campaign panics the kernel deliberately. The instance reboots, pstore and kdump preserve the evidence, and the pipeline resumes from `state/pipeline.json`. |
+| Correct attacker position | The same instance family, driver build and default `compute,utility` capability set a real tenant receives, so a reachability result transfers. |
+| Bounded blast radius | The GPU is passed through to one guest and the IOMMU fences its DMA to that guest. A panic reboots the guest. |
+| No provider boundary crossed | Everything under test runs inside the rented guest. Nothing in the design targets the hypervisor, and no finding claims to reach it. |
+
+## See also
+
+- [Threat model](/gspwn/architecture/threat-model/)
+- [Scope and oracle](/gspwn/architecture/scope-and-oracle/)
+- [Cloud deployment](/gspwn/architecture/cloud-deployment/)
+- [Requirements](/gspwn/getting-started/requirements/)
