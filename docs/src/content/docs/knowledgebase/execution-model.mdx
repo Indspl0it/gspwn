@@ -22,8 +22,8 @@ block's registers and shared memory are drawn from one SM's budget.
 | Thread | One lane | Each thread has its own registers and, since Volta, its own program counter |
 
 Blocks are scheduled onto SMs in no defined order and cannot communicate with
-each other during a launch. That is what lets one binary run on a part with 20
-SMs and on a part with 132: the runtime hands blocks to whatever SMs exist.
+each other during a launch. One binary therefore runs on a part with 20 SMs and
+on a part with 132: the runtime hands blocks to whatever SMs exist.
 
 Hopper adds a level between grid and block. A thread block cluster groups
 blocks that are guaranteed to be resident on SMs within one GPC, which lets
@@ -72,9 +72,9 @@ The binding limit is whichever runs out first. A kernel using 64 registers per
 thread on a part allowing 65536 registers per SM fits 1024 threads, which is
 32 warps, whatever the other limits allow.
 
-Full occupancy is not the goal. A kernel with enough independent work in flight
-per thread reaches peak throughput at lower occupancy, and spending registers
-to get there is often the better trade.
+Peak throughput does not require full occupancy. A kernel with enough
+independent work in flight per thread reaches it at lower occupancy, and
+spending registers to reach that state can raise throughput.
 
 ## Launch configuration
 
@@ -113,8 +113,8 @@ A kernel over one million elements, with 256 threads per block.
    two 128-byte transactions.
 
 Block slots, warp slots, register file and shared memory are four separate
-limits and the smallest one decides. The block-slot figure is the one most
-often quoted for a part and the one least often binding.
+limits and the smallest one decides. The block-slot figure is quoted most often
+for a part and binds least often.
 
 ## See also
 

@@ -41,7 +41,7 @@ spike shorter than the interval falls between samples and is never reported.
 `utilization.gpu` at 100% establishes that a kernel was always running. It
 establishes nothing about how much of the device that kernel used. A kernel
 occupying one SM out of 108 for the whole period reports the same 100% as one
-saturating the part. The DCGM fields are the ones to read for that question:
+saturating the part. DCGM reports the occupancy directly, through
 `DCGM_FI_PROF_SM_ACTIVE`, `DCGM_FI_PROF_SM_OCCUPANCY` and
 `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`.
 

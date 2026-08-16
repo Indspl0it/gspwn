@@ -71,8 +71,8 @@ faulting processor.
 | `malloc` | Pageable host memory. A copy to the device stages through a pinned buffer first. |
 
 `cudaMemPrefetchAsync` moves pages ahead of use, and `cudaMemAdvise` marks a
-range as mostly-read or preferred-location. Both exist to avoid the fault
-storm that a naive first-touch pattern produces.
+range as mostly-read or preferred-location. Both exist to avoid the repeated
+faulting that first-touch access produces.
 
 ## The fault path
 

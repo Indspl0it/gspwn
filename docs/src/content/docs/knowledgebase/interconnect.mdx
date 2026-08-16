@@ -47,21 +47,21 @@ binds to it as an ordinary PCI driver.
 | BAR1 | The device memory aperture the host uses to reach GPU memory directly |
 | BAR3 | A further aperture, used for host access paths that vary by architecture |
 
-BAR1 is the constraint behind several failures. It is sized at boot, and where
-it is smaller than device memory the host can only see a window at a time. This
-is what resizable BAR addresses: with it enabled and supported by the platform
-firmware, BAR1 covers the whole of device memory and host mappings need no
-window movement.
+BAR1 is sized at boot by platform firmware. Where it is smaller than device
+memory, the host sees one window at a time and the driver moves that window to
+reach the rest. Resizable BAR removes the limit: with it enabled and supported
+by the platform firmware, BAR1 covers the whole of device memory and host
+mappings need no window movement.
 
-| Reported by | Command |
+| Quantity | Command |
 | --- | --- |
 | Device and vendor IDs, link speed and width | `lspci -vvv -s <bdf>` |
 | BAR sizes as assigned | `lspci -vvv` resource lines, or `/sys/bus/pci/devices/<bdf>/resource` |
 | Current and maximum link generation | `nvidia-smi -q -d PCI` |
 
-A GPU running at a lower link width than the slot supports is usually a
-platform or seating problem, and `nvidia-smi -q -d PCI` names both the current
-and the maximum.
+A GPU negotiating a lower link width than the slot supports indicates a
+platform configuration or a physical seating fault. `nvidia-smi -q -d PCI`
+names both the current value and the maximum.
 
 ## NVLink
 
@@ -79,8 +79,8 @@ aggregate against a unidirectional PCIe figure overstates the ratio.
 
 NVSwitch is a crossbar. Without it, GPUs are connected in a mesh and the
 available bandwidth between two GPUs depends on how many links directly join
-them. With it, every GPU reaches every other at full link bandwidth, which is
-what makes all-to-all collectives uniform on an 8-GPU baseboard.
+them. With it, every GPU reaches every other at full link bandwidth, so
+all-to-all collectives run at a uniform rate on an 8-GPU baseboard.
 
 `nvidia-smi topo -m` prints the matrix. The legend names each pair's connection:
 NVLink counts, a PCIe host bridge, a CPU socket traversal, or a shared switch.
@@ -109,7 +109,7 @@ support it.
 On Grace Hopper and Grace Blackwell systems the CPU and GPU are joined by
 NVLink-C2C, which is cache coherent.
 
-| Consequence | Detail |
+| Consequence | Mechanism |
 | --- | --- |
 | One address space | The GPU walks the CPU's page tables through address translation services |
 | No migration for correctness | A page is reachable from either side wherever it is resident |
@@ -126,8 +126,8 @@ Copying 1 GB from GPU 0 to GPU 1.
 | PCIe peer-to-peer | No NVLink, `cudaDeviceCanAccessPeer` true | Copy engine issues PCIe writes to GPU 1's BAR1 window through the host bridge |
 | Staged through host | Peer access unavailable | Device to host copy into a bounce buffer, then host to device copy, so the data crosses PCIe twice |
 
-Tracing the third route, which is what an application sees when peer access
-silently fails:
+Tracing the third route, which an application takes when peer access is
+unavailable:
 
 1. `cudaMemcpyPeer` finds peer access disabled between the two devices.
 2. The runtime allocates or reuses a pinned host staging buffer.
@@ -138,8 +138,8 @@ silently fails:
    device memory.
 6. The call returns.
 
-The transfer crossed PCIe twice, waited once in the middle, and consumed host
-memory bandwidth throughout. Enabling peer access with
+The transfer crossed PCIe twice and consumed host memory bandwidth for both
+crossings, with a synchronisation point between them. Enabling peer access with
 `cudaDeviceEnablePeerAccess` removes steps 2 through 4 entirely, and the same
 1 GB moves once. `nvidia-smi topo -m` establishes in advance which of the three
 routes a given pair will take.

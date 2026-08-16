@@ -60,14 +60,14 @@ report anything usable, and a driver upgrade has to drain GPU pods first.
 
 ## The device plugin protocol
 
-The kubelet knows nothing about GPUs. It knows how to talk to a plugin over a
+The kubelet contains no GPU-specific code. It communicates with a plugin over a
 Unix socket in `/var/lib/kubelet/device-plugins/`, and the plugin supplies
 everything device-specific.
 
 | Call | Direction | Carries |
 | --- | --- | --- |
 | `Register` | Plugin to kubelet | The resource name, `nvidia.com/gpu`, and the plugin's socket |
-| `ListAndWatch` | Plugin to kubelet, streaming | The current device id list and each device's health. The stream is how a device going unhealthy is reported. |
+| `ListAndWatch` | Plugin to kubelet, streaming | The current device id list and each device's health. A device going unhealthy is reported on this stream. |
 | `Allocate` | Kubelet to plugin | The device ids the kubelet chose for one container |
 | `Allocate` response | Plugin to kubelet | Environment variables, device nodes and mounts to apply |
 

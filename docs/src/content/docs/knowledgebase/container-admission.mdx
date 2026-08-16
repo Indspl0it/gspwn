@@ -26,8 +26,8 @@ own process starts.
 
 Stage 3 is a shim around `runc`. It reads the request, rewrites the OCI
 specification to add a prestart hook, and hands the modified specification to
-the real runtime. Stage 5 is where files move: it resolves every driver library
-by name, follows the ldcache, and bind-mounts the results plus the device nodes
+the real runtime. Stage 5 moves the files: it resolves every driver library by
+name, follows the ldcache, and bind-mounts the results plus the device nodes
 into the container's mount namespace.
 
 ## Capabilities

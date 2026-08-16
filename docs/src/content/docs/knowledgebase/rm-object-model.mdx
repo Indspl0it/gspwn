@@ -47,24 +47,23 @@ against the client that owns it. Handles are not global: the same numeric value
 in two clients names two different objects, and a handle from one client
 presented by another is rejected.
 
-Destruction is recursive. Freeing the client frees everything under it, which
-is what makes process exit clean up the GPU without cooperation from the
-process.
+Destruction is recursive. Freeing the client frees everything under it, so
+process exit cleans up the GPU without cooperation from the process.
 
 ## The escapes
 
 The character devices under `/dev` accept a small set of ioctl commands. Their
 numbers are defined in `kernel-open/common/inc/nv-ioctl-numbers.h`.
 
-| Escape | Does |
+| Escape | Operation |
 | --- | --- |
 | Allocate | Creates an object of a given class under a given parent, returning a handle |
 | Free | Destroys an object and everything under it |
 | Control | Invokes a numbered command on an object. This is the large surface. |
 | Map memory | Maps an allocation into a process or a device address space |
 
-Control commands are where most of the interface lives. Each is a number
-selecting an operation on a class, with its own parameter structure. The
+Control commands carry most of the interface. Each is a number selecting an
+operation on a class, with its own parameter structure. The
 numbering is organised per class under
 `src/common/sdk/nvidia/inc/ctrl/`, and the class numbers themselves under
 `src/common/sdk/nvidia/inc/class/`.
@@ -92,7 +91,7 @@ Channel and engine classes carry the architecture in their names, because the
 command formats differ per generation. A driver supporting several generations
 carries several channel classes and picks the one matching the part.
 
-## UVM has its own interface
+## The UVM interface
 
 `nvidia-uvm.ko` does not use the escapes above. It exposes its own ioctl
 numbering through `/dev/nvidia-uvm`, defined in
@@ -120,8 +119,8 @@ reading the RM interface and assuming UVM follows it will be wrong.
 
 Every step from 1 to 6 is an allocate escape. Step 4 also uses map memory.
 Steps 7 and 8 involve no ioctl at all: the pushbuffer and the doorbell are
-memory the process already has mapped, which is why submission is cheap and
-setup is not.
+memory the process already has mapped. Submission therefore costs no system
+call, while setup costs one per object created.
 
 ## See also
 

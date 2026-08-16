@@ -59,10 +59,10 @@ Block sizes that are not multiples of 32 waste lanes for that reason.
 | Reconvergence | Independent thread scheduling, from Volta onward, gives each thread its own program counter, so divergent threads can make forward progress independently |
 | Latency hiding | A stalled warp is set aside and another resident warp issues in its place. This is why occupancy matters. |
 
-Independent thread scheduling is the change that broke implicit warp
-synchronisation. Code written before Volta that relied on lockstep execution
-within a warp requires `__syncwarp` to remain correct, which is what the
-`_sync` suffixed intrinsics exist for.
+Independent thread scheduling broke implicit warp synchronisation. Code written
+before Volta that relied on lockstep execution
+within a warp requires `__syncwarp` to remain correct, and the `_sync` suffixed
+intrinsics exist for that purpose.
 
 ## Variation by architecture
 
@@ -87,7 +87,7 @@ why the SM count on a product page is smaller than the count in the
 architecture whitepaper, and why two SKUs from one die differ in SM count,
 memory bus width and clock.
 
-| Reported by | Query |
+| Quantity | Query |
 | --- | --- |
 | SM count | `cudaDeviceProp.multiProcessorCount` |
 | Compute capability | `cudaDeviceProp.major` and `.minor` |
