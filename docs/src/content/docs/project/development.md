@@ -5,13 +5,14 @@ description: The local checks, the Windows path through WSL, and the CI steps.
 
 Every check runs offline: no GPU, no kernel build, no root, no network.
 
-## The four checks
+## The five checks
 
 ```
 python3 tools/selftest.py
 python3 -m pyflakes tools/*.py
 bash -n tools/build_kernel.sh
 python3 tools/gspwn_config.py
+python3 tools/register_check.py
 ```
 
 | Check | Catches | Expected result |
@@ -20,6 +21,7 @@ python3 tools/gspwn_config.py
 | `pyflakes` | Undefined names, bad imports, unused imports left by a deletion | No output, exit status 0 |
 | `bash -n` | Syntax errors in the build script, which has no offline test | No output, exit status 0 |
 | `gspwn_config.py` | A shipped configuration that no longer validates | The effective configuration and the stopping rules, exit status 0 |
+| `register_check.py` | Documentation prose that breaks the writing register | A file and hit count, exit status 0 |
 
 `AGENTS.md` requires the first of these after any change to the tools, before
 their output is trusted.
@@ -54,6 +56,49 @@ in the documentation that names a flag no longer accepted fails the build.
 
 ```
 checked 42 subcommands, 84 flag uses
+```
+
+## The writing-register check
+
+`tools/register_check.py` reads every page under `docs/src/content/docs/` and
+every component under `docs/src/components/`, and fails the build on the
+constructions the writing register bans.
+
+| Category | Examples |
+|---|---|
+| Question-shaped headings | `## What the build phase pins`, `## Where to go next` |
+| Question-shaped table columns | `| Key | What it controls |`, `| Change | Why it is refused |` |
+| Contrastive constructions | `rather than`, `instead of`, `not only X`, `X, not the Y,` |
+| Typographic tells | Em dashes, en dashes, curly quotes, emoji |
+| Register tells | Second person, filler openers, copula avoidance, marketing adjectives |
+
+The heading and column categories are the reason the check exists. Both scan as
+labels during a read-through, and one reference table carried the same
+question-shaped column header ten times before the check was written.
+
+Code is skipped: fenced blocks, inline code spans, and the style and script
+blocks in a component. Everything in a code span is a reproduction, so a
+message the tool prints keeps whatever wording the tool uses. Skipped regions
+are blanked in place so the reported line numbers still match the file.
+
+A banned construction inside quoted tool output is a defect in the tool. Editing
+the page there would make the documentation disagree with what the program
+prints.
+
+Exemptions are listed in `EXEMPT` at the top of the tool, each with its reason.
+An exemption names a file and one category, so the rest of the categories still
+apply to that file.
+
+| Exempt | Category | Reason |
+|---|---|---|
+| `project/faq.md` | All | A question-and-answer page. Questions are its structure. |
+| `project/changelog.md` | Contrastive | Entries quote commit subjects as running text |
+| `components/ThemeProvider.astro` | Contrastive | A source comment, not prose for a reader |
+| `knowledgebase/gsp-offload.mdx` | Marketing adjective | `robust channel` is NVIDIA's name for the mechanism |
+| `knowledgebase/scheduling.mdx` | Marketing adjective | The same term |
+
+```
+register_check: 116 file(s), 0 hit(s)
 ```
 
 ## Working on Windows
@@ -149,6 +194,7 @@ request:
 | Offline self-test | `python3 tools/selftest.py` |
 | Lint | `python3 -m pyflakes tools/*.py` |
 | Shell syntax | `bash -n tools/build_kernel.sh` |
+| Documentation writing register | `python3 tools/register_check.py` |
 | Configuration | `python3 tools/gspwn_config.py` |
 | Prompt consistency | The `--help` cross-check above |
 

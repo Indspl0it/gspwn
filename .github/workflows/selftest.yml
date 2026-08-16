@@ -37,6 +37,12 @@ jobs:
       - name: Shipped config is valid
         run: python3 tools/gspwn_config.py
 
+      - name: Documentation writing register
+        # Question-shaped headings and table column headers scan as labels, so
+        # a read-through does not catch them. One reference table carried the
+        # same one ten times before this check existed.
+        run: python3 tools/register_check.py
+
       - name: Prompts reference commands that exist
         # The agent prompts are the interface between the orchestrator and the
         # tools. A renamed subcommand that no prompt was updated for is a

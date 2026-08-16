@@ -1,0 +1,122 @@
+---
+title: Execution model
+description: "Grid, block, warp and thread, what each maps onto in hardware, how divergence and occupancy follow from that mapping, and a launch traced onto an SM."
+---
+
+import ExecutionModel from '../../../components/ExecutionModel.astro';
+
+A CUDA launch describes work as a grid of thread blocks. The hardware sees
+streaming multiprocessors, warp schedulers and lanes. Four correspondences
+connect the two, and most of the model's behaviour follows from the second one.
+
+<ExecutionModel />
+
+## The mapping
+
+| Software | Hardware | Consequence |
+| --- | --- | --- |
+| Grid | One device | A launch targets one GPU. Multi-GPU work is several launches. |
+| Thread block | One SM | A block's registers and shared memory come from one SM's budget, so a block asking for more than an SM has never launches |
+| Warp | One warp scheduler issue slot | 32 threads share an instruction stream. Divergence within a warp costs execution time. |
+| Thread | One lane | Each thread has its own registers and, since Volta, its own program counter |
+
+Blocks are scheduled onto SMs in no defined order and cannot communicate with
+each other during a launch. That is what lets one binary run on a part with 20
+SMs and on a part with 132: the runtime hands blocks to whatever SMs exist.
+
+Hopper adds a level between grid and block. A thread block cluster groups
+blocks that are guaranteed to be resident on SMs within one GPC, which lets
+them address each other's shared memory. It is the first mechanism that lets
+blocks cooperate.
+
+## Warps and divergence
+
+A warp is 32 threads. The scheduler issues one instruction for the warp, and
+every lane executes it.
+
+When threads in one warp take different branches, the warp executes both paths
+and masks off the lanes that are inactive for each. The cost is the sum of the
+path lengths.
+
+```
+if (threadIdx.x % 2 == 0) { A(); } else { B(); }
+```
+
+Every warp here runs `A` with 16 lanes masked off, then `B` with the other 16
+masked off. Restructuring so that the branch is taken at warp granularity, for
+example on `threadIdx.x / 32`, lets each warp take one path and skip the other
+entirely.
+
+Volta changed what happens after divergence. Before it, a warp had a single
+program counter and threads were forced back into lockstep at the reconvergence
+point. Volta gave each thread its own program counter, so diverged threads can
+make independent progress. That makes some previously deadlocking patterns work
+and makes code that assumed implicit warp-synchronous behaviour unsafe.
+`__syncwarp()` is the explicit form that replaced the assumption.
+
+## Occupancy
+
+Occupancy is resident warps per SM against the architectural maximum. It is a
+latency-hiding measure: while one warp waits on memory, the scheduler issues
+from another.
+
+| Limit | Set by | Effect when it binds |
+| --- | --- | --- |
+| Registers per thread | The compiler, capped by `-maxrregcount` or `__launch_bounds__` | Fewer blocks fit per SM |
+| Shared memory per block | The kernel's declared shared memory | Fewer blocks fit per SM |
+| Threads per block | The launch configuration, at most 1024 | A block granularity that leaves warp slots unused |
+| Blocks per SM | The architecture | An upper bound reached with small blocks |
+
+The binding limit is whichever runs out first. A kernel using 64 registers per
+thread on a part allowing 65536 registers per SM fits 1024 threads, which is
+32 warps, whatever the other limits allow.
+
+Full occupancy is not the goal. A kernel with enough independent work in flight
+per thread reaches peak throughput at lower occupancy, and spending registers
+to get there is often the better trade.
+
+## Launch configuration
+
+```
+kernel<<<gridDim, blockDim, sharedBytes, stream>>>(args);
+```
+
+| Parameter | States |
+| --- | --- |
+| `gridDim` | Blocks in the grid, up to three dimensions |
+| `blockDim` | Threads per block, up to three dimensions, at most 1024 in total |
+| `sharedBytes` | Dynamic shared memory per block, added to what the kernel declares statically |
+| `stream` | The stream the launch is ordered in. Work in one stream is ordered; work in different streams may overlap. |
+
+Block dimensions that are not a multiple of 32 waste lanes. A block of 100
+threads occupies four warps, and the last one runs with 28 of its 32 lanes
+masked off for the kernel's whole duration.
+
+## Worked example: 1,000,000 elements
+
+A kernel over one million elements, with 256 threads per block.
+
+1. `blockDim.x = 256` is eight whole warps, so no lanes are wasted inside a
+   block.
+2. `gridDim.x = (1000000 + 255) / 256 = 3907` blocks. The last block covers
+   elements 999,936 through 1,000,191, which runs past the array.
+3. The kernel guards the tail: `if (i < n)`. Threads 64 through 255 of the last
+   block fail the test and do nothing. Only the last block diverges.
+4. Each block is handed to one SM. On a part with 108 SMs and a limit of 16
+   blocks resident per SM, at most 1728 of the 3907 blocks are resident at
+   once, and the rest launch as earlier ones retire.
+5. Each SM holds 8 warps per block, so 16 resident blocks is 128 warps, above
+   the 64-warp maximum. Warp slots bind before block slots: 8 blocks fit, not
+   16.
+6. Global index: `i = blockIdx.x * blockDim.x + threadIdx.x`. Consecutive
+   threads read consecutive addresses, so each warp's 32 reads fall in one or
+   two 128-byte transactions.
+
+Step 5 is the usual surprise. Block slots, warp slots, register file and shared
+memory are four separate limits, and the smallest one decides.
+
+## See also
+
+- [Memory model](/gspwn/knowledgebase/memory-model/)
+- [Compilation pipeline](/gspwn/knowledgebase/compilation/)
+- [Product lines](/gspwn/knowledgebase/product-lines/)

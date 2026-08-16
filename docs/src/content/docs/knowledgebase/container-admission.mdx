@@ -1,0 +1,105 @@
+---
+title: Container admission path
+description: "The stages a GPU container passes through before its first process runs, the privilege each stage holds, and the two mechanisms that inject driver libraries and device nodes."
+---
+
+import AdmissionPath from '../../../components/AdmissionPath.astro';
+
+A container has no access to a GPU by default. Device nodes and driver
+libraries live on the host, and nothing puts them inside a namespace unless
+something is asked to. The NVIDIA Container Toolkit is what does the asking,
+and it does most of its work as root, in the window after the namespaces exist
+and before the container's own process starts.
+
+<AdmissionPath />
+
+## Stages
+
+| Stage | Component | Runs as | Input it parses |
+| --- | --- | --- | --- |
+| 1 | The image and its OCI configuration | Supplied by the caller | Image labels, entrypoint, environment |
+| 2 | `containerd` or `dockerd` | root | The create request |
+| 3 | `nvidia-container-runtime` | root | `NVIDIA_*` environment variables, the OCI spec |
+| 4 | `nvidia-container-runtime-hook` | root | The container's config and root filesystem path |
+| 5 | `libnvidia-container` through `nvidia-container-cli` | root, in the target namespaces | The driver installation, the ldcache, the requested capabilities |
+| 6 | The image entrypoint | The image user | Nothing from the toolkit |
+
+Stage 3 is a shim around `runc`. It reads the request, rewrites the OCI
+specification to add a prestart hook, and hands the modified specification to
+the real runtime. Stage 5 is where files move: it resolves every driver library
+by name, follows the ldcache, and bind-mounts the results plus the device nodes
+into the container's mount namespace.
+
+## Capabilities
+
+`NVIDIA_DRIVER_CAPABILITIES` selects which groups of libraries and nodes are
+injected. The default is `compute,utility`.
+
+| Capability | Injects |
+| --- | --- |
+| `compute` | CUDA and OpenCL support: `libcuda.so`, `/dev/nvidiactl`, `/dev/nvidiaN`, `/dev/nvidia-uvm` |
+| `utility` | NVML and its tools: `libnvidia-ml.so`, `nvidia-smi` |
+| `graphics` | OpenGL and Vulkan libraries |
+| `video` | NVENC and NVDEC: `libnvidia-encode.so`, `libnvcuvid.so` |
+| `display` | X11 and mode setting support, including `/dev/nvidia-modeset` |
+| `compat32` | The 32-bit build of the above |
+| `all` | Every capability the driver installation provides |
+
+A container asking for nothing gets `compute,utility`. That set is why
+`/dev/nvidia-uvm` is reachable from an ordinary GPU container and
+`/dev/nvidia-modeset` is not.
+
+## Environment variables
+
+| Variable | Selects |
+| --- | --- |
+| `NVIDIA_VISIBLE_DEVICES` | Which GPUs are exposed: `all`, an index list, a UUID list, or `void` for none |
+| `NVIDIA_DRIVER_CAPABILITIES` | The capability set above |
+| `NVIDIA_REQUIRE_CUDA` | A version constraint the host driver must satisfy, checked before the container starts |
+| `NVIDIA_DISABLE_REQUIRE` | Skips the constraint check |
+
+These are read from the image as well as from the run command. An image can
+carry `NVIDIA_VISIBLE_DEVICES=all` in its own environment, so a caller who
+passes no GPU flag can still get every GPU on the host if the runtime is
+configured to honour image-supplied values.
+
+## Two injection mechanisms
+
+| Mechanism | Device description | Applied by |
+| --- | --- | --- |
+| Legacy hook | Implicit. The hook resolves the driver installation at container creation time. | `nvidia-container-runtime-hook` calling `nvidia-container-cli` |
+| CDI | Explicit. A YAML or JSON specification lists every device node, mount and hook. | Any CDI-aware runtime, with no NVIDIA-specific shim |
+
+CDI is the Container Device Interface, a runtime-agnostic specification.
+`nvidia-ctk cdi generate` writes a file under `/etc/cdi/` describing each
+device as a named entity such as `nvidia.com/gpu=0`, and a CDI-aware runtime
+applies it directly. The resolution work moves from container creation time to
+specification generation time.
+
+## Worked example: docker run --gpus all
+
+1. The caller runs `docker run --gpus all <image>`. Docker translates `--gpus`
+   into a device request and calls `nvidia-container-runtime`.
+2. The shim reads `NVIDIA_VISIBLE_DEVICES` and `NVIDIA_DRIVER_CAPABILITIES`,
+   taking values from the run command first and from the image environment
+   otherwise. Neither is set here, so it resolves to every GPU and the
+   `compute,utility` capability set.
+3. The shim inserts a `prestart` hook into the OCI specification and calls
+   `runc create` with it.
+4. `runc` sets up the namespaces and the root filesystem, then runs the hook
+   before executing the entrypoint.
+5. The hook calls `nvidia-container-cli configure`, which enters the
+   container's mount namespace and bind-mounts `libcuda.so`,
+   `libnvidia-ml.so`, `nvidia-smi` and the `compute,utility` device nodes into
+   it, then updates the container's ldcache.
+6. `runc start` executes the entrypoint. The process sees `/dev/nvidiactl` and
+   a `libcuda.so` matching the host driver, and can open both.
+
+Steps 3 through 5 all run as root on the host. Step 6 is the first one that
+runs as the image's user.
+
+## See also
+
+- [Partitioning modes](/gspwn/knowledgebase/partitioning/)
+- [Orchestration](/gspwn/knowledgebase/orchestration/)
+- [Installed stack](/gspwn/knowledgebase/installed-stack/)

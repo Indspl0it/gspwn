@@ -1,0 +1,124 @@
+---
+title: Partitioning modes
+description: "The five ways one GPU is shared between tenants, where isolation falls in each, and how MIG profile names decode."
+---
+
+import PartitionModes from '../../../components/PartitionModes.astro';
+
+Five mechanisms divide one GPU between consumers. They differ in where the
+boundary sits, which decides what one consumer can observe or disturb about
+another.
+
+<PartitionModes />
+
+## Comparison
+
+| Mode | Boundary | Memory | Fault containment | Scheduling | Requires |
+| --- | --- | --- | --- | --- | --- |
+| Passthrough | PCIe function assigned to one guest, DMA fenced by the IOMMU | The whole frame buffer | A guest reset affects that guest | The guest owns the device | IOMMU, a hypervisor |
+| Time-slicing | Context switch in the GPU scheduler | Per-context virtual address spaces | A fatal fault can reset the device for every context | Round-robin between contexts | Nothing. It is the default. |
+| MPS | None. Clients share one context. | One address space shared by all clients | A fault kills the shared context, so every client dies | Concurrent submission into one context | The MPS control daemon |
+| MIG | SMs, L2 cache slices and memory controllers assigned to an instance | A fixed share of the frame buffer, physically partitioned | A fault stays inside its instance | Each instance schedules independently | A100 or later data centre part |
+| vGPU | Host-side mediation of register access | A fixed share per guest | A guest reset affects that guest | The host manager schedules guests | Licensed vGPU software, a supported part |
+
+Time-slicing raises throughput on an idle GPU and provides no isolation
+guarantee. MPS raises throughput further by removing the context switch, and
+provides less. MIG is the only mode where the division is made in silicon.
+
+## Time-slicing
+
+The default. Multiple CUDA contexts exist on one GPU and the scheduler switches
+between them. Each context has its own virtual address space, so one cannot
+address another's memory. What it shares is the whole machine: every SM, the
+full frame buffer bandwidth, and the failure domain.
+
+Compute preemption arrived with Pascal and made the switch finer. Before it, a
+long-running kernel held the GPU until it finished. With it, the scheduler can
+preempt at instruction granularity, so one tenant's long kernel no longer
+stalls another's short one indefinitely.
+
+## MPS
+
+The Multi-Process Service replaces per-process contexts with one shared
+context, fronted by a control daemon. Work from several processes is submitted
+into that single context and runs concurrently without a switch between them.
+
+| Property | Consequence |
+| --- | --- |
+| One address space | A client can address another client's allocations |
+| One failure domain | A fatal fault ends the shared context and every client with it |
+| No switch cost | Small kernels from several processes overlap efficiently |
+
+MPS suits trusted co-tenants such as the ranks of one MPI job. It is not a
+tenancy boundary.
+
+## MIG
+
+Multi-Instance GPU divides the hardware. An A100 exposes seven compute slices
+and eight memory slices, and a partition takes a whole number of each.
+
+The split is two levels. A GPU Instance holds memory slices, SM slices and its
+own L2 and memory controllers. Inside a GPU Instance, one or more Compute
+Instances divide the SMs further, sharing that instance's memory.
+
+| Level | Owns | Divides |
+| --- | --- | --- |
+| GPU Instance | Memory slices, SM slices, L2 slices, memory controllers | The physical GPU |
+| Compute Instance | SM slices within its GPU Instance | One GPU Instance |
+
+### Profile names
+
+A profile name states the size of an instance.
+
+| Profile | GPU slices | Frame buffer | Instances that fit on an A100 40GB |
+| --- | --- | --- | --- |
+| `1g.5gb` | 1 | 5 GB | 7 |
+| `2g.10gb` | 2 | 10 GB | 3 |
+| `3g.20gb` | 3 | 20 GB | 2 |
+| `4g.20gb` | 4 | 20 GB | 1 |
+| `7g.40gb` | 7 | 40 GB | 1 |
+
+The number before `g` is compute slices; the number before `gb` is frame
+buffer. Profiles that do not divide evenly leave a remainder: two `3g.20gb`
+instances consume six of seven compute slices and the seventh is unusable.
+
+Each instance appears as its own device. `nvidia-smi -L` lists them with their
+own UUIDs, and `/dev/nvidia-caps/` carries the capability files that gate
+access to each one.
+
+## vGPU
+
+A licensed host-side driver presents a mediated device to each guest. The guest
+runs an NVIDIA guest driver and believes it owns a GPU; the host manager
+schedules the guests onto the physical device and mediates register access.
+Profiles fix the frame buffer per guest, so a 16 GB card divided into four 4 GB
+profiles serves four guests.
+
+vGPU and MIG compose. A MIG instance can back a vGPU profile, which gives the
+guest a hardware-partitioned share in place of a time-shared one.
+
+## Worked example: an A100 40GB for three workloads
+
+The requirement is three tenants: one large training job, and two small
+inference services that must not disturb it.
+
+1. Enable MIG: `nvidia-smi -mig 1`. The GPU stops being usable as a whole
+   device until MIG is disabled again.
+2. Create one `3g.20gb` GPU Instance for training. It takes three compute
+   slices and half the frame buffer.
+3. Create two `1g.5gb` GPU Instances for the inference services. Compute slices
+   used so far: 3 + 1 + 1 = 5 of 7.
+4. Create one Compute Instance in each GPU Instance, giving each tenant the
+   whole of its own instance.
+5. `nvidia-smi -L` now lists three MIG devices with distinct UUIDs. A container
+   is pinned to one by passing its UUID in `NVIDIA_VISIBLE_DEVICES`.
+
+The remaining two compute slices and 10 GB can host a fourth `2g.10gb`
+instance. Leaving them unallocated wastes them: MIG has no mechanism to lend
+idle slices to a busy instance.
+
+## See also
+
+- [Container admission path](/gspwn/knowledgebase/container-admission/)
+- [Orchestration](/gspwn/knowledgebase/orchestration/)
+- [Product lines](/gspwn/knowledgebase/product-lines/)
