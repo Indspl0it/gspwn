@@ -74,6 +74,11 @@ constructions the writing register bans.
 | Meta-commentary | `it is worth noting`, `as discussed above`, `this page covers` |
 | Narrative framing | `the usual surprise`, `turns out`, `is the one that`, `means something other than` |
 | Cleft construction | `its envelope is what puts the parts on a module`, `the stream is how a device is reported` |
+| Named Claudism | `load-bearing`, `full stop`, `the trap is`, `quietly`, `X matters more` |
+
+The last category holds phrases catalogued from community review of the model
+family that drafted these pages. Each is a fixed string that carries no fact and
+recurs across unrelated topics, so a literal match finds every instance.
 
 Every category is enforced across the whole tree. A category added after the
 pages were written is swept before it is added, so no category carries a

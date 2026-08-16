@@ -79,7 +79,7 @@ is set, so an unattended reboot does not depend on an unchecked write.
 |---|---|
 | Never start from a defconfig silently | A generic x86 defconfig has no NVMe or ENA driver, and on a cloud instance the resulting kernel cannot find its root filesystem. The failure appears only after a full build and a reboot |
 | Never trust that a configuration option took | `olddefconfig` silently drops anything the tree does not offer, and `CONFIG_DEBUG_INFO` stopped being user-selectable in 5.18. Any of the three `DEBUG_INFO` variants satisfies the check |
-| Never skip the Secure Boot check quietly | An unsigned out-of-tree module refuses to load, and the build phase then fails its gate with `nvidia-smi` errors that do not mention signing |
+| Never skip the Secure Boot check silently | An unsigned out-of-tree module refuses to load, and the build phase then fails its gate with `nvidia-smi` errors that do not mention signing |
 | Never guess a GRUB menu entry title | A guessed title such as `Advanced options>Linux $KVER` does not match what Debian generates, and an unattended build then reboots into the old kernel and fails its own gate |
 | Never rebuild an identical kernel per rung | Only the NVIDIA module CFLAGS differ between rungs |
 | Never leave the modules unsignable and unloadable | Distribution configurations sign and lock down modules |

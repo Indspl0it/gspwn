@@ -32,7 +32,7 @@ reachability, and the `poc` phase answers it by experiment.
 `DEFAULT_IMPACT` in `tools/pipeline_state.py` holds eighteen fields, written
 through `pipeline_ctl.py impact-set`.
 
-### Load-bearing fields
+### Judgement fields
 
 | Field | Vocabulary | Role |
 |---|---|---|
