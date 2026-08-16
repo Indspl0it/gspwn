@@ -89,6 +89,15 @@ PATTERNS = [
                        r"\bin other words\b|\bthat said\b|"
                        r"\bat the end of the day\b|"
                        r"\bthis (page|section) (will|covers|explains)\b"),
+    # Named Claude-family tells, catalogued from 2026 community review of
+    # Opus 4.8, Opus 5 and Fable 5. "load-bearing" is the flagship: a metaphor
+    # asserting structural importance without arguing for it. "seam" is absent
+    # from this list on purpose, because it is a real term for a module
+    # boundary and the metaphorical use cannot be separated by pattern.
+    ("named Claudism", r"\bload-bearing\b|\bworth stating\b|\bcarry the argument\b|"
+                      r"\bfull stop\b|\bthe trap is\b|\bstated fairly\b|"
+                      r"\bquietly\b|\bmatters more\b|"
+                      r"\bhere's the (thing|kicker)\b|\bthe best part\b"),
     # Cleft constructions. "Its envelope is what puts the parts on a module"
     # is "its envelope puts the parts on a module" with emphasis bolted on.
     # The plain form states the same fact in fewer words.

@@ -69,7 +69,7 @@ absolute.
 | The firmware is signed | It loads from `/lib/firmware/nvidia/<version>/` and the GPU verifies it. It cannot be replaced or modified. |
 | Coverage instrumentation stops at the queue | KCOV and KASAN are compiler-inserted and only cover code the host compiler built. The GSP runs code no host toolchain touched. |
 | Errors arrive as symptoms | A failure inside the GSP surfaces as an Xid entry in the kernel log, sometimes with no further attribution |
-| Latency changed shape | Operations that were function calls became message round trips, so batching matters more |
+| Latency changed shape | Operations that were function calls became message round trips, so a sequence of small calls now pays one round trip each |
 | The open modules became possible | Publishing the thin half discloses no hardware programming detail, because that detail moved into the firmware |
 
 `open-gpu-kernel-modules` is publishable because the unpublished code moved to
