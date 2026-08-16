@@ -34,8 +34,7 @@ flowchart LR
 
 A CUDA stream is a software abstraction above this. Several streams may map to
 one channel, and the runtime decides. The number of hardware channels is
-limited, which is why creating unbounded numbers of streams stops producing
-additional concurrency at some point.
+limited, so concurrency stops increasing past some number of streams.
 
 ## Time slicing
 
@@ -62,15 +61,15 @@ The alternatives are covered in [partitioning modes](/gspwn/knowledgebase/partit
 | Thread block | Kepler and later | Between block completions | Moderate |
 | Instruction | Pascal and later | Any instruction | High, because the full SM state is saved |
 
-Instruction-level preemption is what makes a long-running kernel bounded in its
-effect on other contexts. The cost is the state: every resident warp's
+Instruction-level preemption bounds a long-running kernel's effect on other
+contexts. The cost is the state: every resident warp's
 registers, program counter and shared memory must be written to memory and read
 back. That state runs to megabytes per SM, and it is why a preemption is
 measured in tens of microseconds.
 
 ## Context switch state
 
-| Saved | Where |
+| State | Location |
 | --- | --- |
 | Register file contents for resident warps | A context save area in device memory |
 | Shared memory contents | The same area |

@@ -43,8 +43,8 @@ sequenceDiagram
 | Fault reporting and error containment | GSP |
 | The display engine, where present | Kernel, through `nvidia-modeset.ko` |
 
-The split is not clean along any single line. An operation typically validates
-in the kernel, executes on the GSP, and updates state on both sides.
+The split follows no single line. An operation typically validates in the
+kernel, executes on the GSP, and updates state on both sides.
 
 ## The transport
 
@@ -64,7 +64,7 @@ absolute.
 
 ## Consequences
 
-| Consequence | Detail |
+| Consequence | Mechanism |
 | --- | --- |
 | The firmware is signed | It loads from `/lib/firmware/nvidia/<version>/` and the GPU verifies it. It cannot be replaced or modified. |
 | Coverage instrumentation stops at the queue | KCOV and KASAN are compiler-inserted and only cover code the host compiler built. The GSP runs code no host toolchain touched. |
@@ -81,7 +81,7 @@ programming detail, because it no longer contains any.
 An Xid is a numbered error the driver logs when the GPU reports a fault. The
 number identifies a class.
 
-| Reported | Typical meaning |
+| Reported condition | Typical meaning |
 | --- | --- |
 | A memory fault by a channel | An illegal address in a kernel |
 | A double-bit ECC error | Uncorrectable memory corruption |

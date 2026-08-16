@@ -126,9 +126,9 @@ A managed page resident on the CPU, first touched by a kernel.
    succeeds.
 
 Steps 3 through 8 run once per batch. A kernel touching a large array for the
-first time pays this repeatedly at the start of its execution, which is what
-`cudaMemPrefetchAsync` avoids by doing steps 6 and 7 for the whole range in one
-operation before the launch.
+first time pays this repeatedly at the start of its execution.
+`cudaMemPrefetchAsync` avoids the repetition by performing steps 6 and 7 for
+the whole range in one operation before the launch.
 
 ## See also
 

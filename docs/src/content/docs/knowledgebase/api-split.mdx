@@ -44,7 +44,7 @@ context of the current device and the driver API can retain the same one with
 A context is the GPU-side equivalent of a process. It owns everything a
 program allocates on the device.
 
-| A context owns | Consequence |
+| Resource | Consequence |
 | --- | --- |
 | A virtual address space | A device pointer is meaningful in its context and nowhere else |
 | Loaded modules and their kernels | A kernel handle from one context cannot be launched in another |
@@ -54,7 +54,7 @@ program allocates on the device.
 Contexts are per-device and per-process. Two processes on one GPU have separate
 contexts and separate address spaces, and the GPU switches between them.
 
-The primary context is the one the runtime API creates lazily on first use.
+The runtime API creates the primary context lazily on first use.
 Before it exists, `cudaMalloc` has nothing to allocate from; that is why the
 first CUDA call in a process is far slower than the rest. It is paying for
 context creation, module loading and, without `nvidia-persistenced`, device

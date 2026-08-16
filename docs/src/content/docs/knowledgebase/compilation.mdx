@@ -6,8 +6,8 @@ description: "Source to PTX to SASS to fatbin, what -arch and -code select, when
 CUDA device code passes through two compilers and two instruction sets. The
 first instruction set is virtual and forward-compatible; the second is
 architecture-specific and has no compatibility guarantee across major versions.
-Which one ends up in a binary is what decides whether it runs on a GPU released
-after it was built.
+Which one a binary carries determines whether it runs on a GPU released after
+it was built.
 
 ```mermaid
 flowchart TB
@@ -49,8 +49,8 @@ flowchart TB
 | Produced by | `nvcc`, from NVVM IR | `ptxas`, from PTX |
 | Inspected with | Read directly, or `cuobjdump -ptx` | `cuobjdump -sass`, `nvdisasm` |
 
-PTX is not what the GPU runs. Every path ends in SASS. The only variable is
-whether `ptxas` ran when the binary was built or when it was loaded.
+The GPU executes SASS. Every path ends there, and the only variable is whether
+`ptxas` ran when the binary was built or when it was loaded.
 
 ## Compatibility rules
 
@@ -74,8 +74,8 @@ path, after a compilation pause on first load.
 | `-gencode arch=compute_80,code=sm_80` | One pair, repeatable | One cubin per repetition |
 | `-gencode arch=compute_80,code=[sm_80,compute_80]` | A cubin plus the PTX | A cubin and a just-in-time fallback |
 
-The last form is what a redistributable binary uses. Cubins cover the
-architectures that exist, and the embedded PTX covers the ones that do not yet.
+A redistributable binary uses the last form. Cubins cover the architectures
+that exist, and the embedded PTX covers the ones that do not yet.
 
 ```
 nvcc -gencode arch=compute_70,code=sm_70 \

@@ -89,6 +89,13 @@ PATTERNS = [
                        r"\bin other words\b|\bthat said\b|"
                        r"\bat the end of the day\b|"
                        r"\bthis (page|section) (will|covers|explains)\b"),
+    # Cleft constructions. "Its envelope is what puts the parts on a module"
+    # is "its envelope puts the parts on a module" with emphasis bolted on.
+    # The plain form states the same fact in fewer words.
+    # "is where" is deliberately absent: it has a literal locative use, as in
+    # "local is where the compiler spills registers".
+    ("cleft construction", r"\b(is|are|was|were) what\b|\bis the one (that|the|most|least)\b|"
+                          r"\b(is|are) how\b|\bwhat it (shares|does|owns) is\b"),
     # Withholding a fact to set it up, or narrating a reaction to it. Both
     # read as a magazine feature. The fact goes in the sentence that
     # introduces it.
@@ -104,9 +111,23 @@ MD_HEADING = re.compile(r"^\s{0,3}#{1,4}\s+(.+?)\s*$", re.M)
 TAG = re.compile(r"<[^>]+>")
 
 
+# Categories added after the tree was already written, and enforced only where
+# the sweep that introduced them has run. The rest of the site carries known
+# instances; enforcing there would fail the build on text nobody has reviewed,
+# and exempting each file individually would record the debt as 40 approvals.
+# Widen a prefix in the same change that clears the pages it covers.
+SCOPED = {
+    "cleft construction": ("knowledgebase/",
+                           "49 instances outside the knowledgebase, not yet swept"),
+}
+
+
 def exemption(rel_path, rule):
     """The reason rule is exempt on rel_path, or None."""
     norm = rel_path.replace(os.sep, "/")
+    scope = SCOPED.get(rule)
+    if scope and scope[0] not in norm:
+        return scope[1]
     for suffix, (exempt_rule, reason) in EXEMPT.items():
         if norm.endswith(suffix) and exempt_rule in ("*", rule):
             return reason

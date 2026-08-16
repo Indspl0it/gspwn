@@ -67,7 +67,7 @@ conflict, which is why padded strides appear throughout tiled kernels.
 From Ampere onward, a portion of L2 can be reserved for a named address range
 so that repeatedly read data is not evicted by streaming traffic.
 
-| Control | Sets |
+| Control | Effect |
 | --- | --- |
 | `cudaDeviceSetLimit` with `cudaLimitPersistingL2CacheSize` | How much L2 is set aside |
 | `cudaStreamSetAttribute` with an access policy window | Which address range is treated as persisting, and the hit ratio to aim for |
@@ -78,7 +78,7 @@ Data centre parts carry error-correcting codes on device memory. Single-bit
 errors are corrected and counted; double-bit errors are uncorrectable and
 raise an Xid.
 
-| Effect | Detail |
+| Property | Behaviour |
 | --- | --- |
 | Usable capacity on HBM parts | Unchanged. HBM2e and HBM3 carry dedicated ECC storage, so the check bits cost no user-visible capacity or bandwidth. |
 | Usable capacity on GDDR parts | Reduced. Where ECC is implemented by reserving part of the same memory, both capacity and bandwidth fall. |
@@ -116,8 +116,8 @@ Tracing the first row through the hierarchy:
    resumes.
 
 Step 4 costs several hundred cycles. During it the warp is set aside and the
-scheduler issues from other resident warps, which is why the loss in the last
-table row shows up as a bandwidth ceiling and not as a latency figure.
+scheduler issues from other resident warps, so the loss in the last table row
+presents as a bandwidth ceiling. A latency measurement does not reveal it.
 
 ## See also
 

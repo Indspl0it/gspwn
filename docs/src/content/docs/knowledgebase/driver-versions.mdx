@@ -26,8 +26,8 @@ release's notes. It is not reproduced here. The value changes per release.
 
 ## Version sources
 
-Each lane reports its version through a different interface. Reading all four
-is how a mismatch is located.
+Each lane reports its version through a different interface. A mismatch is
+located by comparing all four.
 
 | Lane | Command | Reports |
 | --- | --- | --- |
@@ -53,8 +53,8 @@ different pair.
 | PTX just-in-time compilation | Device code runs on a GPU newer than its build target | The binary embeds PTX alongside its compiled cubins |
 
 Minor version compatibility applies at the CUDA runtime layer. Just-in-time
-compilation applies at the device code layer. They solve different problems and
-both can be in play in one process.
+compilation applies at the device code layer. They address different problems
+and both can apply in one process.
 
 ## Branch types
 

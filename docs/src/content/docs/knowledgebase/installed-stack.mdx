@@ -45,8 +45,8 @@ parts only the proprietary modules are available.
 | `/dev/nvidia-modeset` | `nvidia-modeset.ko` | Mode setting | No. Requires the display capability. |
 | `/dev/nvidia-caps/` | `nvidia.ko` | MIG capability files | Only on a MIG system |
 
-"Default container" means the `compute,utility` capability set, which is what
-the container toolkit grants when nothing else is requested.
+"Default container" means the `compute,utility` capability set, which the
+container toolkit grants when nothing else is requested.
 
 There is one `/dev/nvidiaN` per GPU and exactly one `/dev/nvidiactl` per
 machine. Control operations that are not addressed to a specific GPU go to

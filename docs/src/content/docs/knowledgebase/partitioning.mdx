@@ -30,8 +30,8 @@ the division is made in silicon.
 
 The default. Multiple CUDA contexts exist on one GPU and the scheduler switches
 between them. Each context has its own virtual address space, so one cannot
-address another's memory. What it shares is the whole machine: every SM, the
-full frame buffer bandwidth, and the failure domain.
+address another's memory. The contexts share every SM, the full frame buffer
+bandwidth and the failure domain.
 
 Compute preemption arrived with Pascal and made the switch finer. Before it, a
 long-running kernel held the GPU until it finished. With it, the scheduler can
@@ -56,9 +56,9 @@ before it still circulates.
 
 Even on Volta and later, MPS shares SMs, L2 and memory bandwidth with no
 partition between clients, so one client's traffic degrades another's
-throughput. It bounds what a client can read and not what it can consume, which
-is why it suits cooperating co-tenants such as the ranks of one MPI job and
-does not substitute for MIG where the tenants are mutually untrusted.
+throughput. It bounds what a client can read. It does not bound what a client
+can consume, so it suits cooperating co-tenants such as the ranks of one MPI
+job and does not substitute for MIG where the tenants are mutually untrusted.
 
 ## MIG
 
@@ -89,8 +89,8 @@ A profile name states the size of an instance.
 The number before `g` is compute slices and the number before `gb` is frame
 buffer. The two do not track each other. `3g.20gb` takes three of the seven
 compute slices and four of the eight memory slices, so two of them exhaust the
-memory while leaving a compute slice with nothing to pair with. That asymmetry,
-and not the compute count, is what makes some combinations unbuildable.
+memory while leaving a compute slice with nothing to pair with. That asymmetry
+makes some combinations unbuildable even where the compute count allows them.
 
 Each instance appears as its own device. `nvidia-smi -L` lists them with their
 own UUIDs, and `/dev/nvidia-caps/` carries the capability files that gate
@@ -99,8 +99,9 @@ access to each one.
 ## vGPU
 
 A licensed host-side driver presents a mediated device to each guest. The guest
-runs an NVIDIA guest driver and believes it owns a GPU; the host manager
-schedules the guests onto the physical device and mediates register access.
+runs an NVIDIA guest driver and addresses the mediated device as a physical
+GPU. The host manager schedules the guests onto the device and mediates
+register access.
 Profiles fix the frame buffer per guest, so a 16 GB card divided into four 4 GB
 profiles serves four guests.
 

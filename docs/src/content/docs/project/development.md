@@ -73,6 +73,21 @@ constructions the writing register bans.
 | Register tells | Second person, filler openers, copula avoidance, marketing adjectives |
 | Meta-commentary | `it is worth noting`, `as discussed above`, `this page covers` |
 | Narrative framing | `the usual surprise`, `turns out`, `is the one that`, `means something other than` |
+| Cleft construction | `its envelope is what puts the parts on a module`, `the stream is how a device is reported` |
+
+## Scoped categories
+
+A category added after a page was written would fail the build on text nobody
+has reviewed. `SCOPED` at the top of the tool restricts such a category to the
+directories already swept for it, and names the outstanding count.
+
+| Category | Enforced under | Outstanding |
+|---|---|---|
+| Cleft construction | `knowledgebase/` | 49 instances elsewhere in the site |
+
+Widening a prefix belongs in the same change that clears the pages it covers.
+Recording the debt as a scope keeps it to one line; recording it as per-file
+exemptions would read as 40 approvals.
 
 The heading and column categories are the reason the check exists. Both scan as
 labels during a read-through, and one reference table carried the same
