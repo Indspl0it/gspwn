@@ -111,7 +111,7 @@ authorise another campaign.
 
 | Symptom | Cause | Action |
 |---|---|---|
-| `ERROR: these did not survive olddefconfig: ...` | `olddefconfig` silently dropped an instrumentation option | The named symbols are what make coverage and symbolization work. Fix the base config |
+| `ERROR: these did not survive olddefconfig: ...` | `olddefconfig` silently dropped an instrumentation option | The named symbols make coverage and symbolization work. Fix the base config |
 | `WARNING: ... falling back to 'make defconfig'` | `/boot/config-$(uname -r)` is absent | A defconfig kernel usually lacks the storage and network drivers the machine boots with. Set `BASE_CONFIG` |
 | `ERROR: Secure Boot is enabled` | Unsigned out-of-tree modules will not load | Disable it in firmware, or enrol a MOK and sign each `nvidia*.ko` |
 | `WARNING: mokutil is not installed` | Secure Boot state is unknown | Install `mokutil`, or confirm Secure Boot is off in firmware |

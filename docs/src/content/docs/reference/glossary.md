@@ -5,7 +5,7 @@ description: Every project-specific term, defined once, alphabetically.
 
 | Term | Definition |
 |---|---|
-| adjacent | A field of the research record. Calls that share an object, lock, refcount or teardown path with the fault and were not exercised by its reproducer. It carries information the crash report does not, and it is what the feedback edge moves into the next round |
+| adjacent | A field of the research record. Calls that share an object, lock, refcount or teardown path with the fault and were not exercised by its reproducer. It carries information the crash report does not, and the feedback edge moves it into the next round |
 | AFL++ | The fuzzer used for Track U harnesses that report edge counts through `fuzzer_stats`. Runs inside `track_u.docker_image` |
 | brief | `pipeline_ctl.py brief`. The derived handoff for a fresh or compacted agent session: position, blocked phases, the crash registry, the findings, the impact records and the tail of `knowledge/`. Computed at read time, so it cannot be stale |
 | campaign | One fuzzing run under systemd, bounded by a deadline written to disk. Runs for `loop.campaign_hours` and survives the panics the pipeline expects |

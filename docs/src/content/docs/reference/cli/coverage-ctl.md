@@ -67,8 +67,8 @@ Sums AFL++ `fuzzer_stats` across `artifacts/runs/<id>/u/<harness>/`. Each
 harness keeps its own coverage bitmap, so the edge count is a per-run trend
 line across the whole harness set.
 
-`corpus-count-only` means no harness wrote `fuzzer_stats`, which is what
-libFuzzer harnesses do. The corpus directory is then the only signal and it
+`corpus-count-only` means no harness wrote `fuzzer_stats`. libFuzzer harnesses
+do not write it. The corpus directory is then the only signal and it
 carries no edge count.
 
 ## install-timer

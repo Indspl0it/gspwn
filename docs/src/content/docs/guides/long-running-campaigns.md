@@ -31,7 +31,7 @@ sudo python3 tools/campaign_ctl.py install-k --run-id r2-1
 campaign window: 24 h (stops at epoch 1786000000, enforced by gspwn-deadline@r2-1.timer)
 ```
 
-A deadline stored on disk is what makes an unattended round end on time across
+A deadline stored on disk makes an unattended round end on time across
 reboots. After a reboot the check reads the same deadline and still stops on
 schedule. Without it nothing ever ends a campaign, because the units restart.
 
@@ -207,7 +207,7 @@ fuzzing:
 wait  (run r2-1 has 12.4 h left of its campaign window; the round cannot be measured until it ends: python3 tools/campaign_ctl.py wait --run-id r2-1)
 ```
 
-The `fuzz` phase itself is exempt, because it is what starts the campaign.
+The `fuzz` phase itself is exempt, because it starts the campaign.
 
 `round-end` refuses for the same reason:
 

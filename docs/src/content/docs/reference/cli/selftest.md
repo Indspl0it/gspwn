@@ -50,7 +50,7 @@ phase gates on the target machine.
 
 `tools/build_kernel.sh` has no offline test by design. Stubbing `make`,
 `scripts/config`, `sudo`, `update-grub`, `grub-editenv`, `mokutil` and `depmod`
-would test the stubs. `bash -n` and a real provision run are what validate it.
+would test the stubs. `bash -n` and a real provision run validate it.
 
 ## Path isolation
 

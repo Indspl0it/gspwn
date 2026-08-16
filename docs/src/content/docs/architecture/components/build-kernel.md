@@ -19,7 +19,7 @@ the build manifest. It is the sole writer of `artifacts/builds/manifest.json`.
 |---|---|
 | The kernel can find its own root filesystem | The configuration is based on `/boot/config-$(uname -r)`, and the fallback to `defconfig` is loud |
 | Instrumentation is present in the built kernel | `.config` is grepped for every instrumentation symbol after `olddefconfig`, and a missing one exits 1 |
-| Stacks are comparable across boots | `CONFIG_RANDOMIZE_BASE` is disabled, which is what makes the dedup hashes stable |
+| Stacks are comparable across boots | `CONFIG_RANDOMIZE_BASE` is disabled, which makes the dedup hashes stable |
 | Out-of-tree modules can load | `CONFIG_MODULE_SIG_FORCE` and `CONFIG_SECURITY_LOCKDOWN_LSM_EARLY` are disabled and the trusted-key strings cleared |
 | The machine reboots into the kernel just built | The GRUB entry is found by matching the kernel release, and `grub-editenv list` confirms the saved entry changed |
 | Earlier build facts survive | The manifest is extended in place |
@@ -83,7 +83,7 @@ is set, so an unattended reboot does not depend on an unchecked write.
 | Never guess a GRUB menu entry title | A guessed title such as `Advanced options>Linux $KVER` does not match what Debian generates, and an unattended build then reboots into the old kernel and fails its own gate |
 | Never rebuild an identical kernel per rung | Only the NVIDIA module CFLAGS differ between rungs |
 | Never leave the modules unsignable and unloadable | Distribution configurations sign and lock down modules |
-| Never randomise the kernel base | Stable stacks across boots are what make the dedup hashes comparable |
+| Never randomise the kernel base | Stable stacks across boots make the dedup hashes comparable |
 
 ## Design notes
 
@@ -93,8 +93,8 @@ that reason, the `build` sub-agent patches `conftest.sh` minimally, logs the
 patch, and retries once per rung.
 
 Submenus are disabled so every kernel is a top-level entry with a stable,
-greppable id, and `GRUB_DEFAULT` is set to `saved` so `grub-set-default` is what
-selects the kernel.
+greppable id, and `GRUB_DEFAULT` is set to `saved` so `grub-set-default` selects
+the kernel.
 
 The script is validated in CI by `bash -n`. Stubbing `make`, `scripts/config`,
 `sudo`, `update-grub`, `grub-editenv`, `mokutil` and `depmod` would test the

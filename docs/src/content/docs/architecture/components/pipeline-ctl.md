@@ -115,7 +115,7 @@ record must never be stored.
 
 `finding-list` and `impact-list` both end with a count of how many records can
 do their job, and name the ones that cannot. An unsupported record reads
-identically to a supported one in the rollup above it, which is how the feedback
+identically to a supported one in the rollup above it, so the feedback
 edge or an over-claimed severity fails silently.
 
 `_repo_rel` prints a path relative to the repository when it is inside it, and

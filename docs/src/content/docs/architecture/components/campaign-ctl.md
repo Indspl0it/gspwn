@@ -122,9 +122,9 @@ return it enforces the deadline itself if the units are still active. Measuring
 a campaign that is still running produces the same wrong number the wait exists
 to prevent.
 
-`register_campaign` records the install with its hours, which is what makes the
-run id a registered run the coverage sampler accepts, and what a lost deadline
-is reconstructed from.
+`register_campaign` records the install with its hours. That record makes the
+run id a registered run the coverage sampler accepts, and a lost deadline is
+reconstructed from it.
 
 ## See also
 

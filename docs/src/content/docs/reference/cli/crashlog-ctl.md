@@ -75,7 +75,7 @@ sudo python3 tools/crashlog_ctl.py verify
 | The `aws` CLI is present, EC2 only | `FAIL`, exit 1 |
 
 On success it prints `READY` and the deliberate-panic sequence. `READY` covers
-the machinery. The sysrq test is what proves it works.
+the machinery. The sysrq test proves it works.
 
 ## harvest
 

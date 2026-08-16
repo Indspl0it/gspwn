@@ -85,7 +85,7 @@ description problem.
 the `describe` phase produced. The map is committed data, read at each run.
 
 Keys are lowercased before lookup, so uppercase-hex keys work. Keys beginning
-with `comment` are ignored, which is how notes are kept in the file.
+with `comment` are ignored, so notes can be kept in the file.
 
 ## Reading the counts
 
