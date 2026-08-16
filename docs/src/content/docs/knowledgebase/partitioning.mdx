@@ -17,13 +17,14 @@ another.
 | --- | --- | --- | --- | --- | --- |
 | Passthrough | PCIe function assigned to one guest, DMA fenced by the IOMMU | The whole frame buffer | A guest reset affects that guest | The guest owns the device | IOMMU, a hypervisor |
 | Time-slicing | Context switch in the GPU scheduler | Per-context virtual address spaces | A fatal fault can reset the device for every context | Round-robin between contexts | Nothing. It is the default. |
-| MPS | None. Clients share one context. | One address space shared by all clients | A fault kills the shared context, so every client dies | Concurrent submission into one context | The MPS control daemon |
+| MPS | Per-client, inside one shared context, from Volta onward | A separate address space per client on Volta and later. One shared address space before it. | Contained to the faulting client on Volta and later. Before it, a fault kills every client. | Concurrent submission, with no switch between clients | The MPS control daemon |
 | MIG | SMs, L2 cache slices and memory controllers assigned to an instance | A fixed share of the frame buffer, physically partitioned | A fault stays inside its instance | Each instance schedules independently | A100 or later data centre part |
 | vGPU | Host-side mediation of register access | A fixed share per guest | A guest reset affects that guest | The host manager schedules guests | Licensed vGPU software, a supported part |
 
-Time-slicing raises throughput on an idle GPU and provides no isolation
+Time-slicing raises throughput on an underused GPU and provides no isolation
 guarantee. MPS raises throughput further by removing the context switch, and
-provides less. MIG is the only mode where the division is made in silicon.
+its isolation depends entirely on the architecture. MIG is the only mode where
+the division is made in silicon.
 
 ## Time-slicing
 
@@ -43,14 +44,21 @@ The Multi-Process Service replaces per-process contexts with one shared
 context, fronted by a control daemon. Work from several processes is submitted
 into that single context and runs concurrently without a switch between them.
 
-| Property | Consequence |
-| --- | --- |
-| One address space | A client can address another client's allocations |
-| One failure domain | A fatal fault ends the shared context and every client with it |
-| No switch cost | Small kernels from several processes overlap efficiently |
+Volta changed the isolation properties substantially, and material written
+before it still circulates.
 
-MPS suits trusted co-tenants such as the ranks of one MPI job. It is not a
-tenancy boundary.
+| Property | Pre-Volta MPS | Volta and later |
+| --- | --- | --- |
+| Address space | One, shared. A client can address another client's allocations. | One per client. A client cannot address another's memory. |
+| Fatal fault | Ends the shared context and every client with it | Contained to the faulting client for most fault classes |
+| Resource limits | None | `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` caps a client's SM share |
+| Client submission | Through the daemon | Direct to the GPU, with the daemon out of the submission path |
+
+Even on Volta and later, MPS shares SMs, L2 and memory bandwidth with no
+partition between clients, so one client's traffic degrades another's
+throughput. It bounds what a client can read and not what it can consume, which
+is why it suits cooperating co-tenants such as the ranks of one MPI job and
+does not substitute for MIG where the tenants are mutually untrusted.
 
 ## MIG
 
@@ -70,17 +78,19 @@ Instances divide the SMs further, sharing that instance's memory.
 
 A profile name states the size of an instance.
 
-| Profile | GPU slices | Frame buffer | Instances that fit on an A100 40GB |
-| --- | --- | --- | --- |
-| `1g.5gb` | 1 | 5 GB | 7 |
-| `2g.10gb` | 2 | 10 GB | 3 |
-| `3g.20gb` | 3 | 20 GB | 2 |
-| `4g.20gb` | 4 | 20 GB | 1 |
-| `7g.40gb` | 7 | 40 GB | 1 |
+| Profile | Compute slices | Memory slices | Frame buffer | Instances that fit on an A100 40GB |
+| --- | --- | --- | --- | --- |
+| `1g.5gb` | 1 | 1 | 5 GB | 7 |
+| `2g.10gb` | 2 | 2 | 10 GB | 3 |
+| `3g.20gb` | 3 | 4 | 20 GB | 2 |
+| `4g.20gb` | 4 | 4 | 20 GB | 1 |
+| `7g.40gb` | 7 | 8 | 40 GB | 1 |
 
-The number before `g` is compute slices; the number before `gb` is frame
-buffer. Profiles that do not divide evenly leave a remainder: two `3g.20gb`
-instances consume six of seven compute slices and the seventh is unusable.
+The number before `g` is compute slices and the number before `gb` is frame
+buffer. The two do not track each other. `3g.20gb` takes three of the seven
+compute slices and four of the eight memory slices, so two of them exhaust the
+memory while leaving a compute slice with nothing to pair with. That asymmetry,
+and not the compute count, is what makes some combinations unbuildable.
 
 Each instance appears as its own device. `nvidia-smi -L` lists them with their
 own UUIDs, and `/dev/nvidia-caps/` carries the capability files that gate
@@ -113,9 +123,15 @@ inference services that must not disturb it.
 5. `nvidia-smi -L` now lists three MIG devices with distinct UUIDs. A container
    is pinned to one by passing its UUID in `NVIDIA_VISIBLE_DEVICES`.
 
-The remaining two compute slices and 10 GB can host a fourth `2g.10gb`
-instance. Leaving them unallocated wastes them: MIG has no mechanism to lend
-idle slices to a busy instance.
+Two compute slices and 10 GB remain. Whether a given profile fits them is a
+placement question. Each profile has a fixed set of legal start positions, and
+instances already created may leave the remainder in positions no profile
+accepts, so the arithmetic working out is necessary and not sufficient.
+`nvidia-smi mig -lgip` lists the profiles with their placements, and
+`nvidia-smi mig -lgipp` lists the placements still free.
+
+Leaving the remainder unallocated wastes it. MIG has no mechanism to lend idle
+slices to a busy instance.
 
 ## See also
 

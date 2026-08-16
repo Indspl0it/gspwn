@@ -76,8 +76,12 @@ and counted by NVML.
 | Read from | Command |
 | --- | --- |
 | The kernel log, with PID and channel where available | `dmesg -T \| grep -i xid` |
-| Aggregate counts by class | `nvidia-smi -q -d PAGE_RETIREMENT,ECC` |
+| The most recent Xid as a DCGM field | `dcgmi dmon -e 230`, field `DCGM_FI_DEV_XID_ERRORS` |
 | Continuous monitoring with classification | `dcgmi diag` and the DCGM health checks |
+
+The kernel log is the primary source. `nvidia-smi` has no Xid history query:
+the ECC and page-retirement sections it prints are separate counters that some
+Xid classes correlate with, and reading them is not a substitute for the log.
 
 An Xid names a class of fault. Attribution to a process is present for some
 classes and absent for others, because a fault reported by the GSP after a
@@ -104,7 +108,7 @@ service.
 | Field | Reports |
 | --- | --- |
 | `memory.used` | Device memory allocated, including driver overhead |
-| `memory.total` | Capacity as the driver sees it, after ECC overhead |
+| `memory.total` | Capacity as the driver sees it, which on parts where ECC reserves memory is below the advertised figure |
 | Compute processes | PIDs holding a context, with their memory usage |
 | `nvidia-smi pmon` | Per-process utilisation sampled over time |
 

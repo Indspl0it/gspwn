@@ -102,12 +102,11 @@ A kernel over one million elements, with 256 threads per block.
    elements 999,936 through 1,000,191, which runs past the array.
 3. The kernel guards the tail: `if (i < n)`. Threads 64 through 255 of the last
    block fail the test and do nothing. Only the last block diverges.
-4. Each block is handed to one SM. On a part with 108 SMs and a limit of 16
-   blocks resident per SM, at most 1728 of the 3907 blocks are resident at
-   once, and the rest launch as earlier ones retire.
-5. Each SM holds 8 warps per block, so 16 resident blocks is 128 warps, above
-   the 64-warp maximum. Warp slots bind before block slots: 8 blocks fit, not
-   16.
+4. Each block is handed to one SM. An A100 has 108 SMs and allows 32 resident
+   blocks per SM, which would put 3456 of the 3907 blocks on the device at once.
+5. That figure never applies. Each block is 8 warps, so 32 blocks would be 256
+   warps against a maximum of 64. The warp cap binds first and 8 blocks fit,
+   giving 864 resident blocks and roughly five waves.
 6. Global index: `i = blockIdx.x * blockDim.x + threadIdx.x`. Consecutive
    threads read consecutive addresses, so each warp's 32 reads fall in one or
    two 128-byte transactions.
