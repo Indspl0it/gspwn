@@ -116,7 +116,7 @@ limit would stop a campaign that is panicking normally, or allow a same-boot
 loop to run for hours.
 
 A start whose boot id cannot be read counts against the same-boot limit, because
-assuming a reboot is what would let a same-boot loop run forever.
+assuming a reboot would let a same-boot loop run forever.
 
 ## Conditions that stop the unit
 

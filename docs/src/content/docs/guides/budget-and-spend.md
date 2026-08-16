@@ -61,7 +61,7 @@ same way:
 | `campaign_ctl.py` | On deadline stop, on manual stop, and when `status` finds a campaign already finished |
 | `pipeline_ctl.py round-end` | When the round closes |
 
-Billing in both places is what keeps a round that never closes from leaving its
+Billing in both places keeps a round that never closes from leaving its
 hours off the cap entirely. A round can fail to close because a phase blocked,
 the breaker tripped, or someone stopped it by hand.
 
@@ -165,8 +165,8 @@ the budget kept reading the ledger and never saw them. The recorded figure is
 the round's current unattributed total, which keeps a repeated `round-end`
 idempotent.
 
-Derived per-run hours are preferred. `run_hours` is what the cap is measured
-against, and typing it in puts a transcription step in front of a budget.
+Derived per-run hours are preferred. The cap is measured against `run_hours`,
+and typing it in puts a transcription step in front of a budget.
 
 ## Outside the caps
 

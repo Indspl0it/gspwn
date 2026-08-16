@@ -10,8 +10,8 @@ Two stores hold programs, and they have different lifetimes.
 | Run corpus | `artifacts/runs/<run-id>/workdir/corpus.db` | Dies with the run |
 | Seed bank | `artifacts/seeds/` | Outlives rounds and campaigns |
 
-syzkaller's corpus lives inside one run's workdir. The seed bank is what later
-rounds start from, and it persists across the outer loop.
+syzkaller's corpus lives inside one run's workdir. Later rounds start from the
+seed bank, which persists across the outer loop.
 
 ## Corpus policy per run
 

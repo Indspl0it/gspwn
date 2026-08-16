@@ -253,7 +253,7 @@ python3 tools/pipeline_ctl.py round-add-run --run-id r2-1
 | `--run-id` | `ID` | Required | The campaign to attach |
 
 Installing a campaign registers the run id, which lets the sampler accept it.
-This command is what makes `round-end` measure and bill it.
+This command makes `round-end` measure and bill it.
 
 ## round-end
 

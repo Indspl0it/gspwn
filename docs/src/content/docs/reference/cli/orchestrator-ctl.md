@@ -11,7 +11,7 @@ Keeps the orchestrating agent alive across panics, with a circuit breaker.
 python3 tools/orchestrator_ctl.py <subcommand> [options]
 ```
 
-`install` and `remove` require root. `run` is what the unit calls. Running it
+`install` and `remove` require root. The unit calls `run`. Running it
 by hand does the same thing in the foreground.
 
 ## install

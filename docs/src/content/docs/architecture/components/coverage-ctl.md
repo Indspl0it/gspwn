@@ -97,7 +97,7 @@ suppressed by `campaign_finished`, which bounds the file's growth.
 
 | Rule | Rationale |
 |---|---|
-| Never let a dead GPU read as a plateau | A card that has fallen off the bus does not stop the fuzzer; the curve flattens. The recorded GPU status is what separates the two |
+| Never let a dead GPU read as a plateau | A card that has fallen off the bus does not stop the fuzzer; the curve flattens. The recorded GPU status separates the two |
 | Never count replay as discovery | syzkaller re-executes its corpus after every restart. Measured naively, a saturated run reports tens of percent of growth after each panic |
 | Never measure against wall-clock when executions are available | A fixed wall-clock window contains very different amounts of executed testing on a machine that panics by design |
 | Never extrapolate from a curve the model does not describe | Below `coverage.model_min_r2` the verdict is `unknown` |

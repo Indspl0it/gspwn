@@ -3,9 +3,8 @@ title: Reproducing a crash
 description: Extract a reproducer, measure its rate, read the verdicts, and run the container profile check.
 ---
 
-`tools/repro_ctl.py` extracts a reproducer and measures how often it works. The
-rate and the classification it records are what a disclosure package is built
-on.
+`tools/repro_ctl.py` extracts a reproducer and measures how often it works. A
+disclosure package is built on the rate and the classification it records.
 
 ## Stop the campaign first
 

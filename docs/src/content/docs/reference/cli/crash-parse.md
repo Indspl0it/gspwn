@@ -76,7 +76,7 @@ An empty stack hash is **no evidence** and never drives a stack-based decision.
 
 | Condition | Result |
 |---|---|
-| The identity tuple matches an existing entry | `DUP`, nothing registered. This is what makes re-scans idempotent |
+| The identity tuple matches an existing entry | `DUP`, nothing registered. This makes re-scans idempotent |
 | Same title and same non-empty stack as a non-duplicate entry | Registered as a `duplicate` linked to that entry, and both sources are cross-noted |
 | Same title, neither sighting has a stack | `flagged` |
 | Same title, only one sighting has a stack | `flagged` |

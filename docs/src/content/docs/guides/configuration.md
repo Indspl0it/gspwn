@@ -45,8 +45,8 @@ loop:
 `max_rounds` caps rounds whatever coverage does. `max_total_run_hours` is the
 budget checked against the spend ledger, counting every campaign in every
 round: three rounds of three campaigns of 24 hours is 216.
-`campaign_hours` is how long each campaign runs before its deadline timer stops
-it.
+`campaign_hours` sets the duration of each campaign before its deadline timer
+stops it.
 
 A budget or round-cap stop cannot be overridden. `round-decide` recomputes it
 and refuses `--decision continue`.
@@ -148,14 +148,14 @@ answers how many new edges another campaign is expected to find, in the units
 of the quantity being predicted.
 
 `plateau_new_edges` is the threshold: below that many expected new edges, the
-run has plateaued. `horizon_hours` is how far ahead to extrapolate and matches
+run has plateaued. `horizon_hours` sets how far ahead the extrapolation reaches and matches
 `loop.campaign_hours` by default, since that is the unit of spend the decision
 authorises. A mismatch between them makes the verdict answer a different
 question than the next campaign asks, and `gspwn_config.py` prints a note when
 they differ.
 
 `model_min_r2` is the fit quality below which no extrapolation is reported and
-the verdict is `unknown`. `min_fit_samples` is how many points are needed
+the verdict is `unknown`. `min_fit_samples` sets the number of points needed
 before extrapolating. `fit_tail_fraction` is the share of the run's
 **executions** the fit covers: fitting the whole run lets the early steep phase
 dominate, so a run that rose steeply and then flattened would still report a
@@ -179,7 +179,7 @@ poc:
 
 `reliable_threshold` is the boundary between a `reliable` and a `flaky`
 classification, and a disclosure package is built on that label.
-`repro_timeout_sec` is how long one run may take before it counts as a hang; a
+`repro_timeout_sec` bounds how long one run may take before it counts as a hang; a
 hang is a hit only for a crash whose title is hang-class. `default_runs` is the
 counted-run target when `--runs` is absent. `void_retry_factor` bounds how many
 attempts a still-needed counted run may consume, so a persistently wrapping
@@ -198,9 +198,9 @@ triage:
 These decide whether two reports are the same bug, which decides what reaches
 `rca` and what the next round targets.
 
-`stack_hash_frames` is how many top frames are hashed for the secondary dedup
-key: fewer merges distinct bugs sharing a caller, more splits one bug whose
-stack varies by an inlined frame. `signature_frames` is how many frames a
+`stack_hash_frames` sets the number of top frames hashed for the secondary
+dedup key: fewer merges distinct bugs sharing a caller, more splits one bug whose
+stack varies by an inlined frame. `signature_frames` sets the number of frames a
 reproduction must match to count as the same crash.
 
 The two `frameless_*` keys govern the fallback identity for a report with no

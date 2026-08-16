@@ -17,7 +17,7 @@ The map is static data and is committed to the repository.
 
 Keys are matched case-insensitively against a lowercase hex rendering of the
 request number, so uppercase-hex keys work. Keys beginning with `comment` are
-ignored, which is how notes are kept in the file.
+ignored, so notes can be kept in the file.
 
 ## 2. Trace a workload
 

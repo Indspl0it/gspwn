@@ -125,7 +125,7 @@ committed.
 ## Do not hand-edit
 
 The tool timestamps and locks. A hand-edited file loses the format the parser
-depends on, and the parser is what `brief` and `show` read.
+depends on, and `brief` and `show` read through the parser.
 
 ## Public repository
 

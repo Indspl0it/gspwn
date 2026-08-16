@@ -19,7 +19,7 @@ isolation that keeps a test run from touching a real campaign.
 |---|---|
 | A test run cannot write real state | `StateTempMixin` redirects `STATE_PATH`, `DEFAULT_STATE_PATH` and `SPEND_PATH` at module level into a temporary directory |
 | The spend ledger is redirected explicitly | The ledger does not follow `GSPWN_STATE`, so redirecting the state file alone would leave the suite writing the real `state/spend.json` |
-| The fail-closed fallback is redirected too | `DEFAULT_STATE_PATH` is what `spend_for_budget` reads when the ledger is absent |
+| The fail-closed fallback is redirected too | `spend_for_budget` reads `DEFAULT_STATE_PATH` when the ledger is absent |
 | A CSV fixture matches the current schema | Fixtures are built from `coverage_ctl.FIELDS` |
 | A test exercises the tool itself | Assertions call the tool and capture its output |
 | Corpus paths are testable without syzkaller | A `syz-db` stand-in packs and unpacks a directory of programs through a JSON blob |
@@ -90,7 +90,7 @@ directories, so it is safe to run on a campaign box.
 ## Design notes
 
 The `syz-db` stand-in packs and unpacks a directory of programs through a JSON
-blob. That is what lets the seed-injection path, the corpus carry and the
+blob. That stand-in lets the seed-injection path, the corpus carry and the
 promotion ledger be tested without building syzkaller.
 
 Where a test asserts on printed output, it captures standard output, so a change

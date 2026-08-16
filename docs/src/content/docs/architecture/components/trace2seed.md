@@ -64,7 +64,7 @@ The module writes one file per invocation and takes no lock. The output name is
 chosen by scanning the directory for the lowest unused index, so two concurrent
 invocations against the same output directory can race for a name. Runs are
 sequential from the `seeds` phase, one trace at a time. The conversion itself is
-pure: `convert` reads text and returns text, which is what makes it directly
+pure: `convert` reads text and returns text, which makes it directly
 testable.
 
 ## Prohibited behaviour
@@ -88,7 +88,7 @@ The `_IOC` decoder handles hex and decimal fields, and a direction that either
 combines `_IOC_READ` and `_IOC_WRITE` or is numeric. The reassembled request is
 `dir << 30 | size << 16 | type << 8 | nr`.
 
-Map keys beginning with `comment` are ignored, which is how notes are kept in
+Map keys beginning with `comment` are ignored, so notes can be kept in
 the file.
 
 `close` removes the descriptor from the tracking table and emits a `close` on

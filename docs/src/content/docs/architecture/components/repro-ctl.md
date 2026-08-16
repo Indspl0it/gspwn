@@ -3,8 +3,8 @@ title: repro_ctl.py
 description: Reproducer extraction, the verdict rules, and panic-durable verification.
 ---
 
-Extracts a reproducer and measures how often it works. The rate and the
-classification it records are what a disclosure package is built on.
+Extracts a reproducer and measures how often it works. A disclosure
+package is built on the rate and the classification it records.
 
 Verification scores each run as a hit, a void or a clean run, and writes the
 resulting rate and status to the crash registry.

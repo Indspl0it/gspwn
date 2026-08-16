@@ -177,7 +177,7 @@ Three things do not travel in an image and are re-checked on every relaunch:
 | Check | Command |
 |---|---|
 | The instance profile is attached | `aws ec2 get-console-output --instance-id <id> --latest` |
-| The state file is what is expected | `python3 tools/pipeline_ctl.py show` |
+| The state file matches what is expected | `python3 tools/pipeline_ctl.py show` |
 | The spend ledger reflects prior campaigns | `python3 tools/pipeline_ctl.py round-show` |
 
 ## GPU recovery

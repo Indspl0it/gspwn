@@ -72,7 +72,7 @@ Exported constant: `XID_CLASS`.
 The whole scan runs inside one `pipeline_state.transaction`, so it holds the
 exclusive state lock from the first source to the last. `triage` may run while
 the fuzz monitor and other sub-agents are also touching the registry, and the
-single transaction is what makes the scan atomic against them. Registration is
+single transaction makes the scan atomic against them. Registration is
 idempotent: `harvest` runs after every reboot, and the identity tuple makes a
 re-scan a no-op. Durability comes from `pipeline_state.save`.
 
@@ -92,7 +92,7 @@ re-scan a no-op. Durability comes from `pipeline_state.save`.
 ## Design notes
 
 Both keys are normalised identically across sources, so the same bug found in
-the syzkaller workdir and again in a harvested dmesg log collides. That is what
+the syzkaller workdir and again in a harvested dmesg log collides. That collision
 makes the duplicate registration meaningful: the second sighting is linked to
 the first, and both sources stay addressable as durable state.
 

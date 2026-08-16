@@ -13,7 +13,7 @@ The campaign models one attacker per track.
 | Under attacker control | The syscalls issued from inside the container | The container image, the OCI configuration, the CDI spec, environment variables |
 | Privilege of the code under test | Non-root, after confinement | Root, during container init, before isolation is enforced |
 | Confinement in force | Linux capabilities dropped to the container runtime's default set, the runtime's seccomp profile, the device cgroup allowlist | None at the time the code runs |
-| Capability request | `NVIDIA_DRIVER_CAPABILITIES=compute,utility`, which is what CUDA images request | Not applicable |
+| Capability request | `NVIDIA_DRIVER_CAPABILITIES=compute,utility`, which CUDA images request | Not applicable |
 | Device nodes received | `/dev/nvidiactl`, `/dev/nvidiaX`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` | Not applicable |
 | Device nodes withheld | `/dev/nvidia-modeset`, `/dev/dri/*` | Not applicable |
 | Primary target | The NVIDIA GPU kernel driver ioctl surface | `libnvidia-container`, written in C. The memory-safety surface |

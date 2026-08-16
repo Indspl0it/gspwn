@@ -88,8 +88,8 @@ after `install-k`.
 
 ## check-deadline
 
-Enforces one run's campaign window. This is what
-`gspwn-deadline@<run-id>.timer` runs, every `loop.deadline_check_min` minutes.
+Enforces one run's campaign window. `gspwn-deadline@<run-id>.timer` runs this every `loop.deadline_check_min`
+minutes.
 
 ```
 python3 tools/campaign_ctl.py check-deadline --run-id r2-1

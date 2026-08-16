@@ -95,7 +95,7 @@ Exported constant: `BLOCKED_EXIT = 78`.
 |---|---|
 | Never restart into a condition that will recur | A relaunched agent reads the same broken state and stops again, once per restart |
 | Never count reboots against the same-boot limit | A single shared limit would stop a healthy campaign that panics often, or allow a same-boot restart loop to continue indefinitely |
-| Never treat an unreadable boot id as a fresh boot | Assuming a reboot is what lets a same-boot loop run forever |
+| Never treat an unreadable boot id as a fresh boot | Assuming a reboot lets a same-boot loop run forever |
 | Never reset a corrupt breaker file silently | Resetting outside `reset` clears a trip the operator has not seen |
 | Never clear a trip without clearing the history | The counted window has not moved, so the next start re-trips |
 | Never record the session after the launch | A panic terminates the agent with no exit code, so anything recorded afterwards is lost on precisely the restarts this exists for |
@@ -116,7 +116,7 @@ can be exercised without a machine that reboots.
 which invocation to use, and a one-line explanation, which is where an operator
 sees whether a restart carried the previous context.
 
-Rotation is primarily by transcript size, because size is what drives
+Rotation is primarily by transcript size, because size drives
 auto-compaction. Restart count does not: a campaign that panics twenty times in
 an hour writes almost nothing, while one that panics twice in three days writes
 a great deal.
