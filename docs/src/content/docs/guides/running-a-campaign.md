@@ -160,7 +160,7 @@ round 2 now has 1 run(s); added r2-1
 ```
 
 Installing a campaign already registers the run id, which is what lets the
-sampler accept it. `round-add-run` additionally attaches it to the current
+sampler accept it. `round-add-run` also attaches it to the current
 round, which is what `round-end` measures and bills.
 
 ## 7. Check the smoke window

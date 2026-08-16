@@ -1,0 +1,109 @@
+---
+title: Driver and toolkit versions
+description: "The three version lanes on an NVIDIA machine, which couplings between them tolerate a gap, how to read each version, and the mechanisms that widen the tolerance."
+---
+
+import VersionLanes from '../../../components/VersionLanes.astro';
+
+Three separately versioned things sit on an NVIDIA machine: the CUDA toolkit,
+the userspace driver, and the kernel modules with their firmware. Two of the
+couplings between them tolerate a version gap. The third requires an exact
+match.
+
+<VersionLanes />
+
+## Coupling rules
+
+| Pair | Rule | Symptom when violated |
+| --- | --- | --- |
+| Kernel modules and userspace driver | Identical version string | NVML reports a driver and library version mismatch. No CUDA context is created. |
+| GSP firmware and kernel modules | Shipped together, loaded from one version directory under `/lib/firmware/nvidia/` | The module loads and GSP initialisation fails. |
+| Userspace driver and CUDA toolkit | Driver at or above the toolkit's minimum | The application fails at start with an insufficient driver error. |
+| Application and toolkit minor release | Minor version compatible within one major release | None. No rebuild is required across minor toolkit releases. |
+
+The minimum driver version for a given toolkit release is stated in that
+release's notes. It is not reproduced here. The value changes per release.
+
+## Version sources
+
+Each lane reports its version through a different interface. Reading all four
+is how a mismatch is located.
+
+| Lane | Command | Reports |
+| --- | --- | --- |
+| CUDA toolkit | `nvcc --version` | The installed toolkit release |
+| Userspace driver | `nvidia-smi` | The driver version, and the highest CUDA runtime it supports |
+| Userspace driver | `cat /proc/driver/nvidia/version` | The driver version and the gcc release the modules were built with |
+| Kernel modules | `modinfo nvidia \| grep ^version` | The version of the module file on disk |
+| Kernel modules | `cat /sys/module/nvidia/version` | The version of the module currently loaded |
+| GSP firmware | `nvidia-smi -q` | The firmware version in use, under the GSP firmware field |
+
+The last two differ when a module has been replaced on disk and the old one is
+still resident. A reload or a reboot reconciles them.
+
+## Compatibility mechanisms
+
+Three mechanisms widen the tolerance between the lanes. Each addresses a
+different pair.
+
+| Mechanism | Permits | Requirement |
+| --- | --- | --- |
+| Minor version compatibility | An application built against toolkit 12.x runs on any driver supporting 12.0 | The application uses no API added after the driver's CUDA version |
+| Forward compatibility package | Applications from a newer toolkit run on an older driver | The `cuda-compat` package for that toolkit, on a data centre driver |
+| PTX just-in-time compilation | Device code runs on a GPU newer than its build target | The binary embeds PTX alongside its compiled cubins |
+
+Minor version compatibility applies at the CUDA runtime layer. Just-in-time
+compilation applies at the device code layer. They solve different problems and
+both can be in play in one process.
+
+## Branch types
+
+Data centre drivers ship on three branches. Support windows are approximate and
+the release notes are authoritative.
+
+| Branch | Cadence | Support window | Use |
+| --- | --- | --- | --- |
+| New Feature Branch | Frequent | Short | New hardware and new features |
+| Production Branch | Periodic | About one year | Stable deployments |
+| Long Term Support Branch | Rare | About three years | Fleets that hold one version |
+
+`open-gpu-kernel-modules` tags its releases with the same version strings, so a
+branch choice on the driver side fixes the tag on the module side.
+
+## Worked example: reading nvidia-smi
+
+The header carries three version numbers and they mean three different things.
+A representative header:
+
+```text
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.15    Driver Version: 550.54.15    CUDA Version: 12.4      |
++-----------------------------------------------------------------------------+
+```
+
+| Field | Meaning | Common misreading |
+| --- | --- | --- |
+| `NVIDIA-SMI 550.54.15` | The version of the `nvidia-smi` binary, which ships with the driver | None |
+| `Driver Version: 550.54.15` | The version of the userspace driver and, by the equality rule, of the loaded kernel modules | None |
+| `CUDA Version: 12.4` | The highest CUDA runtime this driver supports | The version of the installed toolkit. `nvcc --version` reports that, and the two are frequently different. |
+
+Traced through the three lanes:
+
+1. `Driver Version: 550.54.15` fixes the userspace lane.
+2. The equality coupling fixes the kernel module lane to the same string, so
+   `open-gpu-kernel-modules` at tag `550.54.15` is the matching source.
+3. The same string fixes the firmware directory to
+   `/lib/firmware/nvidia/550.54.15/`.
+4. `CUDA Version: 12.4` states the ceiling for the toolkit lane. Any toolkit up
+   to 12.4 runs against this driver. `nvcc --version` states which one is
+   installed.
+
+A machine reporting `CUDA Version: 12.4` from `nvidia-smi` and `release 12.6`
+from `nvcc` is a normal configuration for a build host and a broken one for a
+run host, unless the forward compatibility package is present.
+
+## See also
+
+- [Product lines](/gspwn/knowledgebase/product-lines/)
+- [Installed stack](/gspwn/knowledgebase/installed-stack/)
+- [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/)

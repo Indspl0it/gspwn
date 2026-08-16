@@ -44,6 +44,16 @@
   --gs-glow: rgba(34, 184, 214, 0.16);
   --gs-code-border: #232a33;
 
+  /* Figure hues, shared by the knowledgebase components. Named by hue and not
+     by meaning: one figure marks an attack surface amber, another marks a
+     tolerant version constraint the same amber. Stated here so no component
+     carries a second copy of the two schemes. */
+  --gs-hue-amber: #e8813a;
+  --gs-hue-green: #3cc088;
+  --gs-hue-red: #d8455a;
+  --gs-hue-cyan: #58c4dd;
+  --gs-hue-violet: #b96ee0;
+
   --sl-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
     'Helvetica Neue', Arial, sans-serif;
   --sl-font-mono: ui-monospace, SFMono-Regular, 'JetBrains Mono',
@@ -90,6 +100,14 @@
   --gs-border-strong: #d0d6de;
   --gs-glow: rgba(14, 143, 170, 0.1);
   --gs-code-border: #e3e7ec;
+
+  /* A hue that reads on #0d1015 washes out on white, so each one is restated
+     darker and more saturated here. */
+  --gs-hue-amber: #b45309;
+  --gs-hue-green: #15803d;
+  --gs-hue-red: #b91c1c;
+  --gs-hue-cyan: #0e7490;
+  --gs-hue-violet: #7e22ce;
 }
 
 /* ------------------------------------------------------------ backdrop --- */

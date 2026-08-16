@@ -106,7 +106,7 @@ Nothing prunes automatically. Harvested logs are evidence.
 Use on-demand for the campaign. Spot is defensible for `provision` and `build`,
 which produce an AMI and can be re-run.
 
-| What a spot interruption costs | Recoverable |
+| Affected by a spot interruption | Recoverable |
 |---|---|
 | The campaign window | Yes. The deadline is on disk and reconstructible, so the run resumes bounded |
 | The coverage curve's continuity | Yes. The gap presents as a counter reset, which the accumulation model absorbs |

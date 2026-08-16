@@ -51,7 +51,7 @@ padding the run's sample count and its apparent duration.
 
 ### Track K sources, in order
 
-| Source | What it is |
+| Source | Definition |
 |---|---|
 | `json:/stats?format=json`, `json:/api/stats`, `json:/stats.json` | syz-manager's JSON endpoints, newest style first |
 | `html` | The dashboard HTML, scraped for label-and-number pairs |

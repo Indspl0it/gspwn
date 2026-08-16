@@ -1,0 +1,84 @@
+---
+title: Knowledgebase
+description: "Background on the NVIDIA GPU platform, ordered from the highest abstraction down to firmware, with the reading order and what each page carries."
+---
+
+Background on the NVIDIA GPU platform. The rest of the site documents the
+pipeline. These pages document the platform it runs on, and stand on their own
+as reference material.
+
+Pages are ordered by descending abstraction. Each carries one figure, the
+reference tables behind it, and one example traced end to end.
+
+## Orientation
+
+| Page | Contents | Status |
+| --- | --- | --- |
+| [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/) | The eight layers from application code to silicon, and the boundaries between them | Built |
+
+## Tier 1, platform
+
+What NVIDIA ships, how the parts are named, and how the pieces are versioned.
+
+| Page | Contents | Status |
+| --- | --- | --- |
+| [Product lines](/gspwn/knowledgebase/product-lines/) | Segments against architecture generations, part naming, form factors and memory | Built |
+| [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/) | The three version lanes, the couplings between them, and the compatibility mechanisms | Built |
+| [Installed stack](/gspwn/knowledgebase/installed-stack/) | Every artefact an installation leaves, where it lives, and the module dependency order | Built |
+| Telemetry and health | NVML, DCGM, Xid events, ECC counters, clocks and throttle reasons | Planned |
+
+## Tier 2, sharing one GPU
+
+How a single card is divided between processes and tenants.
+
+| Page | Contents | Status |
+| --- | --- | --- |
+| Container admission path | Image to runtime to hook to injected mounts, with the privilege level of each stage | Planned |
+| Orchestration | The device plugin and GPU operator components on one node | Planned |
+| Partitioning modes | Passthrough, time-slicing, MPS, MIG and vGPU, with the isolation line drawn in each | Planned |
+
+## Tier 3, programming model
+
+How work is expressed before any of it reaches the driver.
+
+| Page | Contents | Status |
+| --- | --- | --- |
+| Execution model | Grid, block, warp and thread, and the mapping onto streaming multiprocessors | Planned |
+| Memory model and unified memory | Address spaces by scope and latency, and the migration path | Planned |
+| Compilation pipeline | Source to PTX to SASS to fatbin, with the just-in-time branch | Planned |
+
+## Tier 4, runtime and driver
+
+How that work crosses into the kernel.
+
+| Page | Contents | Status |
+| --- | --- | --- |
+| API split and contexts | One call descending from the runtime to the driver API to the ioctl | Planned |
+| Resource Manager object model | The handle hierarchy, the class number space, and the ioctl families that act on it | Planned |
+| UVM subsystem | The fault path: touch, fault, migrate, replay | Planned |
+| GSP offload | Kernel-side RM against firmware-side RM, and the RPC queue between them | Planned |
+
+## Tier 5, device architecture
+
+What executes the work once it arrives.
+
+| Page | Contents | Status |
+| --- | --- | --- |
+| Chip organisation | Graphics processing clusters down to one streaming multiprocessor | Planned |
+| Memory hierarchy | Capacity, bandwidth and latency from registers to device memory | Planned |
+| Scheduling and preemption | Channels, time-slice groups, runlists, and where preemption is possible | Planned |
+| Interconnect and apertures | The host address map, the BAR windows, the IOMMU, and NVLink topology | Planned |
+
+## Tier 6, firmware and boot
+
+| Page | Contents | Status |
+| --- | --- | --- |
+| Boot and firmware chain | VBIOS, the microcontrollers, signature gates, and the point at which the GSP is running | Planned |
+
+## Sourcing
+
+Driver facts come from the headers in `open-gpu-kernel-modules`. Programming
+model and toolchain facts come from the CUDA Programming Guide and the PTX ISA
+specification. Constant values and struct layouts are not reproduced here.
+They move between driver branches. Pages state the header a number lives in and
+leave reading it to whatever needs the value.

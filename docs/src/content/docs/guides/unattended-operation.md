@@ -123,7 +123,7 @@ assuming a reboot is what would let a same-boot loop run forever.
 `run` exits 78 in four situations, and the unit lists that code in
 `RestartPreventExitStatus`, so systemd stops the unit and does not restart it.
 
-| Situation | Why restarting would not help |
+| Situation | Reason a restart does not help |
 |---|---|
 | A breaker tripped | The next start hits the same limit |
 | `orchestrator.command` is unset | Only a human can supply it |

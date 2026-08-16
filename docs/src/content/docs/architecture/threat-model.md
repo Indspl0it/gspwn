@@ -92,7 +92,7 @@ docker run --rm --gpus all \
    does not establish tenant reachability.
 2. Record one of the three outcomes below in the PoC README.
 
-| Outcome | Condition | What the report may state |
+| Outcome | Condition | Permitted report statement |
 |---|---|---|
 | `tenant-reachable` | The reproducer fires in that container | The finding is reachable by an unprivileged tenant |
 | `not-tenant-reachable` | The reproducer needs privilege the Track K attacker does not hold | The finding is reported in full, and its impact statement names the privilege required |

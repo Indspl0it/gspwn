@@ -1,0 +1,138 @@
+---
+title: Installed stack
+description: "Every artefact a driver and toolkit installation leaves on the machine, where each one lives, the module dependency order, and the path one nvidia-smi invocation takes to the ioctl."
+---
+
+import StackInventory from '../../../components/StackInventory.astro';
+
+A driver installation leaves four kinds of artefact: processes, userspace
+libraries, device nodes and kernel modules. How each one is supplied decides
+what can be learned about it.
+
+| Supplied as | Inspection available |
+| --- | --- |
+| Open source | The source itself, plus anything a build permits |
+| Closed source binary | Exported symbols, its documented API, and its observable behaviour |
+| Signed firmware | The version string reported through NVML |
+
+<StackInventory />
+
+## Kernel modules
+
+| Module | Provides | Depends on | Device nodes created |
+| --- | --- | --- | --- |
+| `nvidia.ko` | The Resource Manager kernel side, and the RPC client to the GSP | Nothing | `/dev/nvidiactl`, `/dev/nvidia0` through `/dev/nvidiaN` |
+| `nvidia-uvm.ko` | Unified memory: fault handling and page migration | `nvidia` | `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` |
+| `nvidia-modeset.ko` | Mode setting for the display engine | `nvidia` | `/dev/nvidia-modeset` |
+| `nvidia-drm.ko` | DRM and KMS integration | `nvidia`, `nvidia-modeset` | Nodes under `/dev/dri/` |
+| `nvidia-peermem.ko` | Peer memory registration for GPUDirect RDMA | `nvidia`, `ib_core` | None |
+
+`nvidia.ko` loads first and every other module depends on it. `lsmod` shows
+the same relation in its `Used by` column, and `rmmod nvidia` fails while any
+dependant is resident.
+
+All five build from `open-gpu-kernel-modules` on Turing and newer. On older
+parts only the proprietary modules are available.
+
+## Device nodes
+
+| Node | Created by | Carries | Present in a default container |
+| --- | --- | --- | --- |
+| `/dev/nvidiactl` | `nvidia.ko` | Client and object allocation, control calls | Yes |
+| `/dev/nvidia0` through `/dev/nvidiaN` | `nvidia.ko` | Per-GPU operations and memory mapping | Yes |
+| `/dev/nvidia-uvm` | `nvidia-uvm.ko` | Unified memory operations | Yes |
+| `/dev/nvidia-uvm-tools` | `nvidia-uvm.ko` | The tooling interface to UVM | Yes |
+| `/dev/nvidia-modeset` | `nvidia-modeset.ko` | Mode setting | No. Requires the display capability. |
+| `/dev/nvidia-caps/` | `nvidia.ko` | MIG capability files | Only on a MIG system |
+
+"Default container" means the `compute,utility` capability set, which is what
+the container toolkit grants when nothing else is requested.
+
+There is one `/dev/nvidiaN` per GPU and exactly one `/dev/nvidiactl` per
+machine. Control operations that are not addressed to a specific GPU go to
+`nvidiactl`.
+
+## Userspace libraries
+
+| Library | Provides | Ships with | Source |
+| --- | --- | --- | --- |
+| `libcuda.so` | The CUDA driver API. Builds and issues the ioctls. | Driver package | Closed |
+| `libnvidia-ml.so` | NVML: query and management | Driver package | Closed |
+| `libnvidia-ptxjitcompiler.so` | Compiles PTX to native ISA at run time | Driver package | Closed |
+| `libnvidia-nvvm.so` | Compiler support for the above | Driver package | Closed |
+| `libcudart.so` | The CUDA runtime API | Toolkit package | Closed |
+| `libnvidia-container.so` | Device and library injection into containers | Container toolkit | Open |
+
+`libcuda.so` and `libcudart.so` are frequently confused. The first ships with
+the driver and talks to the kernel. The second ships with the toolkit and talks
+to the first. A missing `libcuda.so.1` means the driver is absent; a missing
+`libcudart.so.12` means the toolkit is.
+
+## Command line and daemons
+
+| Program | Provides | Source |
+| --- | --- | --- |
+| `nvidia-smi` | An NVML client for query and device configuration | Closed |
+| `nvidia-persistenced` | Holds the driver initialised between clients | Open |
+| `nvidia-fabricmanager` | Configures an NVSwitch fabric | Closed |
+| `nvidia-ctk` | Container toolkit CLI. Generates CDI specifications. | Open |
+| `nvidia-container-cli` | Front end to `libnvidia-container` | Open |
+| `nvidia-container-runtime-hook` | The OCI hook that runs before the container starts | Open |
+
+Without `nvidia-persistenced`, the driver tears down its device state when the
+last client exits and reinitialises it for the next one, which adds seconds to
+the first call of every process.
+
+## Filesystem locations
+
+| Artefact | Path |
+| --- | --- |
+| Kernel modules | `/lib/modules/$(uname -r)/kernel/drivers/video/`, or `updates/dkms/` when DKMS built them |
+| GSP firmware | `/lib/firmware/nvidia/<driver-version>/` |
+| Userspace libraries | `/usr/lib/x86_64-linux-gnu/` on Debian family |
+| CUDA toolkit | `/usr/local/cuda-<version>/`, with `/usr/local/cuda` as a symlink to the active one |
+| Container runtime configuration | `/etc/nvidia-container-runtime/config.toml` |
+| CDI specifications | `/etc/cdi/` and `/var/run/cdi/` |
+
+## Kernel interfaces outside /dev
+
+The driver exposes state through `/proc` and `/sys` as well as through the
+device nodes. These are read-only status interfaces.
+
+| Path | Reports |
+| --- | --- |
+| `/proc/driver/nvidia/version` | Driver version and the gcc release the modules were built with |
+| `/proc/driver/nvidia/gpus/<pci-address>/information` | Model, IRQ and BAR addresses for one GPU |
+| `/proc/driver/nvidia/params` | The module parameter values currently in force |
+| `/sys/module/nvidia/version` | The version of the loaded module |
+| `/sys/module/nvidia/parameters/` | One file per module parameter |
+
+## Worked example: nvidia-smi to the ioctl
+
+One `nvidia-smi` invocation, traced from process start to the kernel.
+
+1. The process starts and links `libnvidia-ml.so`.
+2. NVML opens `/dev/nvidiactl` and allocates a root client handle over it.
+3. Each field the tool queries becomes a Resource Manager control call on that
+   handle, issued as an `ioctl()`.
+4. `nvidia.ko` dispatches it from the character device's `unlocked_ioctl` entry
+   point into the handler for that command.
+5. Fields the kernel side owns are answered there. Fields the GSP owns go out
+   on the RPC queue and return as replies.
+6. NVML formats the values and `nvidia-smi` prints the table.
+
+Every CUDA process follows the same first three steps, with `libcuda.so` in the
+place `libnvidia-ml.so` holds here. The device node, the handle model and the
+call mechanism are shared. The object classes allocated over them differ.
+
+The escape numbers and parameter structs behind step 3 live in
+`kernel-open/common/inc/nv-ioctl-numbers.h` and
+`src/common/sdk/nvidia/inc/nvos.h` in `open-gpu-kernel-modules`. The values
+move between driver branches. Reading them from a checked-out tree at the
+matching tag is the only reliable way to obtain them.
+
+## See also
+
+- [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/)
+- [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/)
+- [Product lines](/gspwn/knowledgebase/product-lines/)

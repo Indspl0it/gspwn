@@ -170,7 +170,7 @@ against, and typing it in puts a transcription step in front of a budget.
 
 ## Outside the caps
 
-| Cost | Bounded by | Where to read it |
+| Cost | Bounded by | Source |
 |---|---|---|
 | Instance cost | Nothing in the repository | The provider's console |
 | Token cost | The circuit breaker bounds agent restarts and `orchestrator.max_agent_hours` bounds one launch, both in restart and hour counts | The agent vendor's usage page |

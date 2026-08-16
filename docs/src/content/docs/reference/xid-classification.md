@@ -9,7 +9,7 @@ stores the class on the registry entry.
 
 ## Classes
 
-| Class | Meaning | What triage does |
+| Class | Meaning | Triage action |
 |---|---|---|
 | `noise` | The fuzzer caused it on purpose | Not queued for RCA. Kept in the registry as an audit trail, excluded from every derived crash count |
 | `signal` | Security-relevant or memory-integrity relevant | Queue it |

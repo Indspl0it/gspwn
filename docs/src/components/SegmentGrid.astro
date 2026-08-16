@@ -1,0 +1,234 @@
+---
+// Capability matrix: product segment across, capability down, split into two
+// bands. The upper band is uniform across the three columns and the lower band
+// is not, which is the structural fact the figure exists to show: the
+// architecture generation sets the compute feature set, the segment sets
+// partitioning, reliability and support terms.
+//
+// A markdown table cannot carry the band split or the tri-state markers, and
+// mermaid has no matrix layout.
+
+const SEGMENTS = ['GeForce', 'Workstation', 'Data centre'];
+
+// state: 'y' present, 'n' absent, 'c' conditional
+const BANDS = [
+	{
+		band: 'Set by architecture generation',
+		hint: 'uniform across segments',
+		rows: [
+			{
+				label: 'Open kernel modules',
+				note: 'nvidia.ko from source',
+				cells: [
+					{ s: 'y', t: 'Turing+' },
+					{ s: 'y', t: 'Turing+' },
+					{ s: 'y', t: 'Turing+' },
+				],
+			},
+			{
+				label: 'Tensor cores',
+				note: '',
+				cells: [
+					{ s: 'y', t: 'Turing+' },
+					{ s: 'y', t: 'Turing+' },
+					{ s: 'y', t: 'Volta+' },
+				],
+			},
+			{
+				label: 'CUDA feature level',
+				note: 'async copy, FP8, clusters',
+				cells: [
+					{ s: 'y', t: 'by capability' },
+					{ s: 'y', t: 'by capability' },
+					{ s: 'y', t: 'by capability' },
+				],
+			},
+		],
+	},
+	{
+		band: 'Set by segment',
+		hint: 'the axis that varies',
+		rows: [
+			{
+				label: 'MIG partitioning',
+				note: '',
+				cells: [
+					{ s: 'n', t: 'no' },
+					{ s: 'n', t: 'no' },
+					{ s: 'c', t: 'A100 and later' },
+				],
+			},
+			{
+				label: 'vGPU',
+				note: 'licensed driver',
+				cells: [
+					{ s: 'n', t: 'no' },
+					{ s: 'c', t: 'some parts' },
+					{ s: 'y', t: 'yes' },
+				],
+			},
+			{
+				label: 'ECC memory',
+				note: '',
+				cells: [
+					{ s: 'n', t: 'no' },
+					{ s: 'c', t: 'some parts' },
+					{ s: 'y', t: 'yes' },
+				],
+			},
+			{
+				label: 'NVLink',
+				note: '',
+				cells: [
+					{ s: 'c', t: 'through Ampere' },
+					{ s: 'c', t: 'some parts' },
+					{ s: 'y', t: 'yes' },
+				],
+			},
+			{
+				label: 'Long term support branch',
+				note: '',
+				cells: [
+					{ s: 'n', t: 'no' },
+					{ s: 'n', t: 'no' },
+					{ s: 'y', t: 'yes' },
+				],
+			},
+		],
+	},
+];
+---
+
+<div class="seg" role="group" aria-label="Capability by product segment">
+	<div class="grid">
+		<div class="hd cap"></div>
+		{SEGMENTS.map((s) => <div class="hd">{s}</div>)}
+
+		{
+			BANDS.map((b) => (
+				<>
+					<div class="bandhd">
+						<span class="bn">{b.band}</span>
+						<span class="bh">{b.hint}</span>
+					</div>
+					{b.rows.map((r) => (
+						<>
+							<div class="lab">
+								<span class="nm">{r.label}</span>
+								{r.note && <span class="nt">{r.note}</span>}
+							</div>
+							{r.cells.map((c) => (
+								<div class={`cell ${c.s}`}>
+									<span class="mk" aria-hidden="true" />
+									<span class="tt">{c.t}</span>
+								</div>
+							))}
+						</>
+					))}
+				</>
+			))
+		}
+	</div>
+</div>
+
+<style>
+	.seg {
+		--edge: var(--sl-color-gray-5);
+		--panel: var(--sl-color-gray-6);
+		margin-block: 1.5rem;
+	}
+
+	.grid {
+		display: grid;
+		grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 1fr));
+		gap: 0.3rem;
+	}
+
+	.hd {
+		padding: 0.35rem 0.7rem;
+		font-family: var(--sl-font-mono);
+		font-size: 0.66rem;
+		font-weight: 600;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+		text-align: center;
+	}
+	.hd.cap { text-align: left; }
+
+	.bandhd {
+		grid-column: 1 / -1;
+		display: flex;
+		align-items: baseline;
+		gap: 0.6rem;
+		margin-top: 0.5rem;
+		padding: 0.3rem 0 0.35rem;
+		border-top: 1px solid var(--edge);
+	}
+	.bandhd .bn {
+		font-size: 0.78rem;
+		font-weight: 650;
+		color: var(--sl-color-white);
+	}
+	.bandhd .bh {
+		font-family: var(--sl-font-mono);
+		font-size: 0.64rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.lab {
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		padding: 0.5rem 0.7rem;
+		border: 1px solid var(--edge);
+		border-radius: 0.45rem;
+		background: var(--panel);
+	}
+	.lab .nm {
+		font-size: 0.83rem;
+		font-weight: 600;
+		color: var(--sl-color-white);
+		line-height: 1.3;
+	}
+	.lab .nt {
+		font-family: var(--sl-font-mono);
+		font-size: 0.66rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.cell {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.4rem;
+		padding: 0.5rem;
+		border: 1px solid var(--edge);
+		border-radius: 0.45rem;
+		background: var(--panel);
+		font-size: 0.76rem;
+		color: var(--sl-color-gray-2);
+		text-align: center;
+	}
+
+	.mk {
+		flex: none;
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+	}
+	.cell.y .mk { background: var(--gs-hue-green); }
+	.cell.c .mk { background: var(--gs-hue-amber); }
+	.cell.n .mk {
+		background: transparent;
+		border: 1px solid var(--sl-color-gray-4);
+	}
+	.cell.n .tt { color: var(--sl-color-gray-3); }
+
+	@media (max-width: 45rem) {
+		.lab .nt { display: none; }
+		.cell .tt { display: none; }
+		.hd { font-size: 0.58rem; }
+		.bandhd { flex-direction: column; gap: 0; }
+	}
+</style>

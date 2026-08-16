@@ -1,0 +1,160 @@
+---
+// Three lanes, two couplings. The figure exists to separate the coupling that
+// tolerates a gap from the one that does not: driver against toolkit is a
+// floor, kernel modules against userspace driver is an equality. Reading the
+// second as a floor is what produces the version-mismatch failure.
+---
+
+<div class="lanes" role="group" aria-label="Version coupling between the toolkit, the driver and the kernel modules">
+	<div class="lane">
+		<div class="hd">
+			<span class="ttl">CUDA toolkit</span>
+			<span class="ver">12.x</span>
+		</div>
+		<div class="bod">
+			<code>nvcc</code>, <code>libcudart.so</code>, headers, the profilers
+		</div>
+		<div class="src">Installed by the toolkit package, separately from the driver</div>
+	</div>
+
+	<div class="link soft">
+		<i></i>
+		<span class="chip">
+			<b>Floor</b>
+			<span>the driver must be at or above the toolkit's minimum</span>
+		</span>
+		<i></i>
+	</div>
+
+	<div class="lane">
+		<div class="hd">
+			<span class="ttl">Userspace driver</span>
+			<span class="ver">550.54.15</span>
+		</div>
+		<div class="bod">
+			<code>libcuda.so</code>, <code>libnvidia-ml.so</code>,
+			<code>libnvidia-ptxjitcompiler.so</code>
+		</div>
+		<div class="src">Installed by the driver package. Closed source.</div>
+	</div>
+
+	<div class="link hard">
+		<i></i>
+		<span class="chip">
+			<b>Equality</b>
+			<span>the same version string, or no context is created</span>
+		</span>
+		<i></i>
+	</div>
+
+	<div class="lane">
+		<div class="hd">
+			<span class="ttl">Kernel modules and firmware</span>
+			<span class="ver">550.54.15</span>
+		</div>
+		<div class="bod">
+			<code>nvidia.ko</code>, <code>nvidia-uvm.ko</code>,
+			<code>/lib/firmware/nvidia/550.54.15/gsp_*.bin</code>
+		</div>
+		<div class="src">
+			Built from <code>open-gpu-kernel-modules</code> at the matching tag
+		</div>
+	</div>
+</div>
+
+<style>
+	.lanes {
+		--edge: var(--sl-color-gray-5);
+		--panel: var(--sl-color-gray-6);
+		margin-block: 1.5rem;
+	}
+
+	.lane {
+		border: 1px solid var(--edge);
+		border-radius: 0.6rem;
+		background: var(--panel);
+		padding: 0.75rem 1rem;
+	}
+
+	.hd {
+		display: flex;
+		align-items: baseline;
+		gap: 0.7rem;
+		margin-bottom: 0.35rem;
+	}
+	.ttl {
+		font-size: 0.95rem;
+		font-weight: 650;
+		color: var(--sl-color-white);
+	}
+	.ver {
+		margin-left: auto;
+		font-family: var(--sl-font-mono);
+		font-size: 0.75rem;
+		color: var(--gs-hue-cyan);
+	}
+
+	.bod {
+		font-size: 0.83rem;
+		color: var(--sl-color-gray-2);
+		line-height: 1.7;
+	}
+	.src {
+		margin-top: 0.25rem;
+		font-size: 0.75rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.link {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.3rem;
+		padding: 0.35rem 0;
+	}
+	.link i {
+		display: block;
+		width: 2px;
+		height: 0.7rem;
+		background: currentColor;
+		opacity: 0.55;
+	}
+	.link.soft {
+		color: var(--gs-hue-amber);
+	}
+	.link.hard {
+		color: var(--gs-hue-red);
+	}
+	.link.soft i {
+		background: repeating-linear-gradient(
+			180deg, currentColor 0 4px, transparent 4px 8px
+		);
+	}
+
+	.chip {
+		display: inline-flex;
+		align-items: baseline;
+		gap: 0.5rem;
+		padding: 0.25rem 0.8rem;
+		border: 1px solid currentColor;
+		border-radius: 999px;
+		background: var(--sl-color-bg);
+		font-size: 0.78rem;
+	}
+	.chip b {
+		font-family: var(--sl-font-mono);
+		font-size: 0.65rem;
+		font-weight: 600;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+	}
+	.chip span {
+		color: var(--sl-color-gray-2);
+	}
+
+	@media (max-width: 40rem) {
+		.hd { flex-wrap: wrap; }
+		.ver { margin-left: 0; }
+		.chip { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
+	}
+</style>

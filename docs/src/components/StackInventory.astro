@@ -1,0 +1,204 @@
+---
+// What a driver and toolkit installation leaves on the machine, in four bands
+// ordered by descending abstraction. Each item is tagged by how it is supplied,
+// which is what decides how much of it can be inspected.
+//
+// Device nodes get their own band and their own tag: they are neither source
+// nor binary, they are the interface the other three bands meet at.
+
+const BANDS = [
+	{
+		label: 'Command line and daemons',
+		note: 'processes',
+		items: [
+			{ n: 'nvidia-smi', k: 'closed' },
+			{ n: 'nvidia-persistenced', k: 'open' },
+			{ n: 'nvidia-fabricmanager', k: 'closed' },
+			{ n: 'nvidia-ctk', k: 'open' },
+			{ n: 'nvidia-container-cli', k: 'open' },
+			{ n: 'nvidia-container-runtime-hook', k: 'open' },
+		],
+	},
+	{
+		label: 'Userspace libraries',
+		note: 'linked or dlopened',
+		items: [
+			{ n: 'libcudart.so', k: 'toolkit' },
+			{ n: 'libcuda.so', k: 'closed' },
+			{ n: 'libnvidia-ml.so', k: 'closed' },
+			{ n: 'libnvidia-ptxjitcompiler.so', k: 'closed' },
+			{ n: 'libnvidia-nvvm.so', k: 'closed' },
+			{ n: 'libnvidia-container.so', k: 'open' },
+		],
+	},
+	{
+		label: 'Device nodes',
+		note: 'the ioctl boundary',
+		items: [
+			{ n: '/dev/nvidiactl', k: 'node' },
+			{ n: '/dev/nvidia0', k: 'node' },
+			{ n: '/dev/nvidia-uvm', k: 'node' },
+			{ n: '/dev/nvidia-uvm-tools', k: 'node' },
+			{ n: '/dev/nvidia-modeset', k: 'node' },
+			{ n: '/dev/nvidia-caps/', k: 'node' },
+		],
+	},
+	{
+		label: 'Kernel modules and firmware',
+		note: 'ring 0, then the GSP',
+		items: [
+			{ n: 'nvidia.ko', k: 'open' },
+			{ n: 'nvidia-uvm.ko', k: 'open' },
+			{ n: 'nvidia-modeset.ko', k: 'open' },
+			{ n: 'nvidia-drm.ko', k: 'open' },
+			{ n: 'nvidia-peermem.ko', k: 'open' },
+			{ n: 'gsp_*.bin', k: 'firmware' },
+		],
+	},
+];
+---
+
+<div class="inv" role="group" aria-label="Installed NVIDIA stack by band">
+	<div class="rail" aria-hidden="true">
+		<span class="rl"></span>
+		<span class="rt">calls descend</span>
+		<span class="rl"></span>
+	</div>
+
+	<div class="bands">
+		{
+			BANDS.map((b) => (
+				<div class="band">
+					<div class="lab">
+						<span class="nm">{b.label}</span>
+						<span class="nt">{b.note}</span>
+					</div>
+					<div class="chips">
+						{b.items.map((i) => (
+							<span class={`chip ${i.k}`}>{i.n}</span>
+						))}
+					</div>
+				</div>
+			))
+		}
+	</div>
+
+	<div class="legend">
+		<span class="lg"><span class="sw open" />open source</span>
+		<span class="lg"><span class="sw closed" />closed source</span>
+		<span class="lg"><span class="sw toolkit" />ships with the toolkit</span>
+		<span class="lg"><span class="sw node" />interface</span>
+		<span class="lg"><span class="sw firmware" />signed firmware</span>
+	</div>
+</div>
+
+<style>
+	.inv {
+		--edge: var(--sl-color-gray-5);
+		--panel: var(--sl-color-gray-6);
+		display: grid;
+		grid-template-columns: 1.6rem minmax(0, 1fr);
+		gap: 0 0.7rem;
+		margin-block: 1.5rem;
+	}
+
+	.rail {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.5rem;
+		color: var(--sl-color-gray-4);
+	}
+	.rl {
+		flex: 1;
+		width: 1px;
+		background: currentColor;
+		opacity: 0.5;
+	}
+	.rt {
+		writing-mode: vertical-rl;
+		font-family: var(--sl-font-mono);
+		font-size: 0.6rem;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.bands { display: grid; gap: 0.45rem; }
+
+	.band {
+		display: grid;
+		grid-template-columns: minmax(9rem, 12rem) minmax(0, 1fr);
+		gap: 0.7rem;
+		align-items: center;
+		padding: 0.6rem 0.85rem;
+		border: 1px solid var(--edge);
+		border-radius: 0.55rem;
+		background: var(--panel);
+	}
+
+	.lab { display: flex; flex-direction: column; }
+	.lab .nm {
+		font-size: 0.85rem;
+		font-weight: 620;
+		color: var(--sl-color-white);
+		line-height: 1.3;
+	}
+	.lab .nt {
+		font-family: var(--sl-font-mono);
+		font-size: 0.66rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+	.chip {
+		font-family: var(--sl-font-mono);
+		font-size: 0.71rem;
+		padding: 0.15rem 0.5rem;
+		border: 1px solid var(--sl-color-gray-4);
+		border-inline-start-width: 3px;
+		border-radius: 0.3rem;
+		background: var(--sl-color-bg);
+		color: var(--sl-color-gray-1);
+		white-space: nowrap;
+	}
+	.chip.open { border-inline-start-color: var(--gs-hue-green); }
+	.chip.closed { border-inline-start-color: var(--sl-color-gray-4); }
+	.chip.toolkit { border-inline-start-color: var(--gs-hue-violet); }
+	.chip.node { border-inline-start-color: var(--gs-hue-cyan); }
+	.chip.firmware { border-inline-start-color: var(--gs-hue-red); }
+
+	.legend {
+		grid-column: 2;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin-top: 0.8rem;
+	}
+	.lg {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.71rem;
+		color: var(--sl-color-gray-2);
+	}
+	.sw {
+		width: 9px;
+		height: 9px;
+		border-radius: 2px;
+		flex: none;
+	}
+	.sw.open { background: var(--gs-hue-green); }
+	.sw.closed { background: var(--sl-color-gray-4); }
+	.sw.toolkit { background: var(--gs-hue-violet); }
+	.sw.node { background: var(--gs-hue-cyan); }
+	.sw.firmware { background: var(--gs-hue-red); }
+
+	@media (max-width: 45rem) {
+		.inv { grid-template-columns: minmax(0, 1fr); }
+		.rail { display: none; }
+		.band { grid-template-columns: minmax(0, 1fr); gap: 0.4rem; }
+		.legend { grid-column: 1; }
+	}
+</style>

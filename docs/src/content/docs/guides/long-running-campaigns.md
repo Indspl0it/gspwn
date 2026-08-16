@@ -9,7 +9,7 @@ to disk.
 
 ## Mechanisms that survive a panic
 
-| Mechanism | How it survives |
+| Mechanism | Implementation |
 |---|---|
 | The fuzz units | `Restart=always` with `RestartSec=30` |
 | The campaign deadline | An absolute epoch second in `artifacts/runs/<id>/deadline` |

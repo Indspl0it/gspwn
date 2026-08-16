@@ -134,7 +134,7 @@ phase that should notice it.
 `pipeline_ctl.py finding-set`. `FINDING_TARGETING` in
 `tools/pipeline_state.py` holds the set.
 
-| Field | Derived from | What the next round does with it |
+| Field | Derived from | Use in the next round |
 |---|---|---|
 | `ioctls` | Transcribed from the reproducer | Models the calls that already ran |
 | `preconditions` | Largely the same source | Builds the state that already existed |
