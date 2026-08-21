@@ -245,8 +245,30 @@ the driver: this grammar has stopped reaching new code. It is the strongest
 available argument for what to model next, and it does not establish that the
 subsystem is covered.
 
+## Plateau against surface coverage
+
+`tools/surface_cov.py report` measures a second quantity over the same
+campaign, the share of the 764 enumerated targets a default tenant may call
+that the descriptions declare and the corpus names. A plateau verdict and a
+surface number mean opposite things in combination, and the plateau alone
+cannot separate the two cases.
+
+| Surface coverage at the plateau | Reading | Next action |
+|---|---|---|
+| Low | The descriptions or the resource chains are wrong. The fuzzer stopped finding edges because it never reached most of the surface, and the driver is not exhausted | Model the targets `surface_cov.py gaps --stage model` names |
+| High | The grammar has reached the surface it declares and has stopped finding new code. This is the real stopping condition | Stop the loop |
+
+236 of the non-privileged control commands have their handler compiled out and
+their parameter buffer marshalled across the RPC queue to GSP. A corpus
+drifting onto those raises executions and moves no edge count, so the
+accumulation curve flattens while the fuzzer is still issuing calls it has
+never issued. The GSP subset is a structural ceiling in the edge signal, and an
+edge count alone reads that ceiling and a plateau identically. See
+[surface_cov.py](/gspwn/architecture/components/surface-cov/).
+
 ## See also
 
 - [Throughput against depth](/gspwn/guides/tuning-throughput-vs-depth/)
+- [surface_cov.py](/gspwn/architecture/components/surface-cov/)
 - [coverage_ctl.py](/gspwn/reference/cli/coverage-ctl/)
 - [Scope and oracle](/gspwn/architecture/scope-and-oracle/)

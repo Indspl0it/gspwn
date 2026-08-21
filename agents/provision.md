@@ -67,10 +67,29 @@ instrumented kernel fuzzing.
    On bare metal mokutil is what reports Secure Boot state; without it the
    build phase cannot tell whether its modules will be allowed to load.
 5. Clone into artifacts/src/: upstream linux (stable branch matching the
-   newest supported by open-gpu-kernel-modules), open-gpu-kernel-modules
-   (latest production branch), syzkaller (master), nvidia-container-toolkit,
-   libnvidia-container. Record all commits in artifacts/builds/manifest.json
-   together with gcc version. Also write the GSP firmware version (from
+   newest supported by open-gpu-kernel-modules), open-gpu-kernel-modules,
+   syzkaller (master), nvidia-container-toolkit, libnvidia-container. Record
+   all commits in artifacts/builds/manifest.json together with gcc version.
+
+   Check out open-gpu-kernel-modules at the release tag matching the driver
+   that will actually run, and record that version in config/machine.yaml as
+   `driver_branch`. The describe and seeds phases derive the whole ioctl
+   surface from this checkout: escape numbers, parameter struct sizes, control
+   command numbers and class privilege flags all move between releases, and a
+   checkout that does not match the running driver produces descriptions that
+   compile, run, and model a different driver. The build phase compiles the
+   modules from this tree, so matching here is what makes the two agree. The
+   tags are release versions:
+
+   ```
+   git -C artifacts/src/open-gpu-kernel-modules tag --sort=-creatordate | head
+   ```
+
+   Confirm the choice held:
+
+   ```
+   python3 tools/surface_verify.py show
+   ``` Also write the GSP firmware version (from
    `nvidia-smi -q`) into the manifest; report.md consumes it from there.
 6. Build syzkaller (`make` in its dir) so bin/syz-manager exists.
 

@@ -80,6 +80,23 @@ flowchart TB
 phase marked `blocked` fails that check, so a blocked gate cannot be carried
 into a new round behind a fresh set of phase records.
 
+The work list is the loop's carried state, and round 1 has no predecessor round
+to produce one. `tools/cve_patch_map.py worklist` fills that position from
+NVIDIA's published kernel-mode CVEs, the one steering signal available before
+any campaign has run. It classifies 61 kernel-mode CVEs, resolves 53 of them to
+a release tag pair and ranks 270 changed functions, 27 of which reach a named
+ioctl target. The current run writes `artifacts/surface/worklist-round1.md`
+with 14 `describe` items, 4 `seeds` items and 5 targets recorded as outside the
+tenant surface. A `[history CVE-YYYY-NNNNN]` item ranks a place where the
+vendor found a bug and is no evidence that a bug remains there. It orders the
+work and predicts no finding. See
+[Historical targeting](/gspwn/architecture/historical-targeting/).
+
+`describe`, `seeds` and `harness` are declared parallel after the build phase
+in `PARALLEL_AFTER_BUILD`, in round 1 as in every later round. `seeds` reads
+`tools/ioctl_map.json`, which is committed and pre-populated, so it takes no
+input from the describe phase and the three run concurrently.
+
 ## L2: the phase-gate loop
 
 | Property | Value |

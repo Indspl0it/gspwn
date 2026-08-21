@@ -96,6 +96,8 @@ the state file and never lowers recorded hours.
 | Rebuild a lost spend ledger | `python3 tools/pipeline_ctl.py spend-init` |
 | Attach a run to this round | `python3 tools/pipeline_ctl.py round-add-run --run-id <id>` |
 | This round's input worklist | `python3 tools/pipeline_ctl.py worklist` |
+| Round 1's input worklist (patch history) | `python3 tools/cve_patch_map.py worklist` |
+| Surface coverage, three-stage | `python3 tools/surface_cov.py report` |
 | Close a round | `python3 tools/pipeline_ctl.py round-end --from-run <run-id> [--from-run ...]` (measures the outcome) |
 | Continue or stop the loop | `python3 tools/pipeline_ctl.py round-decide` |
 | Open the next round | `python3 tools/pipeline_ctl.py round-advance` |
@@ -119,7 +121,7 @@ do not skip ahead to a later phase to keep making progress.
 |---|---|---|
 | provision | agents/provision.md | manifest.json written; `crashlog_ctl.py verify` prints READY; test panic harvested |
 | build | agents/build.md | booted into instrumented kernel; KASAN state matches rung in manifest; `nvidia-smi` works |
-| describe | agents/describe.md | Syzlang compiles; smoke run reaches driver (dmesg evidence); audit sample logged |
+| describe | agents/describe.md | `surface_verify.py check` agrees; Syzlang compiles; smoke run reaches driver (dmesg evidence); `surface_cov.py modelled` reports the modelled share of the 764 targetable commands; audit sample logged |
 | seeds | agents/seeds.md | `artifacts/seeds/*.syz` exist; seeds parse under syz-manager |
 | harness | agents/harness.md | Track U harnesses build and produce coverage on seeds |
 | fuzz | agents/fuzz.md | both systemd units active and coverage increases within the smoke window, **then the campaign window has elapsed** (`campaign_ctl.py wait --run-id <id>`). The smoke window only says the campaign started; everything after this phase measures the run, so advancing on it measures the first half hour of a 24-hour campaign |
@@ -127,7 +129,7 @@ do not skip ahead to a later phase to keep making progress.
 | rca | agents/rca.md | `artifacts/rca/<id>.md` complete for every unique crash selected for PoC; each also has a research record (`finding-list`), which is what steers the next round, and an impact record (`impact-list`), which is what lets the report argue a severity |
 | poc | agents/poc.md | every unique crash has repro rate + classification in pipeline.json; every reliable/flaky Track K crash has a recorded profile-check outcome |
 | eval | agents/eval.md | `artifacts/eval/` holds the coverage series, findings table, round progression and version-persistence.md (an explicit `skipped: <why>` counts) for every run in this round |
-| refine | agents/refine.md | gaps.md + worklist.md written, every item tagged `[coverage]` or `[finding crash-NNNN]`; round outcome recorded via `round-end` |
+| refine | agents/refine.md | gaps.md + worklist.md written, every item tagged `[coverage]`, `[finding crash-NNNN]` or `[history CVE-YYYY-NNNNN]`; round outcome recorded via `round-end` |
 | report | agents/report.md | report + PSIRT packages exist; disclosure status recorded |
 
 ## The improvement loop
@@ -151,13 +153,23 @@ coverage on both tracks, then `refine` writes
 round, where `describe` and `seeds` read it back with `pipeline_ctl.py
 worklist`.
 
-**Two signals steer the next round, and they are not interchangeable.**
+**Three signals steer the next round, and they are not interchangeable.**
 Coverage says where the fuzzer has *not been*: `refine` derives it from the
-run's own curve. Findings say where the bugs *have been*: `rca` records a
-research record per analysed crash (`finding-set`), naming the subsystem, the
-bug class, the calls involved, the state they needed, and the adjacent calls
-that share the same object, lock or teardown path. `refine` merges both into
-one worklist with every item tagged `[coverage]` or `[finding crash-NNNN]`.
+run's own curve, and `tools/surface_cov.py` measures the same question against
+a second denominator, the driver's own enumerated command surface. Findings say
+where the bugs *have been*: `rca` records a research record per analysed crash
+(`finding-set`), naming the subsystem, the bug class, the calls involved, the
+state they needed, and the adjacent calls that share the same object, lock or
+teardown path. History says where NVIDIA has already shipped a kernel-mode fix:
+`tools/cve_patch_map.py worklist` classifies 61 kernel-mode CVEs, resolves 53
+of them to a release tag pair, and ranks 270 changed functions, 27 of which
+reach a named ioctl target. History is the only one of the three available
+before a campaign has run, so it steers round 1, which previously had only the
+structural priority order in describe step 4. A history item ranks a place
+where the vendor found a bug. It is not evidence that a bug remains there.
+History orders the work and does not predict findings. `refine` merges all
+three into one worklist with every item tagged `[coverage]`,
+`[finding crash-NNNN]` or `[history CVE-YYYY-NNNNN]`.
 
 Without the second signal the loop only ever widens the surface and never
 returns to a place that already yielded, which is a fuzzing pipeline rather
@@ -207,6 +219,15 @@ spend ceiling, so never raise them mid-loop to keep a campaign alive):
 - coverage plateaued (`stop_on_plateau`)
 - coverage verdict `unknown` — a missing or broken sampler stops the loop
   rather than authorising another blind campaign
+
+A plateau verdict and a surface number mean opposite things in combination, so
+read them together before acting on either. A plateau at low surface coverage
+means the descriptions or the resource chains are wrong, and the driver is not
+exhausted. A plateau at high surface coverage is the real stopping condition.
+The plateau verdict alone cannot separate the two. A corpus that drifts onto
+the 236 GSP-routed control commands raises executions and never edges, which
+looks the same as a plateau, so read
+`python3 tools/surface_cov.py report` before believing one.
 
 `round-decide` computes this for you. A budget or round-cap stop cannot be
 overridden — the tool refuses. Overriding a plateau or `unknown` stop requires

@@ -14,16 +14,44 @@ uninteresting.
    GSP firmware is not instrumented.
    If a run has no edge samples, it cannot contribute a coverage claim — say
    so and exclude it rather than substituting corpus size.
-2. Findings table: unique crashes, time-to-first-crash, repro rate, and how
+2. Surface coverage: `python3 tools/surface_cov.py report --json` writes the
+   three-stage decomposition of the driver's enumerated command surface, and
+   `python3 tools/surface_cov.py targets --json --out artifacts/eval/<run-id>/surface-targets.json`
+   records the denominator it was measured against. Report all three stages,
+   because the headline alone hides which one lost the surface:
+
+   | Stage | Population | Diagnosis of a loss |
+   |---|---|---|
+   | targetable | commands a default tenant may call, 764 in total | the scope of the claim |
+   | modelled | targets a syzlang variant declares | the describe phase is incomplete |
+   | exercised | targets a program in the corpus names | the fuzzer builds programs too invalid to emit the call, usually a wrong resource chain |
+
+   The denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control and 155
+   alloc targets. Four groups sit outside it and stay outside every
+   percentage: 236 control commands routed to GSP, whose handler is compiled
+   out and where KCOV cannot follow; 104 uvm_test commands that need
+   `uvm_enable_builtin_tests=1`; 3 escapes declared in nv_escape.h with no
+   dispatch case; and the 2 multiplexer escapes NV_ESC_RM_CONTROL and
+   NV_ESC_RM_ALLOC, whose leaves already count in the control and alloc
+   families. State the exclusions wherever the percentage appears.
+
+   This number is a claim about the command surface and never about lines of
+   driver code. The KCOV edge count measures an edge space of unknown size, so
+   it can carry no percentage at all. The surface ratio has a measured
+   denominator and carries one. Report the plateau verdict beside it: a
+   plateau at low surface coverage means the descriptions or the resource
+   chains are wrong, and a plateau at high surface coverage is the real
+   stopping condition.
+3. Findings table: unique crashes, time-to-first-crash, repro rate, and how
    many crashes survived triage into the crash registry. Take the counts from
    the registry, not from a syz-manager screenshot: the registry is what
    report and PSIRT packaging read.
-3. Cross-round progression: edges and unique crashes per round from
+4. Cross-round progression: edges and unique crashes per round from
    `pipeline_ctl.py round-show`, alongside what that round's refine phase
    changed. This is what shows whether grammar expansion reached new code.
    A flat round is a real result — record it and say which descriptions were
    added that did not pay off, so the next round does not repeat them.
-4. Version persistence: replay every reliable PoC against one newer NVIDIA
+5. Version persistence: replay every reliable PoC against one newer NVIDIA
    production driver branch; record persist/fixed per PoC. A finding that is
    already fixed upstream still belongs in the report, marked as such.
 
@@ -38,10 +66,10 @@ uninteresting.
    `skipped: <why>` — for example that a newer branch would not build against
    this kernel, or that no crash reached `reliable`. Both are acceptable
    results. A missing file is not, and the gate below asks for it.
-5. Audit sample: re-verify a sample of [UNVERIFIED] RCA claims against
+6. Audit sample: re-verify a sample of [UNVERIFIED] RCA claims against
    source; log outcomes (confirmed/refuted) to artifacts/eval/rca-audit.md.
    A refuted claim is corrected in the crash registry, not just noted here.
-6. Impact audit: `python3 tools/pipeline_ctl.py impact-list`. Two numbers
+7. Impact audit: `python3 tools/pipeline_ctl.py impact-list`. Two numbers
    belong in the findings table — how many crashes have an impact record, and
    how many of those can carry a severity. A round that analysed every crash
    and produced no record able to carry a severity found crashes, not
@@ -55,8 +83,9 @@ uninteresting.
    outcome for faults that vanish into GSP.
 
 ## Outputs
-artifacts/eval/: coverage CSVs, plots, findings table, round progression,
-rca-audit.md, version-persistence.md.
+artifacts/eval/: coverage CSVs, plots, findings table, surface coverage report
+and target denominator, round progression, rca-audit.md,
+version-persistence.md.
 
 ## State
 `python3 tools/pipeline_ctl.py set-phase eval in_progress|done|blocked`.
@@ -64,8 +93,8 @@ rca-audit.md, version-persistence.md.
 ## Gate evidence
 File listing of artifacts/eval/ with a one-line description of each artifact,
 including version-persistence.md (a recorded `skipped: <why>` counts; a
-missing file does not). Name explicitly any run excluded from the numbers and
-why.
+missing file does not) and the surface coverage report with its three stages.
+Name explicitly any run excluded from the numbers and why.
 
 ## Knowledge (cross-campaign)
 

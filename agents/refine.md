@@ -7,10 +7,11 @@ The output of this phase is what the next round's describe and seeds agents
 execute. A refine pass that produces no specific, checkable work items has not
 met its gate.
 
-You steer on two signals, and they are not interchangeable. Coverage says
-where the fuzzer has not been. Findings say where the bugs have been. A round
-that only follows coverage will keep widening the surface and never go back to
-the place that already yielded.
+You steer on three signals, and they are not interchangeable. Coverage says
+where the fuzzer has not been. Findings say where the bugs have been. History
+says where NVIDIA has already shipped a kernel-mode fix. A round that only
+follows coverage will keep widening the surface and never go back to the place
+that already yielded.
 
 ## Inputs
 - artifacts/runs/<run-id>/coverage.csv (via tools/coverage_ctl.py)
@@ -20,6 +21,10 @@ the place that already yielded.
 - `python3 tools/pipeline_ctl.py finding-list` — every research record rca has
   produced, in this round and every previous one, with the per-subsystem
   rollup
+- `python3 tools/surface_cov.py report`, the three-stage decomposition of the
+  driver's enumerated command surface
+- artifacts/surface/worklist-round1.md, the patch-history items written by
+  `python3 tools/cve_patch_map.py worklist`
 - state/pipeline.json rounds history
 - config/campaign.yaml loop settings
 
@@ -45,14 +50,40 @@ description for, and supplying valid object-chain seeds it cannot invent.
    code, which is a statement about the descriptions as much as about the
    driver: it is the strongest argument for what to model next, not a reason
    to conclude the subsystem is covered.
+
+   Report the verdict alongside the surface number from
+   `python3 tools/surface_cov.py report`. The two together mean something
+   neither carries alone. A plateau at low surface coverage means the
+   descriptions or the resource chains are wrong, and the driver is not
+   exhausted. A plateau at high surface coverage is the real stopping
+   condition. The verdict alone cannot separate the two. A corpus that has
+   drifted onto the 236 GSP-routed control commands raises executions and
+   never edges, which looks the same as a plateau, so read the surface table
+   before believing the verdict.
 2. Identify what did not get covered, and be specific. Useful sources:
    - enabled syscalls in the campaign config that show little or no execution
    - ioctl command numbers present in the driver's dispatch switches but
      absent from artifacts/descriptions/
    - control-multiplexer commands that are modeled as opaque buffers
    - seeds that parse but whose ioctls consistently return errors
+   - `python3 tools/surface_cov.py report`, the three-stage decomposition of
+     the 764 targetable commands into targetable, modelled and exercised.
+     A loss at each stage has a different fix. Modelled over targetable is the
+     describe phase's own completeness. Exercised over modelled measures
+     whether the fuzzer builds programs valid enough to emit the call at all,
+     which a wrong resource chain sinks. The headline alone hides which stage
+     lost the surface.
 3. Classify each gap by *why* it is uncovered. This is the analytical step and
-   the reason a human-grade agent runs it rather than a script:
+   the reason a human-grade agent runs it rather than a script.
+   `python3 tools/surface_cov.py gaps` produces the uncovered list
+   mechanically, so the classification starts from a measured set.
+   `--stage model` lists the targets the inventories name and no description
+   declares, which are the **unmodeled** gaps. `--stage corpus` lists the
+   targets a description declares and no program in the corpus names, which
+   hold the **mismodeled** and **unreachable-by-construction** gaps, and
+   telling those two apart still takes the analysis below. `--family`
+   restricts either list to escape, uvm, uvm_tools, control or alloc, and
+   `--top N` bounds its length. The classifications:
    - **unmodeled** — no description exists. Fix: author one (describe).
    - **mismodeled** — description exists but calls are rejected before
      reaching real work (wrong struct, wrong direction, bad constraint).
@@ -87,9 +118,22 @@ description for, and supplying valid object-chain seeds it cannot invent.
    items for the next round, split into a describe section and a seeds
    section. The next round's agents are prompted with this file, so write it
    for them, not as a report for a human. Every item carries its source —
-   `[coverage]` or `[finding crash-NNNN]` — so the next round's agents can
-   tell a place nobody has looked from a place that has already yielded, and
-   so a later round can see which kind of item actually paid off.
+   `[coverage]`, `[finding crash-NNNN]` or `[history CVE-YYYY-NNNNN]` — so the
+   next round's agents can tell a place nobody has looked from a place that
+   has already yielded, and so a later round can see which kind of item
+   actually paid off. A `[history ...]` item names a call whose handler NVIDIA
+   has already patched for a kernel-mode CVE, and it carries `+N` when several
+   CVEs share the patch set.
+
+   History items decay. Carry a `[history ...]` item into the next round's
+   worklist only while it is still unmodelled or unexercised, which
+   `python3 tools/surface_cov.py gaps` answers mechanically: `--stage model`
+   for unmodelled, `--stage corpus` for unexercised. Once a history item is
+   modelled and the corpus exercises it, it has been spent and drops out,
+   whether or not it produced a finding. A history item that produced a
+   finding re-enters the worklist under the finding signal with its own
+   `[finding crash-NNNN]` tag, so dropping it loses nothing. Without this rule
+   the same items reappear in every round for the life of the campaign.
 7. Promote the round's corpus into the seed bank so the next round starts
    ahead: `python3 tools/corpus_ctl.py promote --run-id <id>`. The tool
    honours `loop.promote_seeds` in config/campaign.yaml and refuses when it
@@ -129,6 +173,16 @@ description for, and supplying valid object-chain seeds it cannot invent.
   orchestrator stop the loop with confidence.
 - Coverage is kernel-side reachable code only; GSP firmware is not
   instrumented. Never present an edge count as total driver coverage.
+- Surface coverage is a ratio over the driver's enumerated command surface, so
+  state it as a share of the commands the corpus names. It carries no claim
+  about lines of driver code. The denominator is 764 targets: 32 escape, 39
+  uvm, 7 uvm_tools, 531 control and 155 alloc. Four groups sit outside that
+  denominator by construction and stay outside any percentage: 236 control
+  commands routed to GSP, whose handler is compiled out and where KCOV cannot
+  follow; 104 uvm_test commands that need `uvm_enable_builtin_tests=1`; 3
+  escapes declared in nv_escape.h with no dispatch case; and the 2 multiplexer
+  escapes NV_ESC_RM_CONTROL and NV_ESC_RM_ALLOC, whose leaves are already
+  counted in the control and alloc families.
 
 ## State
 Record the round outcome so the orchestrator can make the loop decision. Let
@@ -155,11 +209,12 @@ design — fix the sampler and re-run rather than supplying a verdict yourself.
 
 ## Gate evidence
 gaps.md and worklist.md paths, the plateau verdict with its detail line, the
-corpus promotion count, the round-end summary, and the split of worklist items
-by source: how many came from coverage gaps and how many from findings. A
-round in which rca recorded findings but the worklist carries no
-`[finding ...]` item has broken the feedback edge, and the next round will
-repeat this one's search.
+three-stage surface numbers from `surface_cov.py report`, the corpus promotion
+count, the round-end summary, and the split of worklist items by source: how
+many came from coverage gaps, how many from findings, and how many from patch
+history. Name the `[history ...]` items you dropped as spent. A round in which
+rca recorded findings but the worklist carries no `[finding ...]` item has
+broken the feedback edge, and the next round will repeat this one's search.
 
 ## Knowledge (cross-campaign)
 

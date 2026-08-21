@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,13 @@ UVM_C = "kernel-open/nvidia-uvm/uvm.c"
 UVM_TOOLS_C = "kernel-open/nvidia-uvm/uvm_tools.c"
 UVM_TEST_C = "kernel-open/nvidia-uvm/uvm_test.c"
 UVM_API_H = "kernel-open/nvidia-uvm/uvm_api.h"
+VERSION_MK = "version.mk"
+
+# The key tools/surface_verify.py reads out of tools/ioctl_map.json,
+# and the format its `stamp` subcommand writes. --emit-map rewrites the
+# whole map, so a stamp applied by that subcommand is dropped on the next
+# regeneration unless this module emits it too.
+MAP_VERSION_KEY = "comment_driver_version"
 
 REQUIRED_FILES = ESCAPE_NUMBER_FILES + [
     ESCAPE_C, OSAPI_C, NV_C, NV_H, UVM_IOCTL_H, UVM_LINUX_IOCTL_H,
@@ -121,6 +129,7 @@ RE_ESC_HEX = re.compile(r"^#define\s+(NV_ESC_\w+)\s+(0[xX][0-9A-Fa-f]+)\s*$", re
 RE_MAGIC = re.compile(r"^#define\s+NV_IOCTL_MAGIC\s+'(.)'", re.M)
 RE_BASE = re.compile(r"^#define\s+NV_IOCTL_BASE\s+(\d+)", re.M)
 RE_MAX_SIZE = re.compile(r"^#define\s+NV_ABSOLUTE_MAX_IOCTL_SIZE\s+(\d+)", re.M)
+RE_NVIDIA_VERSION = re.compile(r"^NVIDIA_VERSION\s*=\s*(\S+)", re.M)
 
 # Validation-table entries. The macro definition lines carry the placeholder
 # names _cmd/_type, which cannot match NV_ESC_\w+, so they drop out here.
@@ -160,6 +169,65 @@ RE_UVM_TEST_GATE = re.compile(r"if\s*\(\s*!\s*(uvm_enable_builtin_tests)\s*\)")
 
 class InventoryError(Exception):
     """A fact the inventory needs is absent or unparseable in the source tree."""
+
+
+def driver_version(src):
+    """NVIDIA_VERSION from version.mk, so the output can be version-checked.
+
+    Every escape number, parameter struct and measured size in the output
+    belongs to one driver release. A record that does not name its release
+    cannot be checked against the driver under test by
+    tools/surface_verify.py, and a mismatch there is silent: the map parses,
+    the descriptions compile, and the campaign measures the wrong driver.
+
+    A missing version.mk is a warning and not a failure. The inventory is
+    still correct for whatever tree was parsed; it just cannot be guarded.
+    """
+    path = os.path.join(src, VERSION_MK)
+    if not os.path.isfile(path):
+        logger.warning("no %s under %s, output will carry no version",
+                       VERSION_MK, src)
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            m = RE_NVIDIA_VERSION.search(fh.read())
+    except OSError as e:
+        logger.warning("cannot read %s: %s, output will carry no version",
+                       path, e)
+        return None
+    if not m:
+        logger.warning("%s defines no NVIDIA_VERSION", path)
+        return None
+    logger.info("driver version %s from %s", m.group(1), path)
+    return m.group(1)
+
+
+def checkout_commit(src):
+    """Short HEAD of the checkout, or None when it is not a git tree.
+
+    Recorded alongside the version because a driver release is cut from many
+    commits, and the artefacts have to name the exact tree they were parsed
+    from when two runs of the same release disagree.
+    """
+    if not os.path.isdir(os.path.join(src, ".git")):
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", src, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("git rev-parse failed for %s: %s", src, e)
+        return None
+    return out.stdout.strip() or None
+
+
+def version_stamp(src):
+    """The version string for the map, in the format `stamp` writes."""
+    version = driver_version(src)
+    if not version:
+        return None
+    commit = checkout_commit(src)
+    return version + ((" (commit %s)" % commit) if commit else "")
 
 
 def read_source(src, rel):
@@ -856,7 +924,7 @@ MAP_COMMENTS = {
 }
 
 
-def build_map(inventory):
+def build_map(inventory, stamp=None):
     """Return the trace2seed request-number map for this inventory.
 
     Commands whose size did not resolve are left out: a key that names the
@@ -864,6 +932,12 @@ def build_map(inventory):
     another, which is worse than the unmapped count that omitting it produces.
     """
     out = dict(MAP_COMMENTS)
+    if stamp:
+        out[MAP_VERSION_KEY] = stamp
+    else:
+        logger.warning(
+            "no driver version available, so the map carries no %s and "
+            "tools/surface_verify.py cannot check it", MAP_VERSION_KEY)
     collisions = []
     skipped = []
     for node in inventory["nodes"]:
@@ -887,7 +961,7 @@ def build_map(inventory):
             "two commands resolve to the same request number, so the map "
             "cannot represent both:\n  - %s" % "\n  - ".join(collisions))
     logger.info("map covers %d request numbers; %d commands omitted (%s)",
-                len(out) - len(MAP_COMMENTS), len(skipped),
+                sum(1 for k in out if not k.startswith("comment")), len(skipped),
                 "gated or size unresolved")
     return out, skipped
 
@@ -971,7 +1045,15 @@ def build_inventory(src, sizes):
                          if c["size_source"] == "unresolved"})
 
     return {
+        # source_tree predates the source block and is read by syzlang-gen.
+        # Both are kept: removing it would break a live consumer, and the
+        # block is the shape tools/surface_verify.py and the other two
+        # surface artefacts agree on.
         "source_tree": os.path.abspath(src),
+        "source": {
+            "path": os.path.abspath(src),
+            "driver_version": driver_version(src),
+        },
         "encoding": {
             "ioctl_magic": magic,
             "ioctl_base": base,
@@ -1106,10 +1188,11 @@ def main(argv=None):
 
     try:
         if a.emit_map:
-            mapping, skipped = build_map(inventory)
+            mapping, skipped = build_map(inventory, version_stamp(a.src))
             write_json(a.emit_map, mapping)
+            requests = sum(1 for k in mapping if not k.startswith("comment"))
             print("wrote %s (%d request numbers, %d commands omitted)"
-                  % (a.emit_map, len(mapping) - len(MAP_COMMENTS), len(skipped)))
+                  % (a.emit_map, requests, len(skipped)))
             if not a.out:
                 return 0
         write_json(a.out, inventory)
