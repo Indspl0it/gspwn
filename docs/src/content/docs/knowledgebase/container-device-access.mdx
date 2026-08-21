@@ -1,0 +1,246 @@
+---
+title: Container device access
+description: "Which NVIDIA character devices a container receives, the capability values and environment variables that select them, and the difference between the legacy hook and the CDI path."
+---
+
+A GPU container receives NVIDIA character devices by bind mount. Two
+independent mechanisms perform that mount, and they select different sets for
+the same request. The legacy hook filters by `NVIDIA_DRIVER_CAPABILITIES`. The
+CDI path does not read that variable at all.
+
+Line references below are to `libnvidia-container` at commit `08cb279`,
+`nvidia-container-toolkit` v1.20.0, and `open-gpu-kernel-modules` 610.57.04.
+The admission sequence itself is on
+[Container admission path](/gspwn/knowledgebase/container-admission/).
+
+## Capability values
+
+`NVIDIA_DRIVER_CAPABILITIES` accepts a comma-separated list. The toolkit
+translates each accepted value into one `nvidia-container-cli` flag
+(`cmd/nvidia-container-runtime-hook/capabilities.go`), and the library maps
+each flag to option bits (`src/options.h`, `container_opts[]`).
+
+| Value | CLI flag | Option bits | Implies |
+| --- | --- | --- | --- |
+| `utility` | `--utility` | `OPT_UTILITY_BINS`, `OPT_UTILITY_LIBS` | |
+| `compute` | `--compute` | `OPT_COMPUTE_BINS`, `OPT_COMPUTE_LIBS` | |
+| `video` | `--video` | `OPT_VIDEO_LIBS`, `OPT_COMPUTE_LIBS` | `compute` |
+| `graphics` | `--graphics` | `OPT_GRAPHICS_LIBS` | |
+| `display` | `--display` | `OPT_DISPLAY`, `OPT_GRAPHICS_LIBS` | `graphics` |
+| `ngx` | `--ngx` | `OPT_NGX_LIBS` | |
+| `compat32` | `--compat32` | `OPT_COMPAT32` | |
+| `all` | every flag above | every bit above | everything |
+
+The default is `utility,compute`
+(`internal/config/image/capabilities.go`, `DefaultDriverCapabilities`). A value
+outside the accepted set makes the hook panic, so the container fails to start.
+
+One image shape overrides the default. An image carrying `CUDA_VERSION` and no
+`NVIDIA_REQUIRE_CUDA` is treated as a legacy image
+(`internal/config/image/cuda_image.go`, `IsLegacy`), and a legacy image with
+`NVIDIA_DRIVER_CAPABILITIES` unset receives the full supported set, including
+`display` and `graphics`.
+
+## Capability to device node, legacy hook
+
+Two sites in `libnvidia-container` decide the set.
+`lookup_devices` (`src/nvc_info.c`) builds a candidate list from the driver
+options, and `nvc_driver_mount` (`src/nvc_mount.c`) filters it with two tests:
+a device whose major is not 195 requires `OPT_COMPUTE_LIBS`, and a device whose
+minor is 254 requires `OPT_DISPLAY`. The per-GPU node is mounted separately by
+`nvc_device_mount`, with no capability test at all.
+
+| Capability | `/dev/nvidiaN` | `/dev/nvidiactl` | `/dev/nvidia-uvm` | `/dev/nvidia-uvm-tools` | `/dev/nvidia-modeset` | `/dev/dri/*` |
+| --- | --- | --- | --- | --- | --- | --- |
+| none | yes | yes | no | no | no | no |
+| `utility` | yes | yes | no | no | no | no |
+| `compute` | yes | yes | yes | yes | no | no |
+| `video` | yes | yes | yes | yes | no | no |
+| `graphics` | yes | yes | no | no | no | yes |
+| `display` | yes | yes | no | no | yes | yes |
+| `ngx` | yes | yes | no | no | no | no |
+| `compat32` | yes | yes | no | no | no | no |
+| `compute,utility` | yes | yes | yes | yes | no | no |
+| `all` | yes | yes | yes | yes | yes | yes |
+
+`/dev/nvidiaN` and `/dev/nvidiactl` are ungated. A container that names a GPU
+in `NVIDIA_VISIBLE_DEVICES` receives both even with an empty capability set,
+and both carry the Resource Manager ioctl surface described on
+[Resource Manager object model](/gspwn/knowledgebase/rm-object-model/).
+
+`/dev/dri/*` is not mounted by `libnvidia-container`. The string `dri/` does
+not occur in its sources. The DRM nodes come from the Go runtime,
+`internal/modifier/graphics.go`, which builds a DRM node discoverer when the
+capability set contains `graphics` or `display`, and matches the globs
+`/dev/dri/card*` and `/dev/dri/renderD*` filtered to the PCI bus IDs of the
+visible GPUs.
+
+## Capability to library and binary
+
+`match_binary_flags` and `match_library_flags` in `src/nvc_info.c`.
+
+| Capability | Binaries | Libraries |
+| --- | --- | --- |
+| `utility` | `nvidia-smi`, `nvidia-debugdump`, `nvidia-persistenced`, `nv-fabricmanager` | `libnvidia-ml.so`, `libnvidia-cfg.so`, `libnvidia-nscq.so` |
+| `compute` | `nvidia-cuda-mps-control`, `nvidia-cuda-mps-server` | Thirteen entries, including `libcuda.so`, `libcudadebugger.so`, `libnvidia-opencl.so`, `libnvidia-gpucomp.so`, `libnvidia-ptxjitcompiler.so`, `libnvidia-allocator.so`, `libnvidia-nvvm.so`, `libnvidia-pkcs11.so`, `libnvidia-tileiras.so` |
+| `video` | none | `libvdpau_nvidia.so`, `libnvidia-encode.so`, `libnvidia-opticalflow.so`, `libnvcuvid.so` |
+| `graphics` | none | `libnvidia-eglcore.so`, `libnvidia-glcore.so`, `libnvidia-glsi.so`, `libnvidia-tls.so`, `libnvidia-fbc.so`, `libnvidia-ifr.so`, `libnvidia-rtcore.so`, `libnvoptix.so`, the GLVND ICDs and the GL compatibility wrappers |
+| `display` | none | Same set as `graphics` |
+| `ngx` | none | `libnvidia-ngx.so` |
+| `compat32` | none | The 32-bit build of whatever the other values selected |
+
+`nvidia-modprobe`, `nvidia-settings` and `nvidia-xconfig` are commented out of
+the utility binary list. The X server modules are excluded by the comment block
+at the top of `nvc_info.c`.
+
+## Non-device injection, legacy hook
+
+| Item | Condition | Mechanism |
+| --- | --- | --- |
+| `/proc/driver/nvidia` holding `params`, `version`, `registry` | Unconditional | tmpfs with file copies, not bind mounts. `ModifyDeviceFiles: 1` is rewritten to `0` in the copy. Remounted `nodev,nosuid,noexec` |
+| `/proc/driver/nvidia/gpus/<busid>` | Once per visible GPU, unconditional | Bind mount of host procfs, remounted read-only |
+| `/var/run/nvidia-persistenced/socket` | `utility` | Unix socket to a host root daemon |
+| `/var/run/nvidia-fabricmanager/socket` | `utility` | Unix socket to the host NVSwitch fabric manager |
+| `/tmp/nvidia-mps` | `compute` | Named pipe directory into a host MPS server |
+| GSP firmware images | Unless `--no-gsp-firmware` | Read-only bind mount |
+| `/etc/nvidia/nvidia-application-profiles-rc.d` | `graphics` or `display` | Writable application profile directory |
+| Container ldcache | Unconditional | `ldconfig` run against the container root |
+
+The device cgroup allowlist is written one rule per mounted node, in the form
+`c <major>:<minor> rw` (`setup_device_cgroup`, `src/cgroup_legacy.c` for
+cgroup v1 and `src/cgroup.c` for v2). The `m` permission is never granted, so a
+container cannot create further nodes on those majors.
+
+## MIG capability nodes
+
+`/dev/nvidia-caps/nvidia-capN` gates MIG instance access. Three routes reach it.
+
+| Route | Nodes granted | Privilege required |
+| --- | --- | --- |
+| `NVIDIA_VISIBLE_DEVICES` naming a MIG instance | The GPU instance `access` cap device and the compute instance `access` cap device for that instance, plus the matching `/proc/driver/nvidia/capabilities` files | None |
+| `NVIDIA_MIG_CONFIG_DEVICES=all` | The whole `/dev/nvidia-caps` directory and all of `/proc/driver/nvidia/capabilities` | Privileged container. The hook panics otherwise |
+| `NVIDIA_MIG_MONITOR_DEVICES=all` | Same whole-directory mount | Privileged container |
+
+## Device nodes the capability set does not gate
+
+Five environment variables inject character devices without consulting
+`NVIDIA_DRIVER_CAPABILITIES`. Four are read in `internal/modifier/cdi.go`,
+`gatedDevices.DeviceRequests`, and the fifth is the IMEX channel list.
+
+| Variable | Value | Nodes injected | Additional mounts |
+| --- | --- | --- | --- |
+| `NVIDIA_NVSWITCH` | `enabled` | `/dev/nvidia-nvswitchctl`, `/dev/nvidia-nvswitch*` | none |
+| `NVIDIA_GDS` | `enabled` | `/dev/nvidia-fs*` | `/run/udev`, `/etc/cufile.json` |
+| `NVIDIA_MOFED` | `enabled` | `/dev/infiniband/uverbs*`, `/dev/infiniband/rdma_cm` | none |
+| `NVIDIA_GDRCOPY` | `enabled` | `/dev/gdrdrv` | none |
+| `NVIDIA_IMEX_CHANNELS` | channel id list | `/dev/nvidia-caps-imex-channels/channel<id>` | none |
+
+Three defaults decide whether an unprivileged container can set them.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `accept-nvidia-visible-devices-envvar-when-unprivileged` | `true` | Device requests through environment variables are honoured for unprivileged containers |
+| `ignore-imex-channel-requests` | unset, so false | IMEX channel requests through `NVIDIA_IMEX_CHANNELS` are honoured |
+| `disable-imex-channel-creation` | unset, so false | `nvidia-container-cli` runs `mknod` on the host for each requested channel id |
+
+The nodes are located, not created. A missing host node is skipped, so the
+variable has an effect only where the corresponding kernel module is loaded.
+The gated set is applied in legacy, csv and jit-cdi modes. Pure `cdi` mode,
+which reads a specification file written ahead of time, skips it.
+
+## CDI path
+
+`nvidia-container-runtime` resolves its mode from the `mode` setting, whose
+default is `auto`. On a platform where NVML loads, `auto` resolves to `jit-cdi`
+(`internal/info/auto.go`, `ResolveRuntimeMode` returning the resolver default
+`JitCDIRuntimeMode`). In that mode and in `cdi` mode the runtime applies only
+the hook remover and the CDI specification. The graphics modifier and the
+capability filter are absent from the modifier list
+(`internal/modifier/mode.go`, `supportedModifierTypes`).
+
+| Origin | Nodes |
+| --- | --- |
+| Common edits, applied for any requested device | `/dev/nvidia-modeset`, `/dev/nvidia-uvm-tools`, `/dev/nvidia-uvm`, `/dev/nvidiactl` |
+| Per-GPU device edits | `/dev/nvidiaN`, plus every DRM node on the PCI bus id of that GPU |
+| Per-MIG device edits | The parent `/dev/nvidiaN`, the GPU instance cap device, the compute instance cap device, and the DRM nodes when the MIG profile carries the `gfx` attribute |
+
+The two paths differ on two nodes for the same request:
+
+| Node | Legacy hook, `compute,utility` | CDI or jit-cdi, any capability value |
+| --- | --- | --- |
+| `/dev/nvidiaN`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` | granted | granted |
+| `/dev/nvidia-modeset` | withheld | granted |
+| `/dev/dri/card*`, `/dev/dri/renderD*` | withheld | granted |
+
+The CDI path also drops the per-GPU procfs bind mount. In its place, the
+`disable-device-node-modification` CDI hook writes a `params` file carrying
+`ModifyDeviceFiles: 0` into the container root. Graphics libraries and the
+Vulkan, EGL and OpenCL loader configuration files are part of the common edits,
+so a CDI container receives them without requesting `graphics`.
+
+A third CDI kind, `management`, generated by
+`nvidia-ctk cdi generate --mode=management` for driver container images, lists
+`/dev/nvidia*`, `/dev/nvidia-caps/nvidia-cap*`, the four control nodes and
+`/dev/nvidia-caps-imex-channels/channel*`, with names beginning `nvidia-fs`,
+`nvidia-nvswitch` and `nvidia-nvlink` filtered out.
+
+## Node creation on the host
+
+The kernel modules register character device regions. With one exception they
+do not create `/dev` entries. `nvidia-modprobe`, udev, or an administrator does
+that, which is why `libnvidia-container` links the `nvidia-modprobe-utils`
+`mknod` helpers and calls them while loading modules.
+
+| Node | Module | Major | Minor | Exists when |
+| --- | --- | --- | --- | --- |
+| `/dev/nvidiaN` | `nvidia.ko` | 195 | GPU index, 0 to 247 | The module is loaded |
+| `/dev/nvidiactl` | `nvidia.ko` | 195 | 255 | The module is loaded |
+| `/dev/nvidia-modeset` | `nvidia-modeset.ko` | 195 | 254 | That module is loaded |
+| `/dev/nvidia-uvm` | `nvidia-uvm.ko` | dynamic | 0 | That module is loaded |
+| `/dev/nvidia-uvm-tools` | `nvidia-uvm.ko` | same dynamic major | 1 | That module is loaded and userspace created the node |
+| `/dev/nvidia-caps/nvidia-capN` | `nvidia.ko`, nv-caps | dynamic | one per registered capability | The module is loaded. Individual entries appear under `/proc/driver/nvidia-caps` as MIG instances are created |
+| `/dev/nvidia-caps-imex-channels/channelN` | `nvidia.ko`, nv-caps-imex | dynamic | channel id | `NVreg_ImexChannelCount` is non-zero, default 2048. `NVreg_CreateImexChannel0` defaults to 0, so no channel node is created at load |
+| `/dev/nvidia-nvswitchctl` | `nvidia.ko` | dynamic | 255 | The module is loaded on a 64-bit host. Registration is unconditional and does not require NVSwitch hardware |
+| `/dev/nvidia-nvswitchN` | `nvidia.ko` | same dynamic major | device instance | The NVSwitch PCI driver bound that instance |
+| `/dev/nvidia-nvlink` | `nvidia.ko` | dynamic | 0 | The module is loaded |
+| `/dev/dri/cardN`, `/dev/dri/renderDN` | `nvidia-drm.ko` | DRM major | assigned by the DRM core | That module is loaded and bound. The DRM core creates the nodes, so this is the one family userspace does not have to `mknod`. The `modeset` parameter only upgrades the driver feature bits |
+
+Four `nvidia.ko` module parameters set the permissions on the nodes it manages:
+`NVreg_ModifyDeviceFiles` defaults to 1, `NVreg_DeviceFileUID` and
+`NVreg_DeviceFileGID` default to 0, and `NVreg_DeviceFileMode` defaults to
+`0666`. That mode is why an unprivileged process inside a container can open
+`/dev/nvidiactl` and `/dev/nvidiaN` once they are bind-mounted.
+
+## NVSwitch and NVLink nodes
+
+`nvswitch_init` runs from `nvlink_drivers_init` whenever `nvidia.ko` loads on a
+64-bit host, and `nvlink_core_init` runs alongside it. Both allocate their
+character device regions unconditionally, with no NVSwitch hardware required.
+`/proc/driver/nvidia-nvswitch/permissions` and
+`/proc/driver/nvidia-nvlink/permissions` each report `DeviceFileMode: 438`,
+that is `0666`, and `nvidia-modprobe` reads those files when it creates the
+nodes.
+
+| Node | Injected into a container | Path |
+| --- | --- | --- |
+| `/dev/nvidia-nvswitchctl` | Yes | `NVIDIA_NVSWITCH=enabled` in `legacy`, `csv` or `jit-cdi` mode, or a CDI specification generated with `nvidia-ctk cdi generate --mode=nvswitch` and requested by name |
+| `/dev/nvidia-nvswitchN` | Yes | Same, and the NVSwitch PCI driver must have bound that instance |
+| `/dev/nvidia-nvlink` | No | No code path injects it. The one injection glob is `/dev/nvidia-nvswitch*`, which does not match the name, and the two places that glob `/dev/nvidia*` filter it out by prefix |
+
+`libnvidia-container` contains no reference to any of the three names, so the
+legacy hook alone can never inject them. The toolkit's only injection site is
+`internal/discover/nvswitch.go`, reached through the `nvswitch` CDI mode. The
+node must already exist on the host, since neither component runs `mknod` for
+these two.
+
+On open, `ctl_fops` carries no `.open` member, so the driver performs no check.
+The device ioctl dispatcher applies a per-command privilege flag, and 38 of its
+dispatch entries carry neither the admin check nor the fabric-manager check
+against 81 that carry one.
+
+## See also
+
+- [Container admission path](/gspwn/knowledgebase/container-admission/)
+- [Partitioning modes](/gspwn/knowledgebase/partitioning/)
+- [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/)
+- [Installed stack](/gspwn/knowledgebase/installed-stack/)

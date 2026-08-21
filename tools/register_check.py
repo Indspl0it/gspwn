@@ -57,6 +57,13 @@ EXEMPT = {
         "marketing adjective",
         "Robust channel, as above.",
     ),
+    "knowledgebase/prior-vulnerabilities.mdx": (
+        "curly quote",
+        "The CVE tables reproduce NVIDIA's own bulletin sentences verbatim. "
+        "CVE-2024-0137's description contains a curly apostrophe in "
+        "“host’s network namespace”. Straightening it would stop "
+        "the row matching what NVIDIA published.",
+    ),
 }
 
 PATTERNS = [

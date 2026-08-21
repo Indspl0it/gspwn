@@ -62,3 +62,15 @@ GSP firmware is not instrumented, so an edge count measures kernel-side
 reachable code and never total driver coverage. On a GSP-based GPU a large
 part of the Resource Manager runs where KCOV cannot see it, and a coverage
 plateau says nothing about that region.
+
+## 2026-08-21T19:44:19+00:00 — describe
+Tags: abi, rmapi, object-model
+The RM allocation DAG is declared in src/nvidia/src/kernel/rmapi/resource_list.h as one RS_ENTRY record per allocatable class: external class number, legal parents, alloc param struct, and privilege flags. It is the machine-readable source for syzlang resource chaining and needs no GPU to read. 222 records, and 151 of them sit at depth 4 from the file descriptor, so a description set without chaining reaches only the 25 classes at depth 1 and 2.
+
+## 2026-08-21T19:44:19+00:00 — describe
+Tags: abi, rmapi, privilege
+Allocation privilege in resource_list.h lives in the Flags field as RS_FLAGS_ALLOC_NON_PRIVILEGED, RS_FLAGS_ALLOC_PRIVILEGED or RS_FLAGS_ALLOC_KERNEL_PRIVILEGED. It does not live in Required Access Rights: every one of the 222 records carries RS_ACCESS_NONE there, so a reader keyed on that field reports the whole table as reachable. The Flags split is 152 unprivileged, 62 privileged, 5 kernel-only, 3 unmarked.
+
+## 2026-08-21T19:44:19+00:00 — describe
+Tags: abi, parsing
+Two inconsistencies in resource_list.h break a naive parser. 15 records label the last field Required Access Right without the plural. 5 records declare RS_ANY_PARENT where the rest declare RS_LIST(classId(...)), and those five are the event and context-dma classes that attach under any allocated object.
