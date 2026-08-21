@@ -30,6 +30,7 @@ import corpus_ctl
 import coverage_ctl
 import crash_parse
 import gspwn_config
+import ioctl_inventory
 import knowledge_ctl
 import orchestrator_ctl
 import repro_ctl
@@ -554,6 +555,125 @@ class TestTrace2Seed(unittest.TestCase):
     def test_close_releases_the_resource(self):
         prog = trace2seed.convert(self.TRACE, self.MAP)
         self.assertIn("close(r0)", prog)
+
+
+class TestIoctlInventoryParsing(unittest.TestCase):
+    """The C-parsing invariants ioctl_inventory depends on.
+
+    Each of these produced a wrong inventory before it was fixed, and each
+    fails silently: the tool still emits a well-formed JSON file, just one
+    that is short by a device node or attributes a privilege check to the
+    wrong command.
+    """
+
+    # escape.c opens with a `//****` banner whose second and third characters
+    # are a valid `/*`. A block-comment regex run before the line-comment one
+    # treats that as the start of a comment and blanks the file to the next
+    # `*/`, which lost all 21 escape dispatch sites in that file.
+    BANNER = (
+        "//***************************** Module Header ****************\n"
+        "// the resource manager's customer\n"
+        "//************************************************************\n"
+        "int f(void)\n"
+        "{\n"
+        "    switch (cmd)\n"
+        "    {\n"
+        "        case NV_ESC_RM_FREE:\n"
+        "        {\n"
+        "            NV_CTL_DEVICE_ONLY(nv);\n"
+        "            break;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    def test_banner_comment_does_not_blank_the_rest_of_the_file(self):
+        clean = ioctl_inventory.strip_c_noise(self.BANNER)
+        self.assertIn("case NV_ESC_RM_FREE:", clean)
+        self.assertIn("switch (cmd)", clean)
+
+    def test_stripping_preserves_line_numbering(self):
+        clean = ioctl_inventory.strip_c_noise(self.BANNER)
+        self.assertEqual(len(clean.splitlines()), len(self.BANNER.splitlines()))
+
+    def test_a_brace_inside_a_string_is_not_counted(self):
+        text = 'int f(void)\n{\n    p("{{{");\n    case NV_ESC_RM_FREE:\n}\n'
+        clean = ioctl_inventory.strip_c_noise(text)
+        self.assertEqual(clean.count("{"), 1)
+
+    # NV_ESC_RM_ALLOC's device check sits inside a switch on hClass, so it
+    # applies to some allocations and not others. A line-only scan either
+    # truncates the case at the inner label or reports the check as
+    # unconditional; both mislead the describe phase about which node to
+    # attach the description to.
+    NESTED = (
+        "        case NV_ESC_RM_ALLOC:\n"
+        "        {\n"
+        "            switch (hClass)\n"
+        "            {\n"
+        "                case NV01_ROOT:\n"
+        "                {\n"
+        "                    NV_CTL_DEVICE_ONLY(nv);\n"
+        "                    break;\n"
+        "                }\n"
+        "            }\n"
+        "            break;\n"
+        "        }\n"
+        "        case NV_ESC_RM_FREE:\n"
+        "        {\n"
+        "            NV_CTL_DEVICE_ONLY(nv);\n"
+        "            break;\n"
+        "        }\n"
+    )
+
+    def blocks(self):
+        return {lbl: (uncond, full)
+                for lbl, _, uncond, full in ioctl_inventory.case_blocks(self.NESTED)}
+
+    def test_nested_case_does_not_end_the_outer_case(self):
+        blocks = self.blocks()
+        self.assertIn("NV_ESC_RM_ALLOC", blocks)
+        self.assertIn("NV01_ROOT", blocks["NV_ESC_RM_ALLOC"][1])
+
+    def test_nested_assertion_is_not_reported_as_unconditional(self):
+        uncond, full = self.blocks()["NV_ESC_RM_ALLOC"]
+        self.assertNotIn("NV_CTL_DEVICE_ONLY", uncond)
+        self.assertIn("NV_CTL_DEVICE_ONLY", full)
+
+    def test_flat_assertion_is_reported_as_unconditional(self):
+        uncond, _ = self.blocks()["NV_ESC_RM_FREE"]
+        self.assertIn("NV_CTL_DEVICE_ONLY", uncond)
+
+    def test_request_encoding_matches_an_observed_trace_value(self):
+        # NV_ESC_RM_CONTROL is nr 0x2a and NVOS54_PARAMETERS measures 32
+        # bytes on x86-64. 0xc020462a is the value this pipeline has seen in a
+        # real strace, so it pins magic, direction and field order at once.
+        self.assertEqual(
+            hex(ioctl_inventory.rm_request(ord("F"), 0x2A, 32)), "0xc020462a")
+
+    def test_map_refuses_two_commands_on_one_request_number(self):
+        inventory = {"nodes": [{"commands": [
+            {"name": "A", "requests": ["0x1"], "is_argument_array": False,
+             "syzlang": "ioctl$A"},
+            {"name": "B", "requests": ["0x1"], "is_argument_array": False,
+             "syzlang": "ioctl$B"},
+        ]}]}
+        with self.assertRaises(ioctl_inventory.InventoryError) as cm:
+            ioctl_inventory.build_map(inventory)
+        self.assertIn("0x1", str(cm.exception))
+
+    def test_map_keys_are_what_trace2seed_looks_up(self):
+        inventory = {"nodes": [{"commands": [
+            {"name": "NV_ESC_RM_CONTROL", "requests": ["0xc020462a"],
+             "is_argument_array": False, "syzlang": "ioctl$NV_ESC_RM_CONTROL"},
+        ]}]}
+        mapping, _ = ioctl_inventory.build_map(inventory)
+        loaded = {k.lower(): v for k, v in mapping.items()
+                  if not k.startswith("comment")}
+        prog = trace2seed.convert(
+            'openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR) = 3\n'
+            'ioctl(3, 0xc020462a, 0x7ffd) = 0\n', loaded)
+        self.assertIn("ioctl$NV_ESC_RM_CONTROL(r0, 0xc020462a", prog)
 
 
 class TestReproHelpers(unittest.TestCase):

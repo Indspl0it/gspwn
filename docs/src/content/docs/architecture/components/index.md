@@ -1,10 +1,15 @@
 ---
 title: Components
-description: The fifteen modules in tools/, what each owns, and the dependencies between them.
+description: The nineteen modules in tools/, what each owns, and the dependencies between them.
 ---
 
-Fifteen files live in `tools/`, plus one data file. Thirteen are commands, one
-is the shared state library, and one is the test runner.
+Nineteen files live in `tools/`, plus one data file. Seventeen are commands,
+one is the shared state library, and one is the test runner.
+
+Three of the commands read the driver source and never touch a device:
+`ioctl_inventory.py`, `ctrl_surface.py` and `object_graph.py` derive the ioctl
+surface, the control command space and the object allocation DAG from a
+checkout. The `describe` phase models against those three outputs.
 
 | Module | Kind | Owns |
 |---|---|---|
@@ -20,9 +25,13 @@ is the shared state library, and one is the test runner.
 | [`corpus_ctl.py`](/gspwn/architecture/components/corpus-ctl/) | Command | The persistent seed bank |
 | [`knowledge_ctl.py`](/gspwn/architecture/components/knowledge-ctl/) | Command | The committed knowledge files |
 | [`trace2seed.py`](/gspwn/architecture/components/trace2seed/) | Command | strace to syz-program conversion |
+| [`ioctl_inventory.py`](/gspwn/architecture/components/ioctl-inventory/) | Command | The escape and UVM ioctl inventory, and the request numbers |
+| [`ctrl_surface.py`](/gspwn/architecture/components/ctrl-surface/) | Command | The RM control command space and its privilege classification |
+| [`object_graph.py`](/gspwn/architecture/components/object-graph/) | Command | The RM object allocation DAG and its chaining depth |
 | [`exec.py`](/gspwn/architecture/components/exec/) | Command | Logged command execution with retries |
 | [`build_kernel.sh`](/gspwn/architecture/components/build-kernel/) | Script | The instrumented kernel build |
 | [`selftest.py`](/gspwn/architecture/components/selftest/) | Test runner | The offline suite |
+| `register_check.py` | Command | The writing-register linter run in CI. No page yet |
 
 `tools/ioctl_map.json` is data: the map from ioctl request numbers to syzlang
 description names.

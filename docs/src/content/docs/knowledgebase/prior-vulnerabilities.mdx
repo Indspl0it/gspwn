@@ -1,0 +1,372 @@
+---
+title: Prior vulnerabilities
+description: "Publicly disclosed vulnerabilities in the NVIDIA GPU driver's local ioctl surface and in the NVIDIA Container Toolkit, classified by the layer NVIDIA names, with the public technical detail behind each."
+---
+
+NVIDIA discloses driver vulnerabilities through PSIRT security bulletins. The
+bulletins carry a CVE identifier, a one-sentence description, a CWE, a CVSS
+vector and the affected driver branches. They rarely name an ioctl, an escape
+code, a Resource Manager control command or a source function. This page
+records what the disclosed history establishes and marks the point where it
+stops.
+
+Two device-node populations divide the record. `nvidia.ko` and `nvidia-uvm.ko`
+expose `/dev/nvidiactl`, `/dev/nvidiaN`, `/dev/nvidia-uvm` and
+`/dev/nvidia-uvm-tools` to any process holding those nodes, at whatever
+privilege the process already has. Everything else in the GPU display driver
+package reaches a different attacker: the Windows kernel-mode driver
+`nvlddmkm.sys`, the user-mode driver libraries, the vGPU host plugin, the
+installer, `nvidia-modeset`, and GPU firmware. The tables below separate the
+first population from the second, and hold a third table for the disclosures
+where NVIDIA's own wording does not decide which one applies.
+
+## Sources
+
+| Source | Coverage | Form |
+| --- | --- | --- |
+| [github.com/NVIDIA/product-security](https://github.com/NVIDIA/product-security) | Bulletins first published 2022 to 2026 | Markdown, CSAF and CVE Record Format, one directory per bulletin |
+| [nvidia.com/en-us/security](https://www.nvidia.com/en-us/security/) | Every bulletin, including those predating the repository | HTML |
+| [NVD API 2.0](https://services.nvd.nist.gov/rest/json/cves/2.0) | 2018 to 2021 bulletins, where NVIDIA is the assigning CNA | JSON |
+
+NVIDIA began publishing bulletins to the GitHub repository on 1 October 2025,
+backfilling to 2022. Bulletins from 2018 to 2021 were recovered from NVD, which
+carries NVIDIA's own CVE descriptions because NVIDIA is the CNA for them.
+
+The machine-readable form of this page, one record per CVE with the
+classification and its basis, is `artifacts/surface/prior-cves.json`.
+
+## Classification method
+
+Each CVE lands in one of four buckets. The rules run in the order below, and
+the first that matches decides. Every record carries the rule that decided it.
+
+| Rule | Outcome |
+| --- | --- |
+| NVIDIA names the NVIDIA Container Toolkit | Container Toolkit |
+| A published researcher writeup names the kernel module and the entry point | Kernel modules |
+| NVIDIA names the Virtual GPU Manager, the vGPU plugin, a host driver, a user-mode layer, the installer, a D-Bus configuration file, GPU firmware, VBIOS, NVKMS or modeset | Outside both |
+| NVIDIA lists Windows platforms only, or scopes the sentence to the Windows driver | Outside both |
+| The CVSS attack vector is not `AV:L` | Outside both |
+| NVIDIA names `DxgkDdiEscape` or `nvlddmkm.sys`, lists Linux drivers as affected, and names no Linux entry point | Undetermined layer |
+| The affected-product list names no operating system and the sentence names no Linux module | Undetermined layer |
+| NVIDIA names the kernel mode layer, the kernel driver, a kernel module, `nvidia.ko`, the Unified Memory driver or UVM, on a Linux platform with a local attack vector | Kernel modules |
+| Otherwise | Undetermined layer |
+
+The third bucket collapses several distinct exclusions into one label. A
+Windows-only defect and a vGPU host defect are both outside the local Linux
+ioctl surface for different reasons, and the per-record basis in the JSON keeps
+them apart.
+
+## Totals
+
+| Bucket | Count |
+| --- | --- |
+| Kernel modules reachable by ioctl from an unprivileged local process | 61 |
+| Undetermined layer | 30 |
+| NVIDIA Container Toolkit | 10 |
+| Outside both | 140 |
+| Total classified | 241 |
+
+The 61 kernel-module CVEs fall by bulletin year as 1 in 2020, 3 in 2021, 26 in
+2022, 15 in 2023, 4 in 2024, 6 in 2025 and 6 in 2026. Two bulletins dominate
+the count. Bulletin [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415)
+of December 2022 carries 19 and bulletin
+[5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) of March 2023
+carries 12. Both were large batch fixes against the Linux kernel mode layer,
+and the descriptions inside each batch are close to identical, which limits how
+much the batch says about distinct code paths.
+
+## Kernel-module disclosures
+
+Vulnerabilities NVIDIA places in `nvidia.ko` or `nvidia-uvm.ko`, reachable over
+ioctl on the device nodes an unprivileged local process holds. The "Published
+mechanism" column carries only what a cited researcher source states. "None
+found" means no public writeup was located, and the NVIDIA sentence in the
+column before it is the whole public record.
+
+| CVE | Bulletin date | Bulletin | Layer as NVIDIA names it | CWE | CVSS | Fault as NVIDIA describes it | Published mechanism |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [CVE-2020-5967](https://nvd.nist.gov/vuln/detail/CVE-2020-5967) | 2020-06-25 | [5031](https://nvidia.custhelp.com/app/answers/detail/a_id/5031) | UVM | CWE-362 | 4.7 | A race condition may lead to a denial of service | None found |
+| [CVE-2021-1053](https://nvd.nist.gov/vuln/detail/CVE-2021-1053) | 2021-01-08 | [5142](https://nvidia.custhelp.com/app/answers/detail/a_id/5142) | kernel mode layer | CWE-20 | 5.5 | Improper validation of a user pointer may lead to denial of service | None found |
+| [CVE-2021-1056](https://nvd.nist.gov/vuln/detail/CVE-2021-1056) | 2021-01-08 | [5142](https://nvidia.custhelp.com/app/answers/detail/a_id/5142) | kernel mode layer (nvidia.ko) | CWE-276 | 7.1 | It does not completely honor operating system file system permissions to provide GPU device-level isolation | None found |
+| [CVE-2021-1076](https://nvd.nist.gov/vuln/detail/CVE-2021-1076) | 2021-04-21 | [5172](https://nvidia.custhelp.com/app/answers/detail/a_id/5172) | kernel mode layer | not assigned | 7.8 | Improper access control may lead to denial of service, information disclosure, or data corruption | None found |
+| [CVE-2022-21813](https://nvd.nist.gov/vuln/detail/CVE-2022-21813) | 2022-02-01 | [5312](https://nvidia.custhelp.com/app/answers/detail/a_id/5312) | kernel driver | CWE-280 | 6.1 | Improper handling of insufficient permissions or privileges may allow an unprivileged local user limited write access to protected memory | None found |
+| [CVE-2022-28181](https://nvd.nist.gov/vuln/detail/CVE-2022-28181) | 2022-05-24 | [5353](https://nvidia.custhelp.com/app/answers/detail/a_id/5353) | kernel mode layer | CWE-787 | 8.5 | An unprivileged regular user on the network can cause an out-of-bounds write through a specially crafted shader | Talos triggered it with a malformed compute shader. The faulting function is unpublished |
+| [CVE-2022-28183](https://nvd.nist.gov/vuln/detail/CVE-2022-28183) | 2022-05-24 | [5353](https://nvidia.custhelp.com/app/answers/detail/a_id/5353) | kernel mode layer | CWE-125 | 7.7 | An unprivileged regular user can cause an out-of-bounds read | None found |
+| [CVE-2022-31607](https://nvd.nist.gov/vuln/detail/CVE-2022-31607) | 2022-08-16 | [5383](https://nvidia.custhelp.com/app/answers/detail/a_id/5383) | kernel mode layer (nvidia.ko) | CWE-20 | 7.8 | A local user with basic capabilities can cause improper input validation | None found |
+| [CVE-2022-31615](https://nvd.nist.gov/vuln/detail/CVE-2022-31615) | 2022-08-16 | [5383](https://nvidia.custhelp.com/app/answers/detail/a_id/5383) | kernel mode layer | CWE-476 | 5.5 | A local user with basic capabilities can cause a null-pointer dereference | None found |
+| [CVE-2022-34665](https://nvd.nist.gov/vuln/detail/CVE-2022-34665) | 2022-08-16 | [5383](https://nvidia.custhelp.com/app/answers/detail/a_id/5383) | kernel mode layer | CWE-476 | 6.5 | A local user with basic capabilities can cause a null-pointer dereference | None found |
+| [CVE-2022-34666](https://nvd.nist.gov/vuln/detail/CVE-2022-34666) | 2022-08-16 | [5383](https://nvidia.custhelp.com/app/answers/detail/a_id/5383) | kernel mode layer | CWE-476 | 6.5 | A local user with basic capabilities can cause a null-pointer dereference | None found |
+| [CVE-2022-34670](https://nvd.nist.gov/vuln/detail/CVE-2022-34670) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer handler | CWE-197 | 7.8 | An unprivileged regular user can cause truncation errors when casting a primitive to a primitive of smaller size causes data to be lost in the conversion | None found |
+| [CVE-2022-34673](https://nvd.nist.gov/vuln/detail/CVE-2022-34673) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-190 | 4.4 | An out-of-bounds array access may lead to denial of service, information disclosure, or data tampering | None found |
+| [CVE-2022-34674](https://nvd.nist.gov/vuln/detail/CVE-2022-34674) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer handler | CWE-200 | 6.8 | A helper function maps more physical pages than were requested | None found |
+| [CVE-2022-34676](https://nvd.nist.gov/vuln/detail/CVE-2022-34676) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer handler | CWE-197 | 7.1 | An out-of-bounds read may lead to denial of service, information disclosure, or data tampering | None found |
+| [CVE-2022-34677](https://nvd.nist.gov/vuln/detail/CVE-2022-34677) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer handler | CWE-125 | 5.5 | An unprivileged regular user can cause an integer to be truncated | None found |
+| [CVE-2022-34678](https://nvd.nist.gov/vuln/detail/CVE-2022-34678) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer | CWE-476 | 6.5 | An unprivileged user can cause a null-pointer dereference | None found |
+| [CVE-2022-34679](https://nvd.nist.gov/vuln/detail/CVE-2022-34679) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer handler | CWE-476 | 5.5 | An unhandled return value can lead to a null-pointer dereference | None found |
+| [CVE-2022-34680](https://nvd.nist.gov/vuln/detail/CVE-2022-34680) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer handler | CWE-197 | 5.5 | An integer truncation can lead to an out-of-bounds read | None found |
+| [CVE-2022-34682](https://nvd.nist.gov/vuln/detail/CVE-2022-34682) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer | CWE-476 | 5.5 | An unprivileged regular user can cause a null-pointer dereference | None found |
+| [CVE-2022-34684](https://nvd.nist.gov/vuln/detail/CVE-2022-34684) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-125 | 5.3 | An off-by-one error may lead to data tampering or information disclosure | None found |
+| [CVE-2022-42254](https://nvd.nist.gov/vuln/detail/CVE-2022-42254) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-125 | 5.3 | An out-of-bounds array access may lead to denial of service, data tampering, or information disclosure | None found |
+| [CVE-2022-42255](https://nvd.nist.gov/vuln/detail/CVE-2022-42255) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-787 | 5.3 | An out-of-bounds array access may lead to denial of service, information disclosure, or data tampering | None found |
+| [CVE-2022-42256](https://nvd.nist.gov/vuln/detail/CVE-2022-42256) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-190 | 5.3 | An integer overflow in index validation may lead to denial of service, information disclosure, or data tampering | None found |
+| [CVE-2022-42257](https://nvd.nist.gov/vuln/detail/CVE-2022-42257) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-190 | 5.3 | An integer overflow may lead to information disclosure, data tampering or denial of service | None found |
+| [CVE-2022-42258](https://nvd.nist.gov/vuln/detail/CVE-2022-42258) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-190 | 5.3 | An integer overflow may lead to denial of service, data tampering, or information disclosure | None found |
+| [CVE-2022-42259](https://nvd.nist.gov/vuln/detail/CVE-2022-42259) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-190 | 4.4 | An integer overflow may lead to denial of service | None found |
+| [CVE-2022-42263](https://nvd.nist.gov/vuln/detail/CVE-2022-42263) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer handler | CWE-190 | 7.1 | An Integer overflow may lead to denial of service or information disclosure | None found |
+| [CVE-2022-42264](https://nvd.nist.gov/vuln/detail/CVE-2022-42264) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer | CWE-823 | 7.1 | An unprivileged regular user can cause the use of an out-of-range pointer offset | None found |
+| [CVE-2022-42265](https://nvd.nist.gov/vuln/detail/CVE-2022-42265) | 2022-12-20 | [5415](https://nvidia.custhelp.com/app/answers/detail/a_id/5415) | kernel mode layer (nvidia.ko) | CWE-190 | 5.3 | An integer overflow may lead to information disclosure or data tampering | None found |
+| [CVE-2023-0180](https://nvd.nist.gov/vuln/detail/CVE-2023-0180) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | a kernel mode layer handler | CWE-125 | 7.1 | May lead to denial of service or information disclosure | None found |
+| [CVE-2023-0181](https://nvd.nist.gov/vuln/detail/CVE-2023-0181) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | a kernel mode layer handler | CWE-280 | 7.1 | Memory permissions are not correctly checked | None found |
+| [CVE-2023-0183](https://nvd.nist.gov/vuln/detail/CVE-2023-0183) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer | CWE-787 | 7.1 | An out-of-bounds write can lead to denial of service and data tampering | None found |
+| [CVE-2023-0184](https://nvd.nist.gov/vuln/detail/CVE-2023-0184) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer handler | CWE-822 | 8.8 | May lead to denial of service, escalation of privileges, information disclosure, and data tampering | None found |
+| [CVE-2023-0185](https://nvd.nist.gov/vuln/detail/CVE-2023-0185) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer | CWE-196 | 6.7 | Sign conversion issues may lead to denial of service or information disclosure | None found |
+| [CVE-2023-0187](https://nvd.nist.gov/vuln/detail/CVE-2023-0187) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer handler | CWE-125 | 6.1 | An out-of-bounds read can lead to denial of service | None found |
+| [CVE-2023-0188](https://nvd.nist.gov/vuln/detail/CVE-2023-0188) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer handler | CWE-119 | 5.5 | An unprivileged user can cause an out-of-bounds read | None found |
+| [CVE-2023-0189](https://nvd.nist.gov/vuln/detail/CVE-2023-0189) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer handler | CWE-822 | 8.8 | May lead to code execution, denial of service, escalation of privileges, information disclosure, and data tampering | None found |
+| [CVE-2023-0190](https://nvd.nist.gov/vuln/detail/CVE-2023-0190) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer | CWE-476 | 5.5 | A NULL pointer dereference may lead to denial of service | None found |
+| [CVE-2023-0191](https://nvd.nist.gov/vuln/detail/CVE-2023-0191) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer handler | CWE-119 | 7.1 | An out-of-bounds access may lead to denial of service or data tampering | None found |
+| [CVE-2023-0198](https://nvd.nist.gov/vuln/detail/CVE-2023-0198) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer | CWE-119 | 6.6 | Improper restriction of operations within the bounds of a memory buffer can lead to denial of service, information disclosure, and data tampering | None found |
+| [CVE-2023-0199](https://nvd.nist.gov/vuln/detail/CVE-2023-0199) | 2023-03-30 | [5452](https://nvidia.custhelp.com/app/answers/detail/a_id/5452) | kernel mode layer handler | CWE-787 | 6.1 | An out-of-bounds write can lead to denial of service and data tampering | None found |
+| [CVE-2023-25516](https://nvd.nist.gov/vuln/detail/CVE-2023-25516) | 2023-06-26 | [5468](https://nvidia.custhelp.com/app/answers/detail/a_id/5468) | kernel mode layer | CWE-190 | 7.1 | An unprivileged user can cause an integer overflow | None found |
+| [CVE-2023-31018](https://nvd.nist.gov/vuln/detail/CVE-2023-31018) | 2023-11-01 | [5491](https://nvidia.custhelp.com/app/answers/detail/a_id/5491) | kernel mode layer | CWE-476 | 6.5 | An unprivileged regular user can cause a NULL-pointer dereference | None found |
+| [CVE-2023-31022](https://nvd.nist.gov/vuln/detail/CVE-2023-31022) | 2023-11-01 | [5491](https://nvidia.custhelp.com/app/answers/detail/a_id/5491) | kernel mode layer | CWE-476 | 5.5 | A NULL-pointer dereference may lead to denial of service | None found |
+| [CVE-2024-0075](https://nvd.nist.gov/vuln/detail/CVE-2024-0075) | 2024-02-28 | [5520](https://nvidia.custhelp.com/app/answers/detail/a_id/5520) | not named | CWE-476 | 6.1 | A user may cause a NULL-pointer dereference by accessing passed parameters the validity of which has not been checked | nvidia.ko. not stated by the source |
+| [CVE-2024-0078](https://nvd.nist.gov/vuln/detail/CVE-2024-0078) | 2024-02-28 | [5520](https://nvidia.custhelp.com/app/answers/detail/a_id/5520) | kernel mode layer | CWE-476 | 6.5 | A user in a guest can cause a NULL-pointer dereference in the host | None found |
+| [CVE-2024-0079](https://nvd.nist.gov/vuln/detail/CVE-2024-0079) | 2024-02-28 | [5520](https://nvidia.custhelp.com/app/answers/detail/a_id/5520) | kernel mode layer | CWE-476 | 6.5 | A user in a guest VM can cause a NULL-pointer dereference in the host | None found |
+| [CVE-2024-0090](https://nvd.nist.gov/vuln/detail/CVE-2024-0090) | 2024-06-06 | [5551](https://nvidia.custhelp.com/app/answers/detail/a_id/5551) | not named | CWE-787 | 7.8 | A user can cause an out-of-bounds write | nvidia.ko / nvidia-uvm.ko. not stated by the source |
+| [CVE-2024-53869](https://nvd.nist.gov/vuln/detail/CVE-2024-53869) | 2025-01-30 | [5614](https://nvidia.custhelp.com/app/answers/detail/a_id/5614) | Unified Memory driver | CWE-459 | 5.5 | An attacker could leak uninitialized memory | None found |
+| [CVE-2025-23277](https://nvd.nist.gov/vuln/detail/CVE-2025-23277) | 2025-07-24 | [5670](https://nvidia.custhelp.com/app/answers/detail/a_id/5670) | kernel mode driver | CWE-284 | 7.3 | An attacker could access memory outside bounds permitted under normal use cases | None found |
+| [CVE-2025-23280](https://nvd.nist.gov/vuln/detail/CVE-2025-23280) | 2025-10-09 | [5703](https://nvidia.custhelp.com/app/answers/detail/a_id/5703) | not named | CWE-416 | 7 | An attacker could cause a use-after-free | nvidia.ko. threadStateInit() / threadStateFree() in src/nvidia/src/kernel/core/thread_state.c |
+| [CVE-2025-23282](https://nvd.nist.gov/vuln/detail/CVE-2025-23282) | 2025-10-09 | [5703](https://nvidia.custhelp.com/app/answers/detail/a_id/5703) | not named | CWE-415 | 7 | An attacker might be able to use a race condition to escalate privileges | nvidia.ko, NV_ESC_ATTACH_GPUS_TO_FD (NV_IOCTL_BASE + 12 = 212). nvidia_ioctl() in kernel-open/nvidia/nv.c |
+| [CVE-2025-23300](https://nvd.nist.gov/vuln/detail/CVE-2025-23300) | 2025-10-09 | [5703](https://nvidia.custhelp.com/app/answers/detail/a_id/5703) | kernel driver | CWE-476 | 5.5 | A user could cause a null pointer dereference by allocating a specific memory resource | nvidia-uvm.ko, UVM_MAP_EXTERNAL_ALLOCATION. dupMemory() in src/nvidia/src/kernel/rmapi/nv_gpu_ops.c |
+| [CVE-2025-23332](https://nvd.nist.gov/vuln/detail/CVE-2025-23332) | 2025-10-09 | [5703](https://nvidia.custhelp.com/app/answers/detail/a_id/5703) | kernel module | CWE-476 | 5 | An attacker might be able to trigger a null pointer deference | nvidia.ko, NV_ESC_WAIT_OPEN_COMPLETE (NV_IOCTL_BASE + 18 = 218). nvidia_ioctl() in kernel-open/nvidia/nv.c |
+| [CVE-2025-33219](https://nvd.nist.gov/vuln/detail/CVE-2025-33219) | 2026-01-28 | [5747](https://nvidia.custhelp.com/app/answers/detail/a_id/5747) | kernel module | CWE-190 | 7.8 | An attacker could cause an integer overflow or wraparound | None found |
+| [CVE-2025-33221](https://nvd.nist.gov/vuln/detail/CVE-2025-33221) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | kernel driver | CWE-20 | 4.4 | A user could cause an incorrect permission assignment for a critical resource | None found |
+| [CVE-2026-24190](https://nvd.nist.gov/vuln/detail/CVE-2026-24190) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | kernel mode layer | CWE-862 | 7.8 | A user could cause improper access to GPU resources | None found |
+| [CVE-2026-24194](https://nvd.nist.gov/vuln/detail/CVE-2026-24194) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | a kernel mode layer handler | CWE-281 | 7.8 | A user could cause improper permission handling | None found |
+| [CVE-2026-24195](https://nvd.nist.gov/vuln/detail/CVE-2026-24195) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | UVM | CWE-20 | 7.1 | A user could cause improper input validation | None found |
+| [CVE-2026-24199](https://nvd.nist.gov/vuln/detail/CVE-2026-24199) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | kernel module | CWE-362 | 4.7 | A user could cause a race condition by reordering compiler or processor memory instructions | None found |
+
+## Undetermined-layer disclosures
+
+Linux, local, and disclosed under a GPU Display Driver bulletin, with no
+public statement naming the kernel module. Nothing here is assigned to
+`nvidia.ko` or `nvidia-uvm.ko` on the strength of the surrounding batch.
+
+| CVE | Bulletin date | Bulletin | CWE | CVSS | Fault as NVIDIA describes it | Reason the layer is undetermined |
+| --- | --- | --- | --- | --- | --- | --- |
+| [CVE-2018-6249](https://nvd.nist.gov/vuln/detail/CVE-2018-6249) | 2018-04-02 | [4649](https://nvidia.custhelp.com/app/answers/detail/a_id/4649) | CWE-476 | 8.8 | A NULL pointer dereference may lead to denial of service or potential escalation of privileges | Neither NVIDIA's sentence nor the affected-product list names an operating system, so the Linux kernel module cannot be confirmed. |
+| [CVE-2018-6260](https://nvd.nist.gov/vuln/detail/CVE-2018-6260) | 2018-11-13 | [4738](https://nvidia.custhelp.com/app/answers/detail/a_id/4738) | CWE-200 | 5.5 | That may allow access to application data processed on the GPU through a side channel exposed by the GPU performance counters. Local user access is required. This is not a network or remote attack vector | Neither NVIDIA's sentence nor the affected-product list names an operating system, so the Linux kernel module cannot be confirmed. |
+| [CVE-2021-1077](https://nvd.nist.gov/vuln/detail/CVE-2021-1077) | 2021-04-21 | [5172](https://nvidia.custhelp.com/app/answers/detail/a_id/5172) | CWE-404 | 5.5 | The software uses a reference count to manage a resource that is incorrectly updated | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2021-1090](https://nvd.nist.gov/vuln/detail/CVE-2021-1090) | 2021-07-22 | [5211](https://nvidia.custhelp.com/app/answers/detail/a_id/5211) | CWE-120 | 7.1 | The software reads or writes to a buffer by using an index or pointer that references a memory location after the end of the buffer | NVIDIA names 'nvlddmkm.sys', a Windows-only interface, while listing Linux drivers as affected and naming no Linux entry point, so the Linux-side handler is not identified. |
+| [CVE-2021-1093](https://nvd.nist.gov/vuln/detail/CVE-2021-1093) | 2021-07-22 | [5211](https://nvidia.custhelp.com/app/answers/detail/a_id/5211) | CWE-404 | 5.5 | The driver contains an assert() or similar statement that can be triggered by an attacker, which leads to an application exit or other behavior that is more severe than necessary, and may lead to denial of service or system crash | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2021-1094](https://nvd.nist.gov/vuln/detail/CVE-2021-1094) | 2021-07-22 | [5211](https://nvidia.custhelp.com/app/answers/detail/a_id/5211) | CWE-125 | 6.1 | An out of bounds array access may lead to denial of service or information disclosure | NVIDIA names 'nvlddmkm.sys', a Windows-only interface, while listing Linux drivers as affected and naming no Linux entry point, so the Linux-side handler is not identified. |
+| [CVE-2021-1095](https://nvd.nist.gov/vuln/detail/CVE-2021-1095) | 2021-07-22 | [5211](https://nvidia.custhelp.com/app/answers/detail/a_id/5211) | CWE-476 | 5.5 | In the kernel mode layer (nvlddmkm.sys) handlers for all control calls with embedded parameters where dereferencing an untrusted pointer may lead to denial of service | NVIDIA names 'nvlddmkm.sys', a Windows-only interface, while listing Linux drivers as affected and naming no Linux entry point, so the Linux-side handler is not identified. |
+| [CVE-2022-28184](https://nvd.nist.gov/vuln/detail/CVE-2022-28184) | 2022-05-24 | [5353](https://nvidia.custhelp.com/app/answers/detail/a_id/5353) | CWE-284 | 7.1 | An unprivileged regular user can access administrator- privileged registers | NVIDIA names 'nvlddmkm.sys', a Windows-only interface, while listing Linux drivers as affected and naming no Linux entry point, so the Linux-side handler is not identified. |
+| [CVE-2022-28185](https://nvd.nist.gov/vuln/detail/CVE-2022-28185) | 2022-05-24 | [5353](https://nvidia.custhelp.com/app/answers/detail/a_id/5353) | CWE-787 | 6.8 | An unprivileged regular user can cause an out-of-bounds write | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2023-25515](https://nvd.nist.gov/vuln/detail/CVE-2023-25515) | 2023-06-26 | [5468](https://nvidia.custhelp.com/app/answers/detail/a_id/5468) | CWE-822 | 7.8 | Unexpected untrusted data is parsed | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2024-0074](https://nvd.nist.gov/vuln/detail/CVE-2024-0074) | 2024-02-28 | [5520](https://nvidia.custhelp.com/app/answers/detail/a_id/5520) | CWE-788 | 7.1 | An attacker may access a memory location after the end of the buffer | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2024-0091](https://nvd.nist.gov/vuln/detail/CVE-2024-0091) | 2024-06-06 | [5551](https://nvidia.custhelp.com/app/answers/detail/a_id/5551) | CWE-822 | 7.8 | A user can cause an untrusted pointer dereference by executing a driver API | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2024-0092](https://nvd.nist.gov/vuln/detail/CVE-2024-0092) | 2024-06-06 | [5551](https://nvidia.custhelp.com/app/answers/detail/a_id/5551) | CWE-703 | 5.5 | An improper check or improper handling of exception conditions might lead to denial of service | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2024-0093](https://nvd.nist.gov/vuln/detail/CVE-2024-0093) | 2024-06-06 | [5551](https://nvidia.custhelp.com/app/answers/detail/a_id/5551) | CWE-200 | 6.5 | It can expose sensitive information to an actor that is not explicitly authorized to have access to that information | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2024-0126](https://nvd.nist.gov/vuln/detail/CVE-2024-0126) | 2024-12-05 | [5586](https://nvidia.custhelp.com/app/answers/detail/a_id/5586) | CWE-20 | 8.2 | Which may allow a privileged attacker to escalate permissions. Such an attack could lead to code execution, information disclosure, data corruption, or denial of service. The scope may extend to other components | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2024-0147](https://nvd.nist.gov/vuln/detail/CVE-2024-0147) | 2025-01-30 | [5614](https://nvidia.custhelp.com/app/answers/detail/a_id/5614) | CWE-416 | 5.5 | Referencing memory after it has been freed can lead to denial of service or data tampering | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2024-0149](https://nvd.nist.gov/vuln/detail/CVE-2024-0149) | 2025-01-30 | [5614](https://nvidia.custhelp.com/app/answers/detail/a_id/5614) | CWE-125 | 3.3 | Which could allow an attacker to prove the existence of files in locations to which they do not have access | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2024-0150](https://nvd.nist.gov/vuln/detail/CVE-2024-0150) | 2025-01-30 | [5614](https://nvidia.custhelp.com/app/answers/detail/a_id/5614) | CWE-787 | 7.1 | Data is written past the end or before the beginning of a buffer | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2025-23244](https://nvd.nist.gov/vuln/detail/CVE-2025-23244) | 2025-04-30 | [5630](https://nvidia.custhelp.com/app/answers/detail/a_id/5630) | CWE-863 | 7.8 | Which could allow an unprivileged attacker to escalate permissions | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2025-23278](https://nvd.nist.gov/vuln/detail/CVE-2025-23278) | 2025-07-24 | [5670](https://nvidia.custhelp.com/app/answers/detail/a_id/5670) | CWE-129 | 7.1 | An attacker might cause an improper index validation by issuing a call with crafted parameters | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2025-23286](https://nvd.nist.gov/vuln/detail/CVE-2025-23286) | 2025-07-24 | [5670](https://nvidia.custhelp.com/app/answers/detail/a_id/5670) | CWE-125 | 4.4 | An attacker could read invalid memory | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2025-23330](https://nvd.nist.gov/vuln/detail/CVE-2025-23330) | 2025-10-09 | [5703](https://nvidia.custhelp.com/app/answers/detail/a_id/5703) | CWE-476 | 5.5 | An attacker might be able to trigger a null pointer dereference | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2025-23345](https://nvd.nist.gov/vuln/detail/CVE-2025-23345) | 2025-10-09 | [5703](https://nvidia.custhelp.com/app/answers/detail/a_id/5703) | CWE-125 | 4.4 | An attacker might cause an out-of-bounds read | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2026-24182](https://nvd.nist.gov/vuln/detail/CVE-2026-24182) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | CWE-667 | 6.5 | An attacker could leak held driver locks | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2026-24187](https://nvd.nist.gov/vuln/detail/CVE-2026-24187) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | CWE-416 | 8.8 | An attacker could cause a use-after-free | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2026-24192](https://nvd.nist.gov/vuln/detail/CVE-2026-24192) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | CWE-681 | 7.8 | An attacker could cause an incorrect conversion between numeric types | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2026-24193](https://nvd.nist.gov/vuln/detail/CVE-2026-24193) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | CWE-787 | 7.8 | An attacker could cause an out-of-bounds write | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2026-24196](https://nvd.nist.gov/vuln/detail/CVE-2026-24196) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | CWE-125 | 7.1 | A user could cause an out-of-bounds read | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2026-24197](https://nvd.nist.gov/vuln/detail/CVE-2026-24197) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | CWE-1188 | 6.5 | An insecure default initialization of memory subsystem routing resources could lead to data corruption or a hang during partition reconfiguration | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+| [CVE-2026-24198](https://nvd.nist.gov/vuln/detail/CVE-2026-24198) | 2026-05-21 | [5821](https://nvidia.custhelp.com/app/answers/detail/a_id/5821) | CWE-200 | 5.6 | An advanced attacker could use a race condition to leak sensitive memory, which might cause limited exposure of sensitive information to an unauthorized actor | NVIDIA states a Linux local vulnerability without naming the layer, so the module cannot be determined from public sources. |
+
+## Container Toolkit disclosures
+
+The container admission path runs as root during container initialisation,
+before the container is confined. The attacker supplies the image and the
+runtime configuration.
+
+| CVE | Bulletin date | Bulletin | CWE | CVSS | Fault as NVIDIA describes it |
+| --- | --- | --- | --- | --- | --- |
+| [CVE-2024-0132](https://nvd.nist.gov/vuln/detail/CVE-2024-0132) | 2024-09-25 | [5582](https://nvidia.custhelp.com/app/answers/detail/a_id/5582) | CWE-367 | 9 | NVIDIA Container Toolkit 1.16.1 or earlier contains a Time-of-check Time-of-Use (TOCTOU) vulnerability when used with default configuration where a specifically crafted container image may gain access to the host file system. This does not impact use cases where CDI is used |
+| [CVE-2024-0133](https://nvd.nist.gov/vuln/detail/CVE-2024-0133) | 2024-09-25 | [5582](https://nvidia.custhelp.com/app/answers/detail/a_id/5582) | CWE-367 | 4.1 | In the default mode of operation allowing a specially crafted container image to create empty files on the host file system. This does not impact use cases where CDI is used |
+| [CVE-2024-0134](https://nvd.nist.gov/vuln/detail/CVE-2024-0134) | 2024-11-05 | [5585](https://nvidia.custhelp.com/app/answers/detail/a_id/5585) | CWE-61 | 4.1 | A specially crafted container image can lead to the creation of unauthorized files on the host. The name and location of the files cannot be controlled by an attacker |
+| [CVE-2024-0135](https://nvd.nist.gov/vuln/detail/CVE-2024-0135) | 2025-01-14 | [5599](https://nvidia.custhelp.com/app/answers/detail/a_id/5599) | CWE-653 | 7.6 | A specially crafted container image could lead to modification of a host binary |
+| [CVE-2024-0136](https://nvd.nist.gov/vuln/detail/CVE-2024-0136) | 2025-01-14 | [5599](https://nvidia.custhelp.com/app/answers/detail/a_id/5599) | CWE-653 | 7.6 | A specially crafted container image could lead to untrusted code obtaining read and write access to host devices. This vulnerability is present only when the NVIDIA Container Toolkit is configured in a nondefault way |
+| [CVE-2024-0137](https://nvd.nist.gov/vuln/detail/CVE-2024-0137) | 2025-01-14 | [5599](https://nvidia.custhelp.com/app/answers/detail/a_id/5599) | CWE-653 | 5.5 | A specially crafted container image could lead to untrusted code running in the host’s network namespace. This vulnerability is present only when the NVIDIA Container Toolkit is configured in a nondefault way |
+| [CVE-2025-23359](https://nvd.nist.gov/vuln/detail/CVE-2025-23359) | 2025-02-11 | [5616](https://nvidia.custhelp.com/app/answers/detail/a_id/5616) | CWE-367 | 8.3 | NVIDIA Container Toolkit for Linux contains a Time-of-Check Time-of-Use (TOCTOU) vulnerability when used with default configuration, where a crafted container image could gain access to the host file system |
+| [CVE-2025-23266](https://nvd.nist.gov/vuln/detail/CVE-2025-23266) | 2025-08-12 | [5659](https://nvidia.custhelp.com/app/answers/detail/a_id/5659) | CWE-426 | 9 | An attacker could execute arbitrary code with elevated permissions |
+| [CVE-2025-23267](https://nvd.nist.gov/vuln/detail/CVE-2025-23267) | 2025-08-12 | [5659](https://nvidia.custhelp.com/app/answers/detail/a_id/5659) | CWE-59 | 8.5 | An attacker could cause a link following by using a specially crafted container image |
+| [CVE-2026-24260](https://nvd.nist.gov/vuln/detail/CVE-2026-24260) | 2026-06-30 | [5850](https://nvidia.custhelp.com/app/answers/detail/a_id/5850) | CWE-367 | 8.5 | An attacker could cause a time-of-check time-of-use race condition |
+
+All ten sit in filesystem, mount and search-path logic: four
+time-of-check-to-time-of-use races (CWE-367), three improper isolation defects
+(CWE-653), two link-following defects (CWE-59 and CWE-61) and one untrusted
+search path (CWE-426). Wiz Research reported six of the ten and shared credit
+on a seventh. None is a memory-safety defect, and the class yields poorly to
+fuzzing.
+
+## Bug classes across the kernel-module record
+
+| CWE | Class | Count |
+| --- | --- | --- |
+| CWE-476 | NULL pointer dereference | 14 |
+| CWE-190 | Integer overflow or wraparound | 9 |
+| CWE-125 | Out-of-bounds read | 6 |
+| CWE-787 | Out-of-bounds write | 5 |
+| CWE-20 | Improper input validation | 4 |
+| CWE-197 | Numeric truncation error | 3 |
+| CWE-119 | Improper restriction of operations within a buffer | 3 |
+| CWE-362 | Race condition | 2 |
+| CWE-280 | Improper handling of insufficient permissions | 2 |
+| CWE-822 | Untrusted pointer dereference | 2 |
+| CWE-196 | Unsigned to signed conversion error | 1 |
+| CWE-200 | Exposure of sensitive information | 1 |
+| CWE-276 | Incorrect default permissions | 1 |
+| CWE-281 | Improper preservation of permissions | 1 |
+| CWE-284 | Improper access control | 1 |
+| CWE-415 | Double free | 1 |
+| CWE-416 | Use after free | 1 |
+| CWE-459 | Incomplete cleanup | 1 |
+| CWE-823 | Use of out-of-range pointer offset | 1 |
+| CWE-862 | Missing authorization | 1 |
+| Not assigned | | 1 |
+
+Thirty-four of the 61 fall in four classes: NULL pointer dereference, integer
+overflow, out-of-bounds read and out-of-bounds write. The distribution carries
+a reporting bias. CWE-476 is the cheapest class to observe, because a NULL
+dereference panics deterministically, and its share says as much about what
+gets noticed as about what exists.
+
+Five of the 61 name the Unified Memory driver: CVE-2020-5967, CVE-2024-0090,
+CVE-2024-53869, CVE-2025-23300 and CVE-2026-24195. The remaining 56 name the
+kernel mode layer or `nvidia.ko` without naming a subsystem inside it.
+
+## Disclosures with published technical detail
+
+Seven of the 241 have a public source naming the module, the entry point or the
+faulting function.
+
+| CVE | Module | Entry point | Function | Class | Source |
+| --- | --- | --- | --- | --- | --- |
+| CVE-2025-23300 | `nvidia-uvm.ko` | `UVM_MAP_EXTERNAL_ALLOCATION` | `dupMemory()` in `src/nvidia/src/kernel/rmapi/nv_gpu_ops.c` | NULL pointer dereference | [Quarkslab](https://blog.quarkslab.com/nvidia_gpu_kernel_vmalloc_exploit.html) |
+| CVE-2025-23280 | `nvidia.ko` | Not stated | `threadStateInit()` and `threadStateFree()` in `src/nvidia/src/kernel/core/thread_state.c` | Kernel stack use-after-free | [Quarkslab](https://blog.quarkslab.com/nvidia_gpu_kernel_vmalloc_exploit.html) |
+| CVE-2025-23282 | `nvidia.ko` | `NV_ESC_ATTACH_GPUS_TO_FD`, escape 212 | `nvidia_ioctl()` in `kernel-open/nvidia/nv.c` | Race condition giving use-after-free and double free | [Stealthium](https://stealthium.io/blog/nvidia-gpu-vulnerabilities), Ekoparty 2025 |
+| CVE-2025-23332 | `nvidia.ko` | `NV_ESC_WAIT_OPEN_COMPLETE`, escape 218 | `nvidia_ioctl()` in `kernel-open/nvidia/nv.c` | `ZERO_SIZE_PTR` dereference | [Stealthium](https://stealthium.io/blog/nvidia-gpu-vulnerabilities) |
+| CVE-2024-0090 | Not stated beyond the driver | Not stated | Not stated | Slab out-of-bounds write | [Moneta, NDSS 2025](https://www.ndss-symposium.org/wp-content/uploads/2025-218-paper.pdf) |
+| CVE-2024-0075 | Not stated beyond the driver | Not stated | Not stated | NULL pointer dereference | [Moneta, NDSS 2025](https://www.ndss-symposium.org/wp-content/uploads/2025-218-paper.pdf) |
+| CVE-2022-28181 | Kernel mode layer, both operating systems | Compute shader submission | Not stated | Out-of-bounds write | [Cisco Talos](https://blog.talosintelligence.com/nvidia-graphics-driver-vulnerability-roundup/) |
+
+The escape numbers verify against
+`kernel-open/common/inc/nv-ioctl-numbers.h` in `open-gpu-kernel-modules`, where
+`NV_IOCTL_BASE` is 200, `NV_ESC_ATTACH_GPUS_TO_FD` is `NV_IOCTL_BASE + 12` and
+`NV_ESC_WAIT_OPEN_COMPLETE` is `NV_IOCTL_BASE + 18`.
+
+The Zero Day Initiative's published advisory index carries no NVIDIA GPU driver
+entries. Its NVIDIA advisories target the AI and machine-learning frameworks.
+
+## Reporters
+
+The acknowledgement sections of the GPU Display Driver bulletins name who found
+what. Recurring reporters over the record:
+
+| Reporter | CVEs acknowledged | Note |
+| --- | --- | --- |
+| Piotr Bania, Cisco Talos | CVE-2022-28181, CVE-2022-28182, CVE-2022-34671, CVE-2024-0071, CVE-2024-0107, CVE-2024-0117 to CVE-2024-0121 | Shader processing, mostly the user-mode layer |
+| Thierry Doré, Quarkslab | CVE-2022-31606, CVE-2022-31612, CVE-2022-31616, CVE-2022-31617 | |
+| Sam Lovejoy and Valentina Palmiotti | CVE-2025-23282, CVE-2025-23332, CVE-2025-33219 | Presented at Ekoparty 2025 as CUDA de Grâce |
+| Jisoo Jang, Joonkyo Jung, Yongwan Jo and Dokyung Song, Yonsei University | CVE-2024-0090 | The Moneta authors |
+| Xiaochen Zou | CVE-2024-0131 | A StepStone author |
+| JunDong Xie, Ant Group Light-Year Security Lab | CVE-2025-23345, CVE-2026-24192, CVE-2026-24196, CVE-2026-24199 | |
+| Wiz Research | CVE-2024-0132 to CVE-2024-0137, CVE-2025-23359 | Container Toolkit |
+
+Two of the reporter groups on this list built GPU driver fuzzers and disclosed
+the bugs those fuzzers found. The overlap between the fuzzing literature and
+the acknowledgement sections is the strongest signal in the record that this
+surface responds to automated testing.
+
+## Published work on fuzzing this surface
+
+| Work | Venue and date | Target | Descriptions published |
+| --- | --- | --- | --- |
+| [Moneta](https://www.ndss-symposium.org/ndss-paper/moneta-ex-vivo-gpu-driver-fuzzing-by-recalling-in-vivo-execution-states/) | NDSS 2025, Yonsei University and KU Leuven | NVIDIA 530.41.03 open kernel modules, AMD Radeon, ARM Mali | Yes, at [github.com/yonsei-sslab/moneta](https://github.com/yonsei-sslab/moneta) |
+| [StepStone](https://www.cs.ucr.edu/~zhiyunq/pub/oakland26_gpu_fuzzing.pdf) | IEEE S&P 2026, UC Riverside | NVIDIA, AMD and Mali drivers through CUDA and Vulkan user-space libraries | Not located |
+| [Fuzzing the NVIDIA GPU Drivers](https://interruptlabs.co.uk/articles/fuzzing-the-nvidia-gpu-drivers) | Interrupt Labs, July 2026 | `nvidiactl`, `nvidiaN`, `nvidia-uvm`, `nvidia-uvm-tools` and the DRM nodes | No |
+| [BSOD](https://github.com/0xf4b1/bsod-kernel-fuzzing) | RAID 2021 | Binary-only driver fuzzing, the public version tailored to NVIDIA | Prototype published |
+| KernelGPT | Cited by StepStone as prior work | Automatic syzlang generation from kernel source by a large language model | Generated NVIDIA descriptions do not compile, per StepStone's evaluation |
+
+Upstream syzkaller carries no NVIDIA descriptions. At commit `1e72964b` of
+17 August 2026, the only match for "nvidia" under `sys/linux/` is the
+`typec_nvidia` sysfs path inside `auto.txt`, which belongs to the USB Type-C
+alternate-mode driver.
+
+Moneta's vendored syzkaller tree holds the only public NVIDIA syzlang, in
+`go/src/github.com/google/syzkaller/sys/linux/sys.txt`. It declares 30 named
+variants of `syz_ioctl_nvidia` plus a generic form, one per NV_ESC escape,
+covering the allocate, free, control, map, unmap, duplicate, share, export and
+import families. Its shape bounds what it can find:
+
+| Property | Value |
+| --- | --- |
+| Device nodes in `dev_nvidia` | `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-modeset` |
+| UVM nodes | Absent |
+| Escape enumeration | Complete for the escapes it names, keyed on the `_IOWR` size and the `'F'` magic |
+| Payload type for every escape except `NV_ESC_IOCTL_XFER_CMD` | `array[int8, N]`, an untyped byte run of the correct length |
+| `NVOS54_PARAMETERS.cmd`, the RM control multiplexer | Unmodelled |
+| RM object class numbers | Unmodelled |
+
+The escape space is therefore enumerated in public and the payload space is
+not. A byte-array payload reaches the escape dispatcher and mutates the control
+command number as random bytes, so a control command's own parameter block is
+reached only by chance. The size of that unmodelled space is on
+[RM control command surface](/gspwn/knowledgebase/rm-control-surface/): 1372
+exported methods behind the single `cmd` field.
+
+Interrupt Labs report writing syzlang for `nvidiaX`, `nvidiactl`,
+`nvidia-uvm`, `nvidia-uvm-tools` and the DRM nodes, including `NV_ESC_RM_ALLOC`
+and `NV_ESC_RM_CONTROL`, extracting constants with `syz-extract` against the
+`open-gpu-kernel-modules` headers. The descriptions are not published, no
+repository is named, and the article records no vulnerabilities found in
+fuzzing runs of about a day. It also records that syzkaller's `setuid` sandbox
+blocks access to the DRM nodes and that `namespace` does not.
+
+StepStone reports that KernelGPT's generated NVIDIA descriptions reference over
+60 missing structure or type definitions and do not compile under syzkaller
+beyond trivially fixable syntax. Its own 11 NVIDIA bugs name the functions they
+fired in: `devmem_page_to_chunk_locked`, `uvm_mmu_chunk_unmap`,
+`uvm_page_mask_test`, `portMemCmp`, `block_phys_page_address`, `mapFind_IMPL`,
+`uvm_gpu_chunk_get_gpu`, `nvidia_mmap_helper`, `remove_proc_entry`, and two
+NVKMS assertions. Seven of the eleven came through CUDA APIs and four through
+Vulkan.
+
+## Limits of the disclosed record
+
+| Question | State of the public record |
+| --- | --- |
+| Which NV_ESC escape a given CVE reaches | Answered for two CVEs out of 61 |
+| Which RM control command a given CVE reaches | Answered for none |
+| Which RM object class a given CVE involves | Answered for none |
+| Which UVM ioctl a given CVE reaches | Answered for one, CVE-2025-23300 |
+| Whether a given CVE is reachable from a container with `compute,utility` | Asserted for CVE-2025-23282 and CVE-2025-23332, unstated for the rest |
+| Which driver branch first introduced a defect | Never stated. Bulletins give the fixed version and never the introducing one |
+
+NVIDIA's bulletin sentences establish the layer and the weakness class. They do
+not establish the entry point. Any statement about which ioctl a historical CVE
+reached, absent one of the seven researcher sources above, is an inference and
+is marked as one in `artifacts/surface/prior-cves.json`.
+
+## See also
+
+- [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/)
+- [RM control command surface](/gspwn/knowledgebase/rm-control-surface/)
+- [UVM subsystem](/gspwn/knowledgebase/uvm/)
+- [Container admission path](/gspwn/knowledgebase/container-admission/)
+- [Container device access](/gspwn/knowledgebase/container-device-access/)
+- [Threat model](/gspwn/architecture/threat-model/)

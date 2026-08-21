@@ -32,29 +32,18 @@ into the container's mount namespace.
 
 ## Capabilities
 
-`NVIDIA_DRIVER_CAPABILITIES` selects which groups of libraries and nodes are
-injected. The default is `compute,utility`.
-
-| Capability | Injects |
-| --- | --- |
-| `compute` | CUDA and OpenCL support: `libcuda.so`, `/dev/nvidiactl`, `/dev/nvidiaN`, `/dev/nvidia-uvm` |
-| `utility` | NVML and its tools: `libnvidia-ml.so`, `nvidia-smi` |
-| `graphics` | OpenGL and Vulkan libraries |
-| `video` | NVENC and NVDEC: `libnvidia-encode.so`, `libnvcuvid.so` |
-| `display` | X11 and mode setting support, including `/dev/nvidia-modeset` |
-| `compat32` | The 32-bit build of the above |
-| `all` | Every capability the driver installation provides |
-
-A container asking for nothing gets `compute,utility`. That set is why
-`/dev/nvidia-uvm` is reachable from an ordinary GPU container and
-`/dev/nvidia-modeset` is not.
+`NVIDIA_DRIVER_CAPABILITIES` selects which groups of libraries and device nodes
+are injected. The default is `compute,utility`. The full value-to-node mapping,
+the environment variables that bypass it, and the difference between the two
+injection mechanisms are on
+[Container device access](/gspwn/knowledgebase/container-device-access/).
 
 ## Environment variables
 
 | Variable | Selects |
 | --- | --- |
 | `NVIDIA_VISIBLE_DEVICES` | Which GPUs are exposed: `all`, an index list, a UUID list, or `void` for none |
-| `NVIDIA_DRIVER_CAPABILITIES` | The capability set above |
+| `NVIDIA_DRIVER_CAPABILITIES` | The driver capability set, honoured by the legacy hook only |
 | `NVIDIA_REQUIRE_CUDA` | A version constraint the host driver must satisfy, checked before the container starts |
 | `NVIDIA_DISABLE_REQUIRE` | Skips the constraint check |
 
@@ -65,10 +54,14 @@ configured to honour image-supplied values.
 
 ## Two injection mechanisms
 
-| Mechanism | Device description | Applied by |
-| --- | --- | --- |
-| Legacy hook | Implicit. The hook resolves the driver installation at container creation time. | `nvidia-container-runtime-hook` calling `nvidia-container-cli` |
-| CDI | Explicit. A YAML or JSON specification lists every device node, mount and hook. | Any CDI-aware runtime, with no NVIDIA-specific shim |
+| Mechanism | Device description | Applied by | Selected when |
+| --- | --- | --- | --- |
+| Legacy hook | Implicit. The hook resolves the driver installation at container creation time. | `nvidia-container-runtime-hook` calling `nvidia-container-cli` | `mode` is set to `legacy` |
+| CDI | Explicit. A YAML or JSON specification lists every device node, mount and hook. | Any CDI-aware runtime, with no NVIDIA-specific shim | `mode` is `cdi`, or `jit-cdi`, which `mode = "auto"` resolves to on a host where NVML loads |
+
+The toolkit ships with `mode = "auto"`, so a current installation on a
+discrete-GPU host runs the CDI mechanism and generates the specification in
+memory at container creation time.
 
 CDI is the Container Device Interface, a runtime-agnostic specification.
 `nvidia-ctk cdi generate` writes a file under `/etc/cdi/` describing each
@@ -76,7 +69,11 @@ device as a named entity such as `nvidia.com/gpu=0`, and a CDI-aware runtime
 applies it directly. The resolution work moves from container creation time to
 specification generation time.
 
-## Worked example: docker run --gpus all
+## Worked example: docker run --gpus all under the legacy hook
+
+The sequence below traces `mode = "legacy"`. The CDI mechanism replaces steps
+3 through 5 with a generated specification, and selects a different device set.
+See [Container device access](/gspwn/knowledgebase/container-device-access/).
 
 1. The caller runs `docker run --gpus all <image>`. Docker translates `--gpus`
    into a device request and calls `nvidia-container-runtime`.
@@ -102,4 +99,5 @@ runs as the image's user.
 
 - [Partitioning modes](/gspwn/knowledgebase/partitioning/)
 - [Orchestration](/gspwn/knowledgebase/orchestration/)
+- [Container device access](/gspwn/knowledgebase/container-device-access/)
 - [Installed stack](/gspwn/knowledgebase/installed-stack/)

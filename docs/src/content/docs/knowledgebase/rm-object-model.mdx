@@ -23,11 +23,16 @@ flowchart TB
   ROOT --> DEV
   DEV --> SUB
   DEV --> VASPACE
-  VASPACE --> MEM
+  DEV --> MEM
   DEV --> CGRP
+  DEV --> CHAN
   CGRP --> CHAN
   CHAN --> ENG
 ```
+
+Edges are parent relationships as the driver's own class table declares them.
+A memory object is mapped into an address space by a later call, which is not
+a parent relationship and is not drawn here.
 
 ## The hierarchy
 
@@ -36,11 +41,18 @@ flowchart TB
 | Client | None. It is the root. | One process's session with the driver |
 | Device | Client | A physical GPU as the client sees it |
 | Subdevice | Device | One GPU, where a device may span several |
-| Address space | Device | A virtual address space for a context |
-| Memory | Address space | An allocation, host or device |
+| Address space | Device, or subdevice | A virtual address space for a context |
+| Memory | Device | An allocation, host or device |
 | Channel group | Device | A group of channels scheduled together |
-| Channel | Channel group | A queue that work is pushed into |
+| Channel | Device, or channel group | A queue that work is pushed into |
 | Engine object | Channel | A class binding the channel to compute, copy or a codec |
+
+Memory objects are parented by the device. Mapping an allocation into an
+address space is a separate escape acting on two existing handles, and no class
+in the driver's table names an address space as its parent. A channel accepts
+either the device or a channel group as its parent, so a channel group is
+optional. The authoritative list of legal parents per class is
+`src/nvidia/src/kernel/rmapi/resource_list.h`, one `RS_ENTRY` record per class.
 
 A handle is a 32-bit value chosen by the caller and validated by the driver
 against the client that owns it. Handles are not global: the same numeric value
@@ -108,8 +120,10 @@ reading the RM interface and assuming UVM follows it will be wrong.
    every device pointer the process later holds is an offset in it.
 4. Allocate memory objects for the kernel's data and map them into the address
    space. The mapping call returns the device virtual address.
-5. Allocate a channel group, then a channel inside it. The channel owns a
-   pushbuffer: a ring in memory that commands are written into.
+5. Allocate a channel group, then a channel inside it. A channel may also be
+   allocated directly under the device, and the group buys time-slice
+   scheduling across several channels. The channel owns a pushbuffer: a ring in
+   memory that commands are written into.
 6. Allocate an engine object on the channel, using the compute class for this
    architecture. The channel is now bound to the compute engine.
 7. Write the launch into the pushbuffer: the kernel's address, its grid and
