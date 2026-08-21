@@ -29,12 +29,15 @@ import campaign_ctl
 import corpus_ctl
 import coverage_ctl
 import crash_parse
+import cve_patch_map
 import gspwn_config
 import ioctl_inventory
 import knowledge_ctl
 import orchestrator_ctl
 import repro_ctl
 import pipeline_state as ps
+import surface_cov
+import syzlang_gen
 import trace2seed
 
 
@@ -661,6 +664,23 @@ class TestIoctlInventoryParsing(unittest.TestCase):
         with self.assertRaises(ioctl_inventory.InventoryError) as cm:
             ioctl_inventory.build_map(inventory)
         self.assertIn("0x1", str(cm.exception))
+
+    def test_version_stamp_is_never_read_as_a_request_number(self):
+        # The stamp shares tools/ioctl_map.json with the request numbers, so a
+        # key that trace2seed did not drop would be looked up as an ioctl.
+        inventory = {"nodes": [{"commands": [
+            {"name": "NV_ESC_RM_CONTROL", "requests": ["0xc020462a"],
+             "is_argument_array": False, "syzlang": "ioctl$NV_ESC_RM_CONTROL"},
+        ]}]}
+        mapping, _ = ioctl_inventory.build_map(
+            inventory, "610.57.04 (commit deadbee)")
+        self.assertEqual(mapping[ioctl_inventory.MAP_VERSION_KEY],
+                         "610.57.04 (commit deadbee)")
+        self.assertTrue(
+            ioctl_inventory.MAP_VERSION_KEY.startswith("comment"))
+        loaded = {k.lower(): v for k, v in mapping.items()
+                  if not k.startswith("comment")}
+        self.assertEqual(list(loaded), ["0xc020462a"])
 
     def test_map_keys_are_what_trace2seed_looks_up(self):
         inventory = {"nodes": [{"commands": [
@@ -3891,6 +3911,402 @@ class TestHarvestDoesNotFakeSuccess(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             crashlog_ctl.cmd_harvest("baremetal")
         self.assertIn("must run as root", str(cm.exception))
+
+
+class TestSyzlangSizeVerification(unittest.TestCase):
+    """A parameter struct whose parsed layout does not total its measured
+    sizeof is wrong. Emitting it anyway produces a description that compiles,
+    runs, and never reaches the driver, because the ioctl request number
+    encodes the size the driver expects."""
+
+    HEADER = """
+typedef struct
+{
+    NvU32 a;
+    NvU64 b;
+    NvU8  c;
+} FIX_PARAMS;
+"""
+    # a at 0, four bytes of padding, b at 8, c at 16, seven bytes of tail
+    # padding for the eight-byte alignment b forces.
+    TRUE_SIZE = 24
+
+    def emitter(self, sizes):
+        directory = tempfile.mkdtemp()
+        path = os.path.join(directory, "fix.h")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(self.HEADER)
+        index = syzlang_gen.TypeIndex()
+        index.scan_file(path, "fix.h")
+        return syzlang_gen.Emitter(index, sizes)
+
+    def test_a_layout_matching_the_measured_size_is_emitted_as_fields(self):
+        emitter = self.emitter({"FIX_PARAMS": self.TRUE_SIZE})
+        self.assertEqual(emitter.ensure("FIX_PARAMS"), "FIX_PARAMS")
+        self.assertEqual(emitter.size_mismatch, [])
+        self.assertEqual(emitter.opaque, [])
+        block = emitter.rendered["FIX_PARAMS"]
+        for field in ("a", "b", "c"):
+            self.assertIn("\t%s\t" % field, block.replace("       ", "\t"))
+
+    def test_the_emitted_struct_totals_the_measured_size(self):
+        """Padding is explicit and the struct is packed, so the emitted size
+        cannot depend on syzkaller's alignment rules agreeing with the
+        compiler's."""
+        emitter = self.emitter({"FIX_PARAMS": self.TRUE_SIZE})
+        emitter.ensure("FIX_PARAMS")
+        block = emitter.rendered["FIX_PARAMS"]
+        self.assertIn("[packed]", block)
+        total = 0
+        for line in block.splitlines():
+            if not line.startswith("\t"):
+                continue
+            syz = [p for p in line.split("\t") if p.strip()][-1]
+            if syz.startswith("array[const[0, int8],"):
+                total += int(syz.rsplit(",", 1)[1].strip(" ]"))
+            elif syz == "const[0, int8]":
+                total += 1
+            else:
+                total += {"int8": 1, "int16": 2, "int32": 4,
+                          "int64": 8}[syz]
+        self.assertEqual(total, self.TRUE_SIZE, block)
+
+    def test_a_layout_disagreeing_with_the_measured_size_is_reported(self):
+        emitter = self.emitter({"FIX_PARAMS": self.TRUE_SIZE + 8})
+        emitter.ensure("FIX_PARAMS")
+        self.assertEqual(emitter.size_mismatch,
+                         [("FIX_PARAMS", self.TRUE_SIZE, self.TRUE_SIZE + 8)])
+
+    def test_a_mismatched_struct_falls_back_to_the_measured_size(self):
+        measured = self.TRUE_SIZE + 8
+        emitter = self.emitter({"FIX_PARAMS": measured})
+        emitter.ensure("FIX_PARAMS")
+        self.assertIn("array[int8, %d]" % measured,
+                      emitter.rendered["FIX_PARAMS"])
+        self.assertEqual([name for name, _size, _why in emitter.opaque],
+                         ["FIX_PARAMS"])
+
+    def test_a_struct_with_neither_a_layout_nor_a_size_is_not_emitted(self):
+        """Nothing is guessed to fill a description. A command whose parameter
+        type cannot be sized is left out and counted."""
+        emitter = self.emitter({})
+        self.assertIsNone(emitter.ensure("ABSENT_PARAMS"))
+        self.assertEqual([name for name, _why in emitter.unresolved],
+                         ["ABSENT_PARAMS"])
+        self.assertNotIn("ABSENT_PARAMS", emitter.rendered)
+
+
+class CvePatchBracketing(unittest.TestCase):
+    """The three invariants that decide whether a release diff is evidence.
+
+    A wrong bracket produces a diff of a whole branch divergence and every
+    function in it reads as a security fix. A wrong path filter drops the RM
+    control handlers, which is most of the surface. A wrong line attribution
+    files a hunk under the previous function.
+    """
+
+    ROWS = [
+        # (product, platform, affected, updated)
+        ("GeForce", "Linux(R580)", "All prior to 580.95.05", "580.95.05"),
+        ("Tesla", "Linux(R535)", "All prior to 535.274.02", "535.274.02"),
+        ("GeForce", "Windows(R580)", "All prior to 581.42", "581.42"),
+        ("Virtual GPU Manager", "Red Hat Enterprise Linux KVM(R580)",
+         "580.82.02", "580.95.02(September 2025 Release)"),
+        ("Cloud Gaming", "Linux(R550)", "All prior to 550.00.00",
+         "550.00.00"),
+    ]
+
+    def test_only_linux_rows_for_the_open_modules_are_read(self):
+        self.assertEqual(cve_patch_map.linux_fix_versions(self.ROWS),
+                         {"580.95.05", "535.274.02"})
+
+    def resolve(self, tags, brackets):
+        """Run resolve_cves with git replaced by a fixed bracket table."""
+        record = {"cve": "CVE-2025-23280", "bulletin_id": "5703",
+                  "bulletin_date": "2025-10-09", "cwe": "CWE-416",
+                  "subsystem": None, "component_as_nvidia_words_it": ""}
+        original = cve_patch_map.bracket
+        cve_patch_map.bracket = lambda _src, tag: brackets.get(tag)
+        try:
+            return cve_patch_map.resolve_cves(
+                "unused", tags, [record],
+                {"CVE-2025-23280": self.ROWS})[0]
+        finally:
+            cve_patch_map.bracket = original
+
+    def test_a_version_absent_from_the_tags_is_reported_and_not_guessed(self):
+        out = self.resolve({"580.95.05"}, {"580.95.05": ("580.82.09",
+                                                         "580.95.05")})
+        self.assertEqual(out["fix_versions_stated"],
+                         ["535.274.02", "580.95.05"])
+        self.assertEqual(out["fix_versions_present_as_tag"], ["580.95.05"])
+        self.assertEqual([(p["from"], p["to"]) for p in out["tag_pairs"]],
+                         [("580.82.09", "580.95.05")])
+
+    def test_a_predecessor_on_another_branch_is_flagged(self):
+        """565.77..570.86.15 is a branch opening, not a release. Left
+        unflagged it contributes 528 changed files to the ranking."""
+        out = self.resolve({"580.95.05"}, {"580.95.05": ("565.77",
+                                                         "580.95.05")})
+        self.assertTrue(out["tag_pairs"][0]["cross_branch"])
+        out = self.resolve({"580.95.05"}, {"580.95.05": ("580.82.09",
+                                                         "580.95.05")})
+        self.assertFalse(out["tag_pairs"][0]["cross_branch"])
+
+    def test_the_path_filter_keeps_the_control_handlers(self):
+        keep = ["src/nvidia/src/kernel/rmapi/client_resource.c",
+                "src/nvidia/src/kernel/gpu/mem_mgr/mem_desc.c",
+                "kernel-open/nvidia-uvm/uvm_va_range.c",
+                "src/nvidia/arch/nvalloc/unix/src/escape.c"]
+        drop = ["kernel-open/nvidia-drm/nvidia-drm-drv.c",
+                "kernel-open/nvidia-modeset/nvidia-modeset-linux.c",
+                "src/nvidia/generated/g_client_resource_nvoc.c",
+                "version.mk"]
+        for path in keep:
+            self.assertTrue(cve_patch_map.path_in_scope(path, False), path)
+        for path in drop:
+            self.assertFalse(cve_patch_map.path_in_scope(path, False), path)
+        self.assertTrue(cve_patch_map.path_in_scope(
+            "src/nvidia/generated/g_client_resource_nvoc.c", True))
+
+    SOURCE = "\n".join([
+        "#include <nv.h>",                        # 1
+        "",                                       # 2
+        "static NV_STATUS _helper(NvU32 a)",      # 3
+        "{",                                      # 4
+        "    return a;",                          # 5
+        "}",                                      # 6
+        "",                                       # 7
+        "NV_STATUS",                              # 8
+        "memdescCreate",                          # 9
+        "(",                                      # 10
+        "    NvU64 Size",                         # 11
+        ")",                                      # 12
+        "{",                                      # 13
+        "    return NV_OK;",                      # 14
+        "}",                                      # 15
+    ])
+
+    def test_both_declarator_styles_are_recognised(self):
+        ranges = cve_patch_map.function_ranges(self.SOURCE)
+        self.assertEqual([name for name, _first, _last in ranges],
+                         ["_helper", "memdescCreate"])
+
+    def test_a_line_between_two_functions_is_attributed_to_neither(self):
+        ranges = cve_patch_map.function_ranges(self.SOURCE)
+        self.assertEqual(cve_patch_map.enclosing(ranges, 5), "_helper")
+        self.assertEqual(cve_patch_map.enclosing(ranges, 14), "memdescCreate")
+        self.assertIsNone(cve_patch_map.enclosing(ranges, 7))
+
+    def test_a_verdict_without_its_evidence_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "verdicts.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"verdicts": {"CVE-2024-0090": {
+                    "verdict": "located"}}}, handle)
+            with self.assertRaises(cve_patch_map.SourceError) as caught:
+                cve_patch_map.load_verdicts(path)
+            self.assertIn("basis", str(caught.exception))
+
+
+class SurfaceDenominator(unittest.TestCase):
+    """The denominator decides every ratio surface coverage reports. Counting
+    one call twice, or dropping the allocation the whole DAG hangs from, moves
+    the number without any campaign changing."""
+
+    def inventories(self, tmp, ctrl_methods=None, graph_records=None,
+                    version="610.57.04"):
+        source = {"path": tmp, "driver_version": version}
+        ioctl = {
+            "source": source,
+            "nodes": [
+                {"paths": ["/dev/nvidiactl"], "module": "nvidia", "commands": [
+                    {"name": "NV_ESC_CARD_INFO"},
+                    {"name": "NV_ESC_RM_CONTROL"},
+                    {"name": "NV_ESC_RM_ALLOC"},
+                ]},
+                {"paths": ["/dev/nvidia-uvm"], "module": "nvidia-uvm",
+                 "commands": [
+                     {"name": "UVM_REGISTER_CHANNEL", "reachable": True},
+                     {"name": "UVM_TEST_THING", "reachable": False,
+                      "reachability_gate": "uvm_enable_builtin_tests"},
+                 ]},
+                {"paths": ["/dev/nvidia-uvm-tools"], "module": "nvidia-uvm",
+                 "commands": [{"name": "UVM_TOOLS_INIT", "reachable": True}]},
+            ],
+            "dead_escapes": ["NV_ESC_RM_ADD_VBLANK_CALLBACK"],
+        }
+        ctrl = {"source": source, "methods": ctrl_methods if ctrl_methods
+                is not None else []}
+        graph = {"source": source, "records": graph_records
+                 if graph_records is not None else []}
+        for name, doc in (("ioctl-inventory.json", ioctl),
+                          ("rm-control-inventory.json", ctrl),
+                          ("rm-object-graph.json", graph)):
+            with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+        return tmp
+
+    def load(self, tmp):
+        original = (surface_cov.IOCTL_INV, surface_cov.CTRL_INV,
+                    surface_cov.OBJ_GRAPH)
+        surface_cov.IOCTL_INV = os.path.join(tmp, "ioctl-inventory.json")
+        surface_cov.CTRL_INV = os.path.join(tmp, "rm-control-inventory.json")
+        surface_cov.OBJ_GRAPH = os.path.join(tmp, "rm-object-graph.json")
+        try:
+            return surface_cov.load_targets()
+        finally:
+            (surface_cov.IOCTL_INV, surface_cov.CTRL_INV,
+             surface_cov.OBJ_GRAPH) = original
+
+    def test_the_two_multiplexer_escapes_are_not_counted_as_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, excluded, _ = self.load(self.inventories(tmp))
+        self.assertNotIn("NV_ESC_RM_CONTROL", targets)
+        self.assertNotIn("NV_ESC_RM_ALLOC", targets)
+        self.assertEqual(excluded["NV_ESC_RM_CONTROL"]["family"],
+                         "escape_mux")
+        self.assertIn("NV_ESC_CARD_INFO", targets)
+
+    def test_a_gsp_routed_command_is_excluded_and_still_counted(self):
+        methods = [{"reachability": "non_privileged", "handler": "fooCtrlCmd",
+                    "handler_compiled_out": True, "method_id": "0x1",
+                    "sdk_prefix": "NV0000"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, excluded, _ = self.load(
+                self.inventories(tmp, ctrl_methods=methods))
+        variant = "NV_ESC_RM_CONTROL_fooCtrlCmd"
+        self.assertNotIn(variant, targets)
+        self.assertEqual(excluded[variant]["family"], "control_gsp")
+
+    def test_a_privileged_command_is_absent_from_both_sides(self):
+        methods = [{"reachability": "privileged", "handler": "barCtrlCmd",
+                    "handler_compiled_out": False}]
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, excluded, _ = self.load(
+                self.inventories(tmp, ctrl_methods=methods))
+        variant = "NV_ESC_RM_CONTROL_barCtrlCmd"
+        self.assertNotIn(variant, targets)
+        self.assertNotIn(variant, excluded)
+
+    def test_the_fd_level_root_class_is_a_target(self):
+        """NV01_ROOT_CLIENT spells no RS_FLAGS_ALLOC_* flag because the fd is
+        the gate. Reading that as an unknown privilege drops the first call of
+        every program from the denominator."""
+        # The sentinel is spelled literally here and not read from
+        # surface_cov: object_graph.py writes it and surface_cov reads it, so
+        # it is a contract between two tools. A fixture built from the
+        # constant under test would pass whatever the constant said.
+        records = [{"alloc_privilege": "unclassified", "depth": 1,
+                    "parents": ["<root fd>"],
+                    "external_class": "NV01_ROOT_CLIENT"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, _, _ = self.load(
+                self.inventories(tmp, graph_records=records))
+        self.assertIn("NV_ESC_RM_ALLOC_NV01_ROOT_CLIENT", targets)
+
+    def test_an_unclassified_class_below_the_root_is_not_a_target(self):
+        records = [{"alloc_privilege": "unclassified", "depth": 3,
+                    "parents": ["NV01_DEVICE_0"], "external_class": "MYSTERY"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, _, _ = self.load(
+                self.inventories(tmp, graph_records=records))
+        self.assertNotIn("NV_ESC_RM_ALLOC_MYSTERY", targets)
+
+    def test_a_uvm_test_command_is_separated_by_its_gate_not_its_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, excluded, _ = self.load(self.inventories(tmp))
+        self.assertIn("UVM_REGISTER_CHANNEL", targets)
+        self.assertEqual(excluded["UVM_TEST_THING"]["family"], "uvm_test")
+        self.assertEqual(targets["UVM_TOOLS_INIT"]["family"], "uvm_tools")
+
+    def test_a_dead_escape_is_excluded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, excluded, _ = self.load(self.inventories(tmp))
+        self.assertNotIn("NV_ESC_RM_ADD_VBLANK_CALLBACK", targets)
+        self.assertEqual(
+            excluded["NV_ESC_RM_ADD_VBLANK_CALLBACK"]["family"],
+            "escape_dead")
+
+    def test_inventories_from_different_releases_are_refused(self):
+        """Mixing releases counts commands that do not coexist, and the ratio
+        that comes out looks ordinary."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self.inventories(tmp)
+            path = os.path.join(tmp, "rm-control-inventory.json")
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            doc["source"]["driver_version"] = "580.65.06"
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            with self.assertRaises(surface_cov.SurfaceError) as caught:
+                self.load(tmp)
+        self.assertIn("580.65.06", str(caught.exception))
+
+    def test_a_missing_inventory_is_refused_and_not_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(surface_cov.SurfaceError) as caught:
+                self.load(tmp)
+        self.assertIn("denominator", str(caught.exception))
+
+
+class SurfaceVariantScan(unittest.TestCase):
+    """One pattern reads a description file and a corpus program, because both
+    spell the variant the same way. A pattern that matched only the
+    declaration would report every corpus as exercising nothing."""
+
+    def scan(self, text, suffix):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "prog" + suffix)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return surface_cov.scan_variants([path], "test")
+
+    def test_a_syzlang_declaration_is_matched(self):
+        line = ("ioctl$NV_ESC_RM_CONTROL_fooCtrlCmd(fd fd_nvidiactl, "
+                "cmd const[0xc020462a], arg ptr[inout, params])")
+        self.assertIn("NV_ESC_RM_CONTROL_fooCtrlCmd", self.scan(line, ".txt"))
+
+    def test_a_corpus_call_site_is_matched(self):
+        prog = "r0 = openat(0xffffffffffffff9c, &(0x7f0)='/dev/nvidiactl')\n" \
+               "ioctl$UVM_REGISTER_CHANNEL(r0, 0x1b, &(0x7f00))\n"
+        self.assertIn("UVM_REGISTER_CHANNEL", self.scan(prog, ".syz"))
+
+    def test_a_plain_ioctl_without_a_variant_is_not_counted(self):
+        self.assertEqual(self.scan("ioctl(r0, 0x1b, 0x0)\n", ".syz"), {})
+
+
+class HistoryWorklistItems(unittest.TestCase):
+    """The round-1 worklist is the only steering signal that exists before a
+    campaign runs. An item naming a handler the method table does not spell is
+    an item no agent can act on."""
+
+    def test_the_nvoc_impl_suffix_is_stripped_from_the_variant(self):
+        """The source spells fooCtrlCmdBar_IMPL and the exported method table
+        spells fooCtrlCmdBar. syzlang_gen names the variant after the table."""
+        self.assertEqual(cve_patch_map._variant("fooCtrlCmdBar_IMPL"),
+                         "NV_ESC_RM_CONTROL_fooCtrlCmdBar")
+
+    def test_a_handler_without_the_suffix_is_left_alone(self):
+        self.assertEqual(cve_patch_map._variant("fooCtrlCmdBar"),
+                         "NV_ESC_RM_CONTROL_fooCtrlCmdBar")
+
+    def test_only_a_command_the_tenant_can_call_with_a_kernel_handler_passes(
+            self):
+        self.assertTrue(cve_patch_map._reachable(
+            {"reachability": "non_privileged", "kernel_side_handler": True}))
+        self.assertFalse(cve_patch_map._reachable(
+            {"reachability": "non_privileged", "kernel_side_handler": False}))
+        self.assertFalse(cve_patch_map._reachable(
+            {"reachability": "privileged", "kernel_side_handler": True}))
+
+    def test_the_header_path_is_repository_relative(self):
+        """The worklist is committed and read on another machine, so an
+        absolute path from whoever ran the tool is a broken pointer."""
+        absolute = os.path.join(cve_patch_map.REPO_ROOT, "artifacts",
+                                "surface", "cve-hotspots.json")
+        self.assertEqual(cve_patch_map._relative(absolute),
+                         "artifacts/surface/cve-hotspots.json")
 
 
 def pipeline_ctl_cmd_round_end(args):

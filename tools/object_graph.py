@@ -87,6 +87,26 @@ PRIV_FLAGS = [
 ]
 
 
+def driver_version(src):
+    """NVIDIA_VERSION from version.mk, so the output can be version-checked.
+
+    Every class number, parent list and privilege flag in the output belongs to
+    one driver release. A record that does not name its release cannot be
+    checked against the driver under test by tools/surface_verify.py.
+    """
+    path = os.path.join(src, "version.mk")
+    if not os.path.isfile(path):
+        logger.warning("no version.mk under %s, output will carry no version",
+                       src)
+        return None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        m = re.search(r"^NVIDIA_VERSION\s*=\s*(\S+)", fh.read(), re.M)
+    if not m:
+        logger.warning("version.mk at %s defines no NVIDIA_VERSION", path)
+        return None
+    return m.group(1)
+
+
 def table_path(src):
     """Absolute path to resource_list.h, validated at the boundary."""
     path = os.path.join(src, TABLE_REL)
@@ -273,7 +293,10 @@ def cmd_extract(args):
     graph, _ = build_graph(entries)
     depth = depths(graph)
     payload = {
-        "source": os.path.join(args.src, TABLE_REL),
+        "source": {
+            "path": os.path.join(args.src, TABLE_REL),
+            "driver_version": driver_version(args.src),
+        },
         "record_count": len(entries),
         "records": records(entries, graph, depth),
     }
@@ -371,6 +394,23 @@ def cmd_targets(args):
     return 0
 
 
+def add_shared(sub_parser):
+    """Accept --src and -v after the subcommand as well as before it.
+
+    argparse binds a parent-level option before the subcommand only, so
+    `object_graph.py extract --src DIR` is a usage error while
+    `object_graph.py --src DIR extract` works. Both orders read naturally and
+    the documentation uses the first, so each subparser repeats the options
+    with SUPPRESS defaults, which leaves the parent's value in place when the
+    subcommand does not carry one.
+    """
+    sub_parser.add_argument("--src", default=argparse.SUPPRESS,
+                            help="open-gpu-kernel-modules checkout")
+    sub_parser.add_argument("-v", "--verbose", action="store_true",
+                            default=argparse.SUPPRESS, help="log at DEBUG")
+    return sub_parser
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="object_graph.py",
@@ -382,19 +422,19 @@ def build_parser():
                     help="log at DEBUG")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("extract", help="write the JSON records")
+    p = add_shared(sub.add_parser("extract", help="write the JSON records"))
     p.add_argument("--out", default=os.path.join("artifacts", "surface",
                                                  "rm-object-graph.json"))
     p.set_defaults(func=cmd_extract)
 
-    p = sub.add_parser("summary", help="depth distribution and widest parents")
+    p = add_shared(sub.add_parser("summary", help="depth distribution and widest parents"))
     p.set_defaults(func=cmd_summary)
 
-    p = sub.add_parser("chain", help="shortest allocation chain to a class")
+    p = add_shared(sub.add_parser("chain", help="shortest allocation chain to a class"))
     p.add_argument("klass", metavar="CLASS")
     p.set_defaults(func=cmd_chain)
 
-    p = sub.add_parser("targets", help="parents ranked by subtree size")
+    p = add_shared(sub.add_parser("targets", help="parents ranked by subtree size"))
     p.add_argument("--top", type=int, default=15)
     p.set_defaults(func=cmd_targets)
     return ap

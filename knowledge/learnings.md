@@ -74,3 +74,6 @@ Allocation privilege in resource_list.h lives in the Flags field as RS_FLAGS_ALL
 ## 2026-08-21T19:44:19+00:00 — describe
 Tags: abi, parsing
 Two inconsistencies in resource_list.h break a naive parser. 15 records label the last field Required Access Right without the plural. 5 records declare RS_ANY_PARENT where the rest declare RS_LIST(classId(...)), and those five are the event and context-dma classes that attach under any allocated object.
+
+## 2026-08-21T21:23:03+00:00 — describe
+The RMCTRL privilege flag is necessary and not sufficient. 16 of the 531 control commands that are NON_PRIVILEGED with a kernel-side handler call rmclientIsCapableOrAdmin, rmclientIsCapable or rmclientIsAdmin inside the handler body, which the flag word does not show. subdeviceCtrlCmdGpuSetFabricAddr (0x2080016f) is flagged NON_PRIVILEGED and then checks NV_RM_CAP_EXT_FABRIC_MGMT. The 16 is a floor: the scan attributes a call to its enclosing function, so a check inside a helper the handler calls is invisible. Read the handler body before spending a round on any command the flag table calls reachable. Others in the set: the NVC637 gisubscription ExecPartitions family, NV2080 GpuGetPartitions and GpuSetPartitions, NV2080 GpuGetPids and GpuGetPidInfo, NV00F8 memoryfabricCtrlCmdDescribe, NVCBCA kccuapiCtrlCmdSubscribe.

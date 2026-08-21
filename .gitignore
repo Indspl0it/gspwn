@@ -1,6 +1,22 @@
 artifacts/*
 !artifacts/.gitkeep
 !artifacts/**/.gitkeep
+# The round-1 worklist is derived from public CVE data and from the
+# driver's own release tags, so it is the same kind of committed data as
+# tools/ioctl_map.json. Round 1 reads it before any campaign has run, and
+# regenerating it needs network access to the PSIRT bulletins and a
+# tagged checkout, so a fresh clone that lacked it would start blind.
+!artifacts/surface/
+artifacts/surface/*
+!artifacts/surface/worklist-round1.md
+# The Track U harnesses are hand-written C and Go, and no phase
+# regenerates them: they were authored offline from the container
+# sources at a pinned commit. Losing them to a clone would lose the
+# work outright. Their seed corpora and dictionaries are inputs and
+# belong with them. Campaign output goes to artifacts/runs/ and stays
+# ignored.
+!artifacts/harnesses/
+!artifacts/harnesses/**
 state/*
 !state/.gitkeep
 # knowledge/ itself is committed on purpose — it is the only thing that

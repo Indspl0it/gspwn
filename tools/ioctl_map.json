@@ -4,6 +4,7 @@
   "comment_arrays": "NV_ESC_CARD_INFO and NV_ESC_ATTACH_GPUS_TO_FD take argument arrays: the driver accepts any nonzero multiple of the element size, so the request number carries an element count and no fixed key covers the command. The keys below are the one-element form. A trace using more elements reports the command as unmapped, which is a trace2seed limitation and not a gap in this map.",
   "comment_uvm": "UVM keys are bare command numbers, not _IOC-encoded: uvm.c switches on the raw cmd and UVM_IOCTL_BASE(i) expands to i on Linux. They are small integers, so they are matched on any nvidia fd trace2seed tracks, including /dev/nvidiactl where they mean nothing.",
   "comment_excluded": "The UVM_TEST_* commands are omitted. uvm_test_ioctl() refuses every one of them unless the module is loaded with uvm_enable_builtin_tests=1. Their numbers are in the inventory JSON if a build turns them on.",
+  "comment_driver_version": "610.57.04 (commit e4a5faa2)",
   "0xc0384627": "ioctl$NV_ESC_RM_ALLOC_MEMORY",
   "0xc0144628": "ioctl$NV_ESC_RM_ALLOC_OBJECT",
   "0xc0104629": "ioctl$NV_ESC_RM_FREE",

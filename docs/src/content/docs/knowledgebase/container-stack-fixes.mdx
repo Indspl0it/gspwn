@@ -1,0 +1,208 @@
+---
+title: Container stack fixes
+description: "The security fix history of libnvidia-container and nvidia-container-toolkit, mapped commit by commit to the NVIDIA bulletins that disclosed the defects, with the release evidence behind each mapping and the disclosures no commit could be tied to."
+---
+
+[Prior vulnerabilities](/gspwn/knowledgebase/prior-vulnerabilities/) records what
+NVIDIA disclosed about the Container Toolkit. This page records what the two
+repositories did about it. Both are public and both carry the fixes in full
+history, so a disclosure that names an affected version and an updated version
+can be checked against the commits that shipped between them.
+
+The NVIDIA Container Toolkit is two programs in two languages. The Go program
+`nvidia-container-toolkit` implements the OCI runtime hook, the CDI hook
+binaries and the CDI spec generator. The C library `libnvidia-container`
+performs the mounts, builds the device nodes and runs `ldconfig` inside the
+container. The Go repository carries the C library as the git submodule
+`third_party/libnvidia-container` and pins it by commit, so a toolkit release
+names exactly one library commit. That pin is the link between the two
+histories and the evidence behind every mapping below.
+
+## Sources
+
+| Source | Coverage | Form |
+| --- | --- | --- |
+| [github.com/NVIDIA/libnvidia-container](https://github.com/NVIDIA/libnvidia-container) | 869 commits, 117 tags, 2017 to 2026 | git |
+| [github.com/NVIDIA/nvidia-container-toolkit](https://github.com/NVIDIA/nvidia-container-toolkit) | 3403 commits, 101 tags, 2019 to 2026 | git |
+| [github.com/NVIDIA/product-security](https://github.com/NVIDIA/product-security) | Bulletin 5582, 5585, 5599, 5616, 5659 and 5850, each with an affected-version and updated-version table | Markdown, CSAF and CVE Record Format |
+
+## The security-fork merge marker
+
+GitHub gives a private security advisory its own fork of the repository. When
+the fix is merged back, the merge commit carries the subject `Merge commit from
+fork` and nothing else. The subject is written by the forge and not by a commit
+author, so it identifies a coordinated security fix without depending on
+anyone's commit message discipline.
+
+`libnvidia-container` holds 2 of these merges. `nvidia-container-toolkit` holds
+8, four of which are pairs: the same fix merged once to `main` and once to a
+maintenance branch, producing two merges with the same subject and different
+first release tags.
+
+| Repository | Merge | Date | Fix carried | First release tag |
+| --- | --- | --- | --- | --- |
+| libnvidia-container | `16f37fc` | 2024-12-04 | Create virtual copy of host ldconfig binary before calling `fexecve()` | v1.17.3 |
+| libnvidia-container | `f23e5e5` | 2025-01-23 | Add `no-cntlibs` CLI option to `nvidia-container-cli` | v1.17.4 |
+| nvidia-container-toolkit | `8c9d3d8f` | 2024-10-31 | Check for valid paths in create-symlinks hook | v1.17.0 |
+| nvidia-container-toolkit | `7ae5c290` | 2025-01-23 | Disable mounting of compat libs from container by default | v1.18.0 |
+| nvidia-container-toolkit | `462ca9f9` | 2025-05-16 | Run update-ldcache in isolated namespaces | v1.17.7 |
+| nvidia-container-toolkit | `ac8f190c` | 2025-05-16 | Run update-ldcache in isolated namespaces | v1.18.0 |
+| nvidia-container-toolkit | `d6f61079` | 2025-05-30 | Add `NVIDIA_CTK_DEBUG=false` to hook envs | v1.17.8 |
+| nvidia-container-toolkit | `450f73a0` | 2025-05-30 | Add `NVIDIA_CTK_DEBUG=false` to hook envs | v1.18.0 |
+| nvidia-container-toolkit | `3e9bab5e` | 2026-05-21 | Use `filepath-securejoin/pathrs-lite` in cudacompat hook | v1.19.1 |
+| nvidia-container-toolkit | `ae297839` | 2026-05-21 | Use `filepath-securejoin/pathrs-lite` in cudacompat hook | v1.20.0 |
+
+`7ae5c290` first appears in v1.18.0 because it was merged to `main`. The same
+change reached v1.17.4 through the maintenance branch as the plain commit
+`f2b3e8d3`. Bulletin 5616 names that release for CVE-2025-23359.
+
+## Submodule pin per toolkit release
+
+Every mapping between a bulletin and a C-library commit runs through this
+table. A toolkit release ships exactly the library commit it pins.
+
+| Toolkit release | Date | Pinned libnvidia-container commit |
+| --- | --- | --- |
+| v1.16.0 | 2024-07-15 | `4c2494f` |
+| v1.16.1 | 2024-07-23 | `4c2494f` |
+| v1.16.2 | 2024-09-24 | `921e2f3` |
+| v1.17.0 | 2024-10-31 | `63d366e` |
+| v1.17.1 | 2024-11-08 | `63d366e` |
+| v1.17.2 | 2024-11-15 | `63d366e` |
+| v1.17.3 | 2024-12-04 | `16f37fc` |
+| v1.17.4 | 2025-01-23 | `f23e5e5` |
+| v1.17.5 | 2025-03-07 | `f23e5e5` |
+| v1.17.6 | 2025-04-22 | `a198166` |
+| v1.17.7 | 2025-05-16 | `d26524a` |
+| v1.17.8 | 2025-05-30 | `6eda4d7` |
+| v1.18.0 | 2025-10-21 | `889a3bb` |
+| v1.19.0 | 2026-03-10 | `7585946` |
+| v1.19.1 | 2026-05-21 | `7585946` |
+
+Two rows carry most of the weight. v1.16.2 advanced the pin across the four
+library commits that include `ad1f8c8`, and v1.17.4 advanced it to the
+`f23e5e5` security-fork merge.
+
+## Disclosure to commit
+
+Evidence is stated per row and never assumed. A release-version match plus a
+diff whose mechanism matches the bulletin's own description of the fault counts
+as evidence. A plausible diff on its own does not, and those rows say so.
+
+| CVE | Updated version | Fix commits | Component | Evidence |
+| --- | --- | --- | --- | --- |
+| [CVE-2024-0132](https://nvd.nist.gov/vuln/detail/CVE-2024-0132) | 1.16.2 | `e383b75a`, `ad1f8c8` | Both | Both commits first ship in v1.16.2, the release bulletin 5582 names. `e383b75a` adds `assertPathInRoot` to `createLink` in the create-symlinks hook and converts two silently-continuing warnings into errors. `ad1f8c8` routes every mount destination through the new `mount_in_root`, which resolves the destination inside the container rootfs before mounting. The bulletin describes a crafted image gaining host filesystem access through a time-of-check-to-time-of-use race, and both changes close a path that resolved outside the root |
+| [CVE-2024-0133](https://nvd.nist.gov/vuln/detail/CVE-2024-0133) | 1.16.2 | `ad1f8c8` | libnvidia-container | Same release. `ad1f8c8` replaces `file_mode` with the new `file_mode_nofollow` in `mount_files` and `file_create`, and raises an error when the resolved source is a directory or a symlink. The bulletin describes a crafted image creating empty files on the host, which is the effect of `file_create` on a mount destination that resolved outside the rootfs |
+| [CVE-2024-0134](https://nvd.nist.gov/vuln/detail/CVE-2024-0134) | 1.17 | `8c9d3d8f` | nvidia-container-toolkit | A security-fork merge dated 2024-10-31, first shipped in v1.17.0 tagged the same day, five days before bulletin 5585. It rewrites `createLink` to resolve the link path with `symlink.FollowSymlinkInScope` against the container root and vendors `moby/sys/symlink` for it. The CWE is CWE-61, UNIX symbolic link following |
+| [CVE-2024-0135](https://nvd.nist.gov/vuln/detail/CVE-2024-0135) | 1.17.1 | Not located | nvidia-container-toolkit | The v1.17.0 to v1.17.1 range holds three non-version commits and no security-fork merge, and the library pin is unchanged across it. One of the three, `324096c9`, resolves the parent of the symlink in scope in place of the full link path, which is security-shaped and version-matched. One commit cannot account for three CVEs disclosed together, and nothing distinguishes which of them it would answer, so no mapping is asserted |
+| [CVE-2024-0136](https://nvd.nist.gov/vuln/detail/CVE-2024-0136) | 1.17.1 | Not located | nvidia-container-toolkit | As above. The bulletin states the defect is present only in a non-default configuration, which is consistent with a remediation in defaults or documentation and not in a code path |
+| [CVE-2024-0137](https://nvd.nist.gov/vuln/detail/CVE-2024-0137) | 1.17.1 | Not located | nvidia-container-toolkit | As above |
+| [CVE-2025-23359](https://nvd.nist.gov/vuln/detail/CVE-2025-23359) | 1.17.4 | `f2b3e8d3`, `2310ed76`, `f23e5e5` | Both | v1.17.4 is the release bulletin 5616 names, and it does two things at once. It adds the `allow-cuda-compat-libs-from-container` feature flag, defaulting to off, and it advances the library pin to the `f23e5e5` security-fork merge. That merge adds the `no-cntlibs` option and gates `find_library_paths`, renamed to `find_compat_library_paths`, behind it. The gated function globs `<rootfs>/<cudart_dir>/compat/lib*.so.*` inside the image, which is the container-supplied path the bulletin's race acts on |
+| [CVE-2025-23266](https://nvd.nist.gov/vuln/detail/CVE-2025-23266) | 1.17.8 | `d6f61079` | nvidia-container-toolkit | A security-fork merge first shipped in v1.17.8, the release bulletin 5659 names. It sets an explicit `Env` on every generated CDI hook. Without one, the OCI runtime passes the container's own environment to a `createContainer` hook running as root, which is an untrusted search path. The CWE is CWE-426 |
+| [CVE-2025-23267](https://nvd.nist.gov/vuln/detail/CVE-2025-23267) | 1.17.8 | `462ca9f9` | nvidia-container-toolkit | Bulletin 5659 names the update-ldcache hook in the description and states that updating to v1.17.7 alone addresses this CVE. `462ca9f9` is the security-fork merge first shipped in v1.17.7, titled "Run update-ldcache in isolated namespaces". It moves the `ldconfig` invocation into a re-executed child in fresh mount and PID namespaces. The CWE is CWE-59, link following |
+| [CVE-2026-24260](https://nvd.nist.gov/vuln/detail/CVE-2026-24260) | 1.19.1 | `3e9bab5e` | nvidia-container-toolkit | A security-fork merge first shipped in v1.19.1, the release bulletin 5850 names. It replaces the container-root path handling in the cudacompat and create-symlinks hooks with `cyphar.com/filepath-securejoin/pathrs-lite`, a library whose purpose is race-free path resolution inside a root. The CWE is CWE-367 |
+
+Seven of the ten disclosures map to a commit with stated evidence. Three do not.
+
+## C-library fix commits
+
+The commits `patch_mine.py` identifies in `libnvidia-container`, with the
+function each one touched. Fix commits that only adjust the seccomp allowlist
+are grouped, because there are nine of them and each adds one syscall after a
+real image failed.
+
+| Commit | Date | Function | Bug class | First release |
+| --- | --- | --- | --- | --- |
+| `b144b4b` | 2017-07-17 | `symlink_libraries` | Link following inside user namespaces | v1.0.0 |
+| `d4032e1` | 2017-08-14 | `nvc_device_mount` | Device node validation | v1.0.0 |
+| `fe4925e` | 2017-09-18 | Device identifier parsing | Input validation | v1.0.0 |
+| `77c1cbc` | 2019-06-14 | `resolve_next_symlink`, `create_jetson_symlinks` | Link following | Unreleased on `main` |
+| `5ae7360` | 2020-12-07 | `find_library_paths` | Link following. Replaces `path_join` with `path_resolve_full` so an absolute symlink in the container's compat directory resolves inside the rootfs | v1.3.1 |
+| `ad1f8c8` | 2024-09-05 | `mount_files`, `mount_directory`, `mount_firmware`, `file_create`, new `mount_in_root` and `file_mode_nofollow` | Link following and containment. Refuses a directory or symlink source and resolves every destination inside the rootfs | v1.16.2 |
+| `38dc3d6` | 2024-09-18 | `main` | Memory leak of the driver option string | v1.16.2 |
+| `ff83efb` | 2024-10-02 | `nvc_ldcache_update`, new `open_as_memfd` | Execution path. Copies the host `ldconfig` into a sealed `memfd` before `fexecve`, so the binary executed inside the container cannot be the host file | v1.17.3 |
+| `f23e5e5` | 2025-01-23 | `nvc_container_new`, `find_compat_library_paths`, `configure_parser`, `list_parser` | Containment. Gates the container's CUDA compat directory behind an opt-in | v1.17.4 |
+| `9e08681` | 2025-05-27 | `nvc_ldcache_update` | Pointer to an object outside its lifetime. The `argv` array was a compound literal declared inside two conditional blocks, and a C11-conforming compiler ends its lifetime at the closing brace | v1.17.8 |
+| Nine commits between 2018 and 2025 | | `limit_syscalls` | Seccomp allowlist completeness. Each adds one syscall `ldconfig` needed on some image | v1.0.0 to v1.18.0 |
+
+`ff83efb` is the fix carried by the `16f37fc` security-fork merge, and no
+bulletin names v1.17.3 as an updated version. It is a coordinated security fix
+whose disclosure is not identifiable from public sources.
+
+## Fix frequency by file
+
+Counted over commits dated 2019-01-01 and later, excluding packaging and
+vendored trees. A file touched by more fix commits has held more defects.
+
+| File | Fix commits | Language |
+| --- | --- | --- |
+| `src/nvc_ldcache.c` | 18 | C |
+| `src/nvc_mount.c` | 9 | C |
+| `src/nvc_container.c` | 4 | C |
+| `src/utils.c` | 2 | C |
+| `src/cli/configure.c` | 2 | C |
+| `src/dxcore.c` | 2 | C |
+
+| Function | Fix commits |
+| --- | --- |
+| `nvc_ldcache_update` | 10 |
+| `limit_syscalls` | 9 |
+| `nvc_driver_mount` | 3 |
+| `mount_directory` | 3 |
+| `mount_files` | 3 |
+| `change_rootfs` | 3 |
+
+The same count over `nvidia-container-toolkit` since 2024-01-01 puts
+`internal/ldconfig/ldconfig.go` first with 26, `create-symlinks.go` second with
+21 and `update-ldcache.go` third with 17. Both repositories concentrate their
+fix history in the same operation: running the container's `ldconfig` and
+creating the symlinks that make the injected driver libraries resolvable.
+
+## Bug classes across the two repositories
+
+| Class | Count | Repository |
+| --- | --- | --- |
+| Link following | 5 | Both |
+| Containment of a resolved path inside a root | 4 | Both |
+| Execution path and hook environment | 3 | Both |
+| Seccomp allowlist completeness | 9 | libnvidia-container |
+| Memory safety in C | 2 | libnvidia-container |
+| Out-of-bounds slice in Go | 1 | nvidia-container-toolkit |
+
+The two memory-safety entries are `38dc3d6`, a leak of one heap string at exit,
+and `9e08681`, a dereference of a pointer to an object whose lifetime had ended.
+Neither is attacker-influenced. The disclosed Container Toolkit record contains
+no memory-safety defect at all, and the fix record adds two that were never
+disclosed and were never reachable from a container image.
+
+The single Go out-of-bounds is commit `232dda7` of 2026-05-07, which clamps both
+bounds of a slice expression in `trim` inside the cudacompat ELF note parser.
+An Orin library's note padding drove the expression past the end of the section
+data. Go bounds-checks, so the fault is a panic, and the regression input is
+committed as `testdata/compat/libcuda.orin.13.2.1.so.1.1`.
+
+## Reproducing this record
+
+`tools/patch_mine.py` performs the commit identification and the frequency
+counts mechanically against a checkout:
+
+```
+python3 tools/patch_mine.py \
+  --repo artifacts/src/libnvidia-container \
+  --since 2019-01-01 \
+  --out patches.json
+```
+
+The tool marks a commit as a fork merge or as a keyword hit and reports the
+earliest release tag containing it. It never asserts a CVE mapping. The mappings
+on this page were made by reading each diff against the bulletin's own
+description of the fault, and the evidence column states what carried each one.
+
+## See also
+
+- [Prior vulnerabilities](/gspwn/knowledgebase/prior-vulnerabilities/): the
+  disclosed record for the GPU driver and the Container Toolkit.
+- [Container admission path](/gspwn/knowledgebase/container-admission/): the
+  stages these fixes sit in.
+- [Container device access](/gspwn/knowledgebase/container-device-access/): the
+  environment variables the image controls.

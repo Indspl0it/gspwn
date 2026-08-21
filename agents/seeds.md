@@ -2,6 +2,24 @@ You are the seeds-phase agent (Track K). Generate seed syz-programs from
 runtime traces of real CUDA workloads using tools/trace2seed.py.
 
 ## Rounds after the first
+Round 1 has a worklist of its own: `artifacts/surface/worklist-round1.md`,
+generated offline by `python3 tools/cve_patch_map.py worklist` and committed.
+Before this file, round 1 had nothing to aim a trace at. Its seeds section
+names the allocation chain each targeted control command needs, with the class
+and its allocation depth: GT200_DEBUGGER at depth 3, NV04_DISPLAY_COMMON at
+depth 3, NV01_DEVICE_0 at depth 2, NV01_ROOT_CLIENT at depth 1. It currently
+carries 4 seeds items. Trace a workload that builds those chains. A trace that
+does not build the chain leaves the command unreachable however well describe
+modelled it.
+
+Round-1 items are tagged `[history CVE-YYYY-NNNNN]`, or
+`[history CVE-YYYY-NNNNN +N]` when several CVEs share the patch set. NVB0CC
+(ProfilerBase, the HWPM profiler) and NV83DE (KernelSMDebuggerSession) account
+for most of the commands behind them. A history item ranks a place where the
+vendor found a bug. It is not evidence that a bug remains there. History orders
+the work and does not predict findings. `pipeline_ctl.py worklist` does not
+print this path, because refine has recorded nothing in round 1.
+
 From round 2 on, get your input worklist from state rather than guessing the
 previous run id: `python3 tools/pipeline_ctl.py worklist` prints the path the
 last round's refine recorded. Its
@@ -10,7 +28,8 @@ that needs a real object/handle chain random generation will not build. Those
 are exactly what tracing buys, so target your workloads at them rather than
 re-tracing the same CUDA sample each round.
 
-Items carry their source. A `[finding crash-NNNN]` item comes from the
+Items carry their source. A `[history CVE-YYYY-NNNNN]` item names an object
+chain a patched command needs. A `[finding crash-NNNN]` item comes from the
 `preconditions` of a research record: the object state that had to exist
 before a real bug in this campaign could be reached. Those come first, and
 they are the most specific brief you will get — "channel bound with async work
@@ -33,13 +52,30 @@ more — the bank is deduplicated by content, so re-adding equivalents is wasted
 tracing time.
 
 ## Do
-1. Populate tools/ioctl_map.json: map ioctl request numbers to the
-   description names produced by the describe phase (parse the NV_* header
-   from describe + `gcc -E` or a small C probe to compute _IOWR values).
-   Round-1 note: this step consumes describe's NV_* header, so in round 1
-   seeds cannot fully parallelize with describe — the describe/seeds/harness
-   trio is fully independent only from round 2 on, when the header and map
-   already exist.
+1. Check tools/ioctl_map.json covers what you will trace. It is committed and
+   pre-populated: 81 request numbers covering the 34 dispatched escapes and
+   the UVM and UVM-tools commands, derived from the driver source by
+   `tools/ioctl_inventory.py` with every struct size measured by compiling the
+   headers. It does not depend on the describe phase, so seeds runs fully
+   parallel with describe and harness in round 1 as well as later rounds.
+
+   The map records the driver version it was built from. Confirm that matches
+   the driver under test before tracing, because a stale map turns real ioctls
+   into comments and the seed exercises nothing:
+
+   ```
+   python3 tools/surface_verify.py check
+   ```
+
+   Exit 3 means regenerate against the installed release:
+
+   ```
+   python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules
+   python3 tools/surface_verify.py stamp --src artifacts/src/open-gpu-kernel-modules
+   ```
+
+   A request number the map lacks is a gap to fix in the map, and never a
+   reason to accept a seed that traced it as a comment.
 2. Install a small CUDA workload (python3 + a minimal CUDA sample or
    pytorch if already present). Trace it:
    strace -v -f -P /dev/nvidiactl -P /dev/nvidia0 -P /dev/nvidia-uvm \
@@ -70,7 +106,7 @@ Record progress with the state tool, never by editing pipeline.json:
 seed count, mapped/unmapped ioctl counts, smoke-run log excerpt showing no
 seed parse errors. Report the unmapped count — a high unmapped ratio
 means the ioctl_map is incomplete and the seeds cover less than they appear to.
-From round 2 on, also report per `[finding ...]` item whether a seed now
+Report per `[finding ...]` and `[history ...]` item whether a seed now
 establishes its precondition, and name the ones you could not reach.
 
 ## Knowledge (cross-campaign)

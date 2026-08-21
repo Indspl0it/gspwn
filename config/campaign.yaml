@@ -22,7 +22,19 @@ track_k:
 track_u:
   docker_image: "aflplusplus/aflplusplus:latest"
   memory_max: "8G"
-  targets: []              # agent-facing: written by harness phase, read by fuzz phase
+  # agent-facing: written by harness phase, read by fuzz phase. Each name is a
+  # directory under artifacts/harnesses/ and the output directory the fuzz
+  # phase checks under /artifacts/runs/$RUN_ID/u/. Entry points and their
+  # reachability are in artifacts/harnesses/TARGETS.md. The Go target
+  # go_cudacompat_elf is absent on purpose: go test -fuzz writes no
+  # fuzzer_stats, so it produces no coverage output for the sampler to read.
+  targets:
+    - fuzz_ldcache
+    - fuzz_path_resolve
+    - fuzz_dsl_evaluate
+    - fuzz_options_parse
+    - fuzz_imex_channels
+    - fuzz_path_join
 
 loop:
   # The campaign's declared stopping rules. The loop runs unattended until one
@@ -153,11 +165,23 @@ coverage:
   # percentage is not: the same percentage means ten edges early in a run and
   # a thousand late in one.
   #
-  # Two limits worth knowing. Coverage is kernel-side reachable code only, and
-  # GSP firmware is not instrumented, so no verdict here says anything about
-  # it. And an aggregate edge counter cannot support a "we have covered X% of
-  # the driver" claim — that needs per-edge frequency counts syz-manager does
-  # not report.
+  # Two limits. Coverage is kernel-side reachable code only, and GSP firmware
+  # is not instrumented, so no verdict here says anything about it. 236 of the
+  # 767 non-privileged control commands have their handler compiled out and
+  # run on GSP: a corpus drifting onto those raises executions and never
+  # edges, which is indistinguishable from exhaustion by edge count alone.
+  # And an aggregate edge counter cannot support a "we have covered X% of the
+  # driver" claim, which needs per-edge frequency counts syz-manager does not
+  # report.
+  #
+  # tools/surface_cov.py measures the other axis, over a denominator the
+  # driver enumerates itself: 764 reachable commands, of which the corpus
+  # names some. That is a claim about the command surface and never about
+  # lines of driver code, and it separates the two readings of a plateau.
+  # Plateau at low surface coverage means the descriptions or the resource
+  # chains are wrong. Plateau at high surface coverage is the
+  # stopping condition these knobs are set for. Read both before spending
+  # another campaign.
   plateau_new_edges: 50   # expected new edges over one more campaign, below
                           # which the run has plateaued. Set it to what would
                           # actually justify another campaign of machine time

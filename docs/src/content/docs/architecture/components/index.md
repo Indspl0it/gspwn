@@ -1,15 +1,21 @@
 ---
 title: Components
-description: The nineteen modules in tools/, what each owns, and the dependencies between them.
+description: The twenty-four modules in tools/, what each owns, and the dependencies between them.
 ---
 
-Nineteen files live in `tools/`, plus one data file. Seventeen are commands,
-one is the shared state library, and one is the test runner.
+Twenty-four files live in `tools/`, plus two data files. Twenty-two are
+commands, one is the shared state library, and one is the test runner.
 
-Three of the commands read the driver source and never touch a device:
-`ioctl_inventory.py`, `ctrl_surface.py` and `object_graph.py` derive the ioctl
-surface, the control command space and the object allocation DAG from a
-checkout. The `describe` phase models against those three outputs.
+Eight of the commands read source trees and never touch a device.
+`ioctl_inventory.py`, `ctrl_surface.py` and `object_graph.py` derive the
+ioctl surface, the control command space and the object allocation DAG
+from a driver checkout, and `syzlang_gen.py` turns all three into a first
+description set. `surface_verify.py` confirms they describe the driver
+actually under test, and `surface_cov.py` counts how much of the surface
+they enumerate a description set and a corpus reach. `cve_patch_map.py`
+and `patch_mine.py` read the fix history of the driver and of the two
+container repositories, which is the one empirical signal available
+before a campaign has run.
 
 | Module | Kind | Owns |
 |---|---|---|
@@ -28,13 +34,19 @@ checkout. The `describe` phase models against those three outputs.
 | [`ioctl_inventory.py`](/gspwn/architecture/components/ioctl-inventory/) | Command | The escape and UVM ioctl inventory, and the request numbers |
 | [`ctrl_surface.py`](/gspwn/architecture/components/ctrl-surface/) | Command | The RM control command space and its privilege classification |
 | [`object_graph.py`](/gspwn/architecture/components/object-graph/) | Command | The RM object allocation DAG and its chaining depth |
+| [`syzlang_gen.py`](/gspwn/architecture/components/syzlang-gen/) | Command | The generated description set, and the per-struct size check on it |
+| [`surface_verify.py`](/gspwn/architecture/components/surface-verify/) | Command | The version guard on every statically derived artefact |
+| [`surface_cov.py`](/gspwn/architecture/components/surface-cov/) | Command | The share of the enumerated command surface a description set models and a corpus reaches |
+| [`cve_patch_map.py`](/gspwn/architecture/components/cve-patch-map/) | Command | The CVE to release-diff join, and the round-1 history worklist |
+| [`patch_mine.py`](/gspwn/architecture/components/patch-mine/) | Command | The container-stack fix history, and the Track U target ranking |
 | [`exec.py`](/gspwn/architecture/components/exec/) | Command | Logged command execution with retries |
 | [`build_kernel.sh`](/gspwn/architecture/components/build-kernel/) | Script | The instrumented kernel build |
 | [`selftest.py`](/gspwn/architecture/components/selftest/) | Test runner | The offline suite |
 | `register_check.py` | Command | The writing-register linter run in CI. No page yet |
 
-`tools/ioctl_map.json` is data: the map from ioctl request numbers to syzlang
-description names.
+Two files in `tools/` are data. `ioctl_map.json` maps ioctl request
+numbers to syzlang description names. `cve_fix_verdicts.json` records the
+curated per-CVE fix verdict and the evidence behind each one.
 
 ## Page structure
 
