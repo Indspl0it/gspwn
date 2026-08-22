@@ -22,10 +22,14 @@ What the emitted set covers:
                    referencing them fails the syzkaller parse gate.
   Escapes          one ioctl description per dispatched NV_ESC_*, carrying the
                    32-bit request number the inventory computed.
-  Allocation       one NV_ESC_RM_ALLOC variant per unprivileged object class,
-                   with hClass pinned to the class number, hObjectParent typed
-                   as the legal parent's resource, and hObjectNew producing the
-                   class's own resource.
+  Allocation       at least one NV_ESC_RM_ALLOC variant per unprivileged
+                   object class, with hClass pinned to the class number,
+                   hObjectParent typed as the legal parent's resource, and
+                   hObjectNew producing the class's own resource. A class
+                   whose legal parents all coexist on one chip carries one
+                   variant per parent: the cheapest parent keeps the
+                   class-level name and the rest are named
+                   <class>_UNDER_<parent>.
   Control          one NV_ESC_RM_CONTROL variant per covered command, with the
                    command number pinned and the real parameter struct
                    attached. Modeling this ioctl as an opaque buffer wastes the
@@ -49,8 +53,14 @@ uses:
 
     python3 tools/syzlang_gen.py emit-probe --probe-dir tmp/surface/syzprobe
     bash tmp/surface/syzprobe/measure_sizes.sh      # on a machine with gcc
-    python3 tools/syzlang_gen.py emit \\
-        --ctrl-sizes tmp/surface/syzprobe/sizes.json
+    cp tmp/surface/syzprobe/sizes.json \\
+        surface/ctrl-param-sizes.json
+    python3 tools/syzlang_gen.py emit
+
+`emit` reads surface/ctrl-param-sizes.json unless --ctrl-sizes names
+another file, records its digest in generation.json, and fails when it is
+absent: without it 521 of the 595 size-matched structs lose their measured
+size and the run still exits 0. `--no-ctrl-sizes` is the deliberate case.
 
 The set is generated offline from a source checkout. No GPU, no SUT. It has
 not been through syz-compile, which is the describe phase's first gate.
@@ -66,6 +76,7 @@ size mismatch.
 """
 import argparse
 import collections
+import hashlib
 import json
 import logging
 import os
@@ -77,8 +88,16 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_SRC = os.path.join(REPO_ROOT, "artifacts", "src",
                            "open-gpu-kernel-modules")
-DEFAULT_SURFACE = os.path.join(REPO_ROOT, "artifacts", "surface")
-DEFAULT_OUT = os.path.join(REPO_ROOT, "artifacts", "descriptions")
+DEFAULT_SURFACE = os.path.join(REPO_ROOT, "surface" )
+DEFAULT_OUT = os.path.join(REPO_ROOT, "descriptions" )
+
+# Measured sizeof() for the control parameter structs, produced by `emit-probe`
+# and its measure_sizes.sh on a machine with a compiler. Without it 521 of the
+# 595 size-matched structs fall back to a parsed layout with no measured size
+# to check it against, so it is the default and its digest is recorded in
+# generation.json.
+DEFAULT_CTRL_SIZES = os.path.join(DEFAULT_SURFACE, "ctrl-param-sizes.json")
+DEFAULT_CTRL_RANK = os.path.join(DEFAULT_SURFACE, "rm-control-rank.json")
 
 SCHEMA = "gspwn.syzlang-generation/1"
 
@@ -111,10 +130,6 @@ PROBE_INCLUDES = [
     os.path.join("src", "nvidia", "arch", "nvalloc", "unix", "include"),
 ]
 
-# Class-number defines live under class/, and a few allocation parameter
-# structs live beside them.
-CLASS_DIR = os.path.join("src", "common", "sdk", "nvidia", "inc", "class")
-
 # Base type sizes and alignments for x86-64 System V, which is the only
 # architecture this campaign builds for. The driver's own nvtypes.h selects
 # these through a stack of compiler conditionals; the table below is checked
@@ -142,22 +157,61 @@ BASE_TYPES = {
 
 SYZ_INT = {1: "int8", 2: "int16", 4: "int32", 8: "int64"}
 
-# NvP64 fields that carry a pointer to a further parameter buffer. Modeling
-# them as a plain 64-bit integer stops the chain at the escape, so the two the
-# ABI defines are typed as pointers where the pointee is known.
-POINTER_FIELDS = {
-    ("NVOS64_PARAMETERS", "pAllocParms"),
-    ("NVOS21_PARAMETERS", "pAllocParms"),
-    ("NVOS54_PARAMETERS", "params"),
-}
-
 # The escape whose parameter struct selects a further command number.
 CONTROL_ESCAPE = "NV_ESC_RM_CONTROL"
 ALLOC_ESCAPE = "NV_ESC_RM_ALLOC"
-FREE_ESCAPE = "NV_ESC_RM_FREE"
+
+# The wrapper escape. kernel-open/nvidia/nv.c:2499 copies its parameter struct
+# in, overwrites arg_cmd, arg_size and arg_ptr from the three fields, and falls
+# through into the same dispatch switch. The unwrap is a single `if` and never
+# a loop, so the inner command is dispatched once and cannot unwrap again.
+XFER_ESCAPE = "NV_ESC_IOCTL_XFER_CMD"
+XFER_STRUCT = "nv_ioctl_xfer_t"
+# kernel-open/common/inc/nv.h:76. nv.c:2513 rejects a larger inner argument
+# before it validates the inner command.
+#
+# One byte above ioctl_inventory.IOC_SIZE_MAX, which is 16383, and both are
+# right: 16383 is the widest _IOC_SIZE field the direct path can encode, and
+# 16384 is what NV_ABSOLUTE_MAX_IOCTL_SIZE admits through the wrapper. An
+# escape of exactly 16384 bytes is therefore reachable only through XFER, the
+# inventory marks it xfer_only, and surface_cov credits the escape to its
+# wrapper so coverage does not fall below the denominator. The largest escape
+# argument in this release is 15412 bytes, so no record takes that path today.
+XFER_MAX_ARG_SIZE = 16384
 
 ROOT_SENTINEL = "<root fd>"
 ANY_PARENT_SENTINEL = "<any parent>"
+
+# Families whose members are gated per chip generation. gpuGetClassByClassId
+# searches pGpu->classDB, which gpu.c:1183 builds from the per-chip class
+# descriptor lists in src/nvidia/generated/g_gpu_class_list.c, so a class
+# absent from the installed part's list cannot be allocated at all.
+# tools/object_graph.py:29 records the gate and the graph does not model it,
+# so the gate is applied here, on the parent set.
+#
+# NVxxx0_DISPLAY is one display class per chip generation. Measured over the
+# 34 per-chip lists in that file, at most 2 of the 8 members appear together
+# on any one part, against parent sets that name all 8. NVC372_DISPLAY_SW,
+# NV04_DISPLAY_COMMON and NVA083_GRID_DISPLAYLESS are not chip-numbered and do
+# not belong to the family, so the pattern matches the numbered form only.
+#
+# CHANNEL_GPFIFO is treated as exclusive on a stricter basis than that file
+# supports: GB202 lists all 8 of the GPFIFO classes that appear anywhere, so
+# the driver does keep older channel classes allocatable on newer parts.
+# Treating the family as exclusive therefore refuses an expansion that would
+# be legal. That is the conservative direction, it holds the alloc variant
+# count at 204 over 155 classes, and widening it is a change to the emitted
+# set rather than a correction, so it is left alone deliberately.
+CHIP_EXCLUSIVE_PARENT_RES = (
+    re.compile(r"CHANNEL_GPFIFO"),
+    re.compile(r"^NV[0-9A-F]{3}0_DISPLAY$"),
+)
+
+# The separator that joins a class to the parent it is allocated under in a
+# per-parent variant name. No external class in resource_list.h contains it,
+# so a per-parent name can never collide with a class-level one, which is what
+# holds surface_cov's alloc denominator still.
+PARENT_VARIANT_SEP = "_UNDER_"
 
 # Allocation privilege values the modelled attacker does not hold. The three
 # records carrying no RS_FLAGS_ALLOC_* flag at all are absent from this set on
@@ -809,6 +863,80 @@ def render_opaque(name, size):
     return "%s {\n\topaque\tarray[int8, %d]\n} [packed]" % (name, size)
 
 
+PINNED_PATTERNS = {}
+POINTER_PATTERNS = {}
+
+
+def pinned_field(text, field):
+    """Whether a rendered struct pins one field to a constant."""
+    pattern = PINNED_PATTERNS.get(field)
+    if pattern is None:
+        pattern = re.compile(r"^\t%s[ ]*\tconst\[" % re.escape(field), re.M)
+        PINNED_PATTERNS[field] = pattern
+    return bool(pattern.search(text))
+
+
+def pointer_field(text, field):
+    """Whether a rendered struct types one field as a pointer."""
+    pattern = POINTER_PATTERNS.get(field)
+    if pattern is None:
+        pattern = re.compile(r"^\t%s[ ]*\tptr64\[" % re.escape(field), re.M)
+        POINTER_PATTERNS[field] = pattern
+    return bool(pattern.search(text))
+
+
+def _rendered(emitter, variant, what):
+    text = emitter.rendered.get(variant)
+    if text is None:
+        raise SystemExit(
+            "%s named the variant struct %s, which was never rendered. The "
+            "emitter and the description would disagree about what the call "
+            "points at." % (what, variant))
+    return text
+
+
+def require_pointer(emitter, variant, field, what):
+    """Fail the build when a pointer field did not render as a pointer.
+
+    render_struct applies an override by field name, so a field renamed in the
+    driver header drops its override. nv_ioctl_xfer_t.ptr renders as int64
+    without it, syzkaller feeds a raw integer where the driver expects an
+    address, and the inner copy_from_user returns -EFAULT on every execution.
+    Nothing downstream notices: the variant name is unchanged, the size still
+    matches and the description still compiles.
+    """
+    text = _rendered(emitter, variant, what)
+    if not pointer_field(text, field):
+        raise SystemExit(
+            "%s emitted %s with %s not typed as a pointer. The driver reads "
+            "that field as an address, so an integer there makes every "
+            "execution of this variant return -EFAULT. Check that %s is still "
+            "the field name in the driver header, and that the override still "
+            "names it." % (what, variant, field, field))
+
+
+def require_pinned(emitter, variant, field, what):
+    """Fail the build when a selector field did not render as a constant.
+
+    render_struct applies an override by field name, so a field renamed in the
+    driver header drops its override and leaves the selector free. A free
+    selector on a multiplexer reaches every command that escape dispatches,
+    including the GSP-routed and privileged commands the campaign scopes out,
+    and nothing downstream notices: the variant name is unchanged, the size
+    still matches and the description still compiles. The check reads the
+    rendered text rather than the override dict, so a dropped override and a
+    renamed field both fail here.
+    """
+    text = _rendered(emitter, variant, what)
+    if not pinned_field(text, field):
+        raise SystemExit(
+            "%s emitted %s with %s unpinned. Dispatch selects on that field, "
+            "so it must render as const[...]: a free selector reaches every "
+            "command the escape multiplexes. Check that %s is still the field "
+            "name in the driver header, and that the override still names it."
+            % (what, variant, field, field))
+
+
 class Emitter:
     """Accumulates syzlang struct definitions and reports what went opaque."""
 
@@ -968,6 +1096,65 @@ def escape_request(command):
     return None, None
 
 
+def escape_param_type(emitter, command):
+    """(pointee type, None) for an escape's argument, or (None, reason).
+
+    The direct description and the typed XFER wrapper point at the same
+    parameter type, so the resolution runs once and both routes read it.
+    """
+    struct = command["param_struct"]
+    base = base_param_type(emitter.index, struct)
+    if base is not None:
+        # NV_ESC_ATTACH_GPUS_TO_FD takes an array of bare NvU32, which has no
+        # struct to lay out.
+        return base[1], None
+    if struct:
+        emitted = emitter.ensure(struct, handle_overrides(struct))
+        if emitted is not None:
+            return emitted, None
+    if command["param_size"]:
+        opaque = syz_ident(command["name"].lower()) + "_arg"
+        if opaque not in emitter.rendered:
+            emitter.add_raw(opaque,
+                            render_opaque(opaque, command["param_size"]))
+            emitter.opaque.append(
+                (opaque, command["param_size"],
+                 "no header definition found for %s" % struct))
+        return opaque, None
+    return None, "no parameter struct and no size"
+
+
+def xfer_variant_struct(emitter, command, pointee):
+    """The nv_ioctl_xfer_t copy that pins one inner escape.
+
+    nv.c:2509 reads cmd, size and ptr straight out of this struct and
+    re-enters dispatch with them. An unpinned cmd therefore reaches every
+    escape and every command the two multiplexers dispatch, and an integer
+    ptr resolves to an unmapped address, so the inner copy_from_user returns
+    -EFAULT. Pinning cmd to one escape number, setting size to that escape's
+    measured argument size and typing ptr as a real pointer leaves one
+    reachable inner command per variant and gives the inner copy an address
+    syzkaller has mapped.
+    """
+    name = "nv_xfer_" + syz_ident(command["name"][len("NV_ESC_"):].lower())
+    overrides = {
+        "cmd": "const[%d, int32]" % command["nr"],
+        "size": "const[%d, int32]" % command["param_size"],
+        "ptr": "ptr64[inout, %s]" % pointee,
+    }
+    variant_struct(emitter, XFER_STRUCT, name, overrides)
+    what = "the XFER wrapper for %s" % command["name"]
+    # All three overrides are checked, not just cmd. A dropped size override
+    # renders int32, nv_validate_ioctl_data rejects on it and the variant never
+    # dispatches; a dropped ptr override renders int64 and every execution
+    # returns -EFAULT. Both failures are silent at build time and produce a
+    # stream of failed executions at run time.
+    require_pinned(emitter, name, "cmd", what)
+    require_pinned(emitter, name, "size", what)
+    require_pointer(emitter, name, "ptr", what)
+    return name
+
+
 def emit_escapes(emitter, inventory, class_map, graph, want_control,
                  want_alloc):
     """Escape descriptions, excluding the two multiplexers."""
@@ -986,29 +1173,23 @@ def emit_escapes(emitter, inventory, class_map, graph, want_control,
             continue
         fd_res = NODE_RESOURCES.get(command["node_restriction"], "fd_nv")
         struct = command["param_struct"]
-        overrides = handle_overrides(struct)
-        arg = None
-        base = base_param_type(emitter.index, struct)
-        if base is not None:
-            # NV_ESC_ATTACH_GPUS_TO_FD takes an array of bare NvU32, which has
-            # no struct to lay out.
-            arg = "ptr[inout, %s]" % base[1]
-        elif struct:
-            emitted = emitter.ensure(struct, overrides)
-            if emitted is not None:
-                arg = "ptr[inout, %s]" % emitted
-        if arg is None and command["param_size"]:
-            opaque = syz_ident(name.lower()) + "_arg"
-            emitter.add_raw(opaque,
-                            render_opaque(opaque, command["param_size"]))
-            emitter.opaque.append(
-                (opaque, command["param_size"],
-                 "no header definition found for %s" % struct))
-            arg = "ptr[inout, %s]" % opaque
-        if arg is None:
+        pointee, reason = escape_param_type(emitter, command)
+        if pointee is None:
             records.append({"escape": name, "emitted": False,
-                            "reason": "no parameter struct and no size"})
+                            "reason": reason})
             continue
+        if name == XFER_ESCAPE:
+            # The wrapper escape keeps its own variant name and takes the
+            # same pinned argument every other XFER variant takes, with the
+            # inner command pinned to the escape itself. nv_validate_ioctl_data
+            # admits nr 211 with a 16-byte argument, the unwrap runs once, and
+            # dispatch reaches the switch default, which calls rm_ioctl with
+            # the escape number. The 31 other inner commands each carry an
+            # ioctl$NV_ESC_IOCTL_XFER_CMD_* variant of their own.
+            arg = "ptr[inout, %s]" % xfer_variant_struct(emitter, command,
+                                                         pointee)
+        else:
+            arg = "ptr[inout, %s]" % pointee
         line = "ioctl$%s(fd %s, cmd const[%s], arg %s)" % (
             name, fd_res, request, arg)
         if note:
@@ -1018,6 +1199,88 @@ def emit_escapes(emitter, inventory, class_map, graph, want_control,
         blocks.append(line)
         records.append({"escape": name, "emitted": True, "request": request,
                         "fd": fd_res, "param_struct": struct})
+    return "\n".join(blocks), records
+
+
+def emit_xfer(emitter, inventory):
+    """One typed NV_ESC_IOCTL_XFER_CMD variant per in-scope inner escape.
+
+    Scope is the escapes the wrapper can dispatch to, and not the commands
+    the two multiplexers reach. arg_cmd after the unwrap is an escape number:
+    NV_ESC_RM_CONTROL and NV_ESC_RM_ALLOC select their real target from a
+    field of their own parameter struct, and a wrapper naming either of them
+    would have to leave that field free, which is the hole this emission
+    exists to close. Wrapping their 686 leaves individually would instead
+    triple the description set to reach the same handlers the direct
+    descriptions already reach, because the only code an XFER variant adds is
+    the unwrap at nv.c:2499 and every variant here runs it.
+    """
+    node = inventory["nodes"][0]
+    outer = next((c for c in node["commands"] if c["name"] == XFER_ESCAPE),
+                 None)
+    if outer is None:
+        raise SystemExit(
+            "%s is absent from the escape inventory, so the re-entrant "
+            "dispatch path cannot be modelled and the inner selector would "
+            "go unpinned. The inventory is the wrong shape or the driver "
+            "branch dropped the escape." % XFER_ESCAPE)
+    request, _note = escape_request(outer)
+    if request is None:
+        raise SystemExit(
+            "%s carries no computed request number in the escape inventory, "
+            "so no XFER variant can name the outer call." % XFER_ESCAPE)
+
+    blocks, records = [], []
+    for command in node["commands"]:
+        name = command["name"]
+        if name == XFER_ESCAPE:
+            # Emitted with the escape family, which keeps the escape's own
+            # variant name in the description set.
+            continue
+        if name in (CONTROL_ESCAPE, ALLOC_ESCAPE):
+            records.append({
+                "escape": name, "emitted": False,
+                "reason": "a multiplexer: the wrapper would have to leave the "
+                          "inner command or class field free, and every leaf "
+                          "already carries a direct variant"})
+            continue
+        size = command["param_size"]
+        if not size:
+            records.append({"escape": name, "emitted": False,
+                            "reason": "no measured argument size, and "
+                                      "nv_validate_ioctl_data compares "
+                                      "arg_size against sizeof"})
+            continue
+        if size > XFER_MAX_ARG_SIZE:
+            records.append({
+                "escape": name, "emitted": False,
+                "reason": "argument is %d bytes, over the %d nv.c:2513 "
+                          "accepts before it validates the inner command"
+                          % (size, XFER_MAX_ARG_SIZE)})
+            continue
+        pointee, reason = escape_param_type(emitter, command)
+        if pointee is None:
+            records.append({"escape": name, "emitted": False,
+                            "reason": reason})
+            continue
+        variant = xfer_variant_struct(emitter, command, pointee)
+        fd_res = NODE_RESOURCES.get(command["node_restriction"], "fd_nv")
+        if command["requires_admin"]:
+            blocks.append("# root-only inner escape, kept for completeness")
+        if command["is_argument_array"]:
+            blocks.append(
+                "# argument is an array; this variant carries one element, "
+                "and nv.c:2437 accepts any nonzero multiple of %d" % size)
+        blocks.append(
+            "ioctl$%s_%s(fd %s, cmd const[%s], arg ptr[inout, %s])"
+            % (XFER_ESCAPE, name[len("NV_ESC_"):], fd_res, request, variant))
+        records.append({"escape": name, "emitted": True, "request": request,
+                        "fd": fd_res, "inner_command": command["nr"],
+                        "inner_size": size, "variant": variant,
+                        "param_struct": command["param_struct"]})
+    logger.info("%d typed XFER variants, %d inner escapes declined",
+                sum(1 for r in records if r["emitted"]),
+                sum(1 for r in records if not r["emitted"]))
     return "\n".join(blocks), records
 
 
@@ -1110,6 +1373,83 @@ def parent_resource(record, by_class, class_map):
     return None, None
 
 
+def chip_exclusive_parents(parents):
+    """Every member of a parent set drawn from any chip-gated family."""
+    return [p for p in parents
+            if any(pattern.search(p) for pattern in CHIP_EXCLUSIVE_PARENT_RES)]
+
+
+def chip_exclusive_by_family(parents):
+    """The same members, split by the family each was matched on.
+
+    Split, because the conflict is inside a family and not across families. A
+    set naming one GPFIFO parent and one display parent has no exclusion in
+    either, so every one of its parents is allocatable on the same chip and
+    expanding it is correct. Counting the two together would call that set
+    wide.
+    """
+    return [[p for p in parents if pattern.search(p)]
+            for pattern in CHIP_EXCLUSIVE_PARENT_RES]
+
+
+def parent_is_narrow(concrete):
+    """Whether every parent in a set is allocatable on the same chip.
+
+    A set drawing more than one class from one chip-gated family is wide:
+    those parents are not all present on any one GPU, so a variant per parent
+    puts a handful of live descriptions and the rest dead into the choice
+    table. A set with no such conflict is narrow, and every variant it
+    produces is allocatable everywhere.
+    """
+    if len(concrete) <= 1:
+        return False
+    return all(len(family) <= 1
+               for family in chip_exclusive_by_family(concrete))
+
+
+def parent_options(record, by_class):
+    """The hObjectParent options a class emits, cheapest first.
+
+    The first option carries the class-level variant name and every later one
+    carries a per-parent name, so the class-level name stays on exactly one
+    variant however wide the parent set is. `parent_resource` decides what a
+    single option pins to and this function decides how many there are.
+
+    A narrow set expands to one option per legal parent, each pinned to that
+    parent's own resource. Every other shape yields the one option
+    `parent_resource` returns, which is a concrete pin for a single-parent
+    class and nv_handle for a wide or sentinel-parented one.
+
+    Cheapest first means shallowest in the object graph, then by name, so the
+    class-level variant names the parent with the shortest allocation chain.
+    """
+    resource, parent_cls = parent_resource(record, by_class, None)
+    if resource is None:
+        return []
+    parents = record.get("parents") or []
+    concrete = sorted({p for p in parents
+                       if p not in (ROOT_SENTINEL, ANY_PARENT_SENTINEL)
+                       and p in by_class})
+    if ROOT_SENTINEL in parents or not parent_is_narrow(concrete):
+        return [{"resource": resource, "parent_class": parent_cls,
+                 "suffix": ""}]
+
+    def cost(name):
+        depth = by_class[name].get("depth")
+        # A parent outside the connected component sorts last rather than
+        # first, which a null read as zero would do.
+        return (depth if depth is not None else len(by_class) + 1, name)
+
+    options = []
+    for name in sorted(concrete, key=cost):
+        options.append({
+            "resource": resource_name(name),
+            "parent_class": name,
+            "suffix": "" if not options else PARENT_VARIANT_SEP + name,
+        })
+    return options
+
+
 def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
     """One NV_ESC_RM_ALLOC variant per allocatable class."""
     node = inventory["nodes"][0]
@@ -1131,6 +1471,10 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
     by_class = {r["external_class"]: r for r in graph["records"]}
     blocks, records, unclassified = [], [], []
     skipped = collections.Counter()
+    # SHARED across the class loop below: guards a per-parent variant name
+    # against colliding with a class-level one.
+    alloc_variant_names = set()
+    expanded = {}
 
     for record in sorted(graph["records"], key=lambda r: r["external_class"]):
         cls = record["external_class"]
@@ -1152,15 +1496,16 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
             records.append({"class": cls, "emitted": False,
                             "reason": "class number not found"})
             continue
-        parent_res, _parent_cls = parent_resource(record, by_class, class_map)
-        if parent_res is None:
+        options = parent_options(record, by_class)
+        if not options:
             skipped["no legal parent"] += 1
             continue
-        if parent_res == "fd_root":
-            # An RS_ROOT_OBJECT class hangs off the file descriptor and has no
-            # parent handle, so hRoot and hObjectParent are both the client
-            # handle the call is about to create.
-            parent_res = "const[0, int32]"
+        for option in options:
+            if option["resource"] == "fd_root":
+                # An RS_ROOT_OBJECT class hangs off the file descriptor and
+                # has no parent handle, so hRoot and hObjectParent are both
+                # the client handle the call is about to create.
+                option["resource"] = "const[0, int32]"
 
         param_struct = record["alloc_param_struct"]
         param_kind = record["alloc_param_kind"]
@@ -1199,29 +1544,52 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
                 param_state = "null (optional, no layout)"
 
         is_root_object = ROOT_SENTINEL in (record.get("parents") or [])
-        overrides = {
-            "hRoot": "const[0, int32]" if is_root_object else "nvh_nv01_root",
-            "hObjectParent": parent_res,
-            "hObjectNew": resource_name(cls),
-            "hClass": "const[0x%x, int32]" % number,
-            "pAllocParms": param_type,
-            "paramsSize": "const[%d, int32]" % (param_size or 0),
-            "pRightsRequested": "const[0, int64]",
-            "flags": "flags[nvos64_alloc_flags, int32]",
-            "status": "int32",
-        }
-        variant = "nvos64_alloc_%s" % cls.lower()
-        variant_struct(emitter, "NVOS64_PARAMETERS", variant, overrides)
-        if request64:
-            blocks.append(
-                "ioctl$NV_ESC_RM_ALLOC_%s(fd fd_nv, cmd const[%s], "
-                "arg ptr[inout, %s])" % (cls, request64, variant))
-        records.append({"class": cls, "emitted": True,
-                        "class_number": "0x%x" % number,
-                        "parent_resource": parent_res,
-                        "alloc_param_struct": param_struct,
-                        "alloc_param_state": param_state,
-                        "resource": resource_name(cls)})
+        # One call per legal parent on a narrow class, one call on every
+        # other. The first option carries the class-level name, so each class
+        # contributes exactly one NV_ESC_RM_ALLOC_<CLASS> variant and the
+        # alloc denominator surface_cov builds from the object graph does not
+        # move under the expansion.
+        for option in options:
+            parent_res = option["resource"]
+            name = cls + option["suffix"]
+            overrides = {
+                "hRoot": "const[0, int32]" if is_root_object
+                         else "nvh_nv01_root",
+                "hObjectParent": parent_res,
+                "hObjectNew": resource_name(cls),
+                "hClass": "const[0x%x, int32]" % number,
+                "pAllocParms": param_type,
+                "paramsSize": "const[%d, int32]" % (param_size or 0),
+                "pRightsRequested": "const[0, int64]",
+                "flags": "flags[nvos64_alloc_flags, int32]",
+                "status": "int32",
+            }
+            variant = "nvos64_alloc_%s" % name.lower()
+            if variant in alloc_variant_names:
+                raise SystemExit(
+                    "two allocation variants both render as %s. A class name "
+                    "and a class-plus-parent name collided, and one "
+                    "description would silently overwrite the other."
+                    % variant)
+            alloc_variant_names.add(variant)
+            variant_struct(emitter, "NVOS64_PARAMETERS", variant, overrides)
+            require_pinned(emitter, variant, "hClass",
+                           "the allocation variant for %s" % name)
+            if request64:
+                blocks.append(
+                    "ioctl$NV_ESC_RM_ALLOC_%s(fd fd_nv, cmd const[%s], "
+                    "arg ptr[inout, %s])" % (name, request64, variant))
+            records.append({"class": cls, "emitted": True,
+                            "variant_name": "NV_ESC_RM_ALLOC_%s" % name,
+                            "class_level_name": not option["suffix"],
+                            "class_number": "0x%x" % number,
+                            "parent_resource": parent_res,
+                            "parent_class": option["parent_class"],
+                            "alloc_param_struct": param_struct,
+                            "alloc_param_state": param_state,
+                            "resource": resource_name(cls)})
+        if len(options) > 1:
+            expanded[cls] = len(options)
 
     # The 32-bit-parameter variant of the same escape. Both sizes dispatch,
     # and a set covering only one leaves half the escape's validation
@@ -1239,6 +1607,8 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
         }
         variant_struct(emitter, "NVOS21_PARAMETERS",
                        "nvos21_alloc_nv01_root", overrides21)
+        require_pinned(emitter, "nvos21_alloc_nv01_root", "hClass",
+                       "the 32-bit-parameter allocation variant")
         blocks.append(
             "ioctl$NV_ESC_RM_ALLOC_NVOS21(fd fd_nv, cmd const[%s], "
             "arg ptr[inout, nvos21_alloc_nv01_root])" % request21)
@@ -1249,6 +1619,11 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
         logger.info("emitted %d classes whose RS_ENTRY names no "
                     "RS_FLAGS_ALLOC_* privilege flag: %s", len(unclassified),
                     ", ".join(sorted(unclassified)))
+    if expanded:
+        logger.info("%d class(es) with a narrow parent set expanded to %d "
+                    "variants, %d added", len(expanded),
+                    sum(expanded.values()),
+                    sum(expanded.values()) - len(expanded))
     return "\n".join(blocks), records, dict(skipped)
 
 
@@ -1259,8 +1634,8 @@ def control_object_resource(class_id_int, number_to_class):
     return resource_name(cls), cls
 
 
-def emit_control(emitter, inventory, control, number_to_class, max_commands,
-                 order):
+def emit_control(emitter, inventory, control, number_to_class, graph,
+                 ranking, max_commands, order):
     """One NV_ESC_RM_CONTROL variant per covered command."""
     node = inventory["nodes"][0]
     command = next((c for c in node["commands"]
@@ -1283,10 +1658,17 @@ def emit_control(emitter, inventory, control, number_to_class, max_commands,
                 "handler, out of %d exported", len(reachable),
                 len(control["methods"]))
 
-    ranked = rank_commands(reachable, number_to_class, order)
+    ranked = rank_commands(reachable, graph, ranking, order)
     blocks, records = [], []
     covered = 0
     skipped = collections.Counter()
+    # The same guarantee emit_alloc holds for nvos64_alloc_*. syz_ident is not
+    # injective, and Emitter.add_raw returns the existing struct unchanged
+    # rather than raising, so two commands whose handler names render alike
+    # would take the first command's parameter struct and emit two identical
+    # ioctl lines under one name. Handler names are unique across all exported
+    # control methods in this release, so this cannot fire today.
+    control_variant_names = set()
 
     for method in ranked:
         if max_commands and covered >= max_commands:
@@ -1331,7 +1713,21 @@ def emit_control(emitter, inventory, control, number_to_class, max_commands,
         }
         suffix = syz_ident(method["handler"])
         variant = "nvos54_ctrl_%s" % suffix
+        if variant in control_variant_names:
+            raise SystemExit(
+                "two control variants both render as %s. Two handler names "
+                "collided under syz_ident, and one description would silently "
+                "overwrite the other, emitting two identical ioctl lines for "
+                "different commands." % variant)
+        control_variant_names.add(variant)
         variant_struct(emitter, "NVOS54_PARAMETERS", variant, overrides)
+        what = ("the control variant for %s %s"
+                % (method["method_id"], method["handler"]))
+        require_pinned(emitter, variant, "cmd", what)
+        # paramsSize is checked for the same reason cmd is. Unpinned it renders
+        # int32, the rmapi size check rejects whatever syzkaller puts there and
+        # the command never runs, with no build-time signal.
+        require_pinned(emitter, variant, "paramsSize", what)
         blocks.append(
             "ioctl$NV_ESC_RM_CONTROL_%s(fd fd_nvidiactl, cmd const[%s], "
             "arg ptr[inout, %s])" % (suffix, request, variant))
@@ -1351,29 +1747,75 @@ def emit_control(emitter, inventory, control, number_to_class, max_commands,
     return "\n".join(blocks), records, dict(skipped), len(reachable)
 
 
-def rank_commands(methods, number_to_class, order):
+def graph_depths(graph):
+    """Shallowest object-graph depth per NVOC internal class.
+
+    The control inventory names the class that owns a command as an internal
+    class and the object graph carries `internal_class` on every record, so
+    the join is direct. An internal class exporting several external classes
+    takes the shallowest, which is the cheapest prologue that reaches it.
+    """
+    out = {}
+    for record in graph["records"]:
+        depth = record.get("depth")
+        if depth is None:
+            continue
+        internal = record["internal_class"]
+        if internal not in out or depth < out[internal]:
+            out[internal] = depth
+    return out
+
+
+def rank_commands(methods, graph, ranking, order):
     """Order the control commands by how early a chain reaches their object.
 
-    Reachability comes from the object graph: a command on the client itself
-    needs one allocation, a command on the device needs two, and one on a
-    channel needs the full prologue. Alphabetical order would put the deepest
-    objects first and spend the cap on commands nothing reaches.
+    This previously sorted on a hardcoded ladder over the SDK class id, which
+    assigned 1 to class 0x0000, 2 to 0x0080, 3 to 0x2080 and 4 to everything
+    else. The ladder was an approximation of allocation depth that never
+    consulted the object graph, and it flattened 337 of the 531 commands into
+    one bucket.
+
+    Two orderings replace it, both measured.
+
+    With `surface/rm-control-rank.json` present, the order is the
+    `rank` field `tools/ctrl_rank.py` computed, which weighs chain length,
+    CVE hot-spot history and parameter struct size together.
+
+    Without it, the order is the measured object-graph depth of the owning
+    class, then GSP routing, then the method id. That needs no artefact beyond
+    the object graph this tool already loads, so a checkout with no ranking
+    file still orders on a measurement.
     """
     if order == "source":
         return list(methods)
 
+    if ranking:
+        position = {row["handler"]: row["rank"] for row in ranking["commands"]}
+        missing = [m["handler"] for m in methods if m["handler"] not in position]
+        if missing:
+            # A handler the ranking does not name is a stale artefact, not a
+            # reason to fall back silently: it sorts after everything ranked,
+            # in a fixed order, and the count is reported.
+            logger.warning("%d control commands are absent from the ranking "
+                           "and sort last: %s", len(missing),
+                           ", ".join(sorted(missing)[:5]))
+        cap = len(position) + 1
+        return sorted(methods, key=lambda m: (position.get(m["handler"], cap),
+                                              m["method_id"]))
+
+    depth_by_class = graph_depths(graph)
+    unresolved = sorted({m["owning_class"] for m in methods
+                         if m["owning_class"] not in depth_by_class})
+    if unresolved:
+        logger.info("%d owning classes have no object-graph record and their "
+                    "commands sort last: %s", len(unresolved),
+                    ", ".join(unresolved))
+
     def key(method):
-        class_id = int(method["class_id"], 16)
-        cls = number_to_class.get(class_id)
-        depth = 99 if cls is None else 1
-        if class_id == 0x0000:
-            depth = 1
-        elif class_id == 0x0080:
-            depth = 2
-        elif class_id == 0x2080:
-            depth = 3
-        elif cls is not None:
-            depth = 4
+        # A class with no record sorts after every measured depth. The graph
+        # tops out at 5, so any constant above it works and 99 states the
+        # intent.
+        depth = depth_by_class.get(method["owning_class"], 99)
         gsp = 1 if method["routed_to_physical"] else 0
         return (depth, gsp, method["method_id"])
 
@@ -1714,6 +2156,121 @@ def load_all(args):
     return inventory, control, graph
 
 
+def rel(path):
+    """A repository-relative path with forward slashes.
+
+    generation.json records the inputs a regeneration has to repeat, so the
+    spelling must not depend on which host produced it.
+    """
+    return os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+
+
+def resolve_ctrl_sizes(args):
+    """The measured-size files to merge.
+
+    The description set on disk was produced with a measured-size file that
+    lived outside the repository, and no manifest recorded that it had been
+    passed. Dropping it takes size_match from 595 to 74 and the run still
+    exits 0, so the committed file is the default and its absence is an error
+    rather than a quieter set of descriptions.
+    """
+    if getattr(args, "no_ctrl_sizes", False):
+        if args.ctrl_sizes:
+            raise SystemExit(
+                "--ctrl-sizes and --no-ctrl-sizes contradict each other. Pass "
+                "one or the other.")
+        logger.warning("generating without measured control parameter sizes: "
+                       "every control struct falls back to its parsed layout "
+                       "with nothing to check it against")
+        return []
+    if args.ctrl_sizes:
+        return list(args.ctrl_sizes)
+    if os.path.isfile(DEFAULT_CTRL_SIZES):
+        return [DEFAULT_CTRL_SIZES]
+    raise SystemExit(
+        "no measured control parameter sizes at %s. Run `emit-probe` and its "
+        "measure_sizes.sh on a machine with a compiler and write the result "
+        "there, pass --ctrl-sizes PATH, or pass --no-ctrl-sizes to accept a "
+        "description set whose control parameter sizes are parsed and "
+        "unchecked." % rel(DEFAULT_CTRL_SIZES))
+
+
+def resolve_ctrl_rank(args):
+    """The ranking to order control commands by, or None for graph depth.
+
+    The ranking is an optimisation and not a correctness input: it decides
+    which commands `--max-control` keeps and what order the emitted blocks
+    appear in, and never what any of them contains. So a missing default is a
+    warning here, where a missing measured-size file is an error.
+    """
+    if getattr(args, "no_ctrl_rank", False):
+        if getattr(args, "ctrl_rank", None):
+            raise SystemExit(
+                "--ctrl-rank and --no-ctrl-rank contradict each other. Pass "
+                "one or the other.")
+        logger.info("ordering control commands by object-graph depth alone")
+        return None
+    path = getattr(args, "ctrl_rank", None) or DEFAULT_CTRL_RANK
+    if not os.path.isfile(path):
+        if getattr(args, "ctrl_rank", None):
+            raise SystemExit(
+                "no control ranking at %s. Run `python tools/ctrl_rank.py "
+                "rank`, or pass --no-ctrl-rank to order on object-graph depth "
+                "alone." % path)
+        logger.warning("no control ranking at %s, ordering on object-graph "
+                       "depth alone. Run `python tools/ctrl_rank.py rank` to "
+                       "order on chain length, CVE history and parameter size "
+                       "together.", rel(DEFAULT_CTRL_RANK))
+        return None
+    ranking = load_json(path, "the control ranking")
+    require_keys(ranking, ["commands"], "the control ranking", path)
+    logger.info("ordering %d control commands by the ranking at %s",
+                len(ranking["commands"]), rel(path))
+    ranking["_path"] = path
+    return ranking
+
+
+def rank_source_record(ranking):
+    """The path, digest and weighting of the ranking that ordered the output."""
+    path = ranking["_path"]
+    with open(path, "rb") as fh:
+        blob = fh.read()
+    return {"path": rel(path),
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "commands": len(ranking["commands"]),
+            "weighting": ranking.get("weighting")}
+
+
+def json_source_record(path, count_key=None):
+    """The path, digest and record count of one JSON input.
+
+    Every input the description set is derived from is digested, not only the
+    two whose absence was noticed first. The reasoning .gitignore gives for
+    digesting rm-control-rank.json holds for all of them: a checkout without
+    one regenerates a different set under the same provenance record. The
+    object graph is the input whose collapse was P0-1 and it carried no digest
+    at all.
+    """
+    with open(path, "rb") as fh:
+        blob = fh.read()
+    record = {"path": rel(path),
+              "sha256": hashlib.sha256(blob).hexdigest()}
+    if count_key:
+        payload = json.loads(blob.decode("utf-8"))
+        value = payload.get(count_key)
+        record["records"] = len(value) if value is not None else None
+    return record
+
+
+def size_source_record(path):
+    """The path, digest and entry count of one measured-size input."""
+    with open(path, "rb") as fh:
+        blob = fh.read()
+    return {"path": rel(path),
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "entries": len(json.loads(blob.decode("utf-8")))}
+
+
 def merged_sizes(inventory, extra_paths):
     """Measured sizes from the inventory plus any probe output."""
     sizes = {}
@@ -1729,9 +2286,9 @@ def merged_sizes(inventory, extra_paths):
         if not os.path.isfile(path):
             raise SystemExit(
                 "measured sizes not found at %s. Run `emit-probe` and then "
-                "its measure_sizes.sh on a machine with a compiler, or drop "
-                "the --ctrl-sizes argument to generate without control "
-                "parameter sizes." % path)
+                "its measure_sizes.sh on a machine with a compiler, or pass "
+                "--no-ctrl-sizes to generate without control parameter "
+                "sizes." % path)
         with open(path, encoding="utf-8") as fh:
             extra = json.load(fh)
         if not isinstance(extra, dict):
@@ -1751,7 +2308,9 @@ def build(args):
     """Everything both `emit` and `verify` need. Returns a result dict."""
     inventory, control, graph = load_all(args)
     index = scan_headers(args.src)
-    sizes = merged_sizes(inventory, args.ctrl_sizes)
+    ctrl_sizes_paths = resolve_ctrl_sizes(args)
+    sizes = merged_sizes(inventory, ctrl_sizes_paths)
+    ranking = resolve_ctrl_rank(args)
     class_map = class_numbers(
         index, {r["external_class"] for r in graph["records"]})
     number_to_class = {}
@@ -1772,15 +2331,19 @@ def build(args):
     alloc_text, alloc_records, alloc_skipped = emit_alloc(
         emitter, inventory, graph, class_map, not args.all_classes)
     ctrl_text, ctrl_records, ctrl_skipped, ctrl_reachable = emit_control(
-        emitter, inventory, control, number_to_class, args.max_control,
-        args.control_order)
+        emitter, inventory, control, number_to_class, graph, ranking,
+        args.max_control, args.control_order)
     escape_text, escape_records = emit_escapes(
         emitter, inventory, class_map, graph, True, True)
+    xfer_text, xfer_records = emit_xfer(emitter, inventory)
     uvm_text, uvm_records = emit_uvm(emitter, inventory, args.uvm_test)
 
     return {
         "inventory": inventory, "control": control, "graph": graph,
         "index": index, "emitter": emitter, "sizes": sizes,
+        "ctrl_sizes_paths": ctrl_sizes_paths,
+        "ranking": ranking,
+        "xfer_text": xfer_text, "xfer_records": xfer_records,
         "class_map": class_map, "missing_class_numbers": missing,
         "resources": resources, "flags": flags,
         "alloc_text": alloc_text, "alloc_records": alloc_records,
@@ -1824,9 +2387,21 @@ def cmd_emit(args):
         result["flags"],
         "# Escapes other than the two multiplexers.\n"
         + result["escape_text"],
+        "# The re-entrant NV_ESC_IOCTL_XFER_CMD path. nv.c:2499 unwraps the\n"
+        "# wrapper once and re-enters the same dispatch switch with the three\n"
+        "# fields of nv_ioctl_xfer_t, so each variant pins the inner command\n"
+        "# to one escape number, sets the size to that escape's measured\n"
+        "# argument size and points the inner pointer at its parameter\n"
+        "# struct. The two multiplexers are absent: a wrapper naming either\n"
+        "# would leave its inner command or class field free.\n"
+        + result["xfer_text"],
         "# Object allocation. hClass is pinned per class, hObjectParent takes\n"
         "# the legal parent's handle, and hObjectNew produces the class's own\n"
-        "# resource, which chains one allocation to the next.\n"
+        "# resource, which chains one allocation to the next. A class whose\n"
+        "# legal parents all coexist on one chip carries one call per parent,\n"
+        "# named <class>_UNDER_<parent> after the first. A class whose parent\n"
+        "# set is chip-gated carries one call taking nv_handle, because at\n"
+        "# most one of those parents exists on any given GPU.\n"
         + result["alloc_text"],
     ]) + "\n"
 
@@ -1863,17 +2438,37 @@ def cmd_emit(args):
     manifest = {
         "schema": SCHEMA,
         "generated_from": {
-            "escape_inventory": os.path.relpath(args.inventory, REPO_ROOT),
-            "control_inventory": os.path.relpath(args.control, REPO_ROOT),
-            "object_graph": os.path.relpath(args.graph, REPO_ROOT),
+            "escape_inventory": json_source_record(args.inventory, "nodes"),
+            "control_inventory": json_source_record(args.control, "methods"),
+            "object_graph": json_source_record(args.graph, "records"),
+            "ctrl_sizes": [size_source_record(p)
+                           for p in result["ctrl_sizes_paths"]],
+            "ctrl_rank": (rank_source_record(result["ranking"])
+                          if result["ranking"] else None),
             "driver_version": version,
+            # Recorded here and not only in the banner text. The version alone
+            # does not identify a tree: two checkouts can carry one
+            # NVIDIA_VERSION and differ, and the provenance record is what a
+            # later reader has to reproduce the set from.
+            "driver_commit": args.commit,
         },
         "counts": {
             "escapes_emitted": sum(1 for r in result["escape_records"]
                                    if r["emitted"]),
             "escapes_total": len(result["escape_records"]),
+            "xfer_variants": sum(1 for r in result["xfer_records"]
+                                 if r["emitted"]),
+            "xfer_declined": sum(1 for r in result["xfer_records"]
+                                 if not r["emitted"]),
             "alloc_variants": sum(1 for r in result["alloc_records"]
                                   if r["emitted"]),
+            # One per allocatable class. This is the count surface_cov joins
+            # against, and it does not move when a narrow parent set expands.
+            "alloc_classes": sum(1 for r in result["alloc_records"]
+                                 if r["emitted"] and r["class_level_name"]),
+            "alloc_parent_variants": sum(1 for r in result["alloc_records"]
+                                         if r["emitted"]
+                                         and not r["class_level_name"]),
             "control_variants": sum(1 for r in result["ctrl_records"]
                                     if r["emitted"]),
             "control_reachable": result["ctrl_reachable"],
@@ -1896,6 +2491,7 @@ def cmd_emit(args):
                     "control": result["ctrl_skipped"]},
         "missing_class_numbers": sorted(result["missing_class_numbers"]),
         "escapes": result["escape_records"],
+        "xfer": result["xfer_records"],
         "allocations": result["alloc_records"],
         "control": result["ctrl_records"],
         "uvm": result["uvm_records"],
@@ -1907,7 +2503,10 @@ def cmd_emit(args):
     print("wrote the description set to %s" % out)
     print("  escapes            %d of %d dispatched"
           % (counts["escapes_emitted"], counts["escapes_total"]))
-    print("  alloc variants     %d" % counts["alloc_variants"])
+    print("  XFER variants      %d typed, %d inner escapes declined"
+          % (counts["xfer_variants"], counts["xfer_declined"]))
+    print("  alloc variants     %d, over %d class(es)"
+          % (counts["alloc_variants"], counts["alloc_classes"]))
     print("  control variants   %d of %d reachable"
           % (counts["control_variants"], counts["control_reachable"]))
     print("  UVM commands       %d of %d"
@@ -1947,8 +2546,10 @@ def cmd_summary(args):
     print("escapes emitted    : %d of %d"
           % (sum(1 for r in result["escape_records"] if r["emitted"]),
              len(result["escape_records"])))
-    print("alloc variants     : %d"
-          % sum(1 for r in result["alloc_records"] if r["emitted"]))
+    print("alloc variants     : %d, over %d class(es)"
+          % (sum(1 for r in result["alloc_records"] if r["emitted"]),
+             sum(1 for r in result["alloc_records"]
+                 if r["emitted"] and r["class_level_name"])))
     print("control variants   : %d of %d reachable"
           % (sum(1 for r in result["ctrl_records"] if r["emitted"]),
              result["ctrl_reachable"]))
@@ -1985,7 +2586,21 @@ def add_common(parser):
                         help="output of tools/object_graph.py extract")
     parser.add_argument("--ctrl-sizes", action="append",
                         help="JSON of measured struct sizes from the probe "
-                             "runner; may be given more than once")
+                             "runner; may be given more than once. Defaults "
+                             "to %s" % rel(DEFAULT_CTRL_SIZES))
+    parser.add_argument("--no-ctrl-sizes", action="store_true",
+                        help="generate without measured control parameter "
+                             "sizes. 521 of the 595 size-matched structs come "
+                             "from that file, so this is not the description "
+                             "set the campaign ships")
+    parser.add_argument("--ctrl-rank",
+                        help="output of tools/ctrl_rank.py rank, which orders "
+                             "control commands on chain length, CVE history "
+                             "and parameter size. Defaults to %s when that "
+                             "file exists" % rel(DEFAULT_CTRL_RANK))
+    parser.add_argument("--no-ctrl-rank", action="store_true",
+                        help="order control commands on object-graph depth "
+                             "alone, ignoring any ranking file")
     parser.add_argument("--max-control", type=int, default=0,
                         help="cap the number of control variants, 0 for all "
                              "that can be modelled correctly")

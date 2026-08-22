@@ -107,7 +107,7 @@ Three properties make a candidate a usable target:
 3. It can be called without a live GPU and without a real container.
 
 The ranked list, with a one-line reachability justification per entry point,
-goes into `artifacts/harnesses/TARGETS.md` before any harness is written. The
+goes into `harnesses/TARGETS.md` before any harness is written. The
 report cites that file when describing Track U coverage.
 
 ## Track U: recording the harness names

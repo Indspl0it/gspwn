@@ -44,7 +44,7 @@ description: Every project-specific term, defined once, alphabetically.
 | sub-agent | One of the twelve definitions in `agents/`, referred to by name. Executes one phase |
 | syz-db | The syzkaller tool that packs and unpacks a corpus database. What `corpus_ctl.py` and the seed packing in `campaign_ctl.py` call |
 | syz-manager | The syzkaller fuzzing manager. What `gspwn-k.service` runs |
-| syz-prog2c | The syzkaller tool that turns a `.syz` program into a standalone C reproducer. What `repro_ctl.py extract` calls when only `repro.syz` exists |
+| syz-prog2c | The syzkaller tool that turns a syz-program into a standalone C reproducer. What `repro_ctl.py extract` calls when the crash directory holds `repro.prog` and no usable `repro.cprog` |
 | syzkaller | The coverage-guided kernel fuzzer that drives Track K. Its inner loop mutates, measures edges through KCOV, and keeps corpus-advancing inputs |
 | syzlang | syzkaller's interface description language. What the `describe` phase authors for the driver's ioctl surface |
 | Track K | The NVIDIA GPU kernel driver, `open-gpu-kernel-modules` |

@@ -1,1 +1,0 @@
-cuda>=12.6 brand=unknown,driver>=470,driver<471 brand=nvidia,driver>=470,driver<471 brand=nvidiartx,driver>=470,driver<471 brand=tesla,driver>=470,driver<471

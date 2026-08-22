@@ -112,8 +112,9 @@ Every worklist item carries the tag of its source.
 
 | Tag | Source of the item |
 |---|---|
-| `[coverage]` | a region of the target that no campaign has covered |
+| `[surface]` | an enumerated command the corpus has not reached |
 | `[finding crash-NNNN]` | a call adjacent to the named registered crash |
+| `[history CVE-YYYY-NNNNN]` | a place a published fix changed, from the round-1 history worklist |
 
 `round-end --worklist <path>` records the file, `round-advance` carries it into
 the new round, and the next round's `describe` and `seeds` sub-agents read it

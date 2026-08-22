@@ -14,8 +14,8 @@ point below serves one of those two.
 
 | Extension point | Cost | Files touched |
 |---|---|---|
-| 1. A syzlang description | Low, largest effect on results | `artifacts/descriptions/*.txt` |
-| 2. A Track U harness | Medium | `artifacts/harnesses/<target>/`, `config/campaign.yaml` |
+| 1. A syzlang description | Low, largest effect on results | `descriptions/*.txt` |
+| 2. A Track U harness | Medium | `harnesses/<target>/`, `config/campaign.yaml` |
 | 3. A configuration key | Low | `tools/gspwn_config.py`, the reference docs |
 | 4. An Xid classification | Low, research decision | `tools/crash_parse.py` |
 | 5. A phase and its sub-agent | High. It touches the state machine | `tools/pipeline_state.py`, `agents/`, `AGENTS.md` |
@@ -25,9 +25,9 @@ point below serves one of those two.
 Fuzzing quality is decided in the `describe` phase. Every coverage number and
 every crash is downstream of the grammar.
 
-| Step | Detail |
+| Aspect | Requirement |
 |---|---|
-| Where | `artifacts/descriptions/*.txt`, generated at runtime. The repository carries no committed copy |
+| Where | `descriptions/*.txt`, generated at runtime. The repository carries no committed copy |
 | Derive from | The driver source. Never from memory or a blog post: the ABI shifts between branches |
 | Compile with | `syz-compile`, after extracting constants with `syz-extract` |
 | Chain handles | With syzkaller resources, so generated programs build valid object trees |
@@ -42,14 +42,14 @@ change, recorded in [Threat model](/gspwn/architecture/threat-model/) first.
 
 ## 2. A Track U harness and its replay command
 
-| Step | Detail |
+| Aspect | Requirement |
 |---|---|
-| Where | `artifacts/harnesses/<target>/`, with the source, a `seeds/` directory and a `build.sh` |
+| Where | `harnesses/<target>/`, with the source, a `seeds/` directory and a `build.sh` |
 | Drives | Exactly one entry point, taking the fuzzer buffer |
 | Must be | Deterministic, free of global state between runs, with no network and no writes outside a temporary directory |
 | Output goes to | `artifacts/runs/$RUN_ID/u/<harness-name>/`, which is where `coverage_ctl.py sample --track u` looks |
-| Registered in | `track_u.targets` in `config/campaign.yaml`, and `artifacts/harnesses/run_all.sh` |
-| Replay command | Recorded in `artifacts/harnesses/TARGETS.md` with `{input}` where the path goes |
+| Registered in | `track_u.targets` in `config/campaign.yaml`, and `harnesses/run_all.sh` |
+| Replay command | Recorded in `harnesses/TARGETS.md` with `{input}` where the path goes |
 
 The replay command is required. Without it a Track U crash from that harness
 cannot be scored for reproduction rate, and the `poc` phase blocks the crash on
@@ -70,7 +70,7 @@ harness runs unprivileged.
 
 ## 3. A configuration key
 
-| Step | Detail |
+| Step | Specification |
 |---|---|
 | Add the default | To the `DEFAULTS` dictionary in `tools/gspwn_config.py`, under the section it belongs to. The shape of that dictionary is the schema |
 | Add a validator | An entry in `_RULES`, as `(section, key, (message, predicate))` |
@@ -120,7 +120,7 @@ derived count with no warning.
 
 ## 5. A phase and its sub-agent
 
-| Step | Detail |
+| Step | Specification |
 |---|---|
 | Add the phase name | To `SETUP_PHASES`, `ROUND_PHASES` or `FINAL_PHASES` in `tools/pipeline_state.py`, in dependency order |
 | Write the sub-agent | `agents/<phase>.md`, following the shape every other one has |
@@ -148,6 +148,8 @@ looks like for that phase, and repeats the public-repository constraint. See
 | Widening `track_k.enabled_syscalls` past the threat model | Scope is a threat-model decision, recorded first |
 | A tool reading a tunable it defines itself | Every tool reads from `gspwn_config`, so a value cannot drift between the file and the code |
 | A second writer for `state/spend.json` | Two derivations of the same figure would disagree |
+| Editing a committed artefact under `surface/` by hand | The producing tool is the schema, and `regression_check.py` compares the artefacts against each other on every push |
+| Recording a target as covered without a ledger entry or a corpus program | The surface curve is read by subtraction, so an unsupported entry lowers the remaining count and can stop the loop |
 
 ## Verification after a change
 
@@ -156,6 +158,7 @@ python3 tools/selftest.py
 python3 -m pyflakes tools/*.py
 bash -n tools/build_kernel.sh
 python3 tools/gspwn_config.py
+python3 tools/regression_check.py all
 ```
 
 | Command | Checks |
@@ -164,9 +167,14 @@ python3 tools/gspwn_config.py
 | `pyflakes` | Undefined names and unused imports across every tool |
 | `bash -n` | Syntax of the build script, which runs unattended for hours |
 | `gspwn_config.py` | The effective configuration, defaults merged and fully validated |
+| `regression_check.py` | The committed surface artefacts still agree with each other, and the five generated pages still follow from them |
 
-CI runs all four, plus a check that every command example in the prose files
-matches the tools' real `--help` output.
+CI runs all five commands above, plus the writing-register check and a check
+that every command example in the prose files matches the tools' real `--help`
+output. `regression_check.py all` is itself five subcommands: `names`, `pins`,
+`coverage`, `derived` and `pages`.
+`regression_check.py` fails on a surface artefact edited by hand without a
+corresponding edit to the tool that writes it.
 
 ## See also
 

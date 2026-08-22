@@ -33,6 +33,20 @@ description: Symptom to cause to fix, for the failure modes the tools guard agai
 An `unknown` verdict stops the loop by design, so a broken sampler cannot
 authorise another campaign.
 
+## Surface and completion verdicts
+
+`completion` exits 0 for `complete`, 3 for `incomplete` and 1 for `unknown`.
+`unknown` never satisfies the completion stop, so a corpus that cannot be read
+cannot end a campaign by claiming it is finished.
+
+| Message | Cause | Action |
+|---|---|---|
+| `N surface sample(s) recorded; need >= M before the curve's shape means anything` | Fewer surface samples than `coverage.surface_min_samples` | The surface column is written on `coverage.surface_sample_min`, which is coarser than the edge cadence. Run longer, or lower the cadence |
+| `no surface value in any sample` | Every sample skipped the surface measurement | Confirm the sampler is not running with `--skip-surface` on Track K, and that the run has a `corpus.db` |
+| `completion not measured: <error>` | The corpus, the inventories or the ledger could not be read | Read the named error. A missing `corpus.db` means the run has not written one yet |
+| `N ledger row(s) name a target no inventory contains and are not counted` | The ledger outlived a driver bump | Expected after a bump. Rows are keyed on the driver release, so the stale ones are reported and ignored |
+| `no new target reached across the last N sample(s), and the corpus names M target(s) throughout` | The surface curve is flat | Read it with the edge verdict. Both flat with the ledger open means the corpus is stuck on resource chains, and not that the surface is exhausted |
+
 ## Campaigns
 
 | Symptom | Cause | Action |
@@ -42,8 +56,11 @@ authorise another campaign.
 | `corpus policy 'carry' requires --from-run` | `--corpus carry` with no source run | Name the previous run id |
 | `run X already has a corpus.db but the corpus policy is 'fresh'` | The run id is being reused | Use a new run id |
 | `run X is not registered` when sampling | The sampler was pointed at an id no campaign install or `round-add-run` names | Fix the id, or register the run. A typo would create a root-owned run directory that later confuses `series` and `status` |
-| `run X: campaign window has elapsed; not sampling` | The sampler timer outlives the campaign | Expected. `--force` overrides it, at the cost of padding the run's sample count |
+| `run X: campaign window has elapsed, so this call is not sampling` | The sampler timer outlives the campaign | Expected. `--force` overrides it, at the cost of padding the run's sample count |
 | The campaign never ends | The deadline file is gone and nothing enforces the window | `check-deadline` rebuilds it from the install record, and stops the units when it cannot |
+| `run error: no harness sources under X, so this is not the harness tree` | The Track U container has no `/harnesses` mount, or it points at the wrong directory | The unit takes two mounts: `-v <repo>/artifacts:/artifacts` and `-v <repo>/harnesses:/harnesses`. Reinstall the campaign, or correct the unit |
+| `run error: N harness source tree(s) under X and no built binary among them` | The mount is correct and `build_all.sh` has not run on this machine | Run `bash harnesses/build_all.sh`, then reinstall |
+| `warning: N of M harnesses are built` | Some targets failed to build | The run proceeds on the built ones. Rebuild the rest, or record them as blocked in `harnesses/TARGETS.md` |
 
 ## The round
 
@@ -53,8 +70,8 @@ authorise another campaign.
 | `refusing to measure a live campaign` | `round-end` was called while a run is still fuzzing | Wait it out. `--force` is for a campaign that really is finished with only a stale deadline file |
 | `cannot advance to round N: round phase(s) not done` | A round phase is not `done` | Finish it, or stop the loop with `round-decide --decision stop --reason "..."` and run `report`. Marking a phase `blocked` does not satisfy the check |
 | `cannot advance to round N: round M has no recorded round-end` | The round was never measured | Run `round-end --from-run <run-id>` |
-| `a budget or round-cap stop cannot be overridden` | `--decision continue` against a hard cap | Raise the cap in the configuration, deliberately |
-| `overriding it requires --reason` | `--decision continue` against a plateau or `unknown` stop | State the reason |
+| `A budget or round-cap stop cannot be overridden` | `--decision continue` against a hard cap | Raise the cap in the configuration, deliberately |
+| `Overriding it requires --reason` | `--decision continue` against a plateau or `unknown` stop | State the reason |
 
 ## Triage
 
@@ -63,7 +80,7 @@ authorise another campaign.
 | `WARN: no crashes dir under ...` | The run id is wrong, or the campaign wrote nowhere | Check the id. This means nothing was scanned, and says nothing about whether the run crashed |
 | The flagged queue will not empty | A generic panic title with a varying stack flags every distinct stack | Read the reports, then group with one `crash-set a b c --duplicate-of X` call |
 | `status 'duplicate' requires --duplicate-of <id>` | A crash was marked a duplicate with no link | Link it, or set `--status unique` |
-| `X is itself a duplicate — link directly to the surviving entry` | A duplicate chain | Point at the surviving entry. Chains and cycles are refused |
+| `X is itself a duplicate. Link directly to the surviving entry` | A duplicate chain | Point at the surviving entry. Chains and cycles are refused |
 | `crash-set` changed nothing | A rejected id aborted the whole call | The error names the id. Fix it and re-run |
 | The crash count looks enormous | Noise Xids dominate the registry | `show` and `brief` print how many are noise. They are excluded from every derived count |
 | `X carries no sanitizer signature — skipped, not registered` | A file in the Track U crash directory is a log, a manifest or a README | Expected. A file with no signature is not a crash |

@@ -172,19 +172,24 @@ Every item carries its source:
 - [finding crash-0001] Model UVM_DESTROY_RANGE_GROUP: shares the range-group
   object with the UAF in crash-0001, never exercised by its reproducer.
 - [finding crash-0001] Model UVM_UNMAP_EXTERNAL: same teardown path.
-- [coverage] NV_ESC_RM_CONTROL command 0x20800110 is modeled as an opaque
+- [surface] NV_ESC_RM_CONTROL command 0x20800110 is modeled as an opaque
   buffer; attach the real parameter struct.
 
 ## seeds
 - [finding crash-0001] Trace a workload that binds a channel and leaves async
   work in flight, which is the precondition the UAF needed.
-- [coverage] Trace a workload reaching nvidia_uvm external-range creation,
+- [surface] Trace a workload reaching nvidia_uvm external-range creation,
   classified unreachable-by-construction.
 ```
 
-A `[coverage]` item marks unexplored surface. A `[finding crash-NNNN]` item
-marks surface that has already produced a bug, and the `describe` sub-agent
-works those first.
+A `[surface]` item marks an enumerated command the corpus has not reached. A
+`[finding crash-NNNN]` item marks surface that has already produced a bug, and
+the `describe` sub-agent works those first. A `[history CVE-YYYY-NNNNN]` item
+marks a place a published fix changed.
+
+A target that no round will reach belongs in the completion ledger and not in
+the worklist. `pipeline_ctl.py surface-account` records the reason, and
+"not reached yet" is refused by the vocabulary.
 
 ## 5. Record the work list in the round
 
@@ -216,7 +221,7 @@ It exits 1 when there is none, which is round 1, and 1 with a message when
 `refine` recorded a path whose file is missing:
 
 ```
-artifacts/eval/r2-1/worklist.md (MISSING — refine recorded it but the file is not there)
+artifacts/eval/r2-1/worklist.md (MISSING: refine recorded it but the file is not there)
 ```
 
 A non-zero exit in round 2 or later is a blocked gate, and round 1's work is

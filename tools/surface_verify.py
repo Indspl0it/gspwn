@@ -15,22 +15,40 @@ the one under test. This module makes that mismatch loud.
 
 Four version sources, checked in whatever combination is available:
 
-  artefact   the version recorded in tools/ioctl_map.json and any inventory
-             JSON under artifacts/surface/
+  artefact   the version recorded in tools/ioctl_map.json, in any inventory
+             JSON under surface/, and in the generation record under
+             descriptions/
   checkout   NVIDIA_VERSION in version.mk of the source tree
   running    /proc/driver/nvidia/version on the target, or nvidia-smi
   declared   driver_branch in config/machine.yaml, written by provision
 
+Two independent sources are the minimum for a verdict. A single source is
+consistent with itself and establishes nothing, so `check` fails on it. Pass
+--allow-single-source where the single source is deliberate and known.
+
+Independence is counted by group, not by file. Every committed artefact takes
+its driver_version from the version.mk of the checkout that produced it:
+ioctl_inventory.py, ctrl_surface.py and object_graph.py each read one tree,
+and descriptions/generation.json copies the value out of the control
+inventory. The six of them are one observation recorded six times, so they
+count once. The other three groups each observe the release by a route that
+can return a different answer: a checkout can be updated without regenerating,
+a loaded driver reports what the kernel actually holds, and machine.yaml
+records what provisioning intended.
+
 Subcommands:
-  check [--src DIR] [--strict] [--no-running]
+  check [--src DIR] [--allow-single-source] [--no-running]
                                  compare every available source, report the
-                                 verdict, exit non-zero on disagreement
+                                 verdict, exit non-zero on disagreement and on
+                                 fewer than two independent sources
   stamp [--src DIR]              record the checkout's version into
                                  tools/ioctl_map.json, for use after
                                  regenerating it
   show                           print each source and where it was read from
 
-Exit codes: 0 agreement or nothing to compare, 1 bad input, 3 disagreement.
+Exit codes: 0 agreement, 1 bad input, 3 disagreement, 4 fewer than two
+independent sources. 3 and 4 are separate because their remedies are separate:
+3 means regenerate the artefacts, 4 means bring a second source up.
 """
 import argparse
 import json
@@ -43,10 +61,11 @@ import sys
 logger = logging.getLogger(__name__)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SRC = os.path.join("artifacts", "src", "open-gpu-kernel-modules")
+DEFAULT_SRC = os.path.join(REPO, "artifacts", "src", "open-gpu-kernel-modules")
 MAP_PATH = os.path.join(REPO, "tools", "ioctl_map.json")
 MACHINE_YAML = os.path.join(REPO, "config", "machine.yaml")
-SURFACE_DIR = os.path.join(REPO, "artifacts", "surface")
+SURFACE_DIR = os.path.join(REPO, "surface" )
+DESCRIPTIONS_DIR = os.path.join(REPO, "descriptions" )
 
 # trace2seed.py drops every key beginning with "comment", so the stamp lives
 # under that prefix and cannot be mistaken for a request number.
@@ -56,12 +75,20 @@ VERSION_KEY = "comment_driver_version"
 # carry no driver version by design. Warning about these would train the reader
 # to ignore the warning that matters.
 NOT_VERSION_TIED = {
-    "artifacts/surface/prior-cves.json",
+    "surface/prior-cves.json",
     # Maps CVEs to release tag pairs, so it spans versions by construction.
-    "artifacts/surface/cve-hotspots.json",
+    "surface/cve-hotspots.json",
 }
 
 DISAGREE = 3
+
+# Kept apart from DISAGREE because the operator actions differ. DISAGREE means
+# the artefacts model a release the target is not running, and the fix is to
+# regenerate. INSUFFICIENT means the guard could not compare anything, and the
+# fix is to bring a second source up. Collapsing the two loses the distinction
+# the printed remedy already draws. The value is 4 because argparse exits 2 on
+# a usage error, and a mistyped flag must not read as a verdict.
+INSUFFICIENT = 4
 
 VERSION_RE = re.compile(r"\b(\d+\.\d+(?:\.\d+)?)\b")
 
@@ -113,12 +140,46 @@ def _find_driver_version(obj, depth=0):
     return None
 
 
+def _scan_json_dir(directory, prefix, found, unversioned):
+    """Record the driver version in every JSON artefact directly under one dir.
+
+    Non-recursive, so artifacts/bulletins/ stays invisible: those are
+    cached vendor HTML and belong to no driver build.
+    """
+    if not os.path.isdir(directory):
+        return
+    for name in sorted(os.listdir(directory)):
+        if not name.endswith(".json"):
+            continue
+        rel = prefix + name
+        path = os.path.join(directory, name)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as exc:
+            logger.warning("could not read %s: %s", rel, exc)
+            unversioned.append(rel)
+            continue
+        version = _find_driver_version(data)
+        if version:
+            found[rel] = version
+        else:
+            unversioned.append(rel)
+
+
 def artefact_versions():
     """Every version recorded in a committed or generated artefact.
 
     Artefacts carrying no version are counted and logged, never skipped in
     silence: an unversioned inventory cannot be checked, and a guard that says
     nothing about it reports agreement it did not establish.
+
+    descriptions/generation.json is included because the description
+    set is the artefact syzkaller consumes, so its staleness carries most. A
+    fresh inventory paired with descriptions generated from an older checkout
+    used to pass this check cleanly. The four .txt files carry the same version
+    in their headers, written by the same syzlang_gen.py run that writes the
+    generation record, so reading the record covers them.
     """
     found, unversioned = {}, []
     if os.path.isfile(MAP_PATH):
@@ -128,24 +189,9 @@ def artefact_versions():
             found["tools/ioctl_map.json"] = str(data[VERSION_KEY]).split()[0]
         else:
             unversioned.append("tools/ioctl_map.json")
-    if os.path.isdir(SURFACE_DIR):
-        for name in sorted(os.listdir(SURFACE_DIR)):
-            if not name.endswith(".json"):
-                continue
-            rel = "artifacts/surface/" + name
-            path = os.path.join(SURFACE_DIR, name)
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    data = json.load(fh)
-            except (OSError, ValueError) as exc:
-                logger.warning("could not read %s: %s", rel, exc)
-                unversioned.append(rel)
-                continue
-            version = _find_driver_version(data)
-            if version:
-                found[rel] = version
-            else:
-                unversioned.append(rel)
+    _scan_json_dir(SURFACE_DIR, "surface/", found, unversioned)
+    _scan_json_dir(DESCRIPTIONS_DIR, "descriptions/", found,
+                   unversioned)
     for rel in unversioned:
         if rel in NOT_VERSION_TIED:
             continue
@@ -187,6 +233,37 @@ def declared_version():
     return value or None
 
 
+# The four independence groups, in the order `check` prints them. The value is
+# the operator-facing name of the group; ARTEFACT_GROUP holds however many
+# files carry a stamp and still counts once, because one version.mk produced
+# all of them. Counting files instead of groups is what let six copies of one
+# stamp satisfy the two-source gate.
+ARTEFACT_GROUP = "artefacts"
+CHECKOUT_GROUP = "checkout version.mk"
+RUNNING_GROUP = "running driver"
+DECLARED_GROUP = "config/machine.yaml driver_branch"
+
+
+def source_groups(artefacts, checkout, running, declared):
+    """Every available version source, partitioned into independent groups.
+
+    Returns an ordered list of (group name, [(label, value), ...]). A group is
+    independent when its answer can differ from every other group's answer.
+    The artefacts cannot differ from each other for any reason except a
+    partial regeneration, which `check` reports separately, so they are one
+    observation however many files record it.
+    """
+    groups = []
+    if artefacts:
+        groups.append((ARTEFACT_GROUP, sorted(artefacts.items())))
+    for name, value in ((CHECKOUT_GROUP, checkout),
+                        (RUNNING_GROUP, running),
+                        (DECLARED_GROUP, declared)):
+        if value:
+            groups.append((name, [(name, value)]))
+    return groups
+
+
 def collect(src):
     sources = {}
     for label, value in artefact_versions().items():
@@ -220,15 +297,18 @@ def cmd_check(args):
     running = None if args.no_running else running_version()
     declared = declared_version()
 
-    rows = list(artefacts.items())
-    for label, value in (("checkout version.mk", checkout),
-                         ("running driver", running),
-                         ("config/machine.yaml driver_branch", declared)):
-        if value:
-            rows.append((label, value))
+    groups = source_groups(artefacts, checkout, running, declared)
+    rows = [row for _name, members in groups for row in members]
     if not rows:
         print("no version source available")
-        return DISAGREE if args.strict else 0
+        print()
+        print("Nothing was compared. tools/ioctl_map.json carries no %s, no "
+              "version.mk was found under %s, no driver reports a version on "
+              "this machine, and config/machine.yaml declares no driver_branch."
+              % (VERSION_KEY, args.src))
+        print("--allow-single-source covers one deliberate source, not none.")
+        logger.error("no version source available, --src %s", args.src)
+        return INSUFFICIENT
 
     width = max(len(k) for k, _ in rows)
     for label, value in rows:
@@ -260,11 +340,39 @@ def cmd_check(args):
              % target))
 
     if not problems:
-        compared = len(rows)
+        compared = len(groups)
         if compared < 2:
-            print("only one version source available, nothing to compare")
-            return DISAGREE if args.strict else 0
-        print("agreement across %d sources" % compared)
+            only = groups[0][0]
+            if only == ARTEFACT_GROUP:
+                print("only the artefacts carry a version, and %d file(s) "
+                      "built from one checkout are one source" % len(rows))
+            else:
+                print("only one version source available, nothing to compare")
+            if args.allow_single_source:
+                logger.warning(
+                    "one independent source (%s), accepted under "
+                    "--allow-single-source", only)
+                return 0
+            print()
+            print("A single source agrees with itself and establishes nothing. "
+                  "The artefacts count once however many of them carry a "
+                  "stamp, because ioctl_inventory.py, ctrl_surface.py and "
+                  "object_graph.py all read one version.mk and "
+                  "generation.json copies the value out of the control "
+                  "inventory. Bring a genuinely second source up: load the "
+                  "driver so nvidia-smi or /proc/driver/nvidia/version "
+                  "answers, set driver_branch in config/machine.yaml, or "
+                  "point --src at an open-gpu-kernel-modules checkout so "
+                  "version.mk can be read. Where the single source is "
+                  "deliberate and known, pass --allow-single-source.")
+            logger.error("1 independent version source (%s), fewer than the 2 "
+                         "needed to compare", only)
+            return INSUFFICIENT
+        print("agreement across %d independent sources: %s"
+              % (compared,
+                 ", ".join("%s (%d files)" % (name, len(members))
+                           if name == ARTEFACT_GROUP else name
+                           for name, members in groups)))
         return 0
 
     print("DISAGREEMENT")
@@ -278,12 +386,18 @@ def cmd_check(args):
           "when run against another, and they fail silently: the map parses, "
           "syzkaller runs, and the campaign measures the wrong target.")
     print()
+    # In dependency order: the three extractors first, then the joins that read
+    # them, then the description set, then the stamp. Every command writes to
+    # its own default path, so each runs exactly as printed.
     print("  python3 tools/ioctl_inventory.py --src <checkout>")
     print("  python3 tools/ctrl_surface.py --src <checkout>")
     print("  python3 tools/object_graph.py extract --src <checkout>")
+    print("  python3 tools/object_graph.py chains --src <checkout>")
+    print("  python3 tools/ctrl_rank.py rank --src <checkout>")
+    print("  python3 tools/syzlang_gen.py emit --src <checkout>")
     print("  python3 tools/surface_verify.py stamp --src <checkout>")
-    logger.error("%d version problem(s) across %d sources",
-                 len(problems), len(rows))
+    logger.error("%d version problem(s) across %d independent source(s)",
+                 len(problems), len(groups))
     return DISAGREE
 
 
@@ -300,11 +414,18 @@ def cmd_stamp(args):
     commit = checkout_commit(args.src)
     data[VERSION_KEY] = version + ((" (commit %s)" % commit) if commit else "")
     # Written whole and replaced, so an interrupted write cannot leave the map
-    # half-rewritten and unparseable by the seeds phase.
+    # half-rewritten and unparseable by the seeds phase. newline="\n" is
+    # explicit for the same reason object_graph.write_json pins it: a stamp run
+    # on Windows and one under WSL must produce the same bytes, and the default
+    # translation would rewrite every line of the map with CRLF. fsync before
+    # the replace, so a crash cannot leave the new name pointing at unwritten
+    # data.
     tmp = MAP_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(data, fh, indent=2, sort_keys=True)
         fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, MAP_PATH)
     logger.info("stamped %s into %s", data[VERSION_KEY], MAP_PATH)
     print("%s -> %s" % (data[VERSION_KEY], os.path.relpath(MAP_PATH, REPO)))
@@ -334,14 +455,16 @@ def build_parser():
                     "under test.")
     ap.add_argument("--src", default=DEFAULT_SRC,
                     help="open-gpu-kernel-modules checkout (default: %s)"
-                         % DEFAULT_SRC)
+                         % os.path.relpath(DEFAULT_SRC, REPO))
     ap.add_argument("-v", "--verbose", action="store_true", help="log at DEBUG")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = add_shared(sub.add_parser("check",
                    help="compare every available version source"))
-    p.add_argument("--strict", action="store_true",
-                   help="treat fewer than two comparable sources as a failure")
+    p.add_argument("--allow-single-source", action="store_true",
+                   help="accept a single version source. Fewer than two "
+                        "sources is a failure by default, because one source "
+                        "agrees with itself and establishes nothing")
     p.add_argument("--no-running", action="store_true",
                    help="skip the loaded-driver comparison, for a workstation "
                         "whose own GPU is not the target")

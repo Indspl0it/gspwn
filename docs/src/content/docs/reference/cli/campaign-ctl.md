@@ -81,7 +81,7 @@ sudo python3 tools/campaign_ctl.py install-u --run-id r2-1 [options]
 
 The unit runs `track_u.docker_image` with `artifacts/` bind-mounted at
 `/artifacts` and `RUN_ID` in the environment, executing
-`/artifacts/harnesses/run_all.sh`.
+`/harnesses/run_all.sh`.
 
 `install-u` writes its own deadline file, so it resets the clock when it runs
 after `install-k`.
@@ -229,5 +229,3 @@ cannot double-count.
 
 - [Running a campaign](/gspwn/guides/running-a-campaign/)
 - [systemd units](/gspwn/reference/systemd-units/)
-</content>
-</invoke>

@@ -1,8 +1,0 @@
-# Format keywords for fuzz_path_join, from the library's own source.
-"/"
-"//"
-".."
-"."
-"usr"
-"lib"
-"rootfs"

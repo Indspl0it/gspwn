@@ -15,7 +15,7 @@ socket, needs no GPU, and never writes into the checkout it reads.
 
 The mined record is
 [Container stack fixes](/gspwn/knowledgebase/container-stack-fixes/). The
-entry-point list derived from it is `artifacts/harnesses/TARGETS.md`.
+entry-point list derived from it is `harnesses/TARGETS.md`.
 
 ## Responsibility
 
@@ -66,7 +66,7 @@ fix-commit count; and the top 25 functions by fix-commit count.
 | Direction | Modules |
 |---|---|
 | Imports this module | Nothing at run time. The `harness` phase invokes it as a command |
-| This module imports | Nothing in `tools/`. It shells out to `git` |
+| This module imports | `tools/gitmine.py`, for the git wrapper, the diff parser, the function attribution and the release-tag mapping. Nothing else in `tools/` |
 
 ## Failure modes
 
@@ -123,7 +123,7 @@ they carry different weights.
 | Keyword | A subject or body matching one of the patterns in `KEYWORDS`, with word boundaries | A heuristic. It catches fixes that never went through an advisory, and it catches unrelated commits. Each record carries the text that matched, and a human reviews it |
 
 **Reachability and harnessability.** The second axis is applied by hand over the
-tool's output and recorded in `artifacts/harnesses/TARGETS.md`. Two questions
+tool's output and recorded in `harnesses/TARGETS.md`. Two questions
 decide it. Do bytes supplied by the container image reach the function, and does
 the function run without root, without a GPU and without a live container. A
 function failing the first question falls outside the Track U attacker
@@ -147,7 +147,7 @@ gate says nothing about the most-fixed function in the target.
 
 ## Harnesses
 
-The harness set the ranking produced is committed under `artifacts/harnesses/`,
+The harness set the ranking produced is committed under `harnesses/`,
 105 files across seven targets.
 
 | Harness | Entry point | Source file |
@@ -177,14 +177,14 @@ Campaign output goes to `artifacts/runs/` and stays ignored.
 No harness in the tree has been compiled. They were written on a machine with no
 clang, no Go toolchain and no AFL++ image, from a reading of the
 `libnvidia-container` and `nvidia-container-toolkit` sources at the commits
-checked out under `artifacts/src/`. `artifacts/harnesses/build_all.sh` is the
+checked out under `artifacts/src/`. `harnesses/build_all.sh` is the
 first thing the `harness` phase runs, and its first run is also the first
 compile of every file in the tree. A build failure there is expected work and
 not a defect. The script exit status is the count of targets that failed to
 build, and `agents/harness.md` permits Track U proceeding with fewer working
 harnesses as long as the shortfall is stated.
 
-`artifacts/harnesses/TARGETS.md` carries the same statement, the per-harness
+`harnesses/TARGETS.md` carries the same statement, the per-harness
 leak policy, the replay command each target takes, and the reachability caveat
 on `fuzz_ldcache`.
 
@@ -221,3 +221,4 @@ is why `pkg/` sits in the ignored prefixes.
 - [Prior vulnerabilities](/gspwn/knowledgebase/prior-vulnerabilities/)
 - [Threat model](/gspwn/architecture/threat-model/)
 - [object_graph.py](/gspwn/architecture/components/object-graph/)
+- [gitmine.py](/gspwn/architecture/components/gitmine/)

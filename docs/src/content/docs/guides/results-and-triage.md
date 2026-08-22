@@ -18,7 +18,7 @@ only when no run is registered at all.
 
 That call covers two sources: the syzkaller workdir at
 `artifacts/runs/<id>/workdir/crashes/`, and the Track U crash directory at
-`artifacts/harnesses/crashes/`.
+`artifacts/u-crashes/`.
 
 Kernel logs are scanned separately, one file at a time:
 
@@ -156,8 +156,7 @@ derive.
 crashes is not read as 412 findings:
 
 ```
-crashes: 412 total (duplicate=3, flagged=1, unique=6, ...)
-  of these 402 are noise Xids (the fuzzer causes them by design; not counted as findings)
+crashes: 412 total (duplicate=3, flagged=1, unique=6, ...)  of these 402 are noise Xids (the fuzzer causes them by design, and they are not counted as findings)
 ```
 
 ## Prioritise for RCA

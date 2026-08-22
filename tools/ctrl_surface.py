@@ -30,7 +30,7 @@ the flags that decide who may call it, the handler, and the parameter struct:
 Flag and access-right names are read from the driver headers at run time,
 because both move between driver branches.
 
-    python3 tools/ctrl_surface.py --out artifacts/surface/rm-control-inventory.json
+    python3 tools/ctrl_surface.py --out surface/rm-control-inventory.json
 
 Entries the parser cannot read are counted and listed in the output under
 `scan.rejected`, and the count is logged. A silently truncated inventory is
@@ -46,10 +46,28 @@ import sys
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def repo_relative(path):
+    """A path as the repository sees it, in forward slashes.
+
+    An artefact that recorded an absolute path carried the author's home
+    directory into a committed file, and differed between two checkouts of
+    the same tree. A path outside the repository is returned absolute,
+    because relative to nothing is worse than long.
+    """
+    absolute = os.path.abspath(path)
+    try:
+        rel = os.path.relpath(absolute, REPO_ROOT)
+    except ValueError:                      # a different drive on Windows
+        return absolute.replace(os.sep, "/")
+    if rel.split(os.sep)[0] == os.pardir:
+        return absolute.replace(os.sep, "/")
+    return rel.replace(os.sep, "/")
+
 DEFAULT_SRC = os.path.join(REPO_ROOT, "artifacts", "src",
                            "open-gpu-kernel-modules")
-DEFAULT_OUT = os.path.join(REPO_ROOT, "artifacts", "surface",
-                           "rm-control-inventory.json")
+DEFAULT_OUT = os.path.join(REPO_ROOT, "surface", "rm-control-inventory.json")
 
 SCHEMA = "gspwn.rm-control-inventory/1"
 
@@ -471,7 +489,7 @@ def collect(src_root):
     return {
         "schema": SCHEMA,
         "source": {
-            "src_root": os.path.abspath(src_root),
+            "src_root": repo_relative(src_root),
             "driver_version": read_driver_version(src_root),
             "generated_dir": GENERATED_DIR.replace(os.sep, "/"),
             "flag_header": CONTROL_H.replace(os.sep, "/"),

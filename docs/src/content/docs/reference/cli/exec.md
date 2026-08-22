@@ -77,5 +77,3 @@ failed rung leaves a log the next rung's diagnosis can read.
 
 - [build_kernel.sh](/gspwn/reference/cli/build-kernel/)
 - [Artifacts](/gspwn/reference/artifacts/)
-</content>
-</invoke>

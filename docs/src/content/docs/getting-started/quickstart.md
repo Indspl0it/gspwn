@@ -128,22 +128,22 @@ contents of the crash registry, the targets the findings name, and the tail of
 `knowledge/`. On a fresh state file the output is short:
 
 ```
-# gspwn brief — generated 2026-08-15T15:31:31+00:00
-Derived from state/pipeline.json at read time. Re-run it rather than trusting a copy;
-nothing here is authoritative once the state file moves on.
+# gspwn brief, generated 2026-08-15T15:31:31+00:00
+Derived from state/pipeline.json at read time. Re-run it for a current answer, because
+nothing here stays authoritative once the state file moves on.
 
 ## Where the pipeline is
-round 1 of max 3, 0.0 of 216 run-hours spent
+round 1 of max 10, 0.0 of 216 run-hours spent
 next action: run phase provision (see agents/provision.md)
 
 ## Crashes
 none registered
 
 ## Findings (what steers the next round)
-none recorded — the loop can only steer on coverage
+none recorded: the loop can only steer on coverage
 
 ## Impact (what the report can argue)
-none assessed — the report would carry reproducers with no argued severity
+none assessed: the report would carry reproducers with no argued severity
 ```
 
 `brief` is computed at read time and cannot be stale. A stored copy goes out of

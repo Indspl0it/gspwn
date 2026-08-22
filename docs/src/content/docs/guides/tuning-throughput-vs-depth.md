@@ -135,7 +135,7 @@ python3 tools/coverage_ctl.py compare --run-id r2-1 --against r1-1
 ```
 
 ```
-Comparing runs is only meaningful when each had its own workdir and corpus policy — see campaign_ctl.py --corpus.
+Comparing runs is only meaningful when each had its own workdir and corpus policy. See campaign_ctl.py --corpus.
 ```
 
 Runs sharing a workdir shared an evolved corpus, so the comparison describes

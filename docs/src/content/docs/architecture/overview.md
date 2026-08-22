@@ -66,8 +66,8 @@ A fact belongs to exactly one store. Execution position written into
 written into `state/pipeline.json` is lost when the box is rebuilt.
 
 `state/spend.json` is machine-global. `GSPWN_STATE` redirects
-`state/pipeline.json` so a side run keeps its own registry; the ledger does not
-follow it, so that run still counts against `loop.max_total_run_hours`.
+`state/pipeline.json` so a side run keeps its own registry. The ledger does
+not follow it, so that run still counts against `loop.max_total_run_hours`.
 
 Three locks cover these stores. `state/.pipeline.lock` follows `GSPWN_STATE` and
 sits beside the file it protects. `state/spend.json.lock` and `state/repro.lock`
@@ -100,10 +100,10 @@ flowchart TB
   TR --> RC["rca<br/>research record and impact record<br/>per unique crash"]
   RC --> PO["poc<br/>repro_ctl.py verify, profile check"]
   PO --> EV["eval<br/>coverage series, findings table,<br/>round progression"]
-  EV --> RF["refine<br/>gaps.md and worklist.md"]
+  EV --> RF["refine<br/>gaps.md and worklist.md<br/>surface-account writes the completion ledger"]
   RF --> RE["round-end --from-run<br/>verdict, edges, run-hours, new crashes<br/>derived from coverage.csv and the registry"]
 
-  RE --> DEC{"round-decide<br/>applies loop.max_rounds,<br/>loop.max_total_run_hours,<br/>plateau and unknown"}
+  RE --> DEC{"round-decide<br/>applies surface completion,<br/>loop.max_rounds, loop.max_total_run_hours,<br/>plateau and unknown, in that order"}
   DEC -->|continue| ADV["round-advance<br/>round phases reset to pending,<br/>setup and crash registry kept"]
   DEC -->|stop| REP["report<br/>write-up and PSIRT packages"]
 
@@ -196,6 +196,7 @@ first two commands and launches an agent.
 | The run-hour budget is not overshot | A machine-global ledger, checked at every campaign install and at every round decision |
 | A round is measured over its whole campaign | `next` returning `wait`, and `round-end` refusing a live campaign |
 | A dead GPU is not reported as a plateau | The GPU status recorded in every Track K coverage sample |
+| A campaign stops on measured completion and not on a round count | The completion ledger, read by `round-decide` before `loop.max_rounds`, which is a backstop |
 | An unattended agent cannot loop forever | A circuit breaker on starts, a wall-clock cap on one launch, and an exit code systemd will not restart |
 | Crash evidence survives a panic | pstore and kdump, harvested before anything else on resume |
 | A write survives a panic mid-write | A temporary file, `fsync`, an atomic rename, and an `fsync` of the directory |

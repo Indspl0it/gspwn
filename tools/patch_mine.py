@@ -54,9 +54,10 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import tempfile
+
+import gitmine
 
 logger = logging.getLogger(__name__)
 
@@ -105,18 +106,6 @@ KEYWORDS = {
 }
 KEYWORD_RE = {re.compile(r"\b" + k + r"\b"): v for k, v in KEYWORDS.items()}
 
-# A release tag. Release-candidate and dated tags are excluded because the
-# bulletin column being checked against names shipped versions.
-RELEASE_TAG = re.compile(r"^v?\d+\.\d+\.\d+$")
-
-# Hunk header: @@ -a,b +c,d @@ trailing-context
-HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@ ?(.*)$")
-
-# A function name in that trailing context: the last identifier before an open
-# parenthesis. Matches "static int\nfoo(struct error *err" reduced to one line
-# and matches "func (c *Client) Do(" through the same rule.
-FUNC_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
-
 # Vendored dependencies, packaging and build scaffolding. A fix commit that
 # bumps a vendored module or edits a changelog says nothing about where this
 # project's own bugs are, and a Debian changelog produces phantom function
@@ -127,21 +116,17 @@ IGNORED_PREFIXES = ("vendor/", "third_party/", "deployments/", "docs/",
 ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-class GitError(RuntimeError):
-    """A git invocation failed. Carries the command and what git printed."""
+# The shared miner raises this class, and every git failure in this tool is
+# one of its invocations, so the two names are the same class.
+GitError = gitmine.GitError
 
 
 def run_git(repo, args):
-    """Run one git command in repo and return its stdout as text."""
-    cmd = ["git", "-C", repo] + args
-    logger.debug("running %s", " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
-    if proc.returncode != 0:
-        raise GitError(
-            "git failed with status %d: %s\nstderr: %s"
-            % (proc.returncode, " ".join(cmd), proc.stderr.strip()))
-    return proc.stdout
+    """Run one git command in repo and return its stdout as text.
+
+    Diff-format configuration and the timeout come from `gitmine.run_git`.
+    """
+    return gitmine.run_git(repo, args)
 
 
 def validate_repo(repo):
@@ -160,7 +145,7 @@ def validate_repo(repo):
             "checkout is shallow: %s. A shallow clone holds one commit and no "
             "tags, so the fix history it would report is empty. Deepen it "
             "with: git -C %s fetch --unshallow --tags" % (repo, repo))
-    ntags = len([t for t in run_git(repo, ["tag"]).splitlines() if t.strip()])
+    ntags = len(gitmine.list_tags(repo))
     if ntags == 0:
         raise ValueError(
             "checkout has no tags: %s. Release mapping needs them. Fetch them "
@@ -247,6 +232,12 @@ def changed_functions(repo, sha):
 
     A merge commit is diffed against its first parent, so a fork merge reports
     the fix it brought in and not the whole branch.
+
+    A file the commit deletes is reported nowhere. Its post-image is
+    `/dev/null`, the hot-spot ranking below this produces a list of campaign
+    targets, and a removed file cannot be one. `cve_patch_map.diff_file`
+    attributes a deletion to the pre-image, because its question is which hunk
+    of a shipped release carries a fix.
     """
     parents = run_git(repo, ["log", "-1", "--format=%P", sha]).split()
     if not parents:
@@ -256,41 +247,20 @@ def changed_functions(repo, sha):
     diff = run_git(repo, ["diff", "--no-color", "-U0", parents[0], sha])
     files = []
     funcs = collections.defaultdict(set)
-    current = None
-    for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            current = line[len("+++ b/"):].strip()
-            if current == "/dev/null":
-                current = None
-                continue
-            files.append(current)
+    for entry in gitmine.parse_unified_diff(diff):
+        if entry.status == "deleted":
             continue
-        if current is None:
-            continue
-        hunk = HUNK.match(line)
-        if hunk is None:
-            continue
-        context = hunk.group(1).strip()
-        if not context:
-            continue
-        names = FUNC_NAME.findall(context)
-        if names:
-            funcs[current].add(names[-1])
+        files.append(entry.new_path)
+        for hunk in entry.hunks:
+            name = gitmine.context_function(hunk.context)
+            if name:
+                funcs[entry.new_path].add(name)
     return sorted(set(files)), {f: sorted(v) for f, v in funcs.items()}
 
 
 def first_release_tag(repo, sha):
     """The earliest release tag containing sha, or None when it is unreleased."""
-    out = run_git(repo, ["tag", "--contains", sha])
-    tags = [t.strip() for t in out.splitlines() if RELEASE_TAG.match(t.strip())]
-    if not tags:
-        return None
-    return sorted(tags, key=version_key)[0]
-
-
-def version_key(tag):
-    """Sort key placing v1.9.0 below v1.17.0."""
-    return tuple(int(p) for p in tag.lstrip("v").split("."))
+    return gitmine.first_release_tag(repo, sha)
 
 
 def interesting(path):

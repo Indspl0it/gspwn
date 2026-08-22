@@ -23,17 +23,33 @@ campaign window has closed and the deadline timer has stopped the units.
 python3 tools/repro_ctl.py extract crash-0001
 ```
 
-Track K copies `repro.syz`, `repro.cprog`, `repro.c`, `repro0`, `report`,
-`description` and `log` out of the syzkaller crash directory into
-`artifacts/pocs/<crash-id>/`, and generates `repro.c` with `syz-prog2c` when
-only `repro.syz` exists:
+Track K copies the syzkaller crash directory into
+`artifacts/pocs/<crash-id>/` and normalises the names as it goes.
+
+| Source in the crash directory | Stored as |
+|---|---|
+| `repro.prog`, or `repro.syz` in a hand-assembled directory | `repro.prog` |
+| `repro.cprog`, `repro.report`, `repro.log`, `repro.stats`, `repro.c`, `description` | Their own names |
+| `report0`, or the lowest-numbered `report<N>` | `report` |
+| `log0`, or the lowest-numbered `log<N>` | `log` |
 
 ```
-extracted to artifacts/pocs/crash-0001: repro.syz, report, description, log, repro.c (generated)
+extracted to artifacts/pocs/crash-0001: repro.prog, repro.cprog, description, report, log, repro.c (from repro.cprog)
 ```
 
-A zero-byte `repro.c` is the residue of a failed `syz-prog2c`, so it is treated
-as missing and regenerated.
+`repro.c` comes from `repro.cprog` when that file is non-empty, because
+syz-manager already ran prog2c on that program and reproduced the crash with
+the result on the machine that faulted. Otherwise `syz-prog2c` translates
+`repro.prog`. A zero-byte `repro.c` is the residue of a failed `syz-prog2c`, so
+it is treated as missing and regenerated.
+
+When the crash directory holds neither a reproducer program nor a non-empty
+`repro.cprog`, extraction prints a warning naming the directory and `verify`
+has nothing to run.
+
+Normalising `report<N>` to `report` also feeds the crash signature.
+`repro_ctl.py` reads `artifacts/pocs/<crash-id>/report` for the stack frames a
+signature is built from, and syzkaller writes no unsuffixed form.
 
 Track U copies the registry crash input to `artifacts/pocs/<crash-id>/input`.
 The copy is atomic, and it refuses to overwrite existing content that differs
@@ -58,7 +74,7 @@ crash-0001: 9/10 (90%) -> reliable [1 void run(s) excluded]
 ```
 
 `--runs` means counted runs. Resuming with a smaller `--runs` never rewrites an
-earlier, larger measurement; it reports the accumulated one. `--restart`
+earlier, larger measurement, and it reports the accumulated one. `--restart`
 discards partial progress and starts from run 1.
 
 The tool compiles `repro.c` with `gcc -pthread -static`, and rebuilds when
@@ -75,7 +91,7 @@ python3 tools/repro_ctl.py verify crash-0004 --track u \
 
 `{input}` is replaced with the shell-quoted path of
 `artifacts/pocs/<crash-id>/input`. Take the template from the harness's entry
-in `artifacts/harnesses/TARGETS.md`. When that entry is missing, the crash is
+in `harnesses/TARGETS.md`. When that entry is missing, the crash is
 blocked on the `harness` phase.
 
 `--crash-exit N` makes exit code `N` count as a reproduction alongside the
@@ -176,7 +192,7 @@ Two concurrent verifiers share one dmesg ring and would corrupt each other's
 delta windows, so a second session exits immediately.
 
 The lock lives in the machine's own state directory and does not follow
-`GSPWN_STATE`, because what it protects is the one ring buffer.
+`GSPWN_STATE`, because it protects the one ring buffer.
 
 ## The container profile check
 

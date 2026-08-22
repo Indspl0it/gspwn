@@ -17,10 +17,10 @@ to `610.57.04`, and NVIDIA squashes each release into a single commit, so the
 diff from a release to its predecessor is that release's complete patch set.
 
 `tools/cve_patch_map.py` mechanises the resolution and the diff and writes
-`artifacts/surface/cve-hotspots.json`. `tools/cve_fix_verdicts.json` carries
+`surface/cve-hotspots.json`. `tools/cve_fix_verdicts.json` carries
 the per-CVE judgement about which hunk in a patch set is the fix, with the
 evidence behind each. `cve_patch_map.py worklist` renders both into
-`artifacts/surface/worklist-round1.md`, in the format `refine` produces for
+`surface/worklist-round1.md`, in the format `refine` produces for
 every later round, so a new bulletin regenerates the worklist without a
 rewrite.
 
@@ -41,8 +41,8 @@ The predecessor tag comes from git ancestry and never from a version sort.
 NVIDIA maintains its driver branches as separate lines of history in this
 repository: 216 tags sit on 216 distinct commits, and only 95 of them are
 ancestors of `HEAD`. Sorting `580.95.05` against the tag list numerically
-returns `580.94.18`, which is on a different line; `git describe` on its parent
-returns `580.82.09`, which is the release it actually followed.
+returns `580.94.18`, which is on a different line, and `git describe` on its
+parent returns `580.82.09`, which is the release it actually followed.
 
 Two bracket shapes carry no evidence and the tool marks both.
 
@@ -132,13 +132,17 @@ excluded table with the reason, so a later round does not spend itself on it.
 ## Reading the worklist tag
 
 `refine` writes `artifacts/eval/<run-id>/worklist.md` with every item tagged
-`[coverage]` or `[finding crash-NNNN]`. The round-1 worklist adds a third tag.
+`[surface]`, `[finding crash-NNNN]` or `[history CVE-YYYY-NNNNN]`.
 
 | Tag | Claim | Strength |
 |---|---|---|
 | `[finding crash-NNNN]` | A bug exists here now, in this driver, in this campaign | Strongest. Nothing else in the pipeline produces it |
 | `[history CVE-YYYY-NNNNN]` | A bug existed here once, in a version since patched, and the patched code shows its shape | Weaker than a finding, stronger than an unexplored surface |
-| `[coverage]` | Nobody has looked here | The default |
+| `[surface]` | Nobody has looked here | The default |
+
+`[surface]` absorbed the older `[coverage]` tag. It names the exact enumerated
+command the corpus has not reached, where an edge count only gestures at a
+region, and `surface_cov.py gaps` already emits the line in that form.
 
 A `[history ...]` item is a prior over a surface with no findings yet, and it
 expires as findings accumulate. From round 2 on, `refine` produces the worklist
@@ -146,11 +150,11 @@ from coverage and findings, and a history item that no round has converted into
 a crash carries less weight each round it survives.
 
 A later phase that meets `[history ...]` and does not recognise it should treat
-it as `[coverage]`. The tag orders the queue; it does not gate anything.
+it as `[surface]`. The tag orders the queue and gates nothing.
 
 ## Limits
 
-| Limit | Detail |
+| Limit | Mechanism |
 |---|---|
 | The record starts at 515.43.04 | Fixes shipped in R390, R450, R470 and R510 have no tag to diff. Four kernel-mode CVEs from 2020 and 2021 predate the PSIRT repository as well |
 | Batch bulletins do not decompose | Bulletins 5415 and 5452 fix 19 and 12 kernel-mode CVEs in one release each, with near-identical per-CVE descriptions. One patch set answers for all of them |

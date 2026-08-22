@@ -155,5 +155,3 @@ and campaign-independent by design.
 
 - [Security and disclosure](/gspwn/project/security/)
 - [Overview](/gspwn/architecture/overview/)
-</content>
-</invoke>

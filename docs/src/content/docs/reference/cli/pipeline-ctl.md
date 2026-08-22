@@ -58,8 +58,8 @@ python3 tools/pipeline_ctl.py next
 ```
 
 `wait` is returned while a campaign in this round is still inside its window,
-and names the run and the hours left. The `fuzz` phase is exempt, because it is
-what starts the campaign.
+and names the run and the hours left. The `fuzz` phase is exempt, because it
+starts the campaign.
 
 ## set-phase
 
@@ -265,20 +265,132 @@ python3 tools/pipeline_ctl.py round-end --from-run r2-1 [--from-run r2-2] [optio
 
 | Flag | Argument | Default | Effect |
 |---|---|---|---|
-| `--from-run` | `RUN_ID` | Required, repeatable | Measure the verdict, edges and hours from this run's `coverage.csv`. Pass every campaign this round ran, each measured and billed independently |
-| `--coverage-verdict` | `growing`, `plateaued`, `unknown` | Derived | Override the derived verdict |
+| `--from-run` | `RUN_ID` | Required, repeatable | Measure the verdict, edges and hours from this run's `coverage.csv`, so they need not be passed by hand. Pass every campaign this round ran, and each is measured and billed independently |
+| `--coverage-verdict` | `growing`, `plateaued`, `unknown` | Derived | Override the derived edge verdict |
 | `--new-crashes` | `N` | Derived | Override the derived crash count |
 | `--edges-start`, `--edges-end` | `N` | Derived | Override the derived edge totals |
 | `--run-hours` | `F` | Derived | Bill these hours to the round under its own ledger key, added to the round total |
 | `--notes` | `TEXT` | Derived | Override the derived per-run detail lines |
 | `--worklist` | `PATH` | None | Record this round's work list, which `round-advance` carries into the next round |
+| `--ledger` | `PATH` | The pointer the round already carries, else `surface/completion-ledger.json` | The completion ledger to measure against, pinned onto the round |
 | `--force` | None | Off | Measure a run whose campaign window has not elapsed |
+
+`--ledger` re-points a round that has already ended, and the pin survives
+`round-advance`, which carries `surface_ledger` into the new round beside
+`worklist_in`.
+
+`round-end` also computes the completion reading from the runs it names and
+records `surface_verdict`, `surface_exercised`, `surface_accounted`,
+`surface_deferred`, `surface_closed`, `surface_total` and `surface_ledger` on
+the round as one write. No flag transcribes them. `surface_deferred` counts the
+accounted rows written under a reason that does not close a target, and
+`round-show` and `brief` print it when it is non-zero.
+
+The reading is taken before the state transaction opens, because it unpacks and
+rescans one corpus per run and the transaction holds the exclusive lock every
+other `pipeline_ctl` and `campaign_ctl` command waits on. An unmeasurable reading arrives as `unknown`,
+and the fields are always written together so a stale `complete` from an
+earlier call cannot survive.
 
 Hours accumulate across calls, and re-billing a run id corrects its entry.
 
 `--force` is for a campaign that has finished behind a stale deadline file.
 Measuring a live campaign produces a wrong coverage curve, wrong billed hours
 and a wrong crash count.
+
+## surface-account
+
+Records one target as accounted for in the completion ledger, with a written
+reason.
+
+```
+python3 tools/pipeline_ctl.py surface-account --json PATH [--ledger PATH]
+```
+
+| Flag | Argument | Default | Effect |
+|---|---|---|---|
+| `--json` | `PATH` or `-` | Required | Read the record from a file, or from standard input for `-` |
+| `--ledger` | `PATH` | `surface/completion-ledger.json` | The ledger to write |
+
+Fields: `variant` (required, as `surface_cov.py gaps` prints it), `reason`
+(required), `detail` (required), `evidence[]`, `round`. The reason vocabulary
+and which reasons require evidence are in
+[Closed vocabularies](/gspwn/reference/vocabularies/).
+
+```json
+{"variant": "NV_ESC_RM_CONTROL_cliresCtrlCmdSystemGetCpuInfo",
+ "reason": "needs-privilege",
+ "detail": "the handler calls rmclientIsCapableOrAdmin before it touches the parameter struct",
+ "evidence": ["src/nvidia/src/kernel/rmapi/client_resource.c:1204"],
+ "round": 3}
+```
+
+`key`, `family`, `first_recorded` and `recorded` are derived. A leading
+`ioctl$` on the variant is accepted and stripped.
+
+| Condition | Result |
+|---|---|
+| The record carries an unknown field | Refused. A misspelled `reasons` would otherwise leave `reason` empty while the command reported success |
+| `variant` names a target no inventory contains | Refused |
+| `reason` is outside the vocabulary | Refused, listing the accepted values |
+| `detail` is empty | Refused. "Not reached yet" belongs in the worklist |
+| `evidence` is empty for a reason that requires it | Refused |
+| The ledger records a different driver release | Refused. A denominator from one release compared against rows from another would report the difference as progress |
+| The target already carries a row | Replaced, preserving `first_recorded` |
+
+The call also records the ledger path on the current round, so the round state
+carries the pointer without a second command.
+
+## surface-unaccount
+
+Removes one accounted row, reopening its target.
+
+```
+python3 tools/pipeline_ctl.py surface-unaccount --variant NAME [--ledger PATH]
+python3 tools/pipeline_ctl.py surface-unaccount --key KEY [--ledger PATH]
+```
+
+| Flag | Argument | Default | Effect |
+|---|---|---|---|
+| `--variant` | `NAME` | None | The target's variant, resolved through the inventories, the same handle `surface-account` takes |
+| `--key` | `KEY` | None | The stored ABI key, for a row whose target no inventory contains any more |
+| `--ledger` | `PATH` | `surface/completion-ledger.json` | The ledger to write |
+
+| Condition | Result |
+|---|---|
+| A row was removed | Exit 0 |
+| The key or variant named no row | Exit 1 |
+
+A wrong `no-param-model` or `chain-unbuildable` row closes a target as
+permanently as a wrong deferral, and 764 of them fire the same non-overridable
+completion stop. This is the way back out.
+
+The recovery route from a wrong completion verdict:
+
+1. `python3 tools/pipeline_ctl.py surface-ledger` to read every row and its
+   reason, with the deferred rows marked as not closing their target.
+2. `python3 tools/pipeline_ctl.py surface-unaccount --variant <name>` for each
+   row that should not have been written.
+3. `python3 tools/pipeline_ctl.py round-end --from-run <run-id>`. The
+   completion verdict is recomputed from the ledger on every `round-end` and
+   never carried over, so the round's `surface_verdict` becomes `incomplete`.
+   Re-running `round-end` on a round that already ended is idempotent for
+   billing: hours are billed per run id and a repeat corrects by the delta.
+4. `python3 tools/pipeline_ctl.py round-decide`. The completion stop is gone
+   and the loop continues on its own computed decision, with no override used
+   anywhere.
+
+## surface-ledger
+
+Prints the accounted rows grouped by reason.
+
+```
+python3 tools/pipeline_ctl.py surface-ledger [--json] [--ledger PATH]
+```
+
+Names any row whose target no inventory contains, and marks the rows written
+under a reason that does not close a target. `--json` on a ledger that has
+never been written still reports the denominator.
 
 ## worklist
 
@@ -306,7 +418,17 @@ python3 tools/pipeline_ctl.py round-decide [options]
 | `--decision` | `continue`, `stop` | Computed | Override the computed decision |
 | `--reason` | `TEXT` | None | Required when overriding a plateau or `unknown` stop |
 
-A budget or round-cap stop cannot be overridden.
+A completion, budget or round-cap stop cannot be overridden. `round-decide`
+recomputes `hard_cap_reason()` before accepting `--decision continue`, and that
+function checks completion first, then the round cap, then the run-hour
+budget.
+
+Where the hard stop is the completion one, the refusal names the ledger
+recovery route under `surface-unaccount`. An operator blocked by the budget is
+not sent to the ledger. Making the completion stop overridable was rejected:
+the override would authorise a campaign whose worklist is empty, and it would
+then be available for a genuine completion too. The stop stays hard and the
+ledger it is computed from is correctable instead.
 
 ## round-advance
 
@@ -359,10 +481,10 @@ Exits 1 when it finds any. What it checks is listed in
 |---|---|
 | `state/pipeline.json` | Phases, crash registry, findings, impacts, rounds |
 | `state/spend.json` | The spend ledger |
+| `surface/completion-ledger.json` | The accounted targets, written by `surface-account` |
 
 ## See also
 
 - [State file schema](/gspwn/reference/state-file/)
 - [Closed vocabularies](/gspwn/reference/vocabularies/)
-</content>
-</invoke>
+- [Artifacts](/gspwn/reference/artifacts/)

@@ -108,7 +108,7 @@ alone, every subsequent non-root agent command fails with a permission error.
 | A non-root process tries to append to a root-owned `coverage.csv` | The condition is reported as a message and does not raise |
 
 ```
-cannot write artifacts/runs/r2-1/coverage.csv — it is owned by the root sampler. Re-run this check with sudo, or read the curve with `series` instead.
+cannot write artifacts/runs/r2-1/coverage.csv, which is owned by the root sampler. Re-run this check with sudo, or read the curve with `series`.
 ```
 
 ## The deadline on disk

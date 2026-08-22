@@ -26,7 +26,7 @@ L3, L4 and L5 run under systemd and outlive any agent session.
 
 | Loop | Owner | Bound |
 |---|---|---|
-| L1 round | `pipeline_ctl.py` | `loop.max_rounds`, `loop.max_total_run_hours` |
+| L1 round | `pipeline_ctl.py` | Surface completion, then `loop.max_rounds`, then `loop.max_total_run_hours` |
 | L2 phase-gate | The orchestrator | Twelve phases; halts on `blocked` |
 | L3 syzkaller inner | syz-manager | The campaign deadline, enforced by L4 |
 | L4 deadline | systemd | Fires every `loop.deadline_check_min`; disables itself after enforcement |
@@ -45,7 +45,7 @@ L3, L4 and L5 run under systemd and outlive any agent session.
 | Iteration body | The nine round phases in dependency order, then `round-end`, then `round-decide` |
 | State carried | The corpus, through `install-k --corpus carry --from-run`; the work list, through `round.worklist_in` |
 | Exit | `round-decide` returns `stop` |
-| Bound | `loop.max_rounds` and `loop.max_total_run_hours`, both non-overridable |
+| Bound | Surface completion, `loop.max_rounds` and `loop.max_total_run_hours`, all three non-overridable |
 
 ```mermaid
 flowchart TB
@@ -58,12 +58,14 @@ flowchart TB
   G --> H["refine<br/>writes worklist.md"]
   H --> I["round-end --from-run --worklist"]
   I --> J{"round-decide"}
+  J -->|"surface complete"| S0["stop"]
   J -->|"round cap reached"| S1["stop"]
   J -->|"run-hour budget spent"| S2["stop"]
-  J -->|"coverage plateaued"| S3["stop"]
+  J -->|"both curves flat"| S3["stop"]
   J -->|"coverage verdict unknown"| S4["stop"]
-  J -->|"still growing"| A
-  S1 --> R["report"]
+  J -->|"edge or surface curve climbing"| A
+  S0 --> R["report"]
+  S1 --> R
   S2 --> R
   S3 --> R
   S4 --> R
@@ -71,10 +73,20 @@ flowchart TB
 
 | Stop condition | Source | `--decision continue` accepted |
 |---|---|---|
+| Surface complete | `surface_stop_reason()` against the completion ledger | No |
 | Round cap reached | `hard_cap_reason()` against `loop.max_rounds` | No |
 | Run-hour budget spent | `hard_cap_reason()` against `loop.max_total_run_hours` | No |
 | Coverage plateaued | `round.coverage_verdict` with `loop.stop_on_plateau` set | Yes, with `--reason` |
 | Coverage verdict unknown | `round.coverage_verdict` | Yes, with `--reason` |
+
+`hard_cap_reason()` checks completion first, so a campaign finishing on its
+last permitted round records why it finished and not which limit it also
+touched. `loop.max_rounds` is 10 and is a backstop against a runaway loop: a
+campaign that reaches it has failed to converge, and its stop reason says so
+and points at the completion ledger. `loop.max_total_run_hours` at 216 is the
+spend ceiling. See
+[Coverage and plateau](/gspwn/architecture/coverage-and-plateau/) for the
+two-curve decision table.
 
 `round-advance` requires every round phase `done` and a recorded `round-end`. A
 phase marked `blocked` fails that check, so a blocked gate cannot be carried
@@ -85,7 +97,7 @@ to produce one. `tools/cve_patch_map.py worklist` fills that position from
 NVIDIA's published kernel-mode CVEs, the one steering signal available before
 any campaign has run. It classifies 61 kernel-mode CVEs, resolves 53 of them to
 a release tag pair and ranks 270 changed functions, 27 of which reach a named
-ioctl target. The current run writes `artifacts/surface/worklist-round1.md`
+ioctl target. The current run writes `surface/worklist-round1.md`
 with 14 `describe` items, 4 `seeds` items and 5 targets recorded as outside the
 tenant surface. A `[history CVE-YYYY-NNNNN]` item ranks a place where the
 vendor found a bug and is no evidence that a bug remains there. It orders the
@@ -150,7 +162,7 @@ flowchart TB
   NEW -->|no| DIS["discard"]
   ADD --> P
   DIS --> P
-  EX -->|"the kernel faulted"| CR["write workdir/crashes/&lt;hash&gt;/<br/>description, report, log, repro.syz"]
+  EX -->|"the kernel faulted"| CR["write workdir/crashes/&lt;hash&gt;/<br/>description, report&lt;N&gt;, log&lt;N&gt;, repro.prog"]
   CR --> P
   EX -->|"the machine panicked"| RS["systemd restarts after RestartSec=30<br/>syzkaller replays its corpus"]
   RS --> P
@@ -206,7 +218,7 @@ window it enforces.
 | Property | Value |
 |---|---|
 | Entry | `coverage_ctl.py install-timer` enables `gspwn-coverage.timer` |
-| Iteration body | Collect Track K, collect Track U, probe the GPU, read free disk, append one row |
+| Iteration body | Collect Track K, collect Track U, probe the GPU, read free disk, measure the surface when it is due, append one row |
 | State carried | `artifacts/runs/<id>/coverage.csv` and `coverage-u.csv` |
 | Exit | `coverage_ctl.py remove-timer` |
 | Bound | Fires every `loop.coverage_sample_min`. The append is skipped once the campaign window has elapsed, absent `--force` |
@@ -221,7 +233,10 @@ flowchart TB
   CK --> CU["Track U: sum fuzzer_stats<br/>across artifacts/runs/&lt;id&gt;/u/*"]
   CU --> GPU["probe the GPU<br/>(Track K only; Track U records n/a)"]
   GPU --> DISK["read free space"]
-  DISK --> APP["append one row under the header<br/>the file already carries"]
+  DISK --> SD{"Track K, and the last<br/>surface sample older than<br/>coverage.surface_sample_min?"}
+  SD -->|yes| SURF["unpack the run's corpus.db<br/>and count enumerated targets"]
+  SD -->|no| APP
+  SURF --> APP["append one row under the header<br/>the file already carries"]
   APP --> WARN{"unhealthy GPU, low disk,<br/>or an unreachable source?"}
   WARN -->|yes| W["print a warning; exit 1 if unreachable"]
   WARN -->|no| T
@@ -234,6 +249,12 @@ The two `ExecStart` lines carry a `-` prefix, so a failure sampling one track
 leaves the other track's sample intact. The GPU probe is bounded by
 `coverage.gpu_probe_timeout_sec`, which covers a hung driver as well as a dead
 one.
+
+The surface measurement runs on its own coarser cadence, because it unpacks the
+run's `corpus.db` and rescans every program in it where the other columns come
+from one HTTP fetch. The Track U `ExecStart` passes `--skip-surface`: those
+harnesses produce no syzlang programs. A sample that skips the measurement
+records an empty `surface` value, which the curve drops.
 
 ## L6: the supervision loop
 
@@ -340,7 +361,7 @@ it `unreproducible`.
 ```mermaid
 flowchart TB
   S["wait --run-id ID"] --> D{"deadline recoverable?"}
-  D -->|no| ERR["exit: install the campaign first,<br/>which is what starts the clock"]
+  D -->|no| ERR["exit: install the campaign first,<br/>which starts the clock"]
   D -->|yes| RE["re-read the deadline<br/>a --replace install moves it"]
   RE --> LEFT{"time left?"}
   LEFT -->|"no"| OUT["window has elapsed"]

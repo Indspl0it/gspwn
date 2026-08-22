@@ -5,12 +5,32 @@
   "comment_uvm": "UVM keys are bare command numbers, not _IOC-encoded: uvm.c switches on the raw cmd and UVM_IOCTL_BASE(i) expands to i on Linux. They are small integers, so they are matched on any nvidia fd trace2seed tracks, including /dev/nvidiactl where they mean nothing.",
   "comment_excluded": "The UVM_TEST_* commands are omitted. uvm_test_ioctl() refuses every one of them unless the module is loaded with uvm_enable_builtin_tests=1. Their numbers are in the inventory JSON if a build turns them on.",
   "comment_driver_version": "610.57.04 (commit e4a5faa2)",
+  "comment_multiplexers": {
+    "doc": "NV_ESC_RM_CONTROL and NV_ESC_RM_ALLOC dispatch on a field inside the parameter struct, so their request numbers name a dispatcher and not a command. The describe phase emits one syzlang variant per leaf, 531 control commands and 155 allocation classes, and no single call name covers the request number. Naming the bare escape here produced seeds calling a syscall no description declares. strace cannot decode the parameter struct, so the selector field never appears in a trace and no entry in the name map above can recover it. tools/trace2seed.py reads this section to write an honest comment for a traced multiplexer call, and its `chains` subcommand builds the command-targeted programs from surface/rm-chains.json instead.",
+    "requests": {
+      "0xc020462a": {
+        "escape": "NV_ESC_RM_CONTROL",
+        "param_struct": "NVOS54_PARAMETERS",
+        "selector_field": "cmd",
+        "variant_prefix": "ioctl$NV_ESC_RM_CONTROL_"
+      },
+      "0xc030462b": {
+        "escape": "NV_ESC_RM_ALLOC",
+        "param_struct": "NVOS64_PARAMETERS",
+        "selector_field": "hClass",
+        "variant_prefix": "ioctl$NV_ESC_RM_ALLOC_"
+      },
+      "0xc020462b": {
+        "escape": "NV_ESC_RM_ALLOC",
+        "param_struct": "NVOS21_PARAMETERS",
+        "selector_field": "hClass",
+        "variant_prefix": "ioctl$NV_ESC_RM_ALLOC_"
+      }
+    }
+  },
   "0xc0384627": "ioctl$NV_ESC_RM_ALLOC_MEMORY",
   "0xc0144628": "ioctl$NV_ESC_RM_ALLOC_OBJECT",
   "0xc0104629": "ioctl$NV_ESC_RM_FREE",
-  "0xc020462a": "ioctl$NV_ESC_RM_CONTROL",
-  "0xc030462b": "ioctl$NV_ESC_RM_ALLOC",
-  "0xc020462b": "ioctl$NV_ESC_RM_ALLOC",
   "0xc01c4634": "ioctl$NV_ESC_RM_DUP_OBJECT",
   "0xc0184635": "ioctl$NV_ESC_RM_SHARE",
   "0xc0204639": "ioctl$NV_ESC_RM_I2C_ACCESS",
