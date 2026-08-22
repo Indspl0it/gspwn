@@ -103,8 +103,9 @@ ExecStart=/usr/bin/docker run --rm --name gspwn-u \\
   --memory={memory_max} \\
   --pids-limit=512 \\
   -v {root}/artifacts:/artifacts \\
+  -v {root}/harnesses:/harnesses \\
   -e RUN_ID={run_id} {image} \\
-  /artifacts/harnesses/run_all.sh
+  /harnesses/run_all.sh
 Restart=always
 RestartSec=30
 MemoryMax={memory_max}

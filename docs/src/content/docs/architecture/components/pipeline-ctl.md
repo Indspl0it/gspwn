@@ -39,7 +39,10 @@ views built from state at read time. It writes state only through
 | `campaign-add` | Record a campaign event |
 | `round-show` | Round history and loop budget |
 | `round-add-run` | Attach a run id to this round |
-| `round-end` | Record the round's measured outcome |
+| `round-end` | Record the round's measured outcome, both curves and the completion reading |
+| `surface-account` | Record one target as accounted for in the completion ledger |
+| `surface-unaccount` | Remove one accounted row, reopening its target |
+| `surface-ledger` | Print the accounted rows grouped by reason |
 | `worklist` | The worklist this round's `describe` and `seeds` sub-agents execute |
 | `round-decide` | Apply the caps and record the loop decision |
 | `round-advance` | Open the next round |
@@ -91,6 +94,10 @@ Read-only commands take the same lock only where they also write.
 | Never let a bulk edit half-apply | A rejected id exits before the write, so the flagged queue is never left half-decided |
 | Never count duplicates, unresolved flagged entries or noise Xids as findings | They are the fuzzer's own repeat output, and counting them inflates the round's measured result |
 | Never silently accept a hand-typed number in place of a measured one | Explicit flags override the derivation, and the notes carry the derived detail so the override is visible |
+| Never accept an accounting record with an unknown field | A misspelled `reasons` would leave `reason` empty while the command reported success, closing out no target and saying it had |
+| Never accept an accounting record with no written detail | The reason vocabulary groups the count and the detail carries the argument, and a closed-out target is closed permanently |
+| Never write the completion ledger inside the state file | `state/pipeline.json` is 1177 bytes and is rewritten whole under a lock on every phase transition and every crash registration |
+| Never count an accounted target against a different driver release | The inventories are keyed by release, and a ledger written for one accounts for targets another does not contain |
 
 ## Design notes
 
@@ -111,7 +118,40 @@ every line displaces something else.
 `finding-set` and `impact-set` take JSON. The records are nine and eighteen
 fields, several of them lists, and `rca` authors each as a whole. A dozen
 repeatable flags would be filled in one call at a time, and a half-written
-record must never be stored.
+record must never be stored. `surface-account` takes JSON for the same reason
+and mirrors the same argument shape.
+
+`surface-account` names its target by `variant`, the name `surface_cov.py gaps`
+prints, and resolves it through `surface_cov.load_targets()` to the composite
+ABI key, the family and the driver version. A corpus program carries the
+variant, and the composite survives a driver refactor renaming a C handler.
+Rows are keyed on the composite, so re-accounting a target
+replaces its row and preserves `first_recorded`, and the accounted count can
+never exceed the denominator through repetition.
+
+The ledger write goes through `pipeline_state._ledger_transaction`, the same
+own-lock-file pattern the spend ledger uses, so `surface-account` is safe to
+call while a state `transaction()` is open.
+
+`surface-unaccount` is the inverse and takes either handle. `--variant`
+resolves through the inventories as `surface-account` does. `--key` names the
+stored ABI key, and it is the only handle on a row whose target no inventory
+contains any more, which is the state a driver bump leaves behind. Without a
+removal operation, a wrong accounting was recoverable only by hand-editing
+`surface/completion-ledger.json`, and 764 wrong rows fire a
+non-overridable completion stop.
+
+`cmd_round_end` takes the completion reading before `ps.transaction()` opens.
+The reading unpacks and rescans one corpus per run, each bounded at
+`coverage.unpack_timeout_sec`, and the transaction holds the exclusive lock
+every other `pipeline_ctl` and `campaign_ctl` command waits on. The ledger
+pointer is read through `ps.load()` first, so the cost is a reading of a state
+one instant older, and nothing between the read and the transaction writes that
+pointer.
+
+`cmd_round_decide` prints the ledger recovery route only when the hard stop
+actually is the completion one, so an operator blocked by the budget is not
+sent to the ledger.
 
 `finding-list` and `impact-list` both end with a count of how many records can
 do their job, and name the ones that cannot. An unsupported record reads

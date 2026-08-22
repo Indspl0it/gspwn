@@ -185,11 +185,39 @@ Value sets: [Closed vocabularies](/gspwn/reference/vocabularies/).
 | `decision_reason` | string | Why |
 | `worklist` | string or null | The path this round's `refine` produced |
 | `worklist_in` | string or null | The path this round's `describe` and `seeds` must execute |
+| `surface_ledger` | string or null | Repo-relative path to the completion ledger this round accounted against |
+| `surface_verdict` | string | `complete`, `incomplete` or `unknown` |
+| `surface_exercised` | integer or null | Targets the measured corpus names |
+| `surface_accounted` | integer or null | Targets carrying a written reason that closes them |
+| `surface_deferred` | integer or null | Accounted rows written under a reason that does not close a target. One integer per round, and it does not scale with 764 |
+| `surface_closed` | integer or null | The union of exercised and accounted, never their sum |
+| `surface_total` | integer or null | The denominator at this driver release |
 | `notes` | string | The derived per-run detail lines |
 
 `run_hours` accumulates because a round routinely spans several campaigns and
 `round-end` is called once per run. Re-billing a run id corrects that run's
 entry and adjusts the total by the delta.
+
+The seven `surface_` fields are written as a unit by `end_round`, so a stale
+`complete` from an earlier call cannot survive a later measurement. An
+unmeasurable reading arrives as `unknown`, which never satisfies the completion
+stop. `surface_closed` is a union because a target can be exercised in a later
+round after an earlier one wrote a reason for it, and the sum would reach the
+total while targets remained.
+
+`surface_deferred` is absent from a state file written before this field
+existed, and `normalize` fills it with null. `round-show` and `brief` print it
+when it is non-zero, and `_plateau_reason` names it, so a round that put work
+aside does not read as a stuck corpus.
+
+`advance_round` carries `surface_ledger` into the new round beside
+`worklist_in`, so a campaign accounting against a non-default ledger keeps it
+across a round boundary. `round-end --ledger PATH` re-points it.
+
+`validate` reports a round marked `complete` with no `surface_ledger`. The
+completion stop cannot be overridden, so its evidence has to be auditable
+afterwards. The ledger itself lives in
+[`surface/completion-ledger.json`](/gspwn/reference/artifacts/).
 
 ## Campaign event
 

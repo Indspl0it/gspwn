@@ -1,11 +1,12 @@
 ---
 title: coverage_ctl.py
-description: Sampling the coverage curve, summarising it, and deriving the plateau verdict.
+description: Sampling both coverage curves, summarising them, and deriving the plateau and completion verdicts.
 ---
 
-Records the coverage curve for a run and answers whether the run is still
-buying new edges. syzkaller runs the inner coverage-guided loop. This tool
-serves the outer loop.
+Records both coverage curves for a run and answers whether the run is still
+buying new edges and whether it has reached the commands the descriptions
+declare. syzkaller runs the inner coverage-guided loop. This tool serves the
+outer loop.
 
 ## Synopsis
 
@@ -13,7 +14,9 @@ serves the outer loop.
 python3 tools/coverage_ctl.py <subcommand> [options]
 ```
 
-`sample`, `install-timer` and `remove-timer` require root.
+`sample`, `install-timer` and `remove-timer` require root. `migrate-csv`
+carries no root check of its own and rewrites a file the root sampler owns, so
+it runs under `sudo` wherever that sampler is installed.
 
 ## sample
 
@@ -30,9 +33,20 @@ sudo python3 tools/coverage_ctl.py sample --run-id r2-1 [options]
 | `--url` | `URL` | Derived from `track_k.http` | Stats endpoint |
 | `--track` | `k`, `u` | `k` | Which track to sample |
 | `--force` | None | Off | Sample even after the campaign window has elapsed |
+| `--skip-surface` | None | Off | Do not measure the surface column on this sample |
 
 ```
-artifacts/runs/r2-1/coverage.csv edges=18422 corpus=512 crashes=0 (source: json:/stats?format=json, gpu: ok)
+artifacts/runs/r2-1/coverage.csv edges=18422 surface=317 corpus=512 crashes=0 (source: json:/stats?format=json, gpu: ok)
+```
+
+The surface column comes from unpacking the run's `corpus.db` and rescanning
+every program in it. It runs on the coarser cadence
+`coverage.surface_sample_min` sets, and the rows in between record no value. The
+timer's Track U line passes `--skip-surface`, because those harnesses produce
+no syzlang programs. A sample that skipped the measurement says so:
+
+```
+  surface: last measured 12 min ago, under the 60 min surface interval
 ```
 
 The row is appended under the header the file already carries. A run that
@@ -120,8 +134,7 @@ run r2-1 track k: 141 samples over 23.5 h
   disk free: 412.6 GB -> 388.1 GB (low water 388.1 GB)
   edges: 18422 -> 41907 (+23485)
   corpus: 512 -> 4183
-  crashes: 0 -> 8
-  NOTE: kernel-side reachable coverage only; GSP firmware is not instrumented.
+  crashes: 0 -> 8  NOTE: kernel-side reachable coverage only. GSP firmware is not instrumented.
 ```
 
 `edges: never recorded` means the run cannot support a coverage claim.
@@ -154,7 +167,55 @@ python3 tools/coverage_ctl.py plateau --run-id r2-1 [options]
 
 A track that was never sampled is ignored.
 
+A flat edge curve is read against the surface curve before any plateau is
+reported. A climbing surface curve makes the verdict `growing`, because the
+round is still reaching commands it had not reached whatever the edge count
+did.
+
 Derivation: [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/).
+
+## completion
+
+Answers the ledger identity: whether every enumerated target is either
+exercised by a corpus or accounted for by a written reason.
+
+```
+python3 tools/coverage_ctl.py completion [--run-id r2-1] [options]
+```
+
+| Flag | Argument | Default | Effect |
+|---|---|---|---|
+| `--run-id` | `ID` | The seed bank | Measure the exercised set from this run's own `corpus.db`. Repeatable, and the sets are unioned |
+| `--corpus` | `DIR` | The seed bank | A directory of programs to measure. The seed bank is not read. Refused with `--run-id` |
+| `--ledger` | `PATH` | `surface/completion-ledger.json` | The completion ledger |
+| `--top` | `N` | 40 | How many unaddressed targets to list. 0 lists none and reports the count |
+
+The output names the driver version, every corpus read with its modification
+time and program count, the ledger path, the three counts, and the targets that
+are neither exercised nor accounted for. Each of those prints as a
+worklist-ready line carrying the variant in brackets, which is the handle
+`pipeline_ctl.py surface-account` resolves.
+
+The closed count is a union and not a sum, because a target can be exercised in
+a later round after an earlier one wrote a reason for it.
+
+`--top` takes a non-negative integer, and a negative value is a parser error.
+At 0 the line reads `N target(s) not listed (--top 0)`, and the offer to raise
+`--top` prints only where some targets were shown.
+
+`--corpus` and `--run-id` together are refused, matching `surface_cov.py
+report`: the two name different corpora and one of them would be dropped
+silently.
+
+With neither, the command reads the seed bank and says so. A target counts as
+exercised because a generated program names it and not because a fuzzer ran it,
+the bank holds this round's programs only after `corpus_ctl.py promote`, and
+the reading the stop rule uses needs `--run-id`.
+
+A row written under a reason that does not close a target is reported as
+`deferred` and is subtracted before the union, so a deferral never satisfies
+the completion identity. See
+[Closed vocabularies](/gspwn/reference/vocabularies/).
 
 ## gpu-health
 
@@ -199,7 +260,7 @@ python3 tools/coverage_ctl.py compare --run-id r2-1 --against r1-1 [--track k|u]
 ```
 r2-1                 edges  18422 ->  41907  (+23485) over 23.5 h
 r1-1                 edges  12004 ->  31220  (+19216) over 23.8 h
-Comparing runs is only meaningful when each had its own workdir and corpus policy — see campaign_ctl.py --corpus.
+Comparing runs is only meaningful when each had its own workdir and corpus policy. See campaign_ctl.py --corpus.
 ```
 
 ## The CSV columns
@@ -216,17 +277,65 @@ Comparing runs is only meaningful when each had its own workdir and corpus polic
 | `source` | Which source answered |
 | `gpu` | `ok`, `dead`, `hung`, `missing`, `error`, or `n/a` for Track U |
 | `disk_free_mb` | Free megabytes on the artifacts filesystem |
+| `surface` | Enumerated targets this run's corpus names. Empty on a sample that skipped the measurement, and on every Track U row |
 
 `corpus` is a program count and `corpus_bytes` is a file size. Separate columns
 keep a comparison valid across a change of source.
+
+`surface` is appended last, never inserted, so anything reading an older file
+with `cut -d,` stays aligned. A run that started before the column existed
+gains no surface curve and reads `surface_verdict=unknown`, because rows are
+appended under the header the file already carries.
+
+Such a run also costs nothing. `surface_due` checks storability before cadence,
+so a CSV whose header lacks the column is not measured at all. The measurement
+used to be taken and then dropped by the writer, at one corpus unpack and one
+full rescan per sample.
+
+## migrate-csv
+
+Adds the columns a run's CSV header lacks and pads every existing row.
+
+```
+python3 tools/coverage_ctl.py migrate-csv --run-id r2-1 [--track k|u]
+```
+
+| Flag | Argument | Default | Effect |
+|---|---|---|---|
+| `--run-id` | `ID` | Required | The run whose CSV is migrated |
+| `--track` | `k`, `u` | Both | Which track to migrate |
+
+This is the one operation on a `coverage.csv` that is not an append, so it is
+an operator step and nothing migrates automatically. Stop the sampler first.
+
+```
+sudo systemctl stop gspwn-coverage.timer
+sudo python3 tools/coverage_ctl.py migrate-csv --run-id r2-1
+sudo systemctl start gspwn-coverage.timer
+```
+
+Existing columns keep their positions, so a header this version does not know
+about survives and anything reading by column index reads the same numbers. The
+write is a temp file in the same directory followed by `os.replace`, and the
+mode is carried over from the original. The file's size is compared before and
+after: a sample landing mid-rewrite aborts the migration with the original
+untouched and drops no row.
+
+Track U gains the column and is still never asked for a surface sample.
+
+After the migration the next sample measures, the cadence gate engages at
+`coverage.surface_sample_min`, and the run gains a surface curve from that
+point. Rows written before the migration carry no surface value and
+`metric_rows` drops them, so the curve starts where the migration ran.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success. For `plateau`, the verdict is `growing` |
-| 1 | A read or write failed. For `plateau`, the verdict is `unknown`. For `gpu-health`, the status is not `ok` |
-| 3 | `plateau` only: the verdict is `plateaued` |
+| 1 | A read or write failed. For `plateau` and `completion`, the verdict is `unknown`. For `gpu-health`, the status is not `ok` |
+| 2 | A usage error, including `--top` below 0 |
+| 3 | `plateau`: the verdict is `plateaued`. `completion`: the verdict is `incomplete` |
 
 ## Files
 
@@ -235,11 +344,11 @@ keep a comparison valid across a change of source.
 | `artifacts/runs/<id>/coverage.csv` | The Track K sample series |
 | `artifacts/runs/<id>/coverage-u.csv` | The Track U sample series |
 | `artifacts/runs/<id>/u/<harness>/` | Per-harness AFL++ state the Track U source sums |
+| `artifacts/runs/<id>/workdir/corpus.db` | What the surface column and `completion --run-id` measure |
+| `surface/completion-ledger.json` | The accounted targets `completion` reads |
 | `gspwn-coverage.service`, `gspwn-coverage.timer` | The sampler units |
 
 ## See also
 
 - [Artifacts](/gspwn/reference/artifacts/)
 - [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/)
-</content>
-</invoke>

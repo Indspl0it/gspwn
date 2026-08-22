@@ -121,5 +121,3 @@ the whole campaign as unreachable.
 
 - [Configuration keys](/gspwn/reference/configuration/)
 - [Configuration](/gspwn/guides/configuration/)
-</content>
-</invoke>

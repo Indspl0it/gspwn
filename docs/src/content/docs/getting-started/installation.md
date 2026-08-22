@@ -102,8 +102,8 @@ cd ../..
 Check out the branches [Requirements](/gspwn/getting-started/requirements/)
 names: a Linux stable branch the driver supports, and the driver's latest
 production branch. Record every commit and the `gcc` version in
-`artifacts/builds/manifest.json`; the `report` phase reads affected versions
-from there.
+`artifacts/builds/manifest.json`, because the `report` phase reads affected
+versions from there.
 
 ## 6. Build syzkaller
 
@@ -119,7 +119,7 @@ Three binaries must exist afterwards, because other tools invoke them by path:
 |---|---|
 | `bin/syz-manager` | the Track K campaign unit |
 | `bin/syz-db` | `corpus_ctl.py` and the seed packing in `campaign_ctl.py` |
-| `bin/syz-prog2c` | `repro_ctl.py extract`, to generate `repro.c` from `repro.syz` |
+| `bin/syz-prog2c` | `repro_ctl.py extract`, to generate `repro.c` from `repro.prog` |
 
 A missing binary blocks the `fuzz` phase. Re-run `make` and read its error.
 

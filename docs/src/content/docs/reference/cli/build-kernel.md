@@ -65,34 +65,74 @@ WARNING: /boot/config-6.1.0-21-amd64 not found, falling back to 'make defconfig'
 
 | Group | Options |
 |---|---|
-| Coverage | `CONFIG_KCOV`, `CONFIG_KCOV_INSTRUMENT_ALL` |
+| Coverage | `CONFIG_KCOV`, `CONFIG_KCOV_INSTRUMENT_ALL`, `CONFIG_KCOV_ENABLE_COMPARISONS` |
 | Sanitizers | `CONFIG_KASAN`, `CONFIG_KASAN_GENERIC`, `CONFIG_UBSAN` |
 | Symbolization | `CONFIG_DEBUG_KERNEL`, `CONFIG_DEBUG_INFO`, `CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT`, `CONFIG_KALLSYMS_ALL` |
 | Crash capture | `CONFIG_PSTORE`, `CONFIG_PSTORE_RAM`, `CONFIG_PSTORE_CONSOLE`, `CONFIG_KEXEC_CORE`, `CONFIG_CRASH_DUMP` |
 | Stable stacks | `CONFIG_RANDOMIZE_BASE` disabled, so dedup hashes are comparable |
 | Module loading | `CONFIG_MODULE_SIG_FORCE` and `CONFIG_SECURITY_LOCKDOWN_LSM_EARLY` disabled, trusted-key strings cleared |
+| Debug info kept | `CONFIG_DEBUG_INFO_NONE` disabled, which would otherwise compile the debug info out from under `CONFIG_DEBUG_INFO` |
 
 Distribution configurations sign and lock down modules, and an out-of-tree
 NVIDIA build cannot load under either.
+
+`CONFIG_KCOV_ENABLE_COMPARISONS` is not implied by `CONFIG_KCOV` and carries no
+`default y`. Without it `kernel/kcov.c` compiles out every
+`__sanitizer_cov_trace_cmp*` definition, and the NVIDIA modules built at rungs
+1 and 2 with `-fsanitize-coverage=trace-cmp` reference symbols the kernel does
+not export, so `insmod` fails with `Unknown symbol
+__sanitizer_cov_trace_cmp1`. syzkaller's comparison-hint mutation reads the
+same data.
 
 ## The configuration check
 
 `make olddefconfig` silently drops anything the tree does not offer, and
 `CONFIG_DEBUG_INFO` stopped being user-selectable in 5.18. The build verifies
-what actually took:
+what actually took, in both directions: six symbols must be `=y`, one of the
+three `CONFIG_DEBUG_INFO` spellings must be `=y`, and every symbol in
+`REQUIRED_DISABLED` must not be.
+
+| Direction | Symbols |
+|---|---|
+| Must be set | `CONFIG_KCOV`, `CONFIG_KCOV_INSTRUMENT_ALL`, `CONFIG_KCOV_ENABLE_COMPARISONS`, `CONFIG_KASAN`, `CONFIG_KASAN_GENERIC`, `CONFIG_KALLSYMS_ALL` |
+| Must be set, any spelling | `CONFIG_DEBUG_INFO`, or a `CONFIG_DEBUG_INFO_DWARF*` variant |
+| Must not survive | `CONFIG_RANDOMIZE_BASE`, `CONFIG_MODULE_SIG_FORCE`, `CONFIG_SECURITY_LOCKDOWN_LSM_EARLY`, `CONFIG_DEBUG_INFO_NONE` |
 
 ```
 == config check ==
-instrumentation present: KCOV, KASAN, kallsyms, debug info
+config check (after olddefconfig): KCOV, KCOV comparisons, KASAN, kallsyms, debug info present; KASLR, module signing and lockdown off
 ```
 
 ```
-ERROR: these did not survive olddefconfig: CONFIG_KCOV_INSTRUMENT_ALL
+ERROR: these are not set in .config (after olddefconfig): CONFIG_KCOV_INSTRUMENT_ALL
        Fuzzing without them measures and symbolizes nothing.
 ```
 
-Exit 1. `olddefconfig` drops these settings without a message, and the loss
-otherwise surfaces only when symbolization fails months later.
+```
+ERROR: these are still enabled in .config (reused kernel, SKIP_KERNEL=1): CONFIG_RANDOMIZE_BASE
+       Each one was disabled on purpose; see REQUIRED_DISABLED in
+       this script for what each one costs.
+```
+
+Either is exit 1. `olddefconfig` drops these settings without a message, and
+the loss otherwise surfaces only when symbolization fails months later.
+
+The `REQUIRED_DISABLED` half exists because each of those four fails
+differently and none of the failures names itself.
+
+| Symbol | Cost of it surviving |
+|---|---|
+| `CONFIG_RANDOMIZE_BASE` | Every address in every report shifts. `stack_hash` strips offsets and module names and keeps function names, so the primary dedup key survives and the secondary key degrades silently |
+| `CONFIG_MODULE_SIG_FORCE` | The unsigned out-of-tree NVIDIA module does not load, and the build gate fails with `nvidia-smi` errors naming neither signing nor lockdown |
+| `CONFIG_SECURITY_LOCKDOWN_LSM_EARLY` | The same |
+| `CONFIG_DEBUG_INFO_NONE` | Selecting it compiles the debug info out from under `CONFIG_DEBUG_INFO` |
+
+`SKIP_KERNEL=1` runs the same check against `$LINUX_SRC/.config`, the config
+the reused kernel came from. Rung 2 compiles the NVIDIA modules with
+`-fsanitize-coverage=trace-cmp` against whatever kernel is installed, so a tree
+that lost `CONFIG_KCOV_ENABLE_COMPARISONS` fails `insmod` hours later.
+Skipping the check on the reuse path let rung 2 walk into the failure rung 1
+checks for.
 
 ## Secure Boot
 
@@ -170,5 +210,3 @@ The `provision` phase adds the GSP firmware version to the same file, and the
 
 - [Requirements](/gspwn/getting-started/requirements/)
 - [Your first campaign](/gspwn/getting-started/first-campaign/)
-</content>
-</invoke>

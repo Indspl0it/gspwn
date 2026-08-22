@@ -37,19 +37,20 @@ Set these first. They bound an unattended run, and they are the spend ceiling.
 
 ```yaml
 loop:
-  max_rounds: 3
+  max_rounds: 10
   max_total_run_hours: 216
   campaign_hours: 24
 ```
 
-`max_rounds` caps rounds whatever coverage does. `max_total_run_hours` is the
-budget checked against the spend ledger, counting every campaign in every
-round: three rounds of three campaigns of 24 hours is 216.
-`campaign_hours` sets the duration of each campaign before its deadline timer
-stops it.
+`max_rounds` is a backstop against a runaway loop. Surface completion is the
+primary stop and `hard_cap_reason()` checks it first, so a campaign that
+reaches this cap has failed to converge and its stop reason says so.
+`max_total_run_hours` is the spend ceiling, checked against the spend ledger
+and counting every campaign in every round. `campaign_hours` sets the duration
+of each campaign before its deadline timer stops it.
 
-A budget or round-cap stop cannot be overridden. `round-decide` recomputes it
-and refuses `--decision continue`.
+A completion, budget or round-cap stop cannot be overridden. `round-decide`
+recomputes all three and refuses `--decision continue`.
 
 ```yaml
   stop_on_plateau: true
@@ -62,7 +63,7 @@ and refuses `--decision continue`.
 `coverage_sample_min` is the sampler interval, and it sets the resolution of
 every curve the round is measured on. `plateau_window_min` and
 `plateau_min_growth` apply only to runs whose coverage source reports no
-execution count; otherwise the verdict comes from the fitted discovery curve
+execution count. Otherwise the verdict comes from the fitted discovery curve
 under `coverage`.
 
 ```yaml
@@ -70,7 +71,7 @@ under `coverage`.
   promote_seeds: true
 ```
 
-`carry` builds each round on the last one's corpus; `fresh` starts empty.
+`carry` builds each round on the last one's corpus, and `fresh` starts empty.
 `promote_seeds: false` freezes the seed bank, and `corpus_ctl.py promote`
 refuses while it is false.
 
@@ -82,7 +83,7 @@ refuses while it is false.
 `deadline_check_min` is the cadence of the per-run deadline timer, deliberately
 separate from `coverage_sample_min`: raising the sampling interval must not
 delay every campaign stop past the window it enforces. `min_free_disk_gb` is
-the free-space floor below which the tools warn; `0` disables the check.
+the free-space floor below which the tools warn, and `0` disables the check.
 
 ## 2. `track_k`: the Track K campaign
 
@@ -100,7 +101,7 @@ track_k:
   smoke_window_minutes: 30
 ```
 
-`enabled_syscalls` is scope; see
+`enabled_syscalls` is scope. See
 [Scope and targets](/gspwn/guides/scope-and-targets/). `sandbox` is syzkaller's
 own value, one of `none`, `setuid`, `namespace` or `android`; a name syzkaller
 does not know makes syz-manager exit at startup.
@@ -125,12 +126,14 @@ track_u:
 
 `docker_image` is the image the Track U unit runs, and it is where the
 harnesses are built. `targets` is written by the `harness` phase and read by
-the `fuzz` phase; nothing validates that the names correspond to real
+the `fuzz` phase, and nothing validates that the names correspond to real
 harnesses.
 
-## 4. `coverage`: the plateau decision
+## 4. `coverage`: the two curves
 
-These keys determine the campaign's stopping rule.
+These keys determine the campaign's stopping rule. The first six govern the
+edge curve, and the three `surface_` keys plus `unpack_timeout_sec` govern the
+second one.
 
 ```yaml
 coverage:
@@ -141,9 +144,12 @@ coverage:
   fit_tail_fraction: 0.5
   beta_tolerance: 0.05
   gpu_probe_timeout_sec: 20
+  surface_sample_min: 60
+  surface_min_samples: 5
+  unpack_timeout_sec: 300
 ```
 
-The verdict is an extrapolation from a fitted species-accumulation curve. It
+The edge verdict is an extrapolation from a fitted species-accumulation curve. It
 answers how many new edges another campaign is expected to find, in the units
 of the quantity being predicted.
 
@@ -163,7 +169,23 @@ high exponent. `beta_tolerance` is the slack above a discovery exponent of 1
 before the series is judged not to be an accumulation curve.
 
 `gpu_probe_timeout_sec` bounds `nvidia-smi` before the driver is called wedged.
-Track K only; Track U samples record the GPU column as not applicable.
+Track K only, because Track U samples record the GPU column as not applicable.
+
+`surface_sample_min` sets the minutes between surface samples. The
+measurement unpacks the run's `corpus.db` and rescans every program in it,
+where every other column comes from one HTTP fetch, so it runs on a coarser
+cadence. Raise it on a long campaign against a slow volume. Lowering it to `0`
+measures the surface on every coverage sample.
+
+`surface_min_samples` is the floor below which the surface curve's shape is not
+read, and it moves with the cadence: at 240 minutes a floor of 5 buys most of a
+day before the curve says anything. Its minimum is 2, because one sample has
+nothing to be compared against.
+
+`unpack_timeout_sec` bounds one `syz-db unpack`. The value it guards grows
+through a campaign as the corpus does, and a limit set too low makes a large
+healthy corpus report its surface as unmeasurable, which reads as
+`surface_verdict=unknown` and blocks the completion stop.
 
 Full derivation: [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/).
 
@@ -179,8 +201,8 @@ poc:
 
 `reliable_threshold` is the boundary between a `reliable` and a `flaky`
 classification, and a disclosure package is built on that label.
-`repro_timeout_sec` bounds how long one run may take before it counts as a hang; a
-hang is a hit only for a crash whose title is hang-class. `default_runs` is the
+`repro_timeout_sec` bounds how long one run may take before it counts as a
+hang, and a hang is a hit only for a crash whose title is hang-class. `default_runs` is the
 counted-run target when `--runs` is absent. `void_retry_factor` bounds how many
 attempts a still-needed counted run may consume, so a persistently wrapping
 dmesg ring cannot loop forever.
@@ -205,8 +227,8 @@ reproduction must match to count as the same crash.
 
 The two `frameless_*` keys govern the fallback identity for a report with no
 usable stack at all, a lone `BUG: unable to handle ...` or a trace-less panic.
-They bound the prologue wording only; the faulting function from the RIP line
-is always part of the identity and neither knob can drop it.
+They bound the prologue wording only, because the faulting function from the
+RIP line is always part of the identity and neither knob can drop it.
 
 :::danger[Change dedup depth between campaigns, never during one]
 Already registered hashes are not recomputed. Across a mid-campaign change one

@@ -3,9 +3,24 @@ title: Coverage and plateau
 description: The species-accumulation model, the Heaps' law fit, the parameters that decide a plateau, the unknown cases, and the two limits the model states.
 ---
 
-Coverage is the only signal that decides whether to run another round. The
-verdict is an extrapolation from a fitted species-accumulation curve, computed
-by `coverage_ctl.py plateau`.
+Two curves and a ledger decide whether to run another round. The edge curve
+answers whether the fuzzer is still finding code, and its verdict is an
+extrapolation from a fitted species-accumulation curve computed by
+`coverage_ctl.py plateau`. The surface curve answers whether the commands the
+descriptions declare have been tried, and the completion ledger answers whether
+every target the inventories enumerate is either exercised or accounted for.
+
+| Edge curve | Surface curve | Ledger | Recorded verdict | Loop decision |
+|---|---|---|---|---|
+| Climbing | Any | Open | `coverage_verdict=growing` | Continue |
+| Flat | Climbing | Any | `coverage_verdict=growing` | Continue. The round is still reaching commands it had not reached |
+| Flat | Flat | Open | `plateaued` and `surface_verdict=incomplete` | Stop, overridable. The reason names a stuck corpus and the number of open targets |
+| Flat | Unknown | Any | `plateaued` and `surface_verdict=unknown` | Stop, overridable. The reason says no completion reading exists |
+| Any | Any | Closed | `surface_verdict=complete` | Stop, non-overridable. Nothing is left to fuzz |
+
+Completion is the campaign's primary termination. `loop.max_rounds` is a
+backstop against a runaway loop, and a campaign that reaches it has failed to
+converge.
 
 ## Model
 
@@ -86,6 +101,9 @@ execution rate.
 | `coverage.fit_tail_fraction` | 0.5 | Fraction of the run's executions fitted. 1.0 fits everything |
 | `coverage.beta_tolerance` | 0.05 | Slack above `beta = 1` absorbing early sampling noise |
 | `coverage.gpu_probe_timeout_sec` | 20 | Ceiling on `nvidia-smi` before the driver counts as wedged. Track K only |
+| `coverage.surface_sample_min` | 60 | Minutes between surface samples. 0 measures the surface on every coverage sample |
+| `coverage.surface_min_samples` | 5 | Surface samples needed before the second curve's shape is read. Minimum 2 |
+| `coverage.unpack_timeout_sec` | 300 | Ceiling on one `syz-db unpack` of a run's corpus |
 | `loop.plateau_window_min` | 240 | Trailing wall-clock window for the legacy fallback |
 | `loop.plateau_min_growth` | 0.02 | Growth threshold for the legacy fallback |
 | `loop.coverage_sample_min` | 10 | Sampling cadence, which sets how many points a run produces |
@@ -203,7 +221,7 @@ distinguish a slow hour from a saturated one, which is the reason the model
 path exists:
 
 ```
-no execution counts recorded, so growth is measured against the clock rather than against work done: distinct edges 41200 -> 41907 over 240 min = 1.716% growth (threshold 2.000%)
+no execution counts recorded, so growth is measured over elapsed time with no measure of work done: distinct edges 41200 -> 41907 over 240 min = 1.716% growth (threshold 2.000%)
 ```
 
 ## Combining the tracks
@@ -231,13 +249,114 @@ does not force `unknown`.
 | `max()` under-reports the union | A post-restart process can cover an edge the earlier one missed while its total is still lower, and that edge is not counted | Under-reports discovery, which ends a campaign early |
 | Kernel-side reachable code only | GSP firmware is uninstrumented, so no coverage number describes it | None. `series` and `plateau` print the statement on every invocation |
 
+## The surface curve
+
+The `surface` column of each coverage sample holds how many of the 764
+enumerated targets this run's own corpus names. `collect_surface(run_id)`
+unpacks `artifacts/runs/<id>/workdir/corpus.db` through syz-db and matches
+variant names against the inventories, which is a measurement syz-manager's
+stats endpoint cannot supply: it holds no model of the 764 targets.
+
+| Property | Value |
+|---|---|
+| Cadence | `coverage.surface_sample_min`, default 60 minutes, gated by `surface_due()` |
+| Cadence memory | The CSV itself. The last row carrying a surface value is the last measurement, so the cadence survives a sampler restart and a reboot |
+| Operator escape hatch | `--skip-surface` on `sample`, which the timer's Track U line passes |
+| Track U | Refused. Those harnesses produce no syzlang programs, and a 0 would put an absence of evidence into the curve as a measurement |
+| Failure | A missing syz-db, a `corpus.db` syz-manager is midway through rewriting, and an unpack failure all record an empty value, which `metric_rows` drops |
+| Accumulation | Running maximum, because syzkaller minimises its corpus and a genuine dip must contribute zero |
+
+`surface_growth(rows)` returns `growing`, `flat` or `unknown` and fits nothing.
+Heaps' law is not transferred to this series for three reasons: an unbounded
+power law fitted to a quantity bounded at 764 predicts more new targets than
+remain, the dynamic range makes the `R2` gate close to arbitrary over a
+400-to-410 series, and the question the stop rule asks the second curve is only
+whether it moved, which is subtraction.
+
+`coverage.surface_min_samples` is 5, higher than the edge curve's floor,
+because the surface counter is quantised and a short tail sitting between two
+steps is a common state.
+
+The surface reading is applied after the GPU gate. A dead GPU does not flatten
+the surface count the way it flattens the edge count, since programs still
+execute and still enter the corpus, so a climbing surface curve is not evidence
+that the card is alive.
+
+A run started before the `surface` column existed gains no second curve.
+`cmd_sample` appends under the header the file already carries and no
+header-rewrite path exists, so such a run warns on every sample and reads
+`surface_verdict=unknown`, which stops the loop on the plateau rule and never
+on completion.
+
+## The completion check
+
+```
+python3 tools/coverage_ctl.py completion [--run-id ID ...] [--corpus DIR] [--ledger PATH] [--top N]
+```
+
+Completion is the ledger identity `exercised + accounted-for = 764`, computed
+as a union of the two sets. A target can be exercised in a later round after an
+earlier one wrote a reason for it, and adding the counts would close the ledger
+while targets remained.
+
+The accounted-for set is the reasons that assert unreachability. Seven of the
+eight accounting reasons do, and `deliberately-deferred` does not: it records
+that a reachable target was put aside, so its rows are subtracted before the
+union and reported on their own as `deferred`. A deferral does not close a
+target and cannot fire the stop. See
+[Closed vocabularies](/gspwn/reference/vocabularies/).
+
+`completion_status` also requires every family in `surface_cov.FAMILIES` to
+contribute at least one target. A truncated inventory would otherwise yield a
+smaller denominator that a corpus can close, firing the stop over commands
+nobody counted. It yields `unknown` instead.
+
+| Exit | Verdict |
+|---|---|
+| 0 | `complete` |
+| 3 | `incomplete` |
+| 1 | `unknown` |
+
+The output names the driver version, every corpus it read with its
+modification time and program count, the ledger path, the three counts, and the
+targets that are neither exercised nor accounted for. Each of those prints as a
+worklist line carrying the variant in brackets, which is the handle
+`pipeline_ctl.py surface-account` resolves:
+
+```
+- [surface] control NV0000 0x00000102 cliresCtrlCmdSystemGetCpuInfo  [NV_ESC_RM_CONTROL_cliresCtrlCmdSystemGetCpuInfo]
+```
+
+`completion` is its own subcommand and not a fourth state on `plateau`, so
+`plateau` keeps its three verdicts and its exit map.
+
+`round-end --from-run` computes the reading from the runs it names and records
+it on the round, so no flag transcribes it.
+
+## Reading a plateau against the surface
+
+236 of the non-privileged control commands have their handler compiled out and
+their parameter buffer marshalled across the RPC queue to GSP. A corpus
+drifting onto those raises executions and moves no edge count, so the
+accumulation curve flattens while the fuzzer is still issuing calls it has
+never issued. The GSP subset is a structural ceiling in the edge signal, and an
+edge count alone reads that ceiling and a plateau identically.
+
+| Surface reading at a flat edge curve | Diagnosis | Next action |
+|---|---|---|
+| Still climbing | The round is still reaching commands it had not reached, whatever the edge count did | Continue |
+| Flat, ledger open | The corpus is stuck. The fuzzer stopped finding edges while modelled targets remain unreached, which is a resource-chain problem | Model the targets `surface_cov.py gaps --stage model` names, or account for them |
+| Flat, ledger closed | The grammar has reached the surface it declares and has stopped finding new code | Stop the loop |
+
+See [surface_cov.py](/gspwn/architecture/components/surface-cov/).
+
 ## Verdict consumers
 
 | Consumer | Use |
 |---|---|
-| `pipeline_ctl.py round-end --from-run` | Records the verdict on the round |
-| `pipeline_ctl.py round-decide` | `plateaued` stops the loop when `loop.stop_on_plateau` is set. `unknown` always stops it |
-| The `refine` sub-agent | The detail line's expected-new-edges figure goes into `gaps.md` |
+| `pipeline_ctl.py round-end --from-run` | Records the edge verdict and the completion reading on the round, as one write |
+| `pipeline_ctl.py round-decide` | `plateaued` stops the loop when `loop.stop_on_plateau` is set. `unknown` always stops it. A `complete` surface verdict stops it non-overridably, checked ahead of the round cap and the budget |
+| The `refine` sub-agent | The detail line's expected-new-edges figure goes into `gaps.md`, and the unaddressed targets go into the worklist or the ledger |
 | The `eval` sub-agent | The series and the cross-round progression |
 
 A `plateaued` verdict is a statement about the descriptions as much as about
@@ -248,5 +367,8 @@ subsystem is covered.
 ## See also
 
 - [Throughput against depth](/gspwn/guides/tuning-throughput-vs-depth/)
+- [surface_cov.py](/gspwn/architecture/components/surface-cov/)
 - [coverage_ctl.py](/gspwn/reference/cli/coverage-ctl/)
+- [Loops](/gspwn/architecture/loops/)
+- [Artifacts](/gspwn/reference/artifacts/)
 - [Scope and oracle](/gspwn/architecture/scope-and-oracle/)
