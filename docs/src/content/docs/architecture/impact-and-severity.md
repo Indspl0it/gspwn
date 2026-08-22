@@ -119,18 +119,25 @@ never penalised and only an unexplained one is reported as a problem.
 
 `impact_support_gap()` reports three conditions, in rising order of cost.
 
-| Gap | Condition | Message |
+| Gap | Condition | Message tail |
 |---|---|---|
-| 1. Concludes nothing without saying why | `primitive` and `consequence` both `undetermined`, and `undetermined_reason` empty | `Undetermined is a valid answer here; an unexplained one is not, because nobody later can tell it apart from an analysis that was skipped` |
+| 1. Concludes nothing without saying why | `primitive` **or** `consequence` is `undetermined`, and `undetermined_reason` is empty. Either field alone triggers it | `Undetermined is a valid answer here, but an unexplained one is not, because nobody later can tell it apart from an analysis that was skipped` |
 | 2. Claims a primitive with no evidence | `primitive` in `PRIMITIVE_NEEDS_EVIDENCE` and `evidence` empty | `That is a claim about code, so it needs the file:line it rests on before a report can put a severity on it` |
-| 3. Consequence outruns its support | A consequence above `dos-only` argued from `primitive=undetermined`, or a consequence in `CONSEQUENCE_NEEDS_CONTROL` with `attacker_control` of `none` or `unknown` | `The conclusion outruns the mechanism: name what the fault actually gives an attacker, or lower the consequence` |
+| 3. Consequence outruns its mechanism | `consequence` in `CONSEQUENCE_NEEDS_CONTROL` and `primitive` is `none` or `undetermined` | `The conclusion outruns the mechanism: name what the fault actually gives an attacker, or lower the consequence` |
+| 4. Consequence rests on an attacker who controls nothing | `consequence` in `CONSEQUENCE_NEEDS_CONTROL` and `attacker_control` is empty or holds only `none` and `unknown` | `An outcome above denial of service needs the attacker to influence something. With no influence, the defensible answer is dos-only` |
+
+Gap 1 is checked first, so a record carrying `primitive=oob-write` with
+`consequence=undetermined` and no `undetermined_reason` is refused there and
+never reaches gaps 2 to 4. Each message opens with the record's own field
+values, and the column above carries the tail.
 
 A primitive other than `none` or `undetermined` is a claim about code, and a
 claim about code with no `file:line` behind it carries no evidence.
 
-Gap 3 carries the highest cost. A privilege-escalation conclusion drawn from an
-undetermined primitive is the finding a vendor engineer disproves first, and
-its disproof reduces the credibility of every other finding in the report.
+Gaps 3 and 4 carry the highest cost. A privilege-escalation conclusion drawn
+from an undetermined primitive is the finding a vendor engineer disproves
+first, and its disproof reduces the credibility of every other finding in the
+report.
 
 A consequence **weaker** than the primitive would support is not flagged.
 Under-claiming costs nothing, and flagging it pushes the analysis towards
@@ -149,7 +156,7 @@ by consequence (what the report's severity table rests on):
 
 4 of 5 record(s) can carry a severity into the report.
 These cannot, and rca should revisit them:
-  crash-0009: consequence=privilege-escalation with attacker_control=unknown. An outcome above denial of service needs the attacker to influence something; if they influence nothing, the defensible answer is dos-only
+  crash-0009: consequence=privilege-escalation with attacker_control=unknown. An outcome above denial of service needs the attacker to influence something. With no influence, the defensible answer is dos-only
 ```
 
 An unsupported record reads identically to a supported one in the rollup above

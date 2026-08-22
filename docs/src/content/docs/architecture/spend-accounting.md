@@ -31,8 +31,7 @@ billed 24.00 run-hours for run r2-1 (configured window (no usable coverage sampl
 A run with no samples at all bills nothing, and the tool reports that case
 explicitly:
 
-```
-  WARNING: run(s) r2-2 had no usable coverage samples and billed 0.0 h — check the sampler; unmeasured spend must not pass silently
+```  WARNING: run(s) r2-2 had no usable coverage samples and billed 0.0 h. Check the sampler, because unmeasured spend must not pass silently
 ```
 
 ## The write path
@@ -178,11 +177,12 @@ budget stops the loop on its own, and takes precedence while coverage is still
 growing.
 
 ```
-error: computed decision is stop (run-hour budget spent (216.0 of 216.0 h)) — a budget or round-cap stop cannot be overridden
+error: computed decision is stop (run-hour budget spent (216.0 of 216.0 h)). A budget or round-cap stop cannot be overridden
 ```
 
 | Stop reason | Overridable with `--decision continue --reason` |
 |---|---|
+| The command surface is complete | No |
 | `loop.max_rounds` reached | No |
 | `loop.max_total_run_hours` spent | No |
 | Coverage `plateaued` | Yes |

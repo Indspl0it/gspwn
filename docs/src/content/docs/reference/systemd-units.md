@@ -3,7 +3,7 @@ title: systemd units
 description: The seven units the tools generate, what each runs, and the constraints each one carries.
 ---
 
-Seven units are generated. None is committed; each is written to
+Seven units are generated. None is committed, and each is written to
 `/etc/systemd/system/` by the tool that owns it.
 
 | Unit | Written by | Purpose |
@@ -54,8 +54,9 @@ ExecStart=/usr/bin/docker run --rm --name gspwn-u \
   --memory=8G \
   --pids-limit=512 \
   -v /path/to/gspwn/artifacts:/artifacts \
+  -v /path/to/gspwn/harnesses:/harnesses \
   -e RUN_ID=r2-1 aflplusplus/aflplusplus:latest \
-  /artifacts/harnesses/run_all.sh
+  /harnesses/run_all.sh
 Restart=always
 RestartSec=30
 MemoryMax=8G
@@ -117,7 +118,7 @@ Type=oneshot
 ExecStart=-/usr/bin/python3 /path/to/gspwn/tools/coverage_ctl.py sample \
   --run-id r2-1 --url http://127.0.0.1:56744
 ExecStart=-/usr/bin/python3 /path/to/gspwn/tools/coverage_ctl.py sample \
-  --run-id r2-1 --track u
+  --run-id r2-1 --track u --skip-surface
 ```
 
 ```ini
@@ -137,6 +138,7 @@ WantedBy=timers.target
 | `OnUnitActiveSec`, `OnBootSec` | `loop.coverage_sample_min` | Overridable with `--interval-min` |
 | `--url` | `track_k.http` | The syz-manager stats endpoint |
 | `-` prefix on `ExecStart` | Fixed | A failure sampling one track does not suppress the other |
+| `--skip-surface` on the Track U line | Fixed | Container harnesses produce no syzlang programs, so the run would measure no surface and pay the corpus unpack for it |
 
 One timer covers both tracks. Sampling runs from a timer so that it outlives
 the agent session and survives panics. The campaign deadline is enforced by its

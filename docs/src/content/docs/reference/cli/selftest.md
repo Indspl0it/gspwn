@@ -97,5 +97,3 @@ verifies each against the tool's real `--help` output. See
 
 - [Development](/gspwn/project/development/)
 - [Contributing](/gspwn/project/contributing/)
-</content>
-</invoke>

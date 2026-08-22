@@ -34,7 +34,18 @@ SAN_TITLE_RES = [
     re.compile(r"^(?:==\d+==\s*)?(SUMMARY: [^\n]*)", re.M),
     re.compile(r"^([^\n:]*:\d+(?::\d+)?: runtime error:[^\n]*)", re.M),
     re.compile(r"^(?:==\d+==\s*)?(SEGV on unknown address[^\n]*)", re.M),
+    # libFuzzer's own verdicts. A replay under a libFuzzer-built harness is
+    # the path that produces them, and an out-of-memory or a deadly signal
+    # caught by the driver rather than by ASan is still the crash the input
+    # was saved for.
+    re.compile(r"^(?:==\d+==\s*)?(ERROR: libFuzzer: [^\n]*)", re.M),
 ]
+
+# What harnesses/replay_crashes.sh appends to a crash input's name
+# when it writes that input's sanitizer output beside it. The pairing is by
+# name so a report is always readable next to the bytes that produced it, and
+# so scan_track_u can tell an input from its report without a manifest.
+REPORT_SUFFIX = ".sanlog"
 NVRM_RE = re.compile(r"NVRM: (Xid[^\n]*|GPU at[^\n]*error[^\n]*)", re.I)
 # Volatile Xid fields: the same recurring Xid must dedup across pids/channels.
 XID_VOLATILE_RE = re.compile(r"\s*,?\s*(?:pid=[^,\s]+|ch(?:annel)?\s*[= ]\s*"
@@ -307,14 +318,78 @@ def register(state, track, title, shash, srcdir, signal=None,
     return cid
 
 
+# syzkaller indexes the per-sighting files in a crash directory: report0,
+# report1, log0, log1, ... It never writes an unsuffixed 'report'. Reading
+# that name returns nothing, and stack_hash('') is '', which kills the
+# secondary dedup key for every Track K crash without any error at the point
+# of failure.
+def syz_indexed_path(cdir, stem):
+    """Lowest-numbered <stem><N> file in a syzkaller crash dir, or None.
+
+    Index 0 is the lowest index syzkaller has written, not necessarily the
+    first sighting: once the directory holds MaxCrashLogs entries syzkaller
+    overwrites the oldest slot by modification time, and it rewrites
+    `description` on every save. Over a long-lived directory the frames read
+    here and the title read from `description` can therefore come from two
+    different sightings of the same bug, and one directory scanned twice can
+    yield two stack hashes — which registers as `flagged` rather than as a
+    silent second finding. Index 0 remains the right choice because it is the
+    only stable selection available; nothing in the directory records which
+    sighting `description` came from.
+
+    A bare `<stem>` is accepted after the numbered ones, so a directory
+    written by an older syzkaller or assembled by hand still resolves. Names
+    like `repro.report` and `report.html` are not reports of this crash and
+    are left alone.
+    """
+    best = None
+    for p in glob.glob(os.path.join(cdir, stem + "*")):
+        if not os.path.isfile(p):
+            continue
+        suffix = os.path.basename(p)[len(stem):]
+        if suffix.isdigit():
+            key = (0, int(suffix))
+        elif suffix == "":
+            key = (1, 0)
+        else:
+            continue
+        if best is None or key < best[0]:
+            best = (key, p)
+    return best[1] if best else None
+
+
+def syz_report_path(cdir):
+    """The symbolized report of a syzkaller crash directory, or None."""
+    return syz_indexed_path(cdir, "report")
+
+
+def syz_log_path(cdir):
+    """The raw console log of a syzkaller crash directory, or None."""
+    return syz_indexed_path(cdir, "log")
+
+
+def syz_evidence_path(cdir):
+    """The file a Track K stack hash is derived from, or None.
+
+    The symbolized report first. syzkaller writes report<N> only when the
+    symbolized text came out non-empty, so a manager running without
+    kernel_obj produces log<N> and no report at all, and reading only the
+    report name hashes the empty string — which is no evidence and kills the
+    secondary dedup key for every crash in that workdir. stack_frames parses
+    raw console traces as well as syzkaller frame lines, so the log carries
+    the same function names and the same hash.
+    """
+    return syz_report_path(cdir) or syz_log_path(cdir)
+
+
 def scan_syz(state, workdir):
     for cdir in sorted(glob.glob(os.path.join(workdir, "crashes", "*"))):
         desc = os.path.join(cdir, "description")
-        report = os.path.join(cdir, "report")
         if not os.path.exists(desc):
             continue
         title = norm_title(read_text(desc))
-        rtext = read_text(report) if os.path.exists(report) else ""
+        report = syz_evidence_path(cdir)
+        rtext = read_text(report) if report else ""
         register(state, "K", title, stack_hash(rtext), cdir)
 
 
@@ -331,17 +406,135 @@ def sanitizer_title(text):
     return None
 
 
+# AFL++ writes a README into its own crashes directory and run_all.sh copies
+# it along with the inputs. It is documentation, not a crash, and run_all.sh
+# already excludes it from the count it reports. Both spellings are dropped:
+# the AFL++ tree has carried each of them.
+TRACK_U_NON_INPUTS = ("README.txt", "README")
+
+# How far below the Track U crash root an input may sit. The copy run_all.sh
+# performs lands it at <harness>/<input>, depth 2. The recovery an operator
+# reaches for when that copy fails — cp -r of the fuzzer output tree — lands
+# it at <harness>/default/crashes/<input> under AFL++ and at
+# <harness>/crashes/<input> under libFuzzer, depth 4 and depth 3. Deeper than
+# that is not a layout any fuzzer or any documented recovery produces, and an
+# unbounded walk over a corpus directory copied here by accident would read
+# every file in it.
+TRACK_U_MAX_DEPTH = 4
+
+
+def track_u_inputs(udir):
+    """Crash input files under the Track U crash root, every layout.
+
+    run_all.sh copies each harness's inputs into
+    artifacts/u-crashes/<harness-name>/. A file placed in the root
+    itself is read too, because a manual copy of a single input lands there,
+    and the deeper trees TRACK_U_MAX_DEPTH covers are read because the copy
+    step is `cp -f ... || true` and its documented recovery is a wholesale
+    copy of the fuzzer output directory.
+
+    Replay reports (REPORT_SUFFIX) are returned alongside the inputs they
+    describe; scan_track_u pairs them.
+    """
+    base = os.path.abspath(udir)
+    files = []
+    for root, subdirs, names in os.walk(base):
+        rel = os.path.relpath(root, base)
+        depth = 0 if rel == os.curdir else len(rel.split(os.sep))
+        # Files inside this directory sit at depth + 1, so descending past a
+        # directory at TRACK_U_MAX_DEPTH - 1 can only reach files below the
+        # bound.
+        if depth + 1 >= TRACK_U_MAX_DEPTH:
+            subdirs[:] = []
+        subdirs.sort()
+        for name in sorted(names):
+            if name in TRACK_U_NON_INPUTS:
+                continue
+            p = os.path.join(root, name)
+            if os.path.isfile(p):
+                files.append(p)
+    return files
+
+
+def track_u_pairs(files):
+    """-> [(path registered as the crash, report text path or None)].
+
+    A crash input carries no sanitizer output of its own: AFL++ and libFuzzer
+    save the bytes that reproduced the crash, not the report the sanitizer
+    printed. replay_crashes.sh runs each input back through its harness and
+    writes that report to <input>REPORT_SUFFIX, so the pair is what the
+    registry needs — the title and the frames come from the report, and the
+    registered path is the input, because that is what `repro_ctl.py extract`
+    copies and `verify --track u` replays.
+
+    A file that already holds a report of its own (an ASan log copied here by
+    hand) is registered directly. A report whose input has been deleted is
+    registered on its own path, because losing the finding is worse than
+    registering it against a path `verify` cannot replay.
+    """
+    names = set(files)
+    pairs = []
+    for f in files:
+        if f.endswith(REPORT_SUFFIX):
+            if f[:-len(REPORT_SUFFIX)] not in names:
+                pairs.append((f, f))
+            continue
+        report = f + REPORT_SUFFIX
+        pairs.append((f, report if report in names else None))
+    return pairs
+
+
 def scan_track_u(state, udir):
-    for f in sorted(glob.glob(os.path.join(udir, "*"))):
-        if not os.path.isfile(f):
-            continue
-        text = read_text(f)
+    files = track_u_inputs(udir)
+    pairs = track_u_pairs(files)
+    usable = 0
+    unreplayed = 0
+    replayed_clean = 0
+    for src, report in pairs:
+        text = read_text(src)
         title = sanitizer_title(text)
+        if title is None and report:
+            text = read_text(report)
+            title = sanitizer_title(text)
+            if title is None:
+                replayed_clean += 1
+                print("WARN: %s was replayed and its output carries no "
+                      "sanitizer signature — skipped, not registered. The "
+                      "input did not crash this build of the harness."
+                      % src)
+                continue
         if title is None:
-            print("WARN: %s carries no sanitizer signature — skipped, not "
-                  "registered" % f)
+            unreplayed += 1
+            print("WARN: %s is a fuzzer crash input and no %s report sits "
+                  "beside it — skipped, not registered. Replay it with "
+                  "harnesses/replay_crashes.sh, which run_all.sh "
+                  "runs at harvest." % (src, REPORT_SUFFIX))
             continue
-        register(state, "U", title, stack_hash(text), f)
+        usable += 1
+        register(state, "U", title, stack_hash(text), src)
+    # A populated directory that yields nothing has to say so. Without this
+    # the triage phase reports success against an empty registry, which is
+    # the same silence that hid the layout mismatch above.
+    if not files:
+        print("WARN: no crash input files under %s — nothing registered for "
+              "Track U. run_all.sh copies them to "
+              "artifacts/u-crashes/<harness-name>/; check that a "
+              "harness run produced any." % udir)
+    elif not usable:
+        detail = []
+        if unreplayed:
+            detail.append("%d of them have no replay report beside them, so "
+                          "they are still raw fuzzer inputs: run "
+                          "harnesses/replay_crashes.sh" % unreplayed)
+        if replayed_clean:
+            detail.append("%d were replayed and did not crash the harness: "
+                          "confirm the binaries under "
+                          "harnesses/*/build/ are the sanitizer "
+                          "build that found them" % replayed_clean)
+        print("WARN: %d file(s) under %s and not one carries a sanitizer "
+              "signature — nothing registered for Track U. %s."
+              % (len(files), udir, "; ".join(detail) or
+                 "none of them is a crash report"))
 
 
 def read_text(path):
@@ -467,8 +660,7 @@ def main():
     ap.add_argument("--syz-workdir", default=None,
                     help="explicit workdir path, overriding --run-id")
     ap.add_argument("--track-u-dir",
-                    default=os.path.join(REPO_ROOT, "artifacts", "harnesses",
-                                         "crashes"))
+                    default=os.path.join(REPO_ROOT, "artifacts", "u-crashes"))
     ap.add_argument("--dmesg", default=None)
     a = ap.parse_args()
     # One locked read-modify-write: triage may run while the fuzz monitor and

@@ -1,10 +1,24 @@
 ---
 title: Components
-description: The fifteen modules in tools/, what each owns, and the dependencies between them.
+description: The twenty-eight modules in tools/, what each owns, and the dependencies between them.
 ---
 
-Fifteen files live in `tools/`, plus one data file. Thirteen are commands, one
-is the shared state library, and one is the test runner.
+Twenty-eight files live in `tools/`, plus two data files. Twenty-five are
+commands, two are libraries, and one is the test runner.
+
+Eleven of the commands read source trees and committed artefacts and never
+touch a device. `ioctl_inventory.py`, `ctrl_surface.py` and `object_graph.py`
+derive the ioctl surface, the control command space and the object allocation
+DAG from a driver checkout, and `syzlang_gen.py` turns all three into a first
+description set. `ctrl_rank.py` orders the control commands on chain length,
+fix history and parameter size. `surface_verify.py` confirms the artefacts
+describe the driver actually under test, `surface_cov.py` counts how much of
+the enumerated surface a description set and a corpus reach, `refgen.py`
+renders the artefacts as the reference pages under `reference/surface/`, and
+`regression_check.py` compares the committed artefacts against each other and
+against those pages in CI. `cve_patch_map.py` and `patch_mine.py` read the fix
+history of the driver and of the two container repositories, which is the one
+empirical signal available before a campaign has run.
 
 | Module | Kind | Owns |
 |---|---|---|
@@ -20,12 +34,26 @@ is the shared state library, and one is the test runner.
 | [`corpus_ctl.py`](/gspwn/architecture/components/corpus-ctl/) | Command | The persistent seed bank |
 | [`knowledge_ctl.py`](/gspwn/architecture/components/knowledge-ctl/) | Command | The committed knowledge files |
 | [`trace2seed.py`](/gspwn/architecture/components/trace2seed/) | Command | strace to syz-program conversion |
+| [`ioctl_inventory.py`](/gspwn/architecture/components/ioctl-inventory/) | Command | The escape and UVM ioctl inventory, and the request numbers |
+| [`ctrl_surface.py`](/gspwn/architecture/components/ctrl-surface/) | Command | The RM control command space and its privilege classification |
+| [`object_graph.py`](/gspwn/architecture/components/object-graph/) | Command | The RM object allocation DAG, its chaining depth, and the allocation chain per owning class |
+| [`ctrl_rank.py`](/gspwn/architecture/components/ctrl-rank/) | Command | The measured ordering of the 531 targetable control commands |
+| [`syzlang_gen.py`](/gspwn/architecture/components/syzlang-gen/) | Command | The generated description set, and the per-struct size check on it |
+| [`surface_verify.py`](/gspwn/architecture/components/surface-verify/) | Command | The version guard on every statically derived artefact |
+| [`surface_cov.py`](/gspwn/architecture/components/surface-cov/) | Command | The share of the enumerated command surface a description set models and a corpus reaches |
+| [`cve_patch_map.py`](/gspwn/architecture/components/cve-patch-map/) | Command | The CVE to release-diff join, and the round-1 history worklist |
+| [`patch_mine.py`](/gspwn/architecture/components/patch-mine/) | Command | The container-stack fix history, and the Track U target ranking |
+| [`gitmine.py`](/gspwn/architecture/components/gitmine/) | Library | The git wrapper, the diff parser, the function attribution and the release-tag mapping both miners share |
+| [`refgen.py`](/gspwn/architecture/components/refgen/) | Command and library | The five generated reference pages under `reference/surface/` |
+| [`regression_check.py`](/gspwn/architecture/components/regression-check/) | Command | The five CI checks over the committed surface artefacts and the pages generated from them |
 | [`exec.py`](/gspwn/architecture/components/exec/) | Command | Logged command execution with retries |
 | [`build_kernel.sh`](/gspwn/architecture/components/build-kernel/) | Script | The instrumented kernel build |
 | [`selftest.py`](/gspwn/architecture/components/selftest/) | Test runner | The offline suite |
+| `register_check.py` | Command | The writing-register linter run in CI. No page yet |
 
-`tools/ioctl_map.json` is data: the map from ioctl request numbers to syzlang
-description names.
+Two files in `tools/` are data. `ioctl_map.json` maps ioctl request
+numbers to syzlang description names. `cve_fix_verdicts.json` records the
+curated per-CVE fix verdict and the evidence behind each one.
 
 ## Page structure
 
@@ -40,7 +68,7 @@ be compared against another without rereading prose.
 | Failure modes | Condition, behaviour, and exit code or exception |
 | Concurrency and durability | Locks held, atomic writes, idempotency |
 | Prohibited behaviour | Rules a reviewer can check a diff against |
-| Design notes | Why the mechanism is the one it is |
+| Design notes | The reasoning behind each design choice |
 
 ## Dependencies
 
@@ -82,12 +110,31 @@ flowchart TB
 
   TS["trace2seed.py"]
   EX["exec.py"]
+
+  GM["gitmine.py"]
+  PM["patch_mine.py"] --> GM
+  CPM["cve_patch_map.py"] --> GM
+
+  SC["surface_cov.py"]
+  RG["refgen.py"] --> SC
+  RCH["regression_check.py"] --> SC
+  RCH --> RG
+  CC -.->|"lazily, for the surface column"| SC
 ```
 
 `gspwn_config.py` and `pipeline_state.py` are the two roots. Everything that
-touches state imports the second; everything with a tunable imports the first.
+touches state imports the second, and everything with a tunable imports the
+first.
 
-`trace2seed.py` and `exec.py` import neither. Both are self-contained, and
+`gitmine.py` is a third root and a library only. It imports nothing in `tools/`
+and holds no repository-specific knowledge, so the two miners keep their own fix
+signals, path filters and output schemas.
+
+`surface_cov.py`, `refgen.py` and `regression_check.py` all refuse the
+`pipeline_state.py` import on purpose. That module needs `fcntl`, and all three
+run on the Windows workstation and in CI, where no GPU and no kernel exist.
+
+`trace2seed.py` and `exec.py` import neither root. Both are self-contained, and
 `exec.py` is stdlib-only by design because it wraps builds that may run before
 anything else is installed.
 

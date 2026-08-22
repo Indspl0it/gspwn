@@ -223,5 +223,3 @@ must not also get a fresh, empty breaker.
 
 - [Unattended operation](/gspwn/guides/unattended-operation/)
 - [systemd units](/gspwn/reference/systemd-units/)
-</content>
-</invoke>

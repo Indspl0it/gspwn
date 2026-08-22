@@ -19,6 +19,8 @@ rounds and the report can group across findings. Free text alone would make
 | [Track](#track) | Crash record `track`, campaign event `track` |
 | [Disclosure status](#disclosure-status) | Crash record `disclosure` |
 | [Coverage verdict](#coverage-verdict) | Round record `coverage_verdict` |
+| [Surface verdict](#surface-verdict) | Round record `surface_verdict` |
+| [Surface accounting reason](#surface-accounting-reason) | Completion ledger row `reason` |
 | [Round decision](#round-decision) | Round record `decision` |
 | [Bug class](#bug-class) | Research record `bug_class` |
 | [Trigger](#trigger) | Research record `trigger` |
@@ -73,7 +75,7 @@ phase-ordering check exempts that trio from each other.
 ## Crash signal
 
 How a crash reads against the campaign's own noise floor. Set from the Xid
-classification for NVRM entries; everything else stays `unclassified`.
+classification for NVRM entries, and everything else stays `unclassified`.
 
 | Value | Meaning |
 |---|---|
@@ -101,6 +103,56 @@ classification for NVRM entries; everything else stays `unclassified`.
 | `growing` | The run is still finding edges | 0 |
 | `unknown` | No verdict could be produced. Stops the loop | 1 |
 | `plateaued` | Another campaign is not expected to find enough new edges | 3 |
+
+## Surface verdict
+
+The completion reading recorded on the round by `pipeline_ctl.py round-end`.
+
+| Value | Meaning | `coverage_ctl.py completion` exit |
+|---|---|---|
+| `complete` | Every enumerated target is exercised or accounted for | 0 |
+| `incomplete` | Targets remain that are neither | 3 |
+| `unknown` | The exercised set could not be measured | 1 |
+
+`complete` is the campaign's primary termination and it sits in the
+non-overridable stop set. `unknown` never satisfies the completion stop, so a
+failed corpus read cannot end a campaign by claiming it is done.
+
+## Surface accounting reason
+
+Why a target is closed out without being exercised. Written by
+`pipeline_ctl.py surface-account` into the completion ledger. The first four
+are spelled identically to the exclusion categories `surface_cov.py` already
+reports, so the two group together.
+
+| Value | Meaning | Evidence required | Closes the target |
+|---|---|---|---|
+| `control_gsp` | Handler compiled out. The parameter buffer crosses the RPC queue and runs on GSP, where KCOV cannot follow | Yes | Yes |
+| `uvm_test` | Gated on `uvm_enable_builtin_tests=1`, which the target does not set | No | Yes |
+| `escape_dead` | Declared with no dispatch case, so no kernel code runs | Yes | Yes |
+| `escape_mux` | A multiplexer whose leaves are counted in another family | No | Yes |
+| `needs-privilege` | The handler body checks a capability the modelled caller does not hold | Yes | Yes |
+| `chain-unbuildable` | No allocation chain a default tenant can build reaches the object this call needs | Yes | Yes |
+| `no-param-model` | The parameter struct cannot be modelled well enough for the call to reach its handler | Yes | Yes |
+| `deliberately-deferred` | In scope and reachable, left for a later campaign by an explicit decision. Recorded, and does not close the target | No | No |
+
+Evidence is a list of `file.c:line`. `detail` is required for every reason, and
+"not reached yet" is refused, because an unreached target belongs in the
+worklist.
+
+Seven of the eight assert that the target cannot be reached by this campaign as
+configured, and the completion identity `exercised + accounted-for = 764` means
+"exercised, or excluded". `deliberately-deferred` asserts the opposite, so
+`surface_completion` subtracts its rows before the union and reports them on
+their own as `deferred`. A round's count of them is `surface_deferred` in the
+state file.
+
+Evidence is not required for it, and requiring it was rejected: evidence is a
+`file:line`, a scope decision rests on no line of driver source, and demanding
+one produces citations chosen to satisfy the check.
+
+A row written in error is removed with
+`python3 tools/pipeline_ctl.py surface-unaccount`, which reopens its target.
 
 ## Round decision
 

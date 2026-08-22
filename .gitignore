@@ -1,14 +1,23 @@
+# Campaign output. Every phase writes here, nothing here is committed.
 artifacts/*
 !artifacts/.gitkeep
 !artifacts/**/.gitkeep
+# The Track U harnesses are hand-written C and Go. build_all.sh compiles
+# each one in place, and that output is not committed.
+harnesses/*/build/
 state/*
 !state/.gitkeep
-# knowledge/ itself is committed on purpose — it is the only thing that
-# survives a rebuilt box. Its lock files are not.
+# knowledge/ itself is committed on purpose. It is the only thing that
+# survives a rebuilt box. Its lock files are not committed.
 knowledge/*.lock
 __pycache__/
 *.pyc
 thoughts/
+# The v0.8.1 change record is an internal working document: it analyses
+# defects in the pipeline's own tooling and records what a change wave
+# landed. The repository states the resulting design in docs/ and in the
+# phase prompts, so a reader needs neither the analysis nor its history.
+improvement_v0.8.1.md
 tmp/
 .claude/settings.local.json
 # The documentation site's build output and toolchain. package.json and

@@ -128,8 +128,8 @@ sequenceDiagram
   end
   alt the kernel faulted
     D-->>M: KASAN report in dmesg
-    M->>M: write workdir/crashes/<hash>/{description,report,log}
-    M->>M: attempt a reproducer, write repro.syz
+    M->>M: write workdir/crashes/<hash>/{description,report<N>,log<N>}
+    M->>M: attempt a reproducer, write repro.prog
   end
   S->>M: GET /stats?format=json
   M-->>S: edges, corpus, crashes, execs
@@ -160,9 +160,10 @@ of its own crashes. See
 | Condition | Mechanism | Overridable |
 |---|---|---|
 | The campaign window elapsed | `gspwn-deadline@<run-id>.timer` stops and disables both fuzz units | No |
+| The command surface is complete | `round-decide` returns `stop` from `hard_cap_reason()`, which checks it first | No |
 | `loop.max_rounds` reached | `round-decide` returns `stop` from `hard_cap_reason()` | No |
 | `loop.max_total_run_hours` spent | `round-decide` returns `stop` from `hard_cap_reason()` | No |
-| Coverage verdict `plateaued` with `loop.stop_on_plateau` set | `round-decide` returns `stop` | Yes, with `--reason` |
+| Both curves flat with `loop.stop_on_plateau` set | `round-decide` returns `stop` | Yes, with `--reason` |
 | Coverage verdict `unknown` | `round-decide` returns `stop` | Yes, with `--reason` |
 | A phase is `blocked` | `next` halts there. `orchestrator_ctl.py run` exits 78 | No |
 | The circuit breaker tripped | `orchestrator_ctl.py run` exits 78 | Reset only, through `orchestrator_ctl.py reset` |

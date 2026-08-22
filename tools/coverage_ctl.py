@@ -13,7 +13,7 @@ coverage.csv and coverage-u.csv — and the loop's verdict combines them: a
 round is still learning if EITHER track is still finding edges.
 
 Subcommands:
-  sample --run-id ID [--track k|u] [--url URL] [--force]
+  sample --run-id ID [--track k|u] [--url URL] [--force] [--skip-surface]
                                        append one row to the track's CSV;
                                        skipped once the campaign window is up
   install-timer --run-id ID [--url URL] [--interval-min N]
@@ -35,9 +35,38 @@ Subcommands:
                                        means another H hours is expected to
                                        find fewer than
                                        coverage.plateau_new_edges new edges.
+  completion [--run-id ID ...] [--corpus DIR] [--ledger PATH] [--top N]
+                                       the ledger identity: is every target
+                                       either exercised or accounted for?
+                                       exit 0 complete, 3 incomplete, 1 unknown
+  migrate-csv --run-id ID [--track k|u]
+                                       add the columns a CSV's header lacks to
+                                       it, so a run that started before a
+                                       column existed can record one. Rewrites
+                                       the file, so stop the sampler first
   compare --run-id A --against B [--track k|u]
                                        side-by-side endpoints (two runs)
   gpu-health                           probe the GPU now; exit 0 healthy, 1 not
+
+TWO CURVES, NOT ONE. The edge curve answers whether the fuzzer is still
+finding code. It cannot answer whether the commands it was told about have
+been tried, because the driver's edge space has no known size. The surface
+curve does: `tools/surface_cov.py` counts how many of the 764 enumerated
+targets a corpus names, and that denominator is counted rather than estimated.
+Both are sampled here, and the loop's stop rule reads them together with the
+completion ledger:
+
+  edge flat, surface climbing    not a plateau; the round is still reaching
+                                 commands it had not reached
+  both flat, ledger open         the corpus is stuck: the fuzzer stopped
+                                 finding edges while modelled targets remain
+                                 unreached, which is a resource-chain problem
+  both flat, ledger closed       complete; nothing is left to fuzz
+
+The surface column carries no fitted curve. Heaps' law is fitted to the edge
+series because the edge space has no known asymptote; the surface series has
+a counted one, at 764, and an unbounded power law fitted to a bounded quantity
+predicts more new targets than remain. The surface reading is subtraction.
 
 Coverage is kernel-side reachable code only. GSP firmware is not instrumented;
 every consumer of these numbers must say so.
@@ -66,8 +95,10 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -79,11 +110,17 @@ REPO_ROOT = ps.REPO_ROOT
 RUNS_DIR = os.path.join(REPO_ROOT, "artifacts", "runs")
 # corpus is a program count; corpus_bytes is a file size. They were once the
 # same column, which made any comparison spanning a source change meaningless.
+# surface is appended, never inserted: the column order of every file already
+# on disk has to survive, because anything reading one with `cut -d,` counts
+# positions. It is an integer, so it stays out of TEXT_FIELDS.
 FIELDS = ["ts", "uptime_s", "edges", "corpus", "corpus_bytes", "crashes",
-          "execs", "source", "gpu", "disk_free_mb"]
+          "execs", "source", "gpu", "disk_free_mb", "surface"]
 # Columns holding text, not counts: read_rows must not run them through
 # _to_int, which would turn "ok" into None and silently un-record a healthy GPU.
 TEXT_FIELDS = ("source", "gpu")
+# The surface column's two knobs live in config/campaign.yaml's coverage
+# section as surface_sample_min and surface_min_samples. See _int_env and
+# surface_sample_min() below for how they are read.
 TIMER_NAME = "gspwn-coverage"
 TRACKS = ("k", "u")
 # The one GPU status that permits a plateau claim. Everything else means the
@@ -286,6 +323,71 @@ def collect(run_id, url, track="k"):
     return row, "corpus.db-size" if row else "unreachable"
 
 
+def collect_surface(run_id):
+    """-> (count, note). How many of the enumerated targets this run reaches.
+
+    Same contract as collect(): never raises, so a failed surface read still
+    lets the row be written with every other column intact. A missing syz-db,
+    a corpus.db syz-manager is midway through rewriting and an unpack failure
+    all yield None, and None is dropped from the curve rather than charted as
+    a fall to zero.
+
+    syz-manager's stats endpoint cannot answer this. It holds no model of the
+    764 targets, so the count comes from the corpus text itself: unpack the
+    run's corpus.db and match variant names against the inventories.
+    """
+    try:
+        import surface_cov
+    except ImportError as exc:
+        return None, "surface_cov unavailable: %s" % exc
+    try:
+        targets, _excluded, meta, _modelled, exercised = surface_cov.measure(
+            surface_cov.DEFAULT_DESC, run_id=run_id)
+    except Exception as exc:
+        return None, "surface not measured: %s" % exc
+    return (len([v for v in targets if v in exercised]),
+            "%d program(s) in %s" % (meta["corpus_programs"], meta["corpus"]))
+
+
+def surface_due(run_id, track, path, interval_min=None):
+    """-> (should sample, why not). The cadence gate for the surface column.
+
+    The CSV is its own memory here: the last row carrying a surface value is
+    the last time it was measured, so the cadence survives a sampler restart
+    and a reboot without any state of its own.
+    """
+    if track != "k":
+        # Track U produces no syzlang programs, so it has no surface to
+        # measure. Recording a 0 would put an absence of evidence into the
+        # curve as a measurement, the same error GPU_NOT_APPLICABLE avoids.
+        return False, "track u produces no syzlang programs"
+    # Storability before cadence. A CSV written before the surface column
+    # existed keeps its own header for the rest of the run, so a value
+    # measured now is written into a DictWriter that drops it. Measuring
+    # anyway costs an unpack and a full rescan of a corpus.db syz-manager is
+    # concurrently rewriting, every sample, for nothing. `migrate-csv` adds
+    # the column to such a file; until it is run there is nothing to measure
+    # into.
+    if os.path.exists(path) and "surface" not in existing_fields(path):
+        return False, ("%s predates the surface column, so a measurement "
+                       "cannot be stored in it. Add the column with: python3 "
+                       "tools/coverage_ctl.py migrate-csv --run-id %s"
+                       % (path, run_id))
+    interval = surface_sample_min() if interval_min is None else interval_min
+    if interval <= 0:
+        return True, ""
+    if not os.path.exists(path):
+        return True, ""
+    rows = [r for r in read_rows(run_id, "k") if r.get("surface") is not None]
+    if not rows:
+        return True, ""
+    age_min = (time.time() - (rows[-1]["ts"] or 0)) / 60.0
+    if age_min >= interval:
+        return True, ""
+    return False, ("last measured %.0f min ago, under the %d min surface "
+                   "interval" % (age_min, interval))
+
+
 def gpu_health(timeout=None):
     """-> (status, detail). Only GPU_OK lets a plateau verdict be claimed.
 
@@ -310,8 +412,8 @@ def gpu_health(timeout=None):
     except FileNotFoundError:
         return "missing", "nvidia-smi is not on PATH"
     except subprocess.TimeoutExpired:
-        return "hung", ("nvidia-smi did not return within %ds; the driver is "
-                        "not answering" % timeout)
+        return "hung", ("nvidia-smi did not return within %ds, so the driver "
+                        "is not answering" % timeout)
     except OSError as e:
         return "error", "could not run nvidia-smi: %s" % e
     out = (r.stdout or "").strip()
@@ -363,7 +465,7 @@ def cmd_gpu_health(a):
     print("GPU: %s (%s)" % (status, detail))
     if status != GPU_OK:
         print("A plateau verdict will read 'unknown' while the GPU is in this "
-              "state, so the loop stops rather than recording a plateau the "
+              "state, so the loop stops without recording a plateau the "
               "fuzzer did not actually reach.")
     return 0 if status == GPU_OK else 1
 
@@ -415,8 +517,8 @@ def cmd_sample(a):
     d = run_dir(a.run_id)
     os.makedirs(d, exist_ok=True)
     if campaign_finished(a.run_id) and not a.force:
-        print("run %s: campaign window has elapsed; not sampling "
-              "(--force to override)" % a.run_id)
+        print("run %s: campaign window has elapsed, so this call is not "
+              "sampling (--force to override)" % a.run_id)
         return 0
     row, source = collect(a.run_id, a.url, a.track)
     row = {k: row.get(k) for k in FIELDS}
@@ -434,6 +536,18 @@ def cmd_sample(a):
     row["disk_free_mb"] = disk_free_mb()
     path = csv_path(a.run_id, a.track)
     new = not os.path.exists(path)
+    surface_note = ""
+    # getattr, not attribute access: cmd_sample is called programmatically as
+    # well as from the parser, and a caller built before this flag existed must
+    # keep working rather than dying on a missing attribute.
+    if getattr(a, "skip_surface", False):
+        surface_note = "skipped (--skip-surface)"
+    else:
+        due, why = surface_due(a.run_id, a.track, path)
+        if due:
+            row["surface"], surface_note = collect_surface(a.run_id)
+        else:
+            surface_note = why
     # Append under the header the file already has, not the one this version
     # would write. A run that started before the gpu column existed keeps an
     # 8-column file: writing 9 values into it would misalign every later read.
@@ -452,32 +566,44 @@ def cmd_sample(a):
         # The unattended sampler runs as root and owns the CSV, so a manual
         # check as a normal user cannot append to it. Say that instead of
         # dying with a traceback the agent has to interpret.
-        print("cannot write %s — it is owned by the root sampler. Re-run this "
-              "check with sudo, or read the curve with `series` instead."
+        print("cannot write %s, which is owned by the root sampler. Re-run "
+              "this check with sudo, or read the curve with `series`."
               % path)
         return 1
-    print("%s edges=%s corpus=%s crashes=%s (source: %s, gpu: %s)"
-          % (path, row["edges"], row["corpus"], row["crashes"], source, gpu))
+    print("%s edges=%s surface=%s corpus=%s crashes=%s (source: %s, gpu: %s)"
+          % (path, row["edges"], row["surface"], row["corpus"], row["crashes"],
+             source, gpu))
+    if surface_note:
+        print("  surface: %s" % surface_note)
     warning = disk_warning(row["disk_free_mb"])
     if warning:
         print(warning)
     if gpu not in (GPU_OK, GPU_NOT_APPLICABLE):
         print("WARN: GPU is %s (%s). The fuzzer keeps running on a dead GPU "
               "and the curve flattens, so plateau will report 'unknown' for "
-              "any window holding this sample rather than calling it a "
-              "plateau." % (gpu, gpu_detail))
+              "any window holding this sample and will not call it a plateau." % (gpu, gpu_detail))
     if "gpu" not in fields:
         print("WARN: %s predates the gpu column, so this sample's GPU status "
               "was not recorded. Plateau will read 'unknown' for windows over "
               "these rows." % path)
+    if "surface" not in fields:
+        # The writer appends under the header the file has, so a value
+        # measured for such a file is dropped. surface_due refuses the
+        # measurement for that reason, and `migrate-csv` is the one path that
+        # adds the column: it rewrites the file, so it is an operator step run
+        # once and not something a sample does under the root sampler.
+        print("WARN: %s predates the surface column, so this run has no "
+              "surface curve and the two-curve stop rule reads 'unknown' for "
+              "it. Add the column with: python3 tools/coverage_ctl.py "
+              "migrate-csv --run-id %s" % (path, a.run_id))
     if source == "unreachable":
         if a.track == "u":
-            print("WARN: no Track U harness output under %s — the sample was "
-                  "recorded empty. Confirm run_all.sh writes each harness's "
-                  "output there." % track_u_dir(a.run_id))
+            print("WARN: no Track U harness output under %s, so the sample "
+                  "was recorded empty. Confirm run_all.sh writes each "
+                  "harness's output there." % track_u_dir(a.run_id))
         else:
-            print("WARN: syz-manager stats unreachable at %s — the sample was "
-                  "recorded empty. Check the unit is running and the http "
+            print("WARN: syz-manager stats unreachable at %s, so the sample "
+                  "was recorded empty. Check the unit is running and the http "
                   "address in the campaign config." % a.url)
         return 1
     return 0
@@ -491,6 +617,85 @@ def existing_fields(path):
     except OSError:
         return FIELDS
     return header or FIELDS
+
+
+def migrate_csv(path, fields=None):
+    """Add the columns `path`'s header lacks -> (columns added, rows kept).
+
+    A sample only ever appends, and it appends under the header the file
+    already carries, so a run started before a column existed records nothing
+    in that column for the rest of its life. This is the one operation on a
+    coverage.csv that is not an append: it rewrites the file with the missing
+    columns and every existing row padded.
+
+    Existing columns keep their positions and their values, so a header this
+    version does not know about survives untouched and anything reading the
+    file by column index still reads the same numbers.
+
+    A sample landing mid-rewrite would be dropped, because the rows were read
+    before it arrived. The window is the length of one rewrite against a
+    cadence in minutes, and it is closed rather than argued about: the file's
+    size is read before and after, and a change aborts with the file
+    untouched. It is an operator step for that reason and never something a
+    sample does on its own.
+    """
+    fields = fields or FIELDS
+    existing = existing_fields(path)
+    missing = [f for f in fields if f not in existing]
+    if not missing:
+        return [], 0
+    size = os.path.getsize(path)
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    header = list(existing) + missing
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", newline="") as out:
+            w = csv.DictWriter(out, fieldnames=header, extrasaction="ignore")
+            w.writeheader()
+            for row in rows:
+                w.writerow({k: ("" if row.get(k) is None else row[k])
+                            for k in header})
+            out.flush()
+            os.fsync(out.fileno())
+        if os.path.getsize(path) != size:
+            raise RuntimeError(
+                "%s grew while it was being rewritten, so a sample landed "
+                "that this rewrite would drop. Nothing was changed. Stop the "
+                "sampler (systemctl stop gspwn-coverage.timer) and run this "
+                "again" % path)
+        # The sampler owns the file and appends to it as root; mkstemp makes
+        # its file 0600 and owned by whoever ran this, so the mode has to be
+        # carried over or the next sample writes into a file it cannot read
+        # back.
+        os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    ps._fix_root_ownership([path])
+    return missing, len(rows)
+
+
+def cmd_migrate_csv(a):
+    for track in (TRACKS if a.track is None else [a.track]):
+        path = csv_path(a.run_id, track)
+        if not os.path.exists(path):
+            print("%s: no file" % path)
+            continue
+        try:
+            added, kept = migrate_csv(path)
+        except (OSError, RuntimeError) as e:
+            print("%s: %s" % (path, e))
+            return 1
+        if added:
+            print("%s: added %s over %d row(s), which record no value for "
+                  "them" % (path, ", ".join(added), kept))
+        else:
+            print("%s: already carries every column" % path)
+    return 0
 
 
 def read_rows(run_id, track="k"):
@@ -543,13 +748,22 @@ def cmd_series(a):
               % (cov[0]["edges"], cov[-1]["edges"],
                  cov[-1]["edges"] - cov[0]["edges"]))
     else:
-        print("  edges: never recorded — coverage claims cannot be made from "
-              "this run")
+        print("  edges: never recorded, so coverage claims cannot be made "
+              "from this run")
+    surf = metric_rows(a.run_id, "surface", a.track)
+    if surf:
+        state, why = surface_growth(rows)
+        print("  surface: %s -> %s target(s) over %d sample(s) [%s: %s]"
+              % (surf[0]["surface"], surf[-1]["surface"], len(surf), state,
+                 why))
+    elif a.track == "k":
+        print("  surface: never recorded, so this run has no second curve and "
+              "a flat edge curve cannot be told from a finished one")
     for m in ("corpus", "corpus_bytes", "crashes"):
         vals = metric_rows(a.run_id, m, a.track)
         if vals:
             print("  %s: %s -> %s" % (m, vals[0][m], vals[-1][m]))
-    print("  NOTE: kernel-side reachable coverage only; GSP firmware is not "
+    print("  NOTE: kernel-side reachable coverage only. GSP firmware is not "
           "instrumented.")
     return 0
 
@@ -558,11 +772,17 @@ def since_last_reset(rows):
     """-> (rows since the fuzzer last restarted, whether it restarted).
 
     Edge counts only ever climb within one fuzzer process. A drop means the
-    process restarted and its counter went back to zero — which this pipeline
+    process restarted and its counter went back to zero, which this pipeline
     causes routinely, since the units are Restart=always and the machine
     panics by design. Samples either side of that are two different counters:
     subtracting across the reset produces large negative 'growth', which reads
     as a plateau and stops a loop that is in fact climbing fast.
+
+    Edges only. The surface column falls for a different cause: syzkaller
+    minimises its corpus, so a surface count drops with no restart behind it,
+    and surface_growth reads that curve through `accumulate`, a running
+    maximum, which makes a minimisation dip contribute nothing without
+    attributing it to a fuzzer that never restarted.
     """
     start = 0
     for i in range(1, len(rows)):
@@ -631,6 +851,36 @@ def unhealthy_gpu_samples(window):
 #    working from an aggregate counter.
 
 
+def _int_env(name, fallback):
+    """int(os.environ[name]), or `fallback` when the variable is unset.
+
+    The environment wins over config/campaign.yaml, so one run can be given a
+    different cadence without editing config every campaign reads.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return fallback
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(
+            "%s=%r is not an integer. Unset it to use the configured value."
+            % (name, raw))
+
+
+def surface_sample_min():
+    """Minutes between surface samples: coverage.surface_sample_min.
+
+    Unlike the other columns this one is not an HTTP GET: it unpacks the run's
+    corpus.db and rescans every program in it, so it runs on its own coarser
+    cadence and the rows in between record None. metric_rows drops those,
+    which is exactly the coarser series wanted. Read per call, so a config
+    edit between runs is picked up.
+    """
+    return _int_env("GSPWN_SURFACE_SAMPLE_MIN",
+                    _coverage_cfg()["surface_sample_min"])
+
+
 def _coverage_cfg():
     """The stopping rule's tunables, or the defaults if config is unreadable.
 
@@ -644,13 +894,18 @@ def _coverage_cfg():
         return dict(gspwn_config.DEFAULTS["coverage"])
 
 
-def accumulate(rows):
-    """-> [(cum_execs|None, cum_edges)], the species accumulation curve.
+def accumulate(rows, metric="edges"):
+    """-> [(cum_execs|None, cum_metric)], the species accumulation curve.
 
     Both counters reset when the fuzzer restarts. Executions are work done, so
     they accumulate: a reset means the delta is the new reading itself, not a
     negative number. Edges are a set, not an amount of work, so they
     accumulate as a running maximum — see the note above on replay.
+
+    The running maximum is correct for the surface metric too, for a different
+    reason: syzkaller minimises its corpus, so an unpacked surface count can
+    genuinely drop, and max() gives the same conservative union of what the
+    run has reached that it gives for edges.
     """
     out = []
     cum_execs = 0
@@ -658,7 +913,7 @@ def accumulate(rows):
     best = 0
     have_execs = True
     for r in rows:
-        edges = r.get("edges")
+        edges = r.get(metric)
         if edges is None:
             continue
         best = max(best, edges)
@@ -750,6 +1005,50 @@ def expected_new_edges(fit, extra_execs):
     return max(0.0, k * ((n + extra_execs) ** b - n ** b))
 
 
+def surface_growth(rows, cov=None, min_samples=None):
+    """-> (state, detail): growing | flat | unknown for the surface curve.
+
+    No fit and no threshold. heaps_fit is deliberately not reused: it fits an
+    unbounded power law, which is right for an edge space whose size is
+    unknown and wrong for a counter bounded at 764, where it would predict
+    more new targets than exist. The dynamic range makes the fit worse still —
+    a 400-to-410 series has one target as a full percent of its spread, so the
+    R2 gate would accept or reject it close to arbitrarily.
+
+    What the curve is asked here is only whether it moved, which is
+    subtraction. The answer modifies the edge verdict and never produces a
+    stop on its own: a flat edge curve against a climbing surface curve means
+    the round is still reaching commands it had not reached, whatever the edge
+    count did.
+    """
+    cov = cov if cov is not None else _coverage_cfg()
+    # Read out of `cov` and not out of config again, so a caller that
+    # injected a configuration gets the floor that belongs to it.
+    floor = (min_samples if min_samples is not None
+             else _int_env("GSPWN_SURFACE_MIN_SAMPLES",
+                           cov["surface_min_samples"]))
+    samples = [r for r in rows if r.get("surface") is not None]
+    if len(samples) < floor:
+        return "unknown", ("%d surface sample(s) recorded; need >= %d before "
+                           "the curve's shape means anything"
+                           % (len(samples), floor))
+    acc = accumulate(samples, "surface")
+    if not acc:
+        return "unknown", "no surface value in any sample"
+    tail = fit_tail(acc, cov["fit_tail_fraction"])
+    if len(tail) < floor:
+        # Either the run records no execution axis to cut by, or the tail is
+        # shorter than the floor. Reading the whole series is the conservative
+        # direction: it can only report growth that a shorter window missed.
+        tail = acc
+    first, last = tail[0][1], tail[-1][1]
+    if last > first:
+        return "growing", ("surface %d -> %d target(s) across the last %d "
+                           "sample(s)" % (first, last, len(tail)))
+    return "flat", ("no new target reached across the last %d sample(s), and "
+                    "the corpus names %d target(s) throughout" % (len(tail), last))
+
+
 def exec_rate_per_hour(rows):
     """Executions per hour over the sampled span, or None if unmeasurable."""
     acc = accumulate(rows)
@@ -789,7 +1088,7 @@ def _legacy_window_verdict(rows, acc, window_min, min_growth, why):
 
 
 def plateau_verdict(rows, window_min, min_growth, horizon_hours=None,
-                    cov=None):
+                    cov=None, surface=None):
     """-> (verdict, detail). The decision is an extrapolation, not a threshold.
 
     The question is whether another campaign is worth running, so the answer
@@ -811,6 +1110,15 @@ def plateau_verdict(rows, window_min, min_growth, horizon_hours=None,
     alone: 'growing' needs no such guard, because coverage cannot climb on a
     GPU that is not answering, so growth is its own evidence the probe was
     only having a bad moment.
+
+    `surface` is the second curve, as the (state, detail) pair surface_growth
+    returns. A flat edge curve against a climbing surface curve is not a
+    plateau: the round is still reaching commands it had not reached, and the
+    edge count is flat because those commands fail early rather than because
+    the search is finished. It is applied after the GPU gate, not before,
+    because a dead GPU does not flatten the surface count the way it flattens
+    the edge count — programs still execute and still enter the corpus — so a
+    climbing surface curve is not evidence the card is alive.
     """
     cov = cov if cov is not None else _coverage_cfg()
     if len(rows) < 3:
@@ -819,8 +1127,8 @@ def plateau_verdict(rows, window_min, min_growth, horizon_hours=None,
     if not acc:
         return "unknown", "no edge data in any sample"
     _seg, restarted = since_last_reset(rows)
-    note = "; the fuzzer restarted during this run, so replay is excluded " \
-           "and only edges beyond the previous high-water mark count" \
+    note = (". The fuzzer restarted during this run, so replay is excluded "
+            "and only edges beyond the previous high-water mark count") \
         if restarted else ""
 
     # Still recovering. After a restart syzkaller re-executes its corpus, and
@@ -873,8 +1181,8 @@ def plateau_verdict(rows, window_min, min_growth, horizon_hours=None,
         # branch covers both.
         verdict, detail = _legacy_window_verdict(
             rows, acc, window_min, min_growth,
-            "no execution counts recorded, so growth is measured against the "
-            "clock rather than against work done")
+            "no execution counts recorded, so growth is measured over elapsed "
+            "time with no measure of work done")
         detail += note
     elif fit["points"] < cov["min_fit_samples"]:
         return "unknown", ("only %d sample(s) usable for a discovery fit; "
@@ -891,10 +1199,9 @@ def plateau_verdict(rows, window_min, min_growth, horizon_hours=None,
                            % (fit["r2"], cov["model_min_r2"], fit["beta"],
                               fit["points"], note))
     elif not (0 < fit["beta"] <= 1.0 + cov["beta_tolerance"]):
-        return "unknown", ("discovery exponent beta=%.3f is outside (0, 1]; "
-                           "the series is not behaving like an accumulation "
-                           "curve, so no extrapolation from it is "
-                           "meaningful%s" % (fit["beta"], note))
+        return "unknown", ("discovery exponent beta=%.3f is outside (0, 1]. "
+                           "The series is not behaving like an accumulation "
+                           "curve, so no extrapolation from it is meaningful%s" % (fit["beta"], note))
     else:
         horizon_execs = rate * horizon_h
         expected = expected_new_edges(fit, horizon_execs)
@@ -927,6 +1234,15 @@ def plateau_verdict(rows, window_min, min_growth, horizon_hours=None,
             "deciding the round is done."
             % (detail, sum(bad.values()), len(window),
                ", ".join("%s x%d" % (k, v) for k, v in sorted(bad.items()))))
+    if surface and surface[0] == "growing":
+        return "growing", (
+            "%s. The edge curve is flat but the surface curve is not (%s), so "
+            "the round is still reaching commands it had not reached and this "
+            "is not a plateau. A command whose handler rejects the call early "
+            "adds a target and almost no edges."
+            % (detail, surface[1]))
+    if surface:
+        detail += ". Surface curve: %s (%s)" % (surface[0], surface[1])
     return "plateaued", detail
 
 
@@ -942,11 +1258,17 @@ def run_verdict(run_id, window_min, min_growth, tracks=TRACKS,
     """
     per = {}
     for t in tracks:
-        rows = metric_rows(run_id, "edges", t)
-        if not read_rows(run_id, t):
+        all_rows = read_rows(run_id, t)
+        if not all_rows:
             continue          # track not sampled at all: not evidence either way
+        rows = metric_rows(run_id, "edges", t)
+        # The surface curve is read from every row, not from the edge-carrying
+        # subset: a sample whose stats fetch failed still records a surface
+        # count, and dropping it would shorten the second curve for a reason
+        # belonging to the first.
         per[t] = plateau_verdict(rows, window_min, min_growth,
-                                 horizon_hours=horizon_hours)
+                                 horizon_hours=horizon_hours,
+                                 surface=surface_growth(all_rows))
     decided = [v for v, _ in per.values() if v != "unknown"]
     if "growing" in decided:
         combined = "growing"
@@ -962,16 +1284,169 @@ def run_verdict(run_id, window_min, min_growth, tracks=TRACKS,
 def cmd_plateau(a):
     if a.track:
         rows = metric_rows(a.run_id, "edges", a.track)
-        verdict, detail = plateau_verdict(rows, a.window_min, a.min_growth,
-                                          horizon_hours=a.horizon_hours)
+        verdict, detail = plateau_verdict(
+            rows, a.window_min, a.min_growth, horizon_hours=a.horizon_hours,
+            surface=surface_growth(read_rows(a.run_id, a.track)))
         print("%s track %s: %s (%s)" % (a.run_id, a.track, verdict, detail))
     else:
         verdict, detail, _ = run_verdict(a.run_id, a.window_min, a.min_growth,
                                          horizon_hours=a.horizon_hours)
         print("%s: %s (%s)" % (a.run_id, verdict, detail))
-    print("Coverage is kernel-side reachable code only; GSP firmware is not "
+    print("Coverage is kernel-side reachable code only. GSP firmware is not "
           "instrumented, so no verdict here says anything about it.")
     return {"growing": 0, "unknown": 1, "plateaued": 3}[verdict]
+
+
+# ------------------------------------------------------- the ledger check ---
+
+
+def completion_status(run_ids=None, corpus=None, ledger_path=None):
+    """-> dict. Is every enumerated target either exercised or accounted for?
+
+    The campaign's primary termination, and it is a ledger identity rather
+    than a threshold: the denominator is counted from the inventories, so the
+    operation is a set union and a comparison. No percentage is computed
+    anywhere, because a percentage would invite a number to be chosen for it.
+
+    A union and not a sum. A target can be exercised in a later round after an
+    earlier one wrote a reason for it, and adding the two counts would then
+    close the ledger while targets remained.
+
+    A row written under a deferring reason is counted and reported and does
+    not close its target: see ps.SURFACE_REASON_DEFERRED.
+
+    Never raises. Anything that stops the corpus or the ledger being read
+    yields verdict 'unknown', which never satisfies the stop: a broken
+    measurement must not be able to end a campaign by claiming it is finished.
+    """
+    out = {"verdict": "unknown", "exercised": None, "accounted": None,
+           "deferred": None, "closed": None, "total": None, "remaining": [],
+           "detail": "", "driver_version": None,
+           "ledger": ps.surface_ledger_path(ledger_path),
+           "corpora": []}
+    try:
+        import surface_cov
+        targets = None
+        reached = set()
+        for run_id in (run_ids or [None]):
+            t, _excluded, meta, _modelled, exercised = surface_cov.measure(
+                surface_cov.DEFAULT_DESC,
+                corpus=None if run_id else corpus, run_id=run_id)
+            targets = t
+            out["driver_version"] = meta["driver_version"]
+            out["corpora"].append("%s (%d program(s), modified %s)"
+                                  % (meta["corpus"], meta["corpus_programs"],
+                                     meta["corpus_mtime"] or "unknown"))
+            reached |= {v for v in t if v in exercised}
+        # The denominator is recounted from the inventories on every call, and
+        # a truncated one is not an error anywhere upstream: an
+        # rm-control-inventory.json whose `methods` list is empty loads
+        # cleanly and yields 233 instead of 764, which a corpus already naming
+        # the escape, UVM and alloc families closes outright. Requiring every
+        # family to contribute puts a floor under it that needs no expected
+        # count and no constant to drift.
+        present = {t["family"] for t in (targets or {}).values()}
+        empty = [f for f in surface_cov.FAMILIES if f not in present]
+        if empty:
+            raise surface_cov.SurfaceError(
+                "the inventories enumerate no target in family %s, so the "
+                "denominator (%d) is not the command surface. A truncated "
+                "inventory reads as a smaller surface that a corpus can "
+                "close, which fires the completion stop over commands nobody "
+                "counted. Regenerate the inventories, then re-run "
+                "surface_verify.py check"
+                % (", ".join(empty), len(targets or {})))
+        keys = {t["abi_key"] for t in targets.values()}
+        exercised_keys = {targets[v]["abi_key"] for v in reached}
+        accounted, deferred = ps.surface_ledger_keys(out["ledger"],
+                                                     out["driver_version"])
+        # Rows for targets the inventories no longer contain are reported and
+        # not counted. A ledger outliving a driver bump would otherwise close
+        # the surface with reasons written for commands that no longer exist.
+        stale = accounted - keys
+        accounted &= keys
+        deferred &= keys
+        verdict, counts, closed = ps.surface_completion(
+            exercised_keys, accounted, len(keys), deferred=deferred)
+        out.update(counts)
+        out["verdict"] = verdict
+        if closed is None:
+            # surface_completion could not measure the union, so nothing is
+            # known to be addressed. Reading `not in closed` against None
+            # raises TypeError into the catch-all below and replaces this
+            # detail with a Python error string.
+            out["remaining"] = sorted(targets.values(),
+                                      key=lambda t: (t["family"],
+                                                     t["variant"]))
+            out["detail"] = ("the exercised set could not be measured over %d "
+                             "target(s), so no target is known to be closed"
+                             % len(keys))
+            return out
+        out["remaining"] = sorted(
+            (t for t in targets.values() if t["abi_key"] not in closed),
+            key=lambda t: (t["family"], t["variant"]))
+        out["detail"] = ("%d of %d target(s) closed: %d exercised, %d "
+                         "accounted for, %d left"
+                         % (counts["closed"], counts["total"],
+                            counts["exercised"], counts["accounted"],
+                            counts["total"] - counts["closed"]))
+        if counts["deferred"]:
+            out["detail"] += (", %d of them deliberately deferred and so not "
+                              "closed" % counts["deferred"])
+        if stale:
+            out["detail"] += (". %d ledger row(s) name a target no inventory "
+                              "contains and are not counted" % len(stale))
+    except Exception as exc:
+        out["detail"] = "completion not measured: %s" % exc
+    return out
+
+
+def cmd_completion(a):
+    # The two name two different corpora and the measurement can only be of
+    # one of them. Passing both used to measure the run and never read the
+    # directory, which is the same silent wrong answer surface_cov.py refuses.
+    if a.corpus and a.run_id:
+        sys.exit("coverage_ctl: --run-id and --corpus name two different "
+                 "corpora; pass one of them")
+    st = completion_status(run_ids=a.run_id, corpus=a.corpus,
+                           ledger_path=a.ledger)
+    print("driver %s" % (st["driver_version"] or "unknown"))
+    for line in st["corpora"]:
+        print("corpus %s" % line)
+    print("ledger %s" % st["ledger"])
+    print("%s: %s" % (st["verdict"], st["detail"]))
+    if not a.run_id and not a.corpus:
+        # `exercised` means a program's text names the variant, and the seed
+        # bank holds one generated program per target whether or not anything
+        # ever ran it. Measured against the bank the identity can read
+        # complete with no execution behind it.
+        print()
+        print("NOTE: measured against the seed bank, where a target counts as "
+              "exercised because a generated program names it and not "
+              "because a fuzzer ran it. The bank also holds this round's "
+              "programs only after `python3 tools/corpus_ctl.py promote`. For "
+              "the reading the stop rule uses, pass --run-id <id> and measure "
+              "the run's own corpus.db.")
+    if st["remaining"]:
+        print()
+        print("neither exercised nor accounted for (%d):" % len(st["remaining"]))
+        top = max(a.top, 0)
+        for target in st["remaining"][:top]:
+            print("- [surface] %s %s  [%s]" % (target["family"],
+                                               target["label"],
+                                               target["variant"]))
+        if len(st["remaining"]) > top:
+            # "raise --top" reads as an offer to see the rest, so it belongs
+            # only where some were shown. At --top 0 nothing was named and the
+            # count is the whole finding.
+            print("... %d more (raise --top)" % (len(st["remaining"]) - top)
+                  if top else
+                  "%d target(s) not listed (--top %d)"
+                  % (len(st["remaining"]), a.top))
+        print()
+        print("Each one is either fuzzed next round or given a written reason: "
+              "python3 tools/pipeline_ctl.py surface-account --json -")
+    return {"complete": 0, "unknown": 1, "incomplete": 3}[st["verdict"]]
 
 
 def cmd_compare(a):
@@ -984,8 +1459,8 @@ def cmd_compare(a):
         print("%-20s edges %6s -> %6s  (+%-6s) over %.1f h"
               % (rid, rows[0]["edges"], rows[-1]["edges"],
                  rows[-1]["edges"] - rows[0]["edges"], span_h))
-    print("Comparing runs is only meaningful when each had its own workdir and "
-          "corpus policy — see campaign_ctl.py --corpus.")
+    print("Comparing runs is only meaningful when each had its own workdir "
+          "and corpus policy. See campaign_ctl.py --corpus.")
     return 0
 
 
@@ -994,6 +1469,8 @@ def cmd_compare(a):
 # install-k/install-u), so the spend ceiling holds even if the sampler is
 # never installed or is removed mid-run.
 # `-` prefixes mean a failure sampling one track does not suppress the other.
+# Track U passes --skip-surface: those harnesses produce no syzlang programs,
+# so there is no surface to measure and the run would only pay the unpack.
 SERVICE_UNIT = """[Unit]
 Description=gspwn coverage sampler ({run_id})
 
@@ -1002,7 +1479,7 @@ Type=oneshot
 {env}ExecStart=-/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
   --run-id {run_id} --url {url}
 ExecStart=-/usr/bin/python3 {root}/tools/coverage_ctl.py sample \\
-  --run-id {run_id} --track u
+  --run-id {run_id} --track u --skip-surface
 """
 TIMER_UNIT = """[Unit]
 Description=gspwn coverage sampler
@@ -1024,10 +1501,10 @@ def cmd_install_timer(a):
     if os.geteuid() != 0:
         sys.exit("install-timer must run as root")
     if a.run_id not in registered_runs(ps.load()):
-        sys.exit("run %s is not registered in %s — install the campaign "
-                 "first (campaign_ctl install-k/install-u registers it). A "
-                 "typo here would create a root-owned run dir the sampler "
-                 "then pads with empty rows." % (a.run_id, ps.STATE_PATH))
+        sys.exit("run %s is not registered in %s. Install the campaign first "
+                 "(campaign_ctl install-k/install-u registers it). A typo "
+                 "here would create a root-owned run dir the sampler then "
+                 "pads with empty rows." % (a.run_id, ps.STATE_PATH))
     os.makedirs(run_dir(a.run_id), exist_ok=True)
     # A run may keep its own pipeline.json via GSPWN_STATE; the
     # unattended sampler must validate and record against that same registry,
@@ -1060,6 +1537,19 @@ def cmd_remove_timer(a):
     return 0
 
 
+def _nonneg_int(value):
+    """argparse type for a count. A negative one slices from the end."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r is not an integer" % value)
+    if n < 0:
+        raise argparse.ArgumentTypeError(
+            "%d is negative; a negative count reads as a slice from the end "
+            "of the list and prints something nobody asked for" % n)
+    return n
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="coverage_ctl.py",
                                  description=__doc__.split("\n")[0])
@@ -1080,6 +1570,11 @@ def build_parser():
     p.add_argument("--track", choices=TRACKS, default="k")
     p.add_argument("--force", action="store_true",
                    help="sample even after the campaign window has elapsed")
+    p.add_argument("--skip-surface", dest="skip_surface", action="store_true",
+                   help="do not measure the surface column on this sample. "
+                        "It unpacks the run's corpus and rescans every "
+                        "program, which is not comparable in cost to the "
+                        "HTTP fetch the other columns come from")
     p.set_defaults(fn=cmd_sample)
 
     p = sub.add_parser("install-timer")
@@ -1100,7 +1595,7 @@ def build_parser():
     p = sub.add_parser("plateau")
     p.add_argument("--run-id", required=True)
     p.add_argument("--track", choices=TRACKS,
-                   help="one track; omit to combine both (the loop's view)")
+                   help="one track. Omit to combine both (the loop's view)")
     p.add_argument("--window-min", type=int,
                    default=loop_cfg["plateau_window_min"],
                    help="trailing window to measure growth over "
@@ -1109,9 +1604,9 @@ def build_parser():
                    default=loop_cfg["plateau_min_growth"],
                    help="fractional edge growth below which the run has "
                         "plateaued. Only used for runs whose source records "
-                        "no execution count; otherwise the verdict comes "
-                        "from the fitted discovery curve "
-                        "(default loop.plateau_min_growth)")
+                        "no execution count. Every other run takes its "
+                        "verdict from the fitted discovery curve (default "
+                        "loop.plateau_min_growth)")
     p.add_argument("--horizon-hours", dest="horizon_hours", type=float,
                    default=None,
                    help="how far ahead to extrapolate: the run has plateaued "
@@ -1119,6 +1614,30 @@ def build_parser():
                         "than coverage.plateau_new_edges new edges "
                         "(default coverage.horizon_hours)")
     p.set_defaults(fn=cmd_plateau)
+
+    p = sub.add_parser("completion")
+    p.add_argument("--run-id", dest="run_id", action="append",
+                   metavar="RUN_ID",
+                   help="measure the exercised set from this run's own "
+                        "corpus.db; repeatable, and the sets are unioned. "
+                        "Omit to read the seed bank")
+    p.add_argument("--corpus",
+                   help="a directory of programs to measure. The seed bank is "
+                        "not read (not combinable with --run-id)")
+    p.add_argument("--ledger", default=None,
+                   help="completion ledger path (default %s)"
+                        % ps.SURFACE_LEDGER_PATH)
+    p.add_argument("--top", type=_nonneg_int, default=40,
+                   help="how many unaddressed targets to list (0 lists none "
+                        "and reports the count)")
+    p.set_defaults(fn=cmd_completion)
+
+    p = sub.add_parser("migrate-csv",
+                       help="add the columns a run's CSV header lacks")
+    p.add_argument("--run-id", dest="run_id", required=True)
+    p.add_argument("--track", choices=TRACKS, default=None,
+                   help="omit to migrate both tracks")
+    p.set_defaults(fn=cmd_migrate_csv)
 
     p = sub.add_parser("gpu-health")
     p.set_defaults(fn=cmd_gpu_health)

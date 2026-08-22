@@ -1,0 +1,342 @@
+---
+title: RM control command surface
+description: "The command space behind the single RM control ioctl, enumerated from the NVOC export tables in the driver source: 1372 exported methods, the flags that decide who may call each one, and the parameter struct each one reads."
+---
+
+One ioctl carries the entire Resource Manager control interface.
+`NV_ESC_RM_CONTROL`, escape `0x2A` in
+`src/nvidia/arch/nvalloc/unix/include/nv_escape.h`, takes an
+`NVOS54_PARAMETERS` whose `cmd` field selects the operation and whose `params`
+pointer addresses a parameter struct whose layout depends on that command
+number. The dispatch table behind `cmd` is generated into the driver source,
+so the whole space can be read without a GPU attached.
+
+```mermaid
+flowchart TB
+  IOCTL["ioctl NV_ESC_RM_CONTROL 0x2A<br/>NVOS54_PARAMETERS: hClient, hObject, cmd, params"]
+  LOOK["Table lookup<br/>cmd matched against methodId in the<br/>target object's exported method table"]
+  COOKIE["serverControl_ValidateCookie<br/>flags, access rights, allowlist"]
+  PROLOG["resControl_Prologue"]
+  LOCAL["Local handler<br/>pFunc compiled into nvidia.ko"]
+  GSP["Physical RM<br/>on the GSP microcontroller"]
+
+  IOCTL --> LOOK
+  LOOK --> COOKIE
+  COOKIE --> PROLOG
+  PROLOG -->|NV_OK| LOCAL
+  PROLOG -->|NV_WARN_NOTHING_TO_DO| GSP
+```
+
+## Measurement
+
+Every number on this page comes from `open-gpu-kernel-modules` at
+`610.57.04`, commit `e4a5faa`, read by `tools/ctrl_surface.py`. The generated
+directory `src/nvidia/generated/` holds 268 C source files. 54 of them carry
+56 tables named `__nvoc_exported_method_def_<Class>`, holding 1372 entries.
+All 1372 parsed. Flag names come from
+`src/nvidia/inc/kernel/rmapi/control.h` and access-right names from
+`src/common/sdk/nvidia/inc/rs_access.h`, both read at run time, because both
+move between driver branches.
+
+## Export table entry
+
+NVOC emits one entry per exported control method. Each entry is self
+describing.
+
+| Field | Contents |
+| --- | --- |
+| `methodId` | The value `NVOS54_PARAMETERS.cmd` must carry |
+| `flags` | `RMCTRL_FLAGS_*` bitmask deciding privilege, locking, routing and caching |
+| `accessRight` | `NVBIT(RS_ACCESS_*)` mask the caller must hold on the target object |
+| `paramSize` | `sizeof` the parameter struct, or `0` for a method taking only the resource |
+| `pClassInfo` | The resource class the command is issued against |
+| `pFunc` | The handler, compiled to `NULL` when the command has no kernel-side implementation |
+| `func` | The handler's name as a string, present when `NV_PRINTF_STRINGS_ALLOWED` |
+
+The top 16 bits of `methodId` name the SDK interface the parameter struct
+belongs to. Command `0x20800102` is an `NV2080` command, and its struct is
+`NV2080_CTRL_GPU_GET_INFO_V2_PARAMS`.
+
+## Totals
+
+| Measure | Count |
+| --- | --- |
+| Exported control methods | 1372 |
+| Distinct command numbers | 1362 |
+| Command numbers exported by more than one class | 5 |
+| Owning resource classes | 56 |
+| SDK interface prefixes | 64 |
+| Distinct parameter structs | 1265 |
+| Methods with no parameter struct | 57 |
+
+The five shared command numbers are `0x00900101`, `0x00900103`,
+`0x00900105`, `0x00900107` and `0x0090010b`. Each is exported by
+`KernelChannel`, `KernelChannelGroupApi` and `KernelGraphicsContext`, so the
+handler reached depends on `hObject`, and the same `cmd` value runs three
+different functions.
+
+## Caller privilege
+
+`rmControlValidateClientPrivilegeAccess` and `serverControl_ValidateCookie`
+in `src/nvidia/src/kernel/rmapi/control.c` enforce four outcomes. Both
+`RMCTRL_FLAGS_NONE` and `RMCTRL_FLAGS_KERNEL_PRIVILEGED` are defined as zero,
+so a command carrying no privilege bit at all is kernel-only by default.
+
+| Class | Commands | Flag condition | Result for a userspace caller |
+| --- | --- | --- | --- |
+| Non-privileged | 767 | `NON_PRIVILEGED` (`0x8`) set, `PRIVILEGED` and `INTERNAL` clear | Executes at any privilege level |
+| Privileged | 250 | `PRIVILEGED` (`0x4`) set | `NV_ERR_INSUFFICIENT_PERMISSIONS` below `RS_PRIV_LEVEL_USER_ROOT` |
+| Kernel-only | 114 | None of `NON_PRIVILEGED`, `PRIVILEGED`, `INTERNAL` set | `NV_ERR_INSUFFICIENT_PERMISSIONS` below `RS_PRIV_LEVEL_KERNEL` |
+| Internal | 241 | `INTERNAL` (`0x80`) set | `NV_ERR_NOT_SUPPORTED` |
+
+The flags overlap, and the order of the tests decides the outcome.
+`INTERNAL` is tested first and rejects
+any caller whose `RmApi` instance left `bApiLockInternal` and
+`bGpuLockInternal` clear, which the ioctl path always does, so the 23
+commands carrying `INTERNAL` together with `NON_PRIVILEGED` are unreachable
+from userspace. `PRIVILEGED` is tested before the kernel-only default, so the
+one command carrying both `PRIVILEGED` and `INTERNAL` never reaches the
+privilege check at all.
+
+Three further gates narrow the non-privileged set.
+
+| Gate | Commands | Mechanism |
+| --- | --- | --- |
+| `RM_TEST_ONLY_CODE` | 17 (13 of them non-privileged) | `NV_ERR_TEST_ONLY_CODE_NOT_ENABLED` unless `PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE` is set |
+| `PRIVILEGED_IF_RS_ACCESS_DISABLED` | 3 | `PRIVILEGED` is added to the flags when `g_resServ.bRsAccessEnabled` is false |
+| `accessRight` non-zero | 5 | `rsAccessCheckRights` against the caller's rights on the target object, when access rights are enabled |
+
+All five commands with a non-zero `accessRight` require `RS_ACCESS_NICE`, and
+all five govern scheduling priority: `subdeviceCtrlCmdFifoRunlistSetSchedPolicy`,
+`kchangrpapiCtrlCmdSetInterleaveLevel`, `kchangrpapiCtrlCmdMakeRealtime`,
+`kchannelCtrlCmdSetInterleaveLevel` and `kchannelCtrlCmdRestartRunlist`.
+Three of them also carry `PRIVILEGED_IF_RS_ACCESS_DISABLED`, so the same
+command demands root on a build with access rights compiled out.
+
+Of the 23 flag bits `control.h` defines, 22 appear on at least one exported
+method. `RMCTRL_FLAGS_ALL_CLIENT_LOCK` (`0x200000`) appears on none.
+
+## Kernel-side implementation
+
+`NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG` compiles `pFunc` to `NULL` when a
+command carries `ROUTE_TO_PHYSICAL` without
+`PHYSICAL_IMPLEMENTED_ON_VGPU_GUEST`. 753 commands carry
+`ROUTE_TO_PHYSICAL`, and 679 of them have no handler in this tree. For those,
+`resControl_Prologue` returns `NV_WARN_NOTHING_TO_DO` and the parameter
+buffer is serialised across the RPC queue to the GSP, where the
+implementation lives in signed firmware.
+
+| Set | Total | Handler in `nvidia.ko` | Forwarded to the GSP |
+| --- | --- | --- | --- |
+| All exported methods | 1372 | 693 | 679 |
+| Non-privileged | 767 | 531 | 236 |
+
+## Reaching the 531
+
+A command is issued against an object, so the owning class has to exist before
+the command can be sent. `tools/object_graph.py chains` walks the `RS_ENTRY`
+parent table with the privileged edges removed and records one allocation chain
+per owning class in `surface/rm-chains.json`. Three counts fall out
+and none of them replaces another.
+
+| Count | Meaning | Absent from the next count down |
+| --- | --- | --- |
+| 531 | Naming an owning class in the export tables | |
+| 516 | Whose owning class has an `RS_ENTRY` record in the object graph | `ProfilerBase` 9 and `Memory` 6, both NVOC base classes with no row |
+| 514 | With a chain an unprivileged process can build | `MmuFaultBuffer` 1 and `NvDispApi` 1, whose every external class carries `RS_FLAGS_ALLOC_PRIVILEGED` |
+
+`rm-control-rank.json` carries the same decomposition on each record. Its
+`no_chain_reason` field over the 531 reads 514 null, 15 `no RS_ENTRY row for
+this class` and 2 `every external class requires allocation privilege`.
+
+Chain length is the allocation cost of reaching a command, and it concentrates
+hard.
+
+| Chain length | Commands |
+| --- | --- |
+| 1 | 91 |
+| 2 | 92 |
+| 3 | 235 |
+| 4 | 95 |
+| 5 | 1 |
+| No chain | 17 |
+
+Every figure here is arithmetic over the `RS_ENTRY` table. No chain has been
+allocated against a GPU, and chip gating decides at run time which classes an
+installed part carries, so a chain the table permits is not yet a chain a part
+accepts.
+
+## Owning classes
+
+| Resource class | Commands | Non-privileged |
+| --- | --- | --- |
+| `Subdevice` | 641 | 289 |
+| `DispCommon` | 157 | 20 |
+| `RmClientResource` | 108 | 91 |
+| `Device` | 60 | 46 |
+| `KernelSMDebuggerSession` | 34 | 34 |
+| `ProfilerBase` | 34 | 28 |
+| `KernelChannel` | 32 | 26 |
+| `GSyncApi` | 29 | 19 |
+| `NvDispApi` | 27 | 16 |
+| `VgpuConfigApi` | 26 | 22 |
+| `DiagApi` | 19 | 17 |
+| `KernelChannelGroupApi` | 17 | 14 |
+| The remaining 44 classes | 188 | 145 |
+
+`Subdevice` holds 47 percent of the surface on its own, and a client reaches
+it immediately after allocating a root client and a device. The 44 classes in
+the tail hold 14 percent between them.
+
+## Interface prefixes
+
+| Prefix | Commands | Non-privileged | Owning class |
+| --- | --- | --- | --- |
+| `NV2080` | 641 | 289 | `Subdevice` |
+| `NV0073` | 157 | 20 | `DispCommon` |
+| `NV0000` | 108 | 91 | `RmClientResource` |
+| `NV0080` | 60 | 46 | `Device` |
+| `NV83DE` | 34 | 34 | `KernelSMDebuggerSession` |
+| `NVB0CC` | 34 | 28 | `ProfilerBase` |
+| `NV30F1` | 29 | 19 | `GSyncApi` |
+| `NVA081` | 26 | 22 | `VgpuConfigApi` |
+| `NV208F` | 19 | 17 | `DiagApi` |
+| `NV5070` | 18 | 10 | `NvDispApi` |
+| `NV0090` | 15 | 15 | `KernelChannel`, `KernelChannelGroupApi`, `KernelGraphicsContext` |
+| `NV0100` | 13 | 13 | `LockStressObject` |
+| The remaining 52 prefixes | 218 | 163 | Various |
+
+`NV0000` is the client-level interface, issued against the root client
+handle. It needs no device and no GPU state beyond an open
+`/dev/nvidiactl`, and 91 of its 108 commands are non-privileged.
+
+## Parameter struct families
+
+Command numbers and parameter structs share a prefix, so the interface table
+above also describes the struct families. Within `NV2080`, the largest
+interface, the second token of the struct name names the subsystem.
+
+| Subsystem | Commands | Non-privileged |
+| --- | --- | --- |
+| `INTERNAL` | 186 | 2 |
+| `GPU` | 94 | 77 |
+| `NVLINK` | 57 | 20 |
+| `GR` | 43 | 37 |
+| `FB` | 37 | 23 |
+| No parameter struct | 33 | 13 |
+| `BUS` | 31 | 26 |
+| `FIFO` | 23 | 14 |
+| `CE` | 16 | 4 |
+| `VGPU` | 15 | 0 |
+| `PERF` | 13 | 13 |
+| The remaining 27 subsystems | 93 | 60 |
+
+1265 distinct structs cover 1315 commands. 41 structs are shared by more than
+one command, covering 91 commands between them, and
+`NV0090_CTRL_TPC_PARTITION_MODE_PARAMS` is shared by six. The remaining 57
+commands have `paramSize` zero, meaning the handler takes only the resource
+pointer and the caller supplies no parameter buffer at all.
+
+## Non-privileged commands with kernel-side implementations
+
+531 commands are non-privileged and carry a handler compiled into `nvidia.ko`.
+`tools/ctrl_rank.py` ranks all 531 and writes
+`surface/rm-control-rank.json`, which is the ordering
+`syzlang_gen.py --max-control N` truncates and the ordering a chain-shaped seed
+program lays its commands out in.
+
+Three measurements separate the commands, and each is already on disk.
+
+| Component | Weight | Source | Normalisation |
+| --- | --- | --- | --- |
+| `depth` | 0.50 | `rm-chains.json` `chain_length` | `(max_chain_length - chain_length) / (max_chain_length - 1)`, and 0 for a command with no chain |
+| `cve` | 0.30 | `cve-hotspots.json` release counts per file and per function | `log2(releases + 1) / log2(max_releases + 1)`, a function-level match scaled by 1.5 |
+| `size` | 0.20 | `ctrl-param-sizes.json` | `log2(param_size + 1) / log2(max_param_size + 1)` |
+
+The parameter-size distribution is skewed hard, median 16 bytes against a
+maximum of 229392, so the logarithm keeps a handful of enormous diagnostic
+structs off the top of every campaign. Reachability is also the leading term of
+the sort key, so the 17 commands with no chain sort after every command that
+has one whatever their other components say. Ties break on `chain_length`, then
+`cve_releases` descending, then command number, so the ordering is stable
+across runs and across hosts.
+
+The head of the ordering reads as follows in the committed artefact.
+
+| Rank | Command | Class | Handler | Chain | `paramSize` | Score |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `0x00000b04` | `RmClientResource` | `cliresCtrlCmdGpuAcctGetAccountingPids` | 1 | 16012 | 0.884923 |
+| 2 | `0x0000012b` | `RmClientResource` | `cliresCtrlCmdSystemGetP2pCapsV2` | 1 | 8348 | 0.874370 |
+| 3 | `0x00000288` | `RmClientResource` | `cliresCtrlCmdGpuGetActiveDeviceIds` | 1 | 3076 | 0.858196 |
+| 4 | `0x00000a04` | `RmClientResource` | `cliresCtrlCmdSyncGpuBoostGroupInfo` | 1 | 2244 | 0.853088 |
+| 5 | `0x00003d0b` | `RmClientResource` | `cliresCtrlCmdOsUnixExportObjectsToFd` | 1 | 2128 | 0.852228 |
+| 6 | `0x0000013a` | `RmClientResource` | `cliresCtrlCmdSystemGetP2pCapsMatrix` | 1 | 1352 | 0.844883 |
+| 7 | `0x00000133` | `RmClientResource` | `cliresCtrlCmdSystemGetVgxSystemInfo` | 1 | 1288 | 0.844098 |
+| 8 | `0x0000013e` | `RmClientResource` | `cliresCtrlCmdSystemGetBuildVersionV2` | 1 | 1032 | 0.840511 |
+
+The head is entirely `RmClientResource` because `depth` outweighs the other
+two components and a client-level command costs one allocation. The tail is the
+17 with no chain, and the last three records are `Memory`, `MmuFaultBuffer` and
+`ProfilerBase`.
+
+| Reading over the 531 records | Count |
+| --- | --- |
+| Handler resolved to a hand-written definition under `src/` | 518 |
+| Handler in a file some CVE fix touched | 245 |
+| Handler matching a function some CVE fix changed | 11 |
+| Parameter size measured by compiling the headers | 513 |
+| No parameter struct | 18 |
+
+The weights are a judgement no measurement settles, so each record carries its
+`depth`, `cve` and `size` components beside the score and a consumer that
+disagrees re-sorts on the components. Whether this ordering reaches a bug
+sooner than an arbitrary one has not been measured, on this or any part.
+
+Parameter struct composition is a separate reading the ranking does not carry.
+An embedded `NvP64` makes the kernel perform a second copy from user memory
+after the ioctl layer has already copied the parameter struct in, and the
+bound on that second copy comes from a field of the first.
+`NV0000_CTRL_GPU_IDLE_CHANNELS_PARAMS`, behind `cliresCtrlCmdIdleChannels` at
+`0x00000283`, holds three such pointers, `phClients`, `phDevices` and
+`phChannels`, bounded by one caller-supplied `numChannels` count.
+
+## Export table against the SDK headers
+
+The headers under `src/common/sdk/nvidia/inc/ctrl/` are the published
+description of the command space. They do not agree with the export table.
+
+| Measure | Count |
+| --- | --- |
+| `*_CTRL_CMD_*` defines under `src/common/sdk/nvidia/inc/`, whose `ctrl/` subtree holds 203 headers | 2623 |
+| Distinct values behind those defines | 1787 |
+| Distinct command numbers in the export tables | 1362 |
+| Present in both | 1330 |
+| Declared in a header with no NVOC export in this tree | 457 |
+| Exported with no header name in this tree | 32 |
+
+The 836-define gap between 2623 and 1787 comes from aliases: legacy names,
+versioned names, and message-id companions pointing at one value. The 457
+header-declared numbers with no export belong to classes whose
+implementation is closed, absent from the open tree, or reached through a
+path other than the NVOC method tables.
+`subdeviceCtrlCmdGpuAcquireComputeModeReservation` at `0x20800145` is an
+example of the reverse case: the export table names it, the SDK headers
+mention it nowhere, and the command is non-privileged with no parameter
+struct.
+
+## Limits of a static enumeration
+
+| Limit | Effect on the counts above |
+| --- | --- |
+| `paramSize` is `sizeof` a fixed struct | Commands whose real payload is a variable-length array behind an embedded `NvP64` report the size of the descriptor, and the true input size is a run-time function of a count field |
+| `gpuValidateRmctrlCmd_HAL` allowlist | Dispatch consults a per-chip allowlist after the flag checks. A command classified non-privileged here can still return an error on a specific part |
+| `PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE` | The 17 test-only commands depend on a system property whose value is a run-time decision |
+| `g_resServ.bRsAccessEnabled` | Decides whether access rights are checked and whether `PRIVILEGED_IF_RS_ACCESS_DISABLED` promotes three commands to privileged |
+| Closed-source components | The tables describe the kernel module only. The 679 commands with no local handler are implemented in GSP firmware, which this enumeration cannot see into |
+| vGPU and hypervisor paths | `serverControl_ValidateVgpu` applies an entirely separate rule set when `hypervisorIsVgxHyper` holds, which no static read of the tables reproduces |
+
+## See also
+
+- [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/)
+- [GSP offload](/gspwn/knowledgebase/gsp-offload/)
+- [Partitioning modes](/gspwn/knowledgebase/partitioning/)

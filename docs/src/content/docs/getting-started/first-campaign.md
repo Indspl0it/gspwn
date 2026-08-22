@@ -146,30 +146,53 @@ gate needs four items:
 
 ### seeds
 
-Converts strace of a real CUDA workload into seed programs:
+Builds the seed bank from two sources. `convert` turns an strace of a real
+CUDA workload into seed programs:
 
 ```
 strace -v -f -P /dev/nvidiactl -P /dev/nvidia0 -P /dev/nvidia-uvm \
   -P /dev/nvidia-uvm-tools -o artifacts/seeds/trace.txt <workload>
-python3 tools/trace2seed.py --trace artifacts/seeds/trace.txt \
+python3 tools/trace2seed.py convert --trace artifacts/seeds/trace.txt \
   --out-dir artifacts/seeds/
 ```
 
 ```
-wrote artifacts/seeds/seed-0000.syz (37 mapped ioctls, 4 unmapped)
+wrote artifacts/seeds/seed-0000.syz (37 mapped ioctls, 4 unmapped, 12 multiplexer calls carrying no decodable command)
+the 12 multiplexer call(s) are control or allocation commands this trace cannot identify. Run `chains` for those.
 ```
 
-Read that ratio. Unmapped requests become comments, so a mostly-unmapped seed
-is an open/close chain that exercises nothing. Extend `tools/ioctl_map.json`
-and re-run.
+The three counts depend on the workload. No CUDA workload trace has been
+captured in this repository, so the numbers above are the shape of the line and
+not a measurement.
+
+Read the unmapped ratio. Unmapped requests become comments, so a
+mostly-unmapped seed is an open-and-close chain that exercises nothing.
+Extend `tools/ioctl_map.json` and re-run. The multiplexer count is never a
+map gap, because `strace` decodes no NVIDIA parameter struct and no trace names
+a control command.
+
+`chains` covers those commands from the allocation graph:
+
+```
+python3 tools/trace2seed.py chains --out-dir artifacts/seeds/
+```
+
+```
+wrote 44 chain-shaped program(s) to artifacts/seeds: 36 prologue(s) over 38 distinct chain(s), carrying 514 control command(s)
+531 control command(s) accounted for: 514 emitted, 0 dropped before emission, 17 with no chain
+```
+
+Four `no chain for <class>` lines sit between the two shown, one per owning
+class, each naming the command count and the reason. Those 17 commands belong
+in the completion ledger.
 
 ### harness
 
-Writes libFuzzer and AFL++ harnesses for Track U into `artifacts/harnesses/`,
+Writes libFuzzer and AFL++ harnesses for Track U into `harnesses/`,
 one directory per target, each with its source, a `seeds/` directory and a
-`build.sh`. It also writes `artifacts/harnesses/run_all.sh` and records each
+`build.sh`. It also writes `harnesses/run_all.sh` and records each
 harness's replay command, with `{input}` where the file path goes, in
-`artifacts/harnesses/TARGETS.md`. The `poc` phase passes that string to
+`harnesses/TARGETS.md`. The `poc` phase passes that string to
 `repro_ctl.py verify --cmd`, and without it a Track U crash cannot be scored.
 
 Each harness must write its fuzzer output under
@@ -370,12 +393,11 @@ run r1-1 track k: 141 samples over 23.5 h
   disk free: 412.6 GB -> 388.1 GB (low water 388.1 GB)
   edges: 18422 -> 41907 (+23485)
   corpus: 512 -> 4183
-  crashes: 0 -> 8
-  NOTE: kernel-side reachable coverage only; GSP firmware is not instrumented.
+  crashes: 0 -> 8  NOTE: kernel-side reachable coverage only. GSP firmware is not instrumented.
 ```
 
 `artifacts/eval/version-persistence.md` must exist. A recorded
-`skipped: <why>` counts; a missing file does not.
+`skipped: <why>` counts, and a missing file does not.
 
 ## 9. refine
 
@@ -389,7 +411,7 @@ python3 tools/coverage_ctl.py plateau --run-id r1-1
 
 ```
 r1-1: growing (k: growing (41907 distinct edges after 3.41e+09 executions; beta 0.412, R2 0.987 over 68 samples. At 1.45e+08 exec/h another 24 h is expected to find ~1180 new edge(s), 2.8% more (plateau below 50)); u: growing (...))
-Coverage is kernel-side reachable code only; GSP firmware is not instrumented, so no verdict here says anything about it.
+Coverage is kernel-side reachable code only. GSP firmware is not instrumented, so no verdict here says anything about it.
 ```
 
 Every gap is classified as `unmodeled`, `mismodeled`,
@@ -418,7 +440,7 @@ python3 tools/pipeline_ctl.py round-decide
 ```
 
 ```
-round 1: continue — coverage still growing after round 1
+round 1: continue (coverage still growing after round 1)
 next: pipeline_ctl.py round-advance
 ```
 
@@ -427,7 +449,7 @@ python3 tools/pipeline_ctl.py round-advance
 ```
 
 ```
-opened round 2; round phases reset to pending (setup and crash registry kept)
+opened round 2. Round phases reset to pending (setup and crash registry kept)
 ```
 
 Round 2 starts at `describe`, and `pipeline_ctl.py worklist` prints the path

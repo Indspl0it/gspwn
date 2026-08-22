@@ -159,5 +159,3 @@ WARN: 14.2 GB free, under loop.min_free_disk_gb (20 GB). ...
 
 - [Disk and crash logs](/gspwn/guides/disk-and-crash-logs/)
 - [Artifacts](/gspwn/reference/artifacts/)
-</content>
-</invoke>

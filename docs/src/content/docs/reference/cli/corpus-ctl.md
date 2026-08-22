@@ -124,5 +124,3 @@ carried corpus is preserved.
 ## See also
 
 - [Corpus and seeds](/gspwn/guides/corpus-and-seeds/)
-</content>
-</invoke>

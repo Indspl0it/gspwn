@@ -3,8 +3,10 @@
 
 Subcommands:
   extract <crash-id> [--force]  Track K: copy repro from the syz workdir ->
-                                artifacts/pocs/<id>/, generating repro.c via
-                                syz-prog2c when only repro.syz exists.
+                                artifacts/pocs/<id>/, taking repro.c from
+                                syzkaller's own repro.cprog when it has one
+                                and generating it with syz-prog2c from
+                                repro.prog otherwise.
                                 Track U: copy the registry crash input file ->
                                 artifacts/pocs/<id>/input (atomic; refuses to
                                 clobber different existing content without
@@ -90,6 +92,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import crash_parse
 import gspwn_config
 import pipeline_state as ps
 
@@ -206,28 +209,116 @@ def _generate_repro_c(syz, c_out):
         raise
 
 
+# The reproducer syzkaller writes into workdir/crashes/<hash>/.
+# pkg/manager/crash.go names it repro.prog. `repro.syz` is kept as a second
+# candidate for a directory assembled by hand or by syz-repro run directly,
+# which is the only way that name ever appears.
+SYZ_PROG_NAMES = ("repro.prog", "repro.syz")
+
+
+def _oldest_indexed(src, stem):
+    """<stem>0 in a syzkaller crash dir, or a bare <stem>, or None.
+
+    syzkaller indexes the per-sighting files (report0, log0, tag0,
+    machineInfo0) and writes no unsuffixed form. Index 0 is the lowest index
+    written, not necessarily the first sighting: once the directory holds
+    MaxCrashLogs entries syzkaller overwrites the oldest slot by modification
+    time. Nothing in the directory records which sighting `description` was
+    derived from, so index 0 is the only stable selection available. The bare
+    name is accepted after the numbered ones so a hand-assembled directory
+    resolves.
+    """
+    best = None
+    for p in glob.glob(os.path.join(src, stem + "*")):
+        if not os.path.isfile(p):
+            continue
+        suffix = os.path.basename(p)[len(stem):]
+        if suffix == "":
+            key = (1, 0)
+        elif suffix.isdigit():
+            key = (0, int(suffix))
+        else:
+            continue
+        if best is None or key < best[0]:
+            best = (key, p)
+    return best[1] if best else None
+
+
 def _extract_k(cid, c):
+    """Copy a syzkaller crash directory into artifacts/pocs/<cid>/.
+
+    The PoC directory normalises what it stores: the numbered report and log
+    land under `report` and `log`, which is where _report_texts looks for the
+    stack frames a crash signature is built from, and the reproducer program
+    lands under `repro.prog` whichever of the two source names it carried.
+    """
     src = c["dir"]
+    # scan_dmesg registers a harvested kernel report as track K with the log
+    # *file* it was read out of as `dir`. syz-manager never saw that crash, so
+    # there is no crash directory to extract and no reproducer to find; the
+    # generic "syz-manager found no reproducer" message below would blame the
+    # manager for a crash it was never shown.
+    if not os.path.isdir(src):
+        sys.exit("%s was harvested from the kernel log %s, not from a "
+                 "syzkaller crash directory, so there is nothing to extract "
+                 "and no reproducer exists. A log-harvested crash reaches a "
+                 "PoC only by writing one: build a reproducer by hand into "
+                 "artifacts/pocs/%s/repro.c, then run verify."
+                 % (cid, src, cid))
     dest = os.path.join(REPO_ROOT, "artifacts", "pocs", cid)
     os.makedirs(dest, exist_ok=True)
     copied = []
-    for name in ("repro.syz", "repro.cprog", "repro.c", "repro0", "report",
-                 "description", "log"):
+
+    def take(path, as_name):
+        # _atomic_copy and not shutil.copy: this pipeline panics the machine
+        # by design, and a panic during extract leaves a truncated repro.c or
+        # report behind. A truncated repro.c is non-empty, so the zero-byte
+        # check below passes it, _prepare_k compiles it, gcc fails, and the
+        # message sends the operator back to extract to copy the same
+        # truncated file again.
+        if not path or not os.path.isfile(path):
+            return
+        _atomic_copy(path, os.path.join(dest, as_name))
+        copied.append(as_name)
+
+    prog = None
+    for name in SYZ_PROG_NAMES:
         p = os.path.join(src, name)
-        if os.path.exists(p):
-            shutil.copy(p, dest)
-            copied.append(name)
-    syz = os.path.join(dest, "repro.syz")
+        if os.path.isfile(p):
+            prog = p
+            break
+    take(prog, "repro.prog")
+    for name in ("repro.cprog", "repro.report", "repro.log", "repro.stats",
+                 "repro.c", "description"):
+        take(os.path.join(src, name), name)
+    take(_oldest_indexed(src, "report"), "report")
+    take(_oldest_indexed(src, "log"), "log")
+
+    prog_out = os.path.join(dest, "repro.prog")
+    cprog_out = os.path.join(dest, "repro.cprog")
     c_out = os.path.join(dest, "repro.c")
     # A zero-byte repro.c is the residue of a failed syz-prog2c, not a real
     # artifact: treat it as missing and regenerate.
     stale = os.path.exists(c_out) and os.path.getsize(c_out) == 0
-    if os.path.exists(syz) and (not os.path.exists(c_out) or stale):
+    if not os.path.exists(c_out) or stale:
         if stale:
             print("existing repro.c is empty (a failed syz-prog2c left a "
                   "stub) — regenerating")
-        _generate_repro_c(syz, c_out)
-        copied.append("repro.c (generated)")
+        if os.path.isfile(cprog_out) and os.path.getsize(cprog_out) > 0:
+            # syz-manager already translated this program and reproduced the
+            # crash with the result on the machine that faulted. That C file
+            # is better evidence than a fresh translation of the same program
+            # by a possibly different syz-prog2c build.
+            _atomic_copy(cprog_out, c_out)
+            copied.append("repro.c (from repro.cprog)")
+        elif os.path.isfile(prog_out) and os.path.getsize(prog_out) > 0:
+            _generate_repro_c(prog_out, c_out)
+            copied.append("repro.c (generated)")
+        else:
+            print("WARN: %s holds neither a reproducer program nor a "
+                  "non-empty repro.cprog — syz-manager found no reproducer "
+                  "for this crash, so no repro.c can be built and `verify` "
+                  "has nothing to run." % src)
     print("extracted to %s: %s" % (dest, ", ".join(copied) or "NOTHING"))
 
 
@@ -258,6 +349,15 @@ def cmd_extract(cid, force=False, track=None):
     if _check_track(c, cid, track) == "U":
         _extract_u(cid, c, force)
     else:
+        if force:
+            # Track K extraction has nothing to clobber: it regenerates
+            # repro.c whenever syz-prog2c has something better to say and
+            # copies everything else unconditionally. Accepting the flag
+            # silently reads as "the overwrite was authorised".
+            print("WARN: --force applies to track U extraction, which refuses "
+                  "to overwrite a differing input file. %s is track K and "
+                  "extract already refreshes every artefact it copies, so "
+                  "the flag changed nothing." % cid)
         _extract_k(cid, c)
 
 
@@ -313,14 +413,25 @@ def dmesg_delta(before, after):
 def _report_texts(c, cid):
     """Report/dmesg text registered for this crash, when available: the
     extracted PoC copy first, then the syz crash dir, then the registry
-    path itself (a file for dmesg-harvested and Track U entries)."""
+    path itself (a file for dmesg-harvested and Track U entries).
+
+    The PoC directory holds `report` and `log`, because _extract_k normalises
+    the names on the way in. The syzkaller crash directory does not: its
+    per-sighting files are report<N> and log<N>, and joining the bare names
+    there opened two paths that never exist and were swallowed by the OSError
+    handler below, leaving a signature built from title tokens alone. A Track
+    U entry names the crash input, whose sanitizer output sits beside it under
+    crash_parse.REPORT_SUFFIX.
+    """
     texts = []
     dest = os.path.join(REPO_ROOT, "artifacts", "pocs", cid)
     candidates = [os.path.join(dest, "report"), os.path.join(dest, "log")]
     d = c.get("dir") or ""
     if os.path.isdir(d):
-        candidates += [os.path.join(d, "report"), os.path.join(d, "log")]
+        candidates += [p for p in (_oldest_indexed(d, "report"),
+                                   _oldest_indexed(d, "log")) if p]
     elif os.path.isfile(d):
+        candidates.append(d + crash_parse.REPORT_SUFFIX)
         candidates.append(d)
     for p in candidates:
         try:

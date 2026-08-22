@@ -21,7 +21,7 @@ single locked read-modify-write on the state file. Root is never required.
 |---|---|---|---|
 | `--run-id` | `ID` | The last run registered in the current round | Scan `artifacts/runs/<id>/workdir` |
 | `--syz-workdir` | `PATH` | None | An explicit workdir path, overriding `--run-id` |
-| `--track-u-dir` | `PATH` | `artifacts/harnesses/crashes` | Track U crash directory |
+| `--track-u-dir` | `PATH` | `artifacts/u-crashes` | Track U crash directory |
 | `--dmesg` | `PATH` | None | A kernel log file to scan |
 
 Always pass `--run-id`. The default is wrong in a round with several campaigns,
@@ -31,18 +31,40 @@ and the tool warns only when no run is registered at all.
 
 | Source | Title | Stack hash |
 |---|---|---|
-| syzkaller workdir | The crash directory's `description` file | The `report` file's top frames |
-| Track U crash directory | The file's sanitizer signature | The file's top frames |
+| syzkaller workdir | The crash directory's `description` file | The `report` file's top frames, and the `log` file where no report exists |
+| Track U crash directory | The input's own sanitizer signature, else the signature in its `.sanlog` replay report | The same text's top frames |
 | Kernel log, NVRM lines | `NVRM ` plus the normalised Xid text | SHA-1 of that text |
 | Kernel log, report blocks | The report-start line | The block's top frames, or the frameless signature |
 
-| Condition | Result |
-|---|---|
-| A Track U file carries no sanitizer signature | Skipped. Logs, manifests and READMEs in a crash directory would otherwise become phantom unique crashes |
+## Track U pairing
+
+The Track U scan walks four levels below the crash root, which covers
+`<harness>/<input>`, `<harness>/crashes/<input>` and
+`<harness>/default/crashes/<input>`. `README` and `README.txt` are excluded, so
+neither produces a warning.
+
+`harnesses/replay_crashes.sh` replays each input under its harness
+and writes the sanitizer output to `<input>.sanlog`. Registration reads that
+report and records the input path.
+
+| File | Registered as | Reason |
+|---|---|---|
+| Carries a sanitizer signature itself | Itself | A hand-copied sanitizer log |
+| No signature, `.sanlog` sibling with one | The input path, title and frames from the report | The normal case |
+| No signature, `.sanlog` sibling without one | Nothing, warned | The input did not crash this build |
+| No signature, no sibling | Nothing, warned, naming the replay script | Not yet replayed |
+| A `.sanlog` whose input is gone | Itself | Losing the finding is worse than a path `verify` cannot replay |
 
 ```
-WARN: artifacts/harnesses/crashes/README carries no sanitizer signature — skipped, not registered
+WARN: artifacts/u-crashes/fuzz_dsl_evaluate/id:000000,sig:06,src:000000 is a fuzzer crash input and no .sanlog report sits beside it — skipped, not registered. Replay it with harnesses/replay_crashes.sh, which run_all.sh runs at harvest.
 ```
+
+The summary warning for a populated directory that registered nothing breaks
+the files down into the ones with no replay report and the ones that were
+replayed and did not crash. It no longer advises checking that the harnesses
+were built with a sanitizer: `harnesses/common/build_common.sh`
+compiles every harness `-fsanitize=address,undefined` in both build modes, so
+that was never the cause.
 
 ## Output lines
 
@@ -147,11 +169,10 @@ when they have moved underneath the stored hashes.
 |---|---|
 | `state/pipeline.json` | The crash registry this tool writes |
 | `artifacts/runs/<id>/workdir` | The syzkaller crash directories |
-| `artifacts/harnesses/crashes` | The Track U crash inputs |
+| `artifacts/u-crashes` | The Track U crash inputs and, beside each one, its `.sanlog` replay report |
 
 ## See also
 
+- [replay_crashes.sh](/gspwn/reference/cli/replay-crashes/)
 - [Crash identity](/gspwn/architecture/crash-identity/)
 - [Results and triage](/gspwn/guides/results-and-triage/)
-</content>
-</invoke>

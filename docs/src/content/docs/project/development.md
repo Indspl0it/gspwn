@@ -5,13 +5,14 @@ description: The local checks, the Windows path through WSL, and the CI steps.
 
 Every check runs offline: no GPU, no kernel build, no root, no network.
 
-## The five checks
+## The six checks
 
 ```
 python3 tools/selftest.py
 python3 -m pyflakes tools/*.py
 bash -n tools/build_kernel.sh
 python3 tools/gspwn_config.py
+python3 tools/regression_check.py all
 python3 tools/register_check.py
 ```
 
@@ -21,7 +22,11 @@ python3 tools/register_check.py
 | `pyflakes` | Undefined names, bad imports, unused imports left by a deletion | No output, exit status 0 |
 | `bash -n` | Syntax errors in the build script, which has no offline test | No output, exit status 0 |
 | `gspwn_config.py` | A shipped configuration that no longer validates | The effective configuration and the stopping rules, exit status 0 |
+| `regression_check.py` | Two committed artefacts that have to agree and no longer do, and a generated reference page that no longer follows from them | Five sections, each ending `OK`, exit status 0 |
 | `register_check.py` | Documentation prose that breaks the writing register | A file and hit count, exit status 0 |
+
+`regression_check.py` and `register_check.py` read committed files only, so
+both run on a workstation with no GPU and no kernel.
 
 `AGENTS.md` requires the first of these after any change to the tools, before
 their output is trusted.
@@ -41,7 +46,10 @@ python3 -m pip install pyyaml pyflakes
 ## The prompt-consistency check
 
 CI parses `tools/<x>.py <subcommand> --flag` out of the prose files and
-verifies each against the tool's real `--help` output.
+verifies each against the tool's real `--help` output. The subcommand is
+optional in the pattern, so an invocation whose first argument is a flag is
+read along with its flags. Such an invocation is also reported when the tool's
+own `--help` exposes a required subcommand list, because it would run nothing.
 
 | Scanned | Contents |
 |---|---|
@@ -55,7 +63,8 @@ time on the machine under test, part-way through a campaign. A command example
 in the documentation that names a flag no longer accepted fails the build.
 
 ```
-checked 42 subcommands, 84 flag uses
+scanning 142 prompt/doc file(s)
+checked 79 subcommands, 15 bare invocation(s) with flags, 272 flag uses
 ```
 
 ## The writing-register check
@@ -73,7 +82,7 @@ constructions the writing register bans.
 | Register tells | Second person, filler openers, copula avoidance, marketing adjectives |
 | Meta-commentary | `it is worth noting`, `as discussed above`, `this page covers` |
 | Narrative framing | `the usual surprise`, `turns out`, `is the one that`, `means something other than` |
-| Cleft construction | `its envelope is what puts the parts on a module`, `the stream is how a device is reported` |
+| Cleft construction | `its envelope is what puts the parts on a module`, `the stream is how a device is reported`, ``the rule is the one `x` is computed with`` |
 | Named Claudism | `load-bearing`, `full stop`, `the trap is`, `quietly`, `X matters more` |
 
 The last category holds phrases catalogued from community review of the model
@@ -105,29 +114,52 @@ Every specimen is real, taken from a page that passed the check. A clean run
 means the mechanical categories are clear and nothing more. The structural
 rules still require a read.
 
+Every pattern matches across a line wrap. The prose wraps at 80 columns, so a
+construction whose two halves land on consecutive lines carries a newline where
+the pattern carries a space. Every literal space in every pattern compiles to
+`WRAP`, which spans one line break and the blockquote or list indent that
+follows it, and no more, so a paragraph boundary still separates two sentences.
+Rewriting the pattern preserves the reported line number, which stays the line
+the construction starts on. Four cleft constructions survived the tree until
+this landed.
+
 Code is skipped: fenced blocks, inline code spans, and the style and script
 blocks in a component. Everything in a code span is a reproduction, so a
 message the tool prints keeps whatever wording the tool uses. Skipped regions
-are blanked in place so the reported line numbers still match the file.
+are replaced in place so the reported line numbers still match the file, and
+the two kinds of region are filled differently. A multi-line region becomes
+spaces. An inline code span becomes `CODE_SPAN`, which is `\x01`.
+
+The cleft category reads that fill. A cleft is often completed by an
+identifier, as in ``the grouping rule is the one `cumulative_reach` is
+computed with``, where the relative pronoun that would give the shape away is
+absent, so the category treats the code span as that identifier. `\x01` is not
+a word character, so every `\b`-anchored pattern reads it as a boundary exactly
+as it read a space, and it is not whitespace, so the cleft pattern tells it
+from a wrap. Filling both with spaces reported a false positive on a determiner
+wrapping into an indented list continuation. The determiner sense of the same
+words, `reset is the one command allowed to start over`, still passes on one
+line, across a wrap, and wrapped into a list indent.
 
 A banned construction inside quoted tool output is a defect in the tool. Editing
 the page there would make the documentation disagree with what the program
 prints.
 
 Exemptions are listed in `EXEMPT` at the top of the tool, each with its reason.
-An exemption names a file and one category, so the rest of the categories still
-apply to that file.
+An exemption names a file and the categories it covers, and every category it
+does not name still applies to that file.
 
 | Exempt | Category | Reason |
 |---|---|---|
-| `project/faq.md` | All | A question-and-answer page. Questions are its structure. |
+| `project/faq.md` | Question heading, question column | A question-and-answer page. Questions are its structure. Every other category applies |
 | `project/changelog.md` | Contrastive | Entries quote commit subjects as running text |
 | `components/ThemeProvider.astro` | Contrastive | A source comment, not prose for a reader |
 | `knowledgebase/gsp-offload.mdx` | Marketing adjective | `robust channel` is NVIDIA's name for the mechanism |
 | `knowledgebase/scheduling.mdx` | Marketing adjective | The same term |
+| `knowledgebase/prior-vulnerabilities.mdx` | Curly quote | The CVE tables reproduce NVIDIA's bulletin sentences, one of which contains a curly apostrophe |
 
 ```
-register_check: 116 file(s), 0 hit(s)
+register_check: 140 file(s), 0 hit(s)
 ```
 
 ## Working on Windows
@@ -225,7 +257,17 @@ request:
 | Shell syntax | `bash -n tools/build_kernel.sh` |
 | Documentation writing register | `python3 tools/register_check.py` |
 | Configuration | `python3 tools/gspwn_config.py` |
+| Committed names resolve to a description | `python3 tools/regression_check.py names` |
+| Emitted selectors are pinned | `python3 tools/regression_check.py pins` |
+| Descriptions cover the whole denominator | `python3 tools/regression_check.py coverage` |
+| Derived artefacts still match the control inventory | `python3 tools/regression_check.py derived` |
+| Generated reference pages still match the artefacts | `python3 tools/regression_check.py pages` |
 | Prompt consistency | The `--help` cross-check above |
+
+The five `regression_check.py` steps run separately and not as `all`, so a
+failure names the comparison that broke in the step title. They run in
+`CHECK_ORDER`, which `all` also uses, so a local `all` and the CI steps report
+in the same sequence.
 
 `.github/workflows/docs.yml` builds the site on every pull request that touches
 `docs/`, and deploys it to GitHub Pages on a push to `main`.

@@ -35,6 +35,7 @@ One card divided between processes and tenants.
 | Page | Contents | Status |
 | --- | --- | --- |
 | [Container admission path](/gspwn/knowledgebase/container-admission/) | Image to runtime to hook to injected mounts, with the privilege level of each stage | Built |
+| [Container device access](/gspwn/knowledgebase/container-device-access/) | Capability values and environment variables against the device nodes each grants, for both injection mechanisms | Built |
 | [Orchestration](/gspwn/knowledgebase/orchestration/) | The device plugin protocol and the GPU Operator components on one node | Built |
 | [Partitioning modes](/gspwn/knowledgebase/partitioning/) | Passthrough, time-slicing, MPS, MIG and vGPU, with the isolation line drawn in each | Built |
 
@@ -56,6 +57,7 @@ That work crossing into the kernel.
 | --- | --- | --- |
 | [API split and contexts](/gspwn/knowledgebase/api-split/) | One call descending from the runtime to the driver API to the ioctl | Built |
 | [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/) | The handle hierarchy, the class number space, and the ioctl families that act on it | Built |
+| [RM control command surface](/gspwn/knowledgebase/rm-control-surface/) | The 1372 control commands behind one ioctl, their privilege classes and parameter structs | Built |
 | [UVM subsystem](/gspwn/knowledgebase/uvm/) | The fault path: touch, fault, migrate, replay | Built |
 | [GSP offload](/gspwn/knowledgebase/gsp-offload/) | The split between kernel-side and firmware-side RM, and the RPC queue between them | Built |
 
@@ -75,6 +77,15 @@ The hardware executing the work once it arrives.
 | Page | Contents | Status |
 | --- | --- | --- |
 | [Boot and firmware chain](/gspwn/knowledgebase/boot-firmware/) | VBIOS, the microcontrollers, signature gates, and the point at which the GSP is running | Built |
+
+## Tier 7, disclosure history
+
+What has already been found in the stack, and by whom.
+
+| Page | Contents | Status |
+| --- | --- | --- |
+| [Prior vulnerabilities](/gspwn/knowledgebase/prior-vulnerabilities/) | Every disclosed GPU driver and Container Toolkit CVE from 2018, classified by the layer NVIDIA names, with the seven that carry public technical detail and the published work on fuzzing this surface | Built |
+| [Container stack fixes](/gspwn/knowledgebase/container-stack-fixes/) | The commits behind those Container Toolkit disclosures, mapped through the submodule pin each toolkit release carries, with the evidence for each mapping and the three disclosures no commit could be tied to | Built |
 
 ## Sourcing
 

@@ -157,7 +157,7 @@ python3 tools/coverage_ctl.py gpu-health
 
 ```
 GPU: dead (nvidia-smi exit 255: Unable to determine the device handle for GPU 0000:00:1E.0: Unknown Error)
-A plateau verdict will read 'unknown' while the GPU is in this state, so the loop stops rather than recording a plateau the fuzzer did not actually reach.
+A plateau verdict will read 'unknown' while the GPU is in this state, so the loop stops without recording a plateau the fuzzer did not actually reach.
 ```
 
 The recovery ladder, in order:

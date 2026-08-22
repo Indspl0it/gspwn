@@ -15,7 +15,8 @@ The campaign models one attacker per track.
 | Confinement in force | Linux capabilities dropped to the container runtime's default set, the runtime's seccomp profile, the device cgroup allowlist | None at the time the code runs |
 | Capability request | `NVIDIA_DRIVER_CAPABILITIES=compute,utility`, which CUDA images request | Not applicable |
 | Device nodes received | `/dev/nvidiactl`, `/dev/nvidiaX`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` | Not applicable |
-| Device nodes withheld | `/dev/nvidia-modeset`, `/dev/dri/*` | Not applicable |
+| Device nodes received conditionally | `/dev/nvidia-nvswitchctl` and `/dev/nvidia-nvswitch*`, when the image sets `NVIDIA_NVSWITCH=enabled` | Not applicable |
+| Device nodes withheld | `/dev/nvidia-modeset`, `/dev/dri/*`, `/dev/nvidia-nvlink` | Not applicable |
 | Primary target | The NVIDIA GPU kernel driver ioctl surface | `libnvidia-container`, written in C. The memory-safety surface |
 | Secondary target | None | `nvidia-container-toolkit`, written in Go. Panic and denial-of-service surface only |
 | Trust boundary crossed | Container to host kernel | Untrusted image input to a host root process |
@@ -27,15 +28,47 @@ a default tenant requests neither. An ioctl surface reachable only through those
 nodes lies outside the Track K attacker's reach, and a crash found there cannot
 be claimed under the model.
 
+Device nodes are one gate of two, and the second is the allocation privilege
+flag the driver attaches to each object class. A class carrying
+`RS_FLAGS_ALLOC_PRIVILEGED` is out of reach even where the tenant holds the
+device node, and a class carrying `RS_FLAGS_ALLOC_NON_PRIVILEGED` is in reach
+even where its subsystem sounds excluded. The
+[attack surface](/gspwn/architecture/attack-surface/) page holds the
+measurement behind both statements.
+
 Go is memory-safe. A finding against `nvidia-container-toolkit` supports a
 denial-of-service claim and no memory-corruption claim. The `harness` sub-agent
 prompt forbids one.
+
+## Surfaces inside the model that the node list does not name
+
+A device-node list understates what the Track K attacker reaches. Four surfaces
+sit inside the model and are named here so a phase does not have to rediscover
+them.
+
+| Surface | Reached by | Status |
+|---|---|---|
+| `NV04_DISPLAY_COMMON`, class 0x0073, and 20 non-privileged `NV0073` control commands | `NV_ESC_RM_ALLOC` on `/dev/nvidiactl` under `NV01_DEVICE_0`. No display node takes part | In scope. 4 of the 20 have a kernel-side handler |
+| `/dev/nvidia-nvswitchctl` and `/dev/nvidia-nvswitch*` | `NVIDIA_NVSWITCH=enabled` in the image environment, honoured for unprivileged containers by default | In scope where the deployment leaves the default. Neither node checks privilege on open |
+| `/var/run/nvidia-persistenced/socket` and `/var/run/nvidia-fabricmanager/socket` | Granted by the `utility` capability, which a default tenant requests | In scope as a boundary. Both speak to host root processes |
+| Host-side `mknod` driven by `NVIDIA_IMEX_CHANNELS` | The image environment, read by `libnvidia-container` running as root | Track U surface. Not an ioctl target |
+
+The display exclusion rests on the privilege flag as well as the node list.
+`NVC570_DISPLAY` and all 38 classes below it carry
+`RS_FLAGS_ALLOC_PRIVILEGED`, so the display channel tree is closed to the
+tenant whether or not a display node is present. `NV04_DISPLAY_COMMON` carries
+`RS_FLAGS_ALLOC_NON_PRIVILEGED` and is therefore inside the model.
+
+`/dev/nvidia-nvlink` is outside the model. The container toolkit never injects
+it, and it appears there only inside `blockedPrefixes`.
 
 ## Scope exclusions
 
 | Excluded | Reason |
 |---|---|
 | `nvidia-modeset` and `/dev/dri/*` | A default tenant never receives those nodes |
+| `/dev/nvidia-nvlink` | The container toolkit never injects it. It appears there only inside `blockedPrefixes` |
+| The display channel class tree below `NVC570_DISPLAY` | All 38 classes carry `RS_FLAGS_ALLOC_PRIVILEGED`, so the tenant cannot allocate them |
 | Symlink TOCTOU and mount-escape logic bugs on Track U | Fuzzing finds them poorly. Recorded in the report as future work |
 | Memory-corruption claims against the Go toolkit | Go is memory-safe |
 | GSP firmware | Not instrumented. KCOV cannot see it, and no coverage number says anything about it |
@@ -89,7 +122,10 @@ docker run --rm --gpus all \
 
 1. Confirm what that container received. Run `ls /dev/nvidia*` inside it. If
    `/dev/dri` is present, the capability set is wider than the model and the run
-   does not establish tenant reachability.
+   does not establish tenant reachability. If `/dev/nvidia-nvswitch*` is
+   present, record it: those nodes are conditional on `NVIDIA_NVSWITCH`, and a
+   finding reached through them carries that condition in its impact
+   statement.
 2. Record one of the three outcomes below in the PoC README.
 
 | Outcome | Condition | Permitted report statement |

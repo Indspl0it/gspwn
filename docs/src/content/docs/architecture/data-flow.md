@@ -16,12 +16,13 @@ path from a raw log to a disclosure package.
 | Source | Path | Produced by | Read by |
 |---|---|---|---|
 | syzkaller workdir | `workdir/crashes/<hash>/` | syz-manager | `crash_parse.py`, `repro_ctl.py extract` |
-| Track U harness output | `artifacts/harnesses/crashes/` | The libFuzzer and AFL++ targets | `crash_parse.py` |
+| Track U harness output | `artifacts/u-crashes/` | The libFuzzer and AFL++ targets | `crash_parse.py` |
 | pstore | `/sys/fs/pstore` | The kernel, on panic | `crashlog_ctl.py harvest` |
 | kdump | `/var/crash` | The crash kernel | `crashlog_ctl.py harvest` |
 | EC2 serial console | `ec2:GetConsoleOutput` | The hypervisor | `crashlog_ctl.py harvest`, on EC2 only |
 | syz-manager stats | `track_k.http` `/stats` | syz-manager | `coverage_ctl.py sample` |
 | AFL++ `fuzzer_stats` | `artifacts/runs/<id>/u/<harness>/` | AFL++ | `coverage_ctl.py sample --track u` |
+| syzkaller corpus | `workdir/corpus.db` | syz-manager | `surface_cov.py --run-id`, through `coverage_ctl.py sample` |
 
 ## The whole path
 
@@ -29,12 +30,13 @@ path from a raw log to a disclosure package.
 flowchart LR
   subgraph SRC["Sources"]
     SW["syz workdir<br/>crashes/&lt;hash&gt;/"]
-    UD["artifacts/harnesses/crashes/"]
+    UD["artifacts/u-crashes/"]
     PS["/sys/fs/pstore"]
     KD["/var/crash"]
     CO["EC2 console output"]
     ST["syz-manager /stats"]
     FS["AFL++ fuzzer_stats"]
+    CD["syz workdir/corpus.db"]
   end
 
   PS --> HV["crashlog_ctl.py harvest"]
@@ -62,12 +64,17 @@ flowchart LR
 
   ST --> SMP["coverage_ctl.py sample"]
   FS --> SMP
-  SMP --> CSV["artifacts/runs/&lt;id&gt;/coverage.csv"]
-  CSV --> SER["series, plateau"]
+  CD --> SC["surface_cov.py --run-id"]
+  SC --> SMP
+  SMP --> CSV["artifacts/runs/&lt;id&gt;/coverage.csv<br/>edges and surface columns"]
+  CSV --> SER["series, plateau, completion"]
   SER --> EVAL["artifacts/eval/"]
   CSV --> RE["round-end --from-run"]
   RE --> RND[("round record")]
   RE --> SPEND[("state/spend.json")]
+  RF --> SA["pipeline_ctl.py surface-account"]
+  SA --> LED["surface/completion-ledger.json"]
+  LED --> RE
 
   FIND --> RF["refine"]
   SER --> RF
@@ -102,8 +109,8 @@ pstore record is unlinked after it is copied.
 
 | Producer | Artifact | Consumer | Lifetime |
 |---|---|---|---|
-| `crash_parse.py --run-id` reading `workdir/crashes/<hash>/description` and `report` | A registry entry | The `triage` sub-agent | The campaign |
-| The same call, reading `artifacts/harnesses/crashes/*` | A registry entry | The same | The campaign |
+| `crash_parse.py --run-id` reading `workdir/crashes/<hash>/description` and the lowest-numbered `report<N>` | A registry entry | The `triage` sub-agent | The campaign |
+| The same call, reading `artifacts/u-crashes/*` | A registry entry | The same | The campaign |
 | `crash_parse.py --dmesg` reading a harvested dmesg, kdump or console log | A registry entry | The same | The campaign |
 
 Entries are deduplicated on the canonicalised title and a stack hash, so the
@@ -123,7 +130,8 @@ same panic in two sources becomes one finding with both sources linked. See
 
 | Producer | Artifact | Consumer | Lifetime |
 |---|---|---|---|
-| `repro_ctl.py extract` through `syz-prog2c` | `artifacts/pocs/<id>/repro.c` | `repro_ctl.py verify`, the `poc` sub-agent | The campaign |
+| `repro_ctl.py extract` copying the crash directory | `artifacts/pocs/<id>/repro.prog`, `report`, `log` | `repro_ctl.py verify`, the `poc` sub-agent | The campaign |
+| The same, through `syz-prog2c` | `artifacts/pocs/<id>/repro.c` | The same | The campaign |
 | The same, on a Track U crash input | `artifacts/pocs/<id>/input` | The same | The campaign |
 | `repro_ctl.py verify` | `crash.repro_rate`, `crash.status` | The `report` sub-agent | The campaign |
 | The `poc` sub-agent, running a container matching the threat model | The profile-check outcome in the PoC README | The `report` sub-agent | The campaign |
@@ -132,8 +140,9 @@ same panic in two sources becomes one finding with both sources linked. See
 
 | Producer | Artifact | Consumer | Lifetime |
 |---|---|---|---|
-| `coverage_ctl.py sample` | One row in `artifacts/runs/<id>/coverage.csv` | `series`, `plateau`, `round-end` | The campaign |
-| The same, `--track u` | One row in `coverage-u.csv` | The same | The campaign |
+| `coverage_ctl.py sample` | One row in `artifacts/runs/<id>/coverage.csv`, carrying the edge count and the surface count | `series`, `plateau`, `completion`, `round-end` | The campaign |
+| The same, `--track u --skip-surface` | One row in `coverage-u.csv`, with an empty `surface` column | The same | The campaign |
+| `pipeline_ctl.py surface-account` | `surface/completion-ledger.json` | `coverage_ctl.py completion`, `round-end`, `round-decide` | The machine, versioned by driver release |
 | `pipeline_ctl.py round-end --from-run` | The round record's verdict, edges and hours | `round-decide`, the `eval` sub-agent | The campaign |
 | The same, and `campaign_ctl.py` | `state/spend.json` | `check_budget()`, `loop_decision()` | The machine |
 
@@ -146,6 +155,7 @@ same panic in two sources becomes one finding with both sources linked. See
 | `pipeline_ctl.py round-end --worklist` | `round.worklist` | `round-advance` | The campaign |
 | `pipeline_ctl.py round-advance` | The next round's `round.worklist_in` | `pipeline_ctl.py worklist` | The next round |
 | `pipeline_ctl.py worklist` | The work items | The next round's `describe` and `seeds` | The next round |
+| The `refine` sub-agent, through `surface-account` | A closed ledger entry per target no round can reach | `coverage_ctl.py completion` | The machine |
 
 ### Reporting
 
@@ -165,12 +175,18 @@ assembled and nothing is sent.
 
 ## Round boundary
 
-Two artifacts cross a round boundary.
+Three artifacts cross a round boundary.
 
 | Carried | Mechanism | Consumer in the new round |
 |---|---|---|
 | The corpus | `campaign_ctl.py install-k --corpus carry --from-run <prev>` | syz-manager, at campaign start |
 | The work list | `round.worklist` becoming `round.worklist_in` | `describe` and `seeds` |
+| The completion ledger | A file outside the state, keyed on the driver release | `surface-account`, and `round-decide` in every later round |
+
+The ledger is a third crossing and it outlives the campaign as well as the
+round. A target closed as `chain-unbuildable` in round 2 stays closed in round
+6, so the surface curve is read by subtraction against a denominator that only
+shrinks.
 
 The crash registry persists across rounds because it belongs to the campaign.
 The two setup phases persist for the same reason. Everything else resets: the

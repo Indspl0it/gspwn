@@ -28,12 +28,22 @@ python3 tools/repro_ctl.py extract crash-0001 [options]
 | `--force` | None | Off | Track U: overwrite an existing input file whose content differs |
 | `--track` | `K`, `U` | From the registry | Cross-check against the registry |
 
-Track K copies `repro.syz`, `repro.cprog`, `repro.c`, `repro0`, `report`,
-`description` and `log` from the syzkaller crash directory, then generates
-`repro.c` with `syz-prog2c` when only `repro.syz` exists. Generation writes to
-a temporary file and renames into place only on a non-empty result, so a failed
+Track K copies the syzkaller crash directory and normalises the names it
+stores.
+
+| Source in the crash directory | Stored as |
+|---|---|
+| `repro.prog`, or `repro.syz` in a hand-assembled directory | `repro.prog` |
+| `repro.cprog`, `repro.report`, `repro.log`, `repro.stats`, `repro.c`, `description` | Their own names |
+| The lowest-numbered `report<N>`, or a bare `report` | `report` |
+| The lowest-numbered `log<N>`, or a bare `log` | `log` |
+
+`repro.c` is copied from a non-empty `repro.cprog` when there is one, and
+otherwise generated from `repro.prog` with `syz-prog2c`. Generation writes to a
+temporary file and renames into place only on a non-empty result, so a failed
 `syz-prog2c` leaves no stub behind. A zero-byte `repro.c` from an older failure
-is detected and regenerated.
+is detected and regenerated. A crash directory holding neither a reproducer
+program nor a non-empty `repro.cprog` produces a warning naming the directory.
 
 Track U copies the registry crash input to `artifacts/pocs/<crash-id>/input`
 with a temporary file, `fsync` and rename.
@@ -42,6 +52,30 @@ with a temporary file, `fsync` and rename.
 |---|---|
 | Track U, an existing file is identical | Left alone |
 | Track U, an existing file differs | Refused without `--force` |
+| Track U, no existing file | Copied |
+| Track U, the registry path is not a file | Exits naming the path |
+| Track K, `--force` passed | Warned and ignored |
+| Track K, the registry path is not a directory | Exits naming the kernel log |
+
+`--force` is a Track U flag. Track K extraction has nothing to clobber: it
+regenerates `repro.c` whenever `syz-prog2c` has something better to say and
+copies everything else unconditionally, so accepting the flag silently would
+read as an authorised overwrite. The warning names the crash and says the flag
+changed nothing.
+
+`crash_parse.py` registers a crash harvested out of a kernel log as track K
+with the path of the log it was read out of as its `dir`. That path names a
+file. syz-manager never saw that crash, so there is no crash
+directory to copy and no reproducer to find. `extract` exits naming the log.
+The generic "syz-manager found no reproducer" message would blame the manager
+for a crash it was never shown. A log-harvested crash reaches a PoC only by
+writing one by hand into `artifacts/pocs/<crash-id>/repro.c` and then running
+`verify`.
+
+A Track U input reaches `artifacts/pocs/<crash-id>/input` because that is the
+file `verify --track u --cmd` replays. The registry records the input path and
+not its `.sanlog` replay report, so `verify` is never handed a text log to
+replay.
 
 ## verify
 
@@ -190,5 +224,3 @@ the machine.
 
 - [Reproducing a crash](/gspwn/guides/reproducing-a-crash/)
 - [State file schema](/gspwn/reference/state-file/)
-</content>
-</invoke>
