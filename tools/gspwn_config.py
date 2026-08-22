@@ -36,7 +36,14 @@ DEFAULTS = {
         "targets": [],
     },
     "loop": {
-        "max_rounds": 3,
+        # Backstop against a runaway loop, and not the expected termination.
+        # The campaign stops on completion: every enumerated target is either
+        # exercised or carries a written reason in the completion ledger. A
+        # campaign that reaches this cap has failed to converge, and
+        # hard_cap_reason says so in its stop reason. Held equal to
+        # config/campaign.yaml so a deployment whose config file is absent, or
+        # whose loop block is trimmed, keeps the same backstop.
+        "max_rounds": 10,
         "max_total_run_hours": 216,
         "campaign_hours": 24,
         "stop_on_plateau": True,
@@ -182,6 +189,26 @@ DEFAULTS = {
         # this bounds. Track K only: the container-toolkit harnesses never
         # touch the GPU, so their samples record it as not applicable.
         "gpu_probe_timeout_sec": 20,
+        # The three below govern the surface curve, the second coverage
+        # signal, which is a count of enumerated driver targets the corpus
+        # names. It is bounded at the size of the inventory, so none of the
+        # fit knobs above apply to it and its reading is subtraction.
+        #
+        # Minutes between surface samples. Unlike every other column this one
+        # is not an HTTP GET: it unpacks the run's corpus.db and rescans every
+        # program in it, so it runs on its own coarser cadence and the rows in
+        # between record no surface value. 0 measures it on every sample.
+        "surface_sample_min": 60,
+        # Surface samples needed before the curve's shape is read at all.
+        # Higher than min_fit_samples' purpose for the edge curve because the
+        # surface counter is quantised: it is an integer with long flat
+        # stretches between steps, and a short tail sitting between two steps
+        # is a common state.
+        "surface_min_samples": 5,
+        # Seconds syz-db may take to unpack one run corpus for a surface
+        # measurement. It scales with corpus size and disk speed, so a long
+        # campaign on a slow volume needs more than a smoke run does.
+        "unpack_timeout_sec": 300,
     },
     # Reproduction verification. These decide what "reliable" means, and a
     # reliable classification is what a disclosure package is built on, so
@@ -356,6 +383,16 @@ _RULES = [
       "before calling the series something other than an accumulation curve)",
       lambda v: _num(v) and 0 <= v < 1)),
     ("coverage", "gpu_probe_timeout_sec", _POSITIVE_INT),
+    ("coverage", "surface_sample_min",
+     ("must be an integer >= 0 (0 measures the surface on every coverage "
+      "sample, which unpacks and rescans the whole corpus each time)",
+      lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0)),
+    ("coverage", "surface_min_samples",
+     ("must be an integer >= 2. One sample has nothing to be compared "
+      "against, so the curve would read as flat from the first measurement "
+      "and a still-climbing surface would stop the loop",
+      lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 2)),
+    ("coverage", "unpack_timeout_sec", _POSITIVE_INT),
     ("poc", "repro_timeout_sec", _POSITIVE_INT),
     ("poc", "default_runs", _POSITIVE_INT),
     ("poc", "void_retry_factor", _POSITIVE_INT),
@@ -610,6 +647,11 @@ def main():
           % (cv["fit_tail_fraction"] * 100, cv["min_fit_samples"],
              cv["model_min_r2"], cv["horizon_hours"],
              cv["plateau_new_edges"]))
+    print("surface curve: sampled every %s, shape read from >= %d sample(s), "
+          "corpus unpack capped at %ds"
+          % (("%d min" % cv["surface_sample_min"]) if cv["surface_sample_min"]
+             else "coverage sample", cv["surface_min_samples"],
+             cv["unpack_timeout_sec"]))
     pc = cfg["poc"]
     print("repro: %d run(s) by default, %ds per run, reliable at >= %.0f%%"
           % (pc["default_runs"], pc["repro_timeout_sec"],

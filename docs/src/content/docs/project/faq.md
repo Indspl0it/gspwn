@@ -19,8 +19,9 @@ The smoke window only says the campaign started correctly.
 
 ### Why does `next` return `wait` during a campaign window?
 
-Same reason. `next` refuses to run ahead of a campaign still inside its window,
-and names the run and the hours left. `round-end` refuses to measure one.
+A phase run inside the window measures a part-campaign. `next` refuses to run
+ahead of a campaign still inside its window, and names the run and the hours
+left. `round-end` refuses to measure one.
 
 ## Coverage measurement
 
@@ -72,7 +73,7 @@ little work does not count as recent history.
 
 ### Why are noise Xids registered at all if they are not findings?
 
-As an audit trail. They stay in the registry so the record of what the campaign
+They stay in the registry as an audit trail, so the record of what the campaign
 saw is complete, and they are excluded from every count the tools derive:
 `round-end`, `round-show`, `brief` and `show`.
 
@@ -107,9 +108,9 @@ a real bug would be classified `unreproducible` at a manufactured 0% rate.
 
 ### What is a void run?
 
-A run that produced no usable verdict: the dmesg ring wrapped, the reproducer
-would not execute, a timeout on a crash whose title is not hang-class, or a
-verification process that died on the same boot.
+A void run produced no usable verdict: the dmesg ring wrapped, the reproducer
+would not execute, a timeout landed on a crash whose title is not hang-class, or
+the verification process died on the same boot.
 
 Void runs are excluded from both the numerator and the denominator, and re-run.
 An attempt cap bounds that, so a persistently wrapping ring cannot loop
@@ -162,9 +163,9 @@ let a same-boot loop run unbounded.
 
 ### Why does session rotation use transcript size?
 
-Size is what drives auto-compaction. A campaign that panics twenty times in an
-hour writes almost nothing, while one that panics twice in three days writes a
-great deal, so restart count tracks compaction poorly.
+Transcript size drives auto-compaction. A campaign that panics twenty times in
+an hour writes almost nothing, while one that panics twice in three days writes
+a great deal, so restart count tracks compaction poorly.
 
 The restart count remains as a backstop for when the transcript cannot be
 measured, and the tool reports each fall back to it.
@@ -223,7 +224,7 @@ already a closed vocabulary, so the two cannot disagree by drift.
 ### Why is under-claiming a consequence not flagged?
 
 It costs nothing, and flagging it would push the analysis towards escalating,
-which is the direction that does cost something. A privilege-escalation
+which does cost something. A privilege-escalation
 conclusion drawn from an undetermined primitive is the first finding a vendor
 engineer disproves.
 
@@ -246,8 +247,8 @@ until the invocation is set.
 ### Why is there no mutator plugin API?
 
 syzkaller owns mutation on Track K, and AFL++ or libFuzzer owns it on Track U.
-The outer loop's job is what the fuzzer cannot do for itself: modelling ioctls
-it has no description for, and supplying valid object-chain seeds it cannot
+The outer loop does what the fuzzer cannot do for itself: modelling ioctls it
+has no description for, and supplying valid object-chain seeds it cannot
 invent.
 
 ## Crash capture

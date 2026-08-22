@@ -86,5 +86,3 @@ fails with a permission error.
 
 - [Exit codes](/gspwn/reference/exit-codes/)
 - [Environment variables](/gspwn/reference/environment/)
-</content>
-</invoke>

@@ -37,6 +37,17 @@ Subcommands:
   summary [--src DIR]                depth distribution and widest parents
   chain CLASS [--src DIR]            shortest allocation chain to one class
   targets [--src DIR] [--top N]      parents ranked by reachable subtree size
+  chains [--control PATH] [--out PATH]
+                                     one chain record per internal class,
+                                     joined to the control commands that class
+                                     owns, plus the cumulative-reach curve
+
+The `chains` subcommand performs a join nothing else performs. The control
+inventory carries `owning_class`, the NVOC internal class name, and this table
+carries `internal_class` on every record. Commands sharing an owning class
+share an allocation chain, so one program can build the chain once and issue
+every command that class owns against it. `chains` measures what that is worth:
+one allocation reaches 91 of the 531 targetable commands and three reach 315.
 
 Exit codes: 0 success, 1 bad input or unreadable source, 2 class not found.
 """
@@ -50,7 +61,35 @@ import sys
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SRC = os.path.join("artifacts", "src", "open-gpu-kernel-modules")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def repo_relative(path):
+    """A path as the repository sees it, in forward slashes.
+
+    An artefact that recorded an absolute path carried the author's home
+    directory into a committed file, and differed between two checkouts of
+    the same tree. A path outside the repository is returned absolute,
+    because relative to nothing is worse than long.
+    """
+    absolute = os.path.abspath(path)
+    try:
+        rel = os.path.relpath(absolute, REPO_ROOT)
+    except ValueError:                      # a different drive on Windows
+        return absolute.replace(os.sep, "/")
+    if rel.split(os.sep)[0] == os.pardir:
+        return absolute.replace(os.sep, "/")
+    return rel.replace(os.sep, "/")
+
+
+# Anchored on the repository and not the process working directory, so the
+# producer and every consumer agree about where a file lives whatever
+# directory the tool is invoked from.
+DEFAULT_SRC = os.path.join(REPO_ROOT, "artifacts", "src",
+                           "open-gpu-kernel-modules")
+DEFAULT_GRAPH_OUT = os.path.join(REPO_ROOT, "surface", "rm-object-graph.json")
+DEFAULT_CONTROL = os.path.join(REPO_ROOT, "surface", "rm-control-inventory.json")
+DEFAULT_CHAINS_OUT = os.path.join(REPO_ROOT, "surface", "rm-chains.json")
 TABLE_REL = os.path.join("src", "nvidia", "src", "kernel", "rmapi",
                          "resource_list.h")
 
@@ -182,10 +221,20 @@ def build_graph(entries):
     graph maps an external class to its legal parent external classes. A class
     whose Parents field is RS_ROOT_OBJECT hangs directly off the file
     descriptor and is given the sentinel parent ROOT.
+
+    The internal-to-external map holds a list per internal class. The relation
+    is one-to-many in the table: 18 internal classes export more than one
+    external class, DispChannelDma exports 23 and KernelChannel 11. A Parents
+    field naming classId(KernelChannel) therefore admits all 11 GPFIFO classes,
+    and keeping only the first declaration would drop the other 10 from every
+    chain built through it. Order follows the table, and duplicates are
+    dropped, so the output stays stable across runs.
     """
     int2ext = {}
     for rec in entries:
-        int2ext.setdefault(rec["internal_class"], rec["external_class"])
+        exported = int2ext.setdefault(rec["internal_class"], [])
+        if rec["external_class"] not in exported:
+            exported.append(rec["external_class"])
 
     graph, unresolved = {}, collections.Counter()
     for rec in entries:
@@ -203,7 +252,9 @@ def build_graph(entries):
         resolved = []
         for name in names:
             if name in int2ext:
-                resolved.append(int2ext[name])
+                for ext in int2ext[name]:
+                    if ext not in resolved:
+                        resolved.append(ext)
             else:
                 unresolved[name] += 1
         graph[rec["external_class"]] = resolved
@@ -234,7 +285,10 @@ def depths(graph):
     queue = collections.deque([ROOT, ANY_PARENT])
     while queue:
         node = queue.popleft()
-        for child in kids.get(node, []):
+        # Sorted for the same reason allocatable_depths sorts. Breadth-first
+        # depth is independent of neighbour order, so this changes no value;
+        # it keeps the two walks reading alike.
+        for child in sorted(kids.get(node, [])):
             if child not in depth:
                 depth[child] = depth[node] + 1
                 queue.append(child)
@@ -288,24 +342,332 @@ def records(entries, graph, depth):
     return out
 
 
+# The two privilege values that stop an unprivileged process allocating a
+# class. "unclassified" is admitted: the three root classes name no
+# RS_FLAGS_ALLOC_* flag at all, they are the first step of every chain, and
+# excluding them empties the whole chain set. Every chain carrying an
+# unclassified step records it in `unclassified_steps`.
+BLOCKING_PRIVILEGE = ("privileged", "kernel")
+
+
+def allocatable_depths(graph, by_ext):
+    """Depth from the file descriptor over allocatable classes only.
+
+    depths() walks every edge and answers where a class sits in the table.
+    This walks only classes an unprivileged process can allocate, so the
+    answer is the prologue length a program actually pays. The two differ
+    wherever the shallowest parent is privileged.
+    """
+    kids = children_of(graph)
+    depth = {ROOT: 0, ANY_PARENT: 1}
+    queue = collections.deque([ROOT, ANY_PARENT])
+    while queue:
+        node = queue.popleft()
+        for child in sorted(kids.get(node, [])):
+            if child in depth:
+                continue
+            rec = by_ext.get(child)
+            if rec is None or privilege(rec) in BLOCKING_PRIVILEGE:
+                continue
+            depth[child] = depth[node] + 1
+            queue.append(child)
+    return depth
+
+
+def cheapest_root_child(alloc_depth):
+    """The cheapest class allocatable directly on the file descriptor.
+
+    NV01_ROOT, NV01_ROOT_CLIENT and NV01_ROOT_NON_PRIV all sit here; the name
+    breaks the tie so the chain is stable across runs.
+    """
+    candidates = sorted(c for c, d in alloc_depth.items()
+                        if d == 1 and c not in (ROOT, ANY_PARENT))
+    return candidates[0] if candidates else None
+
+
+def allocatable_chain(graph, alloc_depth, cls):
+    """Allocation steps from the file descriptor to cls, shallowest parent.
+
+    Returns the external classes to allocate in order. ROOT is dropped, being
+    the file descriptor itself and not an allocation. ANY_PARENT is replaced by
+    the cheapest class allocatable on the descriptor, because it is not free:
+    allocatable_depths seeds it at depth 1 for exactly that reason, so a class
+    whose only parent is the sentinel still needs a client allocated first.
+    Dropping it reported such a class at chain length 1, the same as a class
+    that hangs off the descriptor, understating the prologue by one
+    allocation. Returns None when cls is not allocatable or not connected. The
+    `seen` set bounds the walk, so a parent cycle terminates instead of
+    looping.
+    """
+    if cls not in alloc_depth:
+        return None
+    steps, seen, cur = [cls], {cls}, cls
+    while cur not in (ROOT, ANY_PARENT):
+        options = [p for p in graph.get(cur, [])
+                   if p in alloc_depth and p not in seen]
+        if not options:
+            return None
+        cur = min(options, key=lambda p: (alloc_depth[p], p))
+        seen.add(cur)
+        steps.append(cur)
+    steps.reverse()
+    substitute = cheapest_root_child(alloc_depth)
+    out = []
+    for step in steps:
+        if step == ROOT:
+            continue
+        if step == ANY_PARENT:
+            if substitute is None:
+                return None
+            out.append(substitute)
+            continue
+        out.append(step)
+    return out
+
+
+def cheapest_chain(entries, graph, alloc_depth, internal_class):
+    """Shortest allocatable chain over every external class of one internal class.
+
+    Ties break on the external class name so the output is stable across runs.
+    """
+    best = None
+    for rec in entries:
+        if rec["internal_class"] != internal_class:
+            continue
+        cls = rec["external_class"]
+        steps = allocatable_chain(graph, alloc_depth, cls)
+        if steps is None:
+            continue
+        key = (len(steps), cls)
+        if best is None or key < best[0]:
+            best = (key, cls, steps)
+    if best is None:
+        return None, None
+    return best[1], best[2]
+
+
+def chain_records(entries, graph, alloc_depth, depth, commands_by_class):
+    """One record per internal class, with its chain and the commands it unlocks."""
+    by_ext = {e["external_class"]: e for e in entries}
+    out = []
+    for internal in sorted({e["internal_class"] for e in entries}):
+        exported = [e for e in entries if e["internal_class"] == internal]
+        target, steps = cheapest_chain(entries, graph, alloc_depth, internal)
+        commands = commands_by_class.get(internal, [])
+        record = {
+            "internal_class": internal,
+            "external_classes": [{
+                "external_class": e["external_class"],
+                "alloc_privilege": privilege(e),
+                "depth": depth.get(e["external_class"]),
+            } for e in sorted(exported, key=lambda e: e["external_class"])],
+            "target_external_class": target,
+            "chain": None,
+            "chain_length": None,
+            "unallocatable_reason": None,
+            "unclassified_steps": [],
+            "commands": commands,
+            "command_count": len(commands),
+        }
+        if steps is None:
+            record["unallocatable_reason"] = (
+                "every external class requires allocation privilege"
+                if all(privilege(e) in BLOCKING_PRIVILEGE for e in exported)
+                else "no external class connects to the file descriptor")
+        else:
+            record["chain"] = [{
+                "external_class": cls,
+                "alloc_param_struct": alloc_param(by_ext[cls])[1],
+                "alloc_param_kind": alloc_param(by_ext[cls])[0],
+                "alloc_privilege": privilege(by_ext[cls]),
+            } for cls in steps]
+            record["chain_length"] = len(steps)
+            record["unclassified_steps"] = [
+                cls for cls in steps if privilege(by_ext[cls]) == "unclassified"]
+        out.append(record)
+    return out
+
+
+def cumulative_reach(chain_recs):
+    """Greedy curve: allocations paid against control commands unlocked.
+
+    Each step picks the class with the highest command count per allocation
+    the built set does not already hold, so a class whose whole chain is
+    already built costs nothing and is taken first. Every class already
+    allocated along the way is credited, which is why the curve rises at an
+    allocation count no single chain has.
+    """
+    remaining = {r["internal_class"]: r for r in chain_recs
+                 if r["chain"] is not None and r["command_count"]}
+    built, total, curve = set(), 0, []
+    while remaining:
+        best = None
+        for internal, rec in remaining.items():
+            new = [s["external_class"] for s in rec["chain"]
+                   if s["external_class"] not in built]
+            cost = len(new)
+            yield_per = (rec["command_count"] / cost) if cost else float("inf")
+            key = (-yield_per, cost, internal)
+            if best is None or key < best[0]:
+                best = (key, internal, new)
+        _, internal, new = best
+        rec = remaining.pop(internal)
+        built.update(new)
+        total += rec["command_count"]
+        curve.append({
+            "allocations": len(built),
+            "commands": total,
+            "class_added": internal,
+            "new_allocations": len(new),
+        })
+    return curve
+
+
+def commands_by_owning_class(control_path):
+    """Targetable control commands grouped by the NVOC class that owns them.
+
+    Targetable is the definition surface_cov.py uses: non-privileged
+    reachability and a handler that is not compiled out.
+    """
+    with open(control_path, encoding="utf-8") as fh:
+        control = json.load(fh)
+    if "methods" not in control:
+        raise SystemExit("%s carries no `methods` array, so it is not a "
+                         "control inventory." % control_path)
+    grouped = collections.defaultdict(list)
+    for method in control["methods"]:
+        if method["reachability"] != "non_privileged":
+            continue
+        if method["handler_compiled_out"]:
+            continue
+        grouped[method["owning_class"]].append({
+            "method_id": method["method_id"],
+            "handler": method["handler"],
+        })
+    for commands in grouped.values():
+        commands.sort(key=lambda c: c["handler"])
+    return dict(grouped)
+
+
+def cmd_chains(args):
+    entries = parse_entries(args.src)
+    graph, _ = build_graph(entries)
+    depth = depths(graph)
+    by_ext = {e["external_class"]: e for e in entries}
+    alloc_depth = allocatable_depths(graph, by_ext)
+
+    if not os.path.isfile(args.control):
+        raise SystemExit(
+            "the control inventory %s is missing, so no chain can name the "
+            "commands it unlocks. Run tools/ctrl_surface.py, or pass "
+            "--control PATH." % args.control)
+    commands_by_class = commands_by_owning_class(args.control)
+    total_commands = sum(len(v) for v in commands_by_class.values())
+
+    recs = chain_records(entries, graph, alloc_depth, depth, commands_by_class)
+    by_internal = {r["internal_class"]: r for r in recs}
+
+    unresolved = []
+    for owning, commands in sorted(commands_by_class.items()):
+        rec = by_internal.get(owning)
+        if rec is None:
+            reason = "no RS_ENTRY row for this class"
+        elif rec["chain"] is None:
+            reason = rec["unallocatable_reason"]
+        else:
+            continue
+        unresolved.append({
+            "owning_class": owning,
+            "reason": reason,
+            "command_count": len(commands),
+            "commands": [c["handler"] for c in commands],
+        })
+
+    curve = cumulative_reach(recs)
+    reached = sum(r["command_count"] for r in recs if r["chain"] is not None)
+    payload = {
+        "schema": "gspwn.rm-chains/1",
+        "source": {
+            "table": repo_relative(os.path.join(args.src, TABLE_REL)),
+            "control_inventory": repo_relative(args.control),
+            "driver_version": driver_version(args.src),
+        },
+        "counts": {
+            "internal_classes": len(recs),
+            "chained": sum(1 for r in recs if r["chain"] is not None),
+            "unallocatable": sum(1 for r in recs if r["chain"] is None),
+            "targetable_commands": total_commands,
+            "commands_with_a_chain": reached,
+            "commands_without_a_chain": total_commands - reached,
+            "owning_classes": len(commands_by_class),
+        },
+        "cumulative_reach": curve,
+        "unresolved_owning_classes": unresolved,
+        "chains": recs,
+    }
+    write_json(args.out, payload)
+    logger.info("wrote %d chain records to %s", len(recs), args.out)
+    print("%d chain records -> %s" % (len(recs), args.out))
+    print("%d of %d targetable control commands resolve to a chain"
+          % (reached, total_commands))
+    # Several classes can land at the same allocation count, because a class
+    # whose chain is already built costs nothing. Print the total each count
+    # reaches, which is the last row carrying it.
+    at_count = {}
+    for row in curve:
+        at_count[row["allocations"]] = row
+    for allocations in sorted(at_count):
+        row = at_count[allocations]
+        print("  %3d allocations -> %3d commands (%.0f%%), last class added %s"
+              % (allocations, row["commands"],
+                 100.0 * row["commands"] / max(total_commands, 1),
+                 row["class_added"]))
+    for row in unresolved:
+        print("  no chain: %-16s %2d commands, %s"
+              % (row["owning_class"], row["command_count"], row["reason"]))
+    return 0
+
+
+def write_json(path, payload):
+    """Write JSON through a temp file in the same directory, then rename.
+
+    A reader that opens the artefact while it is being rewritten sees either
+    the old file or the new one and never a truncated prefix.
+    """
+    out_dir = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+        logger.info("created output directory %s", out_dir)
+    tmp = os.path.abspath(path) + ".tmp"
+    try:
+        # newline="\n" so a run on Windows and a run under WSL produce the
+        # same bytes.
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(payload, fh, indent=1, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def cmd_extract(args):
     entries = parse_entries(args.src)
     graph, _ = build_graph(entries)
     depth = depths(graph)
     payload = {
         "source": {
-            "path": os.path.join(args.src, TABLE_REL),
+            # Forward slashes on every platform, the form cmd_chains already
+            # writes. A backslash path here made the artefact differ between a
+            # Windows run and a WSL run over identical source.
+            "path": repo_relative(os.path.join(args.src, TABLE_REL)),
             "driver_version": driver_version(args.src),
         },
         "record_count": len(entries),
         "records": records(entries, graph, depth),
     }
-    out_dir = os.path.dirname(os.path.abspath(args.out))
-    if not os.path.isdir(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
-        logger.info("created output directory %s", out_dir)
-    with open(args.out, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=1, sort_keys=True)
+    write_json(args.out, payload)
     unreached = [r["external_class"] for r in payload["records"]
                  if r["depth"] is None]
     logger.info("wrote %d records to %s", len(entries), args.out)
@@ -417,14 +779,15 @@ def build_parser():
         description="Extract the RM allocation DAG from resource_list.h.")
     ap.add_argument("--src", default=DEFAULT_SRC,
                     help="open-gpu-kernel-modules checkout (default: %s)"
-                         % DEFAULT_SRC)
+                         % os.path.relpath(DEFAULT_SRC, REPO_ROOT))
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="log at DEBUG")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = add_shared(sub.add_parser("extract", help="write the JSON records"))
-    p.add_argument("--out", default=os.path.join("artifacts", "surface",
-                                                 "rm-object-graph.json"))
+    p.add_argument("--out", default=DEFAULT_GRAPH_OUT,
+                   help="default: %s" % os.path.relpath(DEFAULT_GRAPH_OUT,
+                                                        REPO_ROOT))
     p.set_defaults(func=cmd_extract)
 
     p = add_shared(sub.add_parser("summary", help="depth distribution and widest parents"))
@@ -437,6 +800,16 @@ def build_parser():
     p = add_shared(sub.add_parser("targets", help="parents ranked by subtree size"))
     p.add_argument("--top", type=int, default=15)
     p.set_defaults(func=cmd_targets)
+
+    p = add_shared(sub.add_parser(
+        "chains", help="allocation chain per class, with the commands it unlocks"))
+    p.add_argument("--control", default=DEFAULT_CONTROL,
+                   help="output of tools/ctrl_surface.py (default: %s)"
+                        % os.path.relpath(DEFAULT_CONTROL, REPO_ROOT))
+    p.add_argument("--out", default=DEFAULT_CHAINS_OUT,
+                   help="default: %s" % os.path.relpath(DEFAULT_CHAINS_OUT,
+                                                        REPO_ROOT))
+    p.set_defaults(func=cmd_chains)
     return ap
 
 

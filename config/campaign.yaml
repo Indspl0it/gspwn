@@ -23,9 +23,9 @@ track_u:
   docker_image: "aflplusplus/aflplusplus:latest"
   memory_max: "8G"
   # agent-facing: written by harness phase, read by fuzz phase. Each name is a
-  # directory under artifacts/harnesses/ and the output directory the fuzz
+  # directory under harnesses/ and the output directory the fuzz
   # phase checks under /artifacts/runs/$RUN_ID/u/. Entry points and their
-  # reachability are in artifacts/harnesses/TARGETS.md. The Go target
+  # reachability are in harnesses/TARGETS.md. The Go target
   # go_cudacompat_elf is absent on purpose: go test -fuzz writes no
   # fuzzer_stats, so it produces no coverage output for the sampler to read.
   targets:
@@ -41,14 +41,28 @@ loop:
   # of them trips, so set them before starting, not after. They bound the
   # search, not the bill: this repo has no view of what an instance costs.
   # Watch real money in the AWS console.
-  max_rounds: 3              # hard cap on rounds, whatever coverage does
+  # Backstop against a runaway loop, not the expected termination. The
+  # campaign stops on completion: every one of the 764 enumerated targets is
+  # either exercised or carries a written reason in the completion ledger
+  # (pipeline_ctl.py surface-account). Against that denominator from an empty
+  # corpus, a cap of 3 stopped every campaign long before completion could
+  # hold, so completion was decorative. A campaign that reaches this cap has
+  # failed to converge and the stop reason says so.
+  max_rounds: 10
   # Total run-hour budget, checked against the spend ledger state/spend.json.
   # round-end bills every campaign's measured hours there per run id (a run
   # that died early bills only what it sampled), so the cap counts every
-  # campaign, not one per round: 3 rounds x 3 runs x 24h = 216.
+  # campaign, not one per round. This, and not max_rounds, is the spend
+  # ceiling: 216 h is 9 campaigns of 24 h, whatever number of rounds they fall
+  # across. Raise it before raising max_rounds buys anything.
   max_total_run_hours: 216
   campaign_hours: 24         # each campaign self-stops after this long
-  stop_on_plateau: true      # stop early when coverage growth flattens
+  # Stop early when both curves flatten. Overridable, unlike the completion
+  # stop: a plateau is a judgement about what another campaign would buy,
+  # while completion is a ledger identity with nothing left to fuzz. A flat
+  # edge curve against a still-climbing surface curve is not a plateau and
+  # does not trip this.
+  stop_on_plateau: true
   # Plateau test, applied to the trailing window of the coverage curve.
   plateau_window_min: 240    # measure growth over the last 4h
   plateau_min_growth: 0.02   # < 2% new edges in that window = plateaued
@@ -178,10 +192,20 @@ coverage:
   # driver enumerates itself: 764 reachable commands, of which the corpus
   # names some. That is a claim about the command surface and never about
   # lines of driver code, and it separates the two readings of a plateau.
-  # Plateau at low surface coverage means the descriptions or the resource
-  # chains are wrong. Plateau at high surface coverage is the
-  # stopping condition these knobs are set for. Read both before spending
-  # another campaign.
+  # coverage_ctl.py records it as the `surface` column and reads the two
+  # curves together:
+  #
+  #   edge flat, surface climbing   not a plateau
+  #   both flat, ledger open        the corpus is stuck
+  #   both flat, ledger closed      complete, and the loop stops
+  #
+  # The ledger is closed when exercised plus accounted-for reaches the whole
+  # denominator, where every unreached target carries a written reason
+  # (pipeline_ctl.py surface-account). No percentage threshold decides it, so
+  # the five fit knobs below govern the edge curve alone, whose asymptote is
+  # unknown and has to be extrapolated. The three surface_ keys at the end of
+  # this section govern how often the surface curve is sampled and how many
+  # samples its shape is read from.
   plateau_new_edges: 50   # expected new edges over one more campaign, below
                           # which the run has plateaued. Set it to what would
                           # actually justify another campaign of machine time
@@ -201,6 +225,26 @@ coverage:
   # only — the container-toolkit harnesses never touch the GPU, so their
   # samples record the GPU column as not applicable.
   gpu_probe_timeout_sec: 20
+  # Minutes between surface samples. Unlike every other column in the coverage
+  # CSV this one is not an HTTP GET: it unpacks the run's corpus.db and
+  # rescans every program in it, so it runs on its own coarser cadence and the
+  # rows in between record no surface value. Raise it on a large corpus, where
+  # the rescan costs real time; 0 measures it on every coverage sample.
+  # Override for one run with GSPWN_SURFACE_SAMPLE_MIN.
+  surface_sample_min: 60
+  # Surface samples needed before the curve's shape is read at all. Higher
+  # than min_fit_samples' role for the edge curve because the surface counter
+  # is quantised: it is an integer with long flat stretches between steps, and
+  # a short tail sitting between two steps is a common state. Below 2 there is
+  # nothing to compare against and every run would read as flat from its first
+  # measurement. Override with GSPWN_SURFACE_MIN_SAMPLES.
+  surface_min_samples: 5
+  # Seconds syz-db may take to unpack one run corpus for a surface
+  # measurement. It scales with corpus size and disk speed, so a long campaign
+  # on a slow volume needs more than a smoke run does. On a timeout the
+  # surface reading is recorded as absent, never as 0. Override with
+  # GSPWN_UNPACK_TIMEOUT_SEC.
+  unpack_timeout_sec: 300
 
 poc:
   # What counts as a reproduction, and how long one may take. A reliable

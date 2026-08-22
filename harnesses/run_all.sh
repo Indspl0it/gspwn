@@ -3,7 +3,7 @@
 #
 # Output layout, which agents/harness.md fixes:
 #   /artifacts/runs/$RUN_ID/u/<harness-name>/    fuzzer output, one dir per harness
-#   /artifacts/harnesses/crashes/<harness-name>/ crashes copied out at the end
+#   /artifacts/u-crashes/<harness-name>/ crashes copied out at the end
 #
 # The coverage sampler reads AFL++'s fuzzer_stats from the first path. Only the
 # afl build mode writes that file. In libfuzzer mode the directory holds the
@@ -51,8 +51,40 @@ C_TARGETS=(
     fuzz_path_join
 )
 
+# The harness tree arrives on its own bind mount, separate from ARTIFACT_ROOT:
+# the unit passes -v <repo>/artifacts:/artifacts and
+# -v <repo>/harnesses:/harnesses. A mount that is missing or points at the
+# wrong directory leaves every binary unfindable, and the per-target skip
+# below would then walk the whole target list, fuzz nothing and exit 0.
+# Refuse the run instead. The two causes are separated because they have
+# different fixes: an absent source tree is a mount fault on the host, and a
+# present one with no binaries has not been built here.
+sources=0
+built=0
+for t in "${C_TARGETS[@]}"; do
+    [ -f "${here}/${t}/build.sh" ] && sources=$((sources + 1))
+    [ -x "${here}/${t}/build/${t}" ] && built=$((built + 1))
+done
+if [ "${sources}" -eq 0 ]; then
+    echo "run error: no harness sources under ${here}, so this is not the" \
+         "harness tree. It is a bind mount of the repository's harnesses/" \
+         "directory, separate from the artifact mount. Check that the unit" \
+         "passes -v <repo>/harnesses:/harnesses before anything else." >&2
+    exit 1
+fi
+if [ "${built}" -eq 0 ]; then
+    echo "run error: ${sources} harness source tree(s) under ${here} and no" \
+         "built binary among them, so the run would skip every target and" \
+         "exit clean. Run build_all.sh on this machine first." >&2
+    exit 1
+fi
+if [ "${built}" -lt "${sources}" ]; then
+    echo "warning: ${built} of ${sources} harnesses are built. The rest are" \
+         "skipped below and contribute no coverage to this run."
+fi
+
 RUN_ROOT="${ARTIFACT_ROOT}/runs/${RUN_ID}/u"
-CRASH_ROOT="${ARTIFACT_ROOT}/harnesses/crashes"
+CRASH_ROOT="${ARTIFACT_ROOT}/u-crashes"
 mkdir -p "${RUN_ROOT}" "${CRASH_ROOT}"
 
 detect_mode() {
@@ -144,9 +176,35 @@ for t in "${C_TARGETS[@]}"; do
     n=$(find "${src}" -type f ! -name "README.txt" | wc -l)
     [ "${n}" -gt 0 ] || continue
     mkdir -p "${CRASH_ROOT}/${t}"
-    cp -f "${src}"/* "${CRASH_ROOT}/${t}/" 2>/dev/null || true
+    if ! cp -f "${src}"/* "${CRASH_ROOT}/${t}/" 2>/dev/null; then
+        # The copy used to end in `|| true`, so a failure here was silent and
+        # the documented recovery — copying the whole output tree by hand —
+        # was reached only by an operator who noticed the shortfall. Say what
+        # failed and what to do about it.
+        echo "${t}: copying ${src} to ${CRASH_ROOT}/${t} failed. Copy the" \
+             "tree by hand (cp -r ${src} ${CRASH_ROOT}/${t}/) and re-run" \
+             "replay_crashes.sh; crash_parse.py reads that layout too."
+        status=1
+    fi
     copied=$((copied + n))
     echo "${t}: ${n} crash inputs copied to ${CRASH_ROOT}/${t}"
 done
 echo "total crash inputs: ${copied}"
+
+# The copied files are the bytes the fuzzer saved, and tools/crash_parse.py
+# registers a Track U crash from a sanitizer signature. Replaying each input
+# under its own harness is what produces that signature; without this step the
+# whole harvest is skipped with a warning and the registry stays empty. Bounds
+# and failure handling live in replay_crashes.sh.
+if [ "${copied}" -gt 0 ]; then
+    echo "== replaying crash inputs under their harnesses =="
+    ARTIFACT_ROOT="${ARTIFACT_ROOT}" CRASH_ROOT="${CRASH_ROOT}" \
+        HARNESS_ROOT="${here}" \
+        bash "${here}/replay_crashes.sh" || {
+            echo "replay_crashes.sh failed; the inputs are still in" \
+                 "${CRASH_ROOT} and can be replayed on their own. Until they" \
+                 "are, crash_parse.py registers nothing for Track U."
+            status=1
+        }
+fi
 exit "${status}"

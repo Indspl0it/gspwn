@@ -204,7 +204,7 @@ says so, so it cannot be used to wipe the budget.
 fuzzing:
 
 ```
-wait  (run r2-1 has 12.4 h left of its campaign window; the round cannot be measured until it ends: python3 tools/campaign_ctl.py wait --run-id r2-1)
+wait  (run r2-1 has 12.4 h left of its campaign window, and the round cannot be measured until it ends: python3 tools/campaign_ctl.py wait --run-id r2-1)
 ```
 
 The `fuzz` phase itself is exempt, because it starts the campaign.

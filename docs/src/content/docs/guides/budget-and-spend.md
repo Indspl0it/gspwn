@@ -9,11 +9,17 @@ cost estimate.
 
 | Cap | Key | Enforced by |
 |---|---|---|
-| Rounds | `loop.max_rounds` | `round-decide` |
+| Rounds | `loop.max_rounds`, default 10 | `round-decide` |
 | Total run-hours | `loop.max_total_run_hours` | `round-decide`, and every campaign install |
 | Per-campaign hours | `loop.campaign_hours` | The per-run deadline timer |
 
-A coverage plateau and an `unknown` coverage verdict also stop the loop. See
+`loop.max_rounds` is a backstop against a runaway loop. The campaign's primary
+termination is surface completion, which `hard_cap_reason()` checks ahead of
+both caps, so a campaign that reaches the round cap has failed to converge.
+`loop.max_total_run_hours` is the spend ceiling.
+
+A plateau on both curves and an `unknown` coverage verdict also stop the loop,
+and both are overridable. See
 [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/).
 
 ## Measuring billed hours
@@ -40,8 +46,7 @@ billed 24.00 run-hours for run r2-1 (configured window (no usable coverage sampl
 
 A run with no samples at all is reported:
 
-```
-  WARNING: run(s) r2-2 had no usable coverage samples and billed 0.0 h — check the sampler; unmeasured spend must not pass silently
+```  WARNING: run(s) r2-2 had no usable coverage samples and billed 0.0 h. Check the sampler, because unmeasured spend must not pass silently
 ```
 
 ## The ledger
@@ -117,7 +122,7 @@ python3 tools/pipeline_ctl.py round-decide --decision continue --reason "one mor
 ```
 
 ```
-error: computed decision is stop (run-hour budget spent (216.0 of 216.0 h)) — a budget or round-cap stop cannot be overridden
+error: computed decision is stop (run-hour budget spent (216.0 of 216.0 h)). A budget or round-cap stop cannot be overridden
 ```
 
 The round cap behaves the same way. A plateau stop or an `unknown` stop can be
@@ -150,7 +155,7 @@ recorded spend. With a ledger already present it changes nothing:
 
 ```
 ledger already present at state/spend.json: 47.2 run-hours billed
-(no change — delete the ledger first if you truly mean to rebuild it from the state file)
+(no change. Delete the ledger first to rebuild it from the state file)
 ```
 
 ## Hours entered by hand

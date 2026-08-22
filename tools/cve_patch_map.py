@@ -36,10 +36,10 @@ graduates by accumulating signal points.
 
 The join to the inventories turns a changed function into a target:
 
-  `artifacts/surface/rm-control-inventory.json`  handler -> methodId, privilege
-  `artifacts/surface/ioctl-inventory.json`       handler -> UVM command; file ->
+  `surface/rm-control-inventory.json`  handler -> methodId, privilege
+  `surface/ioctl-inventory.json`       handler -> UVM command; file ->
                                                  the escapes dispatched there
-  `artifacts/surface/rm-object-graph.json`       owning class -> alloc depth
+  `surface/rm-object-graph.json`       owning class -> alloc depth
 
 Subcommands:
   fetch    [--cache DIR]                  download PSIRT bulletin markdown
@@ -59,23 +59,23 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import urllib.error
 import urllib.request
+
+import gitmine
 
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_SRC = os.path.join("artifacts", "src", "open-gpu-kernel-modules")
-DEFAULT_CVES = os.path.join("artifacts", "surface", "prior-cves.json")
-DEFAULT_CACHE = os.path.join("artifacts", "surface", "bulletins")
-DEFAULT_OUT = os.path.join("artifacts", "surface", "cve-hotspots.json")
+DEFAULT_CVES = os.path.join("surface", "prior-cves.json")
+DEFAULT_CACHE = os.path.join("surface", "bulletins")
+DEFAULT_OUT = os.path.join("surface", "cve-hotspots.json")
 DEFAULT_VERDICTS = os.path.join("tools", "cve_fix_verdicts.json")
-CONTROL_INVENTORY = os.path.join("artifacts", "surface",
-                                 "rm-control-inventory.json")
-IOCTL_INVENTORY = os.path.join("artifacts", "surface", "ioctl-inventory.json")
-OBJECT_GRAPH = os.path.join("artifacts", "surface", "rm-object-graph.json")
+CONTROL_INVENTORY = os.path.join("surface", "rm-control-inventory.json")
+IOCTL_INVENTORY = os.path.join("surface", "ioctl-inventory.json")
+OBJECT_GRAPH = os.path.join("surface", "rm-object-graph.json")
 
 SCHEMA = "gspwn.cve-hotspots/1"
 
@@ -130,20 +130,17 @@ BULLETIN_TABLE_HEADER_RE = re.compile(r"^\|\s*\*\*CVE IDs Addressed\*\*")
 VERSION_LEAD_RE = re.compile(r"^\s*(\d+\.\d+(?:\.\d+)?)")
 BRANCH_RE = re.compile(r"^(\d+)\.")
 CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,7}$")
-HUNK_HEADER_RE = re.compile(
-    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 # A C function definition in this tree opens its brace in column 0. The name is
 # the first identifier followed by an open parenthesis in the declarator above
 # it, which holds for both `static NV_STATUS foo(args)` and the multi-line
-# `NV_STATUS\nmemdescCreate\n(\n args \n)` form the RM sources use.
-FUNC_NAME_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
-C_KEYWORDS = frozenset((
-    "if", "for", "while", "switch", "return", "sizeof", "do", "else",
-    "defined", "case", "typedef", "struct", "union", "enum", "static",
-    "inline", "const", "volatile", "extern", "unsigned", "signed",
-))
-DECLARATOR_LOOKBACK = 30
+# `NV_STATUS\nmemdescCreate\n(\n args \n)` form the RM sources use. The three
+# functions implementing that rule live in `gitmine` and are named here because
+# this module is where they are called and tested from.
+function_ranges = gitmine.function_ranges
+declarator_name = gitmine.declarator_name
+enclosing = gitmine.enclosing
+
 # Suffixes NVOC appends to a handler symbol. The inventory records the base
 # name and the source defines the suffixed one.
 HANDLER_SUFFIXES = ("__EXPORT", "_IMPL", "_KERNEL", "_PHYSICAL", "_VF")
@@ -202,17 +199,11 @@ def repo_path(path):
 def git(src, *args):
     """Run one git command in the checkout and return its stdout.
 
-    A non-zero exit is an error with the command and stderr in the message. A
-    silent empty result would read as an empty diff.
+    A non-zero exit or a timeout is a SourceError carrying the command and
+    stderr. A silent empty result would read as an empty diff. Diff-format
+    configuration and the timeout come from `gitmine.run_git`.
     """
-    cmd = ["git", "-C", src] + list(args)
-    proc = subprocess.run(cmd, capture_output=True, text=True,
-                          errors="replace")
-    if proc.returncode != 0:
-        raise SourceError(
-            "git %s failed in %s with exit %d: %s"
-            % (" ".join(args), src, proc.returncode, proc.stderr.strip()))
-    return proc.stdout
+    return gitmine.run_git(src, args, error=SourceError)
 
 
 def check_src(src):
@@ -227,7 +218,7 @@ def check_src(src):
         raise SourceError(
             "%s has no src/nvidia/arch/nvalloc/unix: --src does not point at "
             "open-gpu-kernel-modules" % full)
-    tags = [t for t in git(full, "tag").split() if t]
+    tags = gitmine.list_tags(full, error=SourceError)
     if not tags:
         raise SourceError(
             "%s has no tags. Release bracketing needs them: fetch with "
@@ -393,8 +384,7 @@ def bracket(src, tag):
     would report a whole branch divergence as one release.
     """
     try:
-        previous = git(src, "describe", "--tags", "--abbrev=0",
-                       "%s^" % tag).strip()
+        previous = gitmine.previous_tag(src, "%s^" % tag, error=SourceError)
     except SourceError as exc:
         logger.warning("no ancestor tag for %s: %s", tag, exc)
         return None
@@ -468,73 +458,6 @@ def path_in_scope(path, include_generated):
     return path.startswith(REACHABLE_PREFIXES)
 
 
-def function_ranges(text):
-    """Return [(name, first_line, last_line)] for one C translation unit.
-
-    Lines are 1-based and inclusive. A definition is recognised by its opening
-    brace in column 0; the declarator above it supplies the name.
-    """
-    lines = text.split("\n")
-    ranges = []
-    n = 0
-    while n < len(lines):
-        if lines[n][:1] != "{" or lines[n].strip() != "{":
-            n += 1
-            continue
-        name = declarator_name(lines, n)
-        if name is None:
-            n += 1
-            continue
-        end = n
-        for m in range(n + 1, len(lines)):
-            if lines[m][:1] == "}":
-                end = m
-                break
-        else:
-            end = len(lines) - 1
-        ranges.append((name, n + 1, end + 1))
-        n = end + 1
-    return ranges
-
-
-def declarator_name(lines, brace_index):
-    """The function name in the declarator above a column-0 opening brace."""
-    collected = []
-    for n in range(brace_index - 1, max(-1, brace_index - DECLARATOR_LOOKBACK),
-                   -1):
-        line = lines[n]
-        stripped = line.strip()
-        if not stripped:
-            if collected:
-                break
-            continue
-        if stripped in ("}", "};") or stripped.endswith(";"):
-            break
-        if stripped.startswith("#"):
-            continue
-        if stripped.startswith("//") or stripped.startswith("*"):
-            continue
-        collected.append(stripped)
-    if not collected:
-        return None
-    declarator = " ".join(reversed(collected))
-    if "=" in declarator.split("(")[0]:
-        return None
-    for match in FUNC_NAME_RE.finditer(declarator):
-        candidate = match.group(1)
-        if candidate not in C_KEYWORDS:
-            return candidate
-    return None
-
-
-def enclosing(ranges, line):
-    """The innermost function range holding a 1-based line, or None."""
-    for name, first, last in ranges:
-        if first <= line <= last:
-            return name
-    return None
-
-
 def hunk_signals(added, removed):
     """The security-shaped signals one hunk carries."""
     fired = []
@@ -592,46 +515,27 @@ def diff_file(src, from_tag, to_tag, path):
     outside = "%s (outside any function)" % os.path.basename(path)
     per_function = collections.defaultdict(
         lambda: {"hunks": set(), "added": [], "removed": []})
-    current, hunk_index, added, removed = None, 0, [], []
 
-    def flush():
-        """Attribute one hunk's lines to the functions they land in.
-
-        An added line carries its own post-image position, so a hunk that adds
-        three whole functions splits three ways. A removed line has no
-        post-image position and goes to the function at the hunk anchor.
-        """
-        if current is None:
-            return
-        start, count = current
-        for offset, text in enumerate(added):
-            name = enclosing(ranges, start + offset) or outside
-            slot = per_function[name]
-            slot["added"].append(text)
-            slot["hunks"].add(hunk_index)
-        if removed:
-            anchor = start if count else max(1, start)
-            name = enclosing(ranges, anchor) or outside
-            slot = per_function[name]
-            slot["removed"].extend(removed)
-            slot["hunks"].add(hunk_index)
-
-    for line in body.split("\n"):
-        header = HUNK_HEADER_RE.match(line)
-        if header:
-            flush()
+    # An added line carries its own post-image position, so a hunk that adds
+    # three whole functions splits three ways. A removed line has no post-image
+    # position and goes to the function at the hunk anchor. A hunk that only
+    # removes lines from the head of the file anchors at 0, and the pre-image
+    # is 1-based, so the anchor is floored.
+    hunk_index = 0
+    for entry in gitmine.parse_unified_diff(body):
+        for hunk in entry.hunks:
             hunk_index += 1
-            current = (int(header.group(3)),
-                       int(header.group(4)) if header.group(4) else 1)
-            added, removed = [], []
-            continue
-        if current is None:
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
-            added.append(line[1:])
-        elif line.startswith("-") and not line.startswith("---"):
-            removed.append(line[1:])
-    flush()
+            for offset, text in enumerate(hunk.added):
+                name = enclosing(ranges, hunk.new_start + offset) or outside
+                slot = per_function[name]
+                slot["added"].append(text)
+                slot["hunks"].add(hunk_index)
+            if hunk.removed:
+                anchor = max(1, hunk.new_start)
+                name = enclosing(ranges, anchor) or outside
+                slot = per_function[name]
+                slot["removed"].extend(hunk.removed)
+                slot["hunks"].add(hunk_index)
 
     out = []
     for name, slot in sorted(per_function.items()):
@@ -1064,7 +968,7 @@ def cmd_hotspots(args):
     return 0
 
 
-DEFAULT_WORKLIST = os.path.join("artifacts", "surface", "worklist-round1.md")
+DEFAULT_WORKLIST = os.path.join("surface", "worklist-round1.md")
 
 
 def _relative(path):

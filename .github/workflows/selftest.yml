@@ -37,6 +37,52 @@ jobs:
       - name: Shipped config is valid
         run: python3 tools/gspwn_config.py
 
+      # The five steps below compare committed artefacts that have to agree
+      # and that nothing else compares. Each reads files only, so they run in
+      # the same offline job as everything above.
+
+      - name: Committed names resolve to a description
+        # tools/trace2seed.py converts a traced request number into a call by
+        # name through tools/ioctl_map.json. A name the description set does
+        # not declare produces a program syz-db rejects, and the map went two
+        # releases carrying the two multiplexer names after the surface model
+        # stopped declaring them.
+        run: python3 tools/regression_check.py names
+
+      - name: Emitted selectors are pinned
+        # A control variant with a free cmd field reaches all 1372 exported
+        # control commands from one description, which is the hole the
+        # per-leaf denominator exists to close. syzlang_gen.py asserts the
+        # same rule at emission; this step covers a description set edited by
+        # hand afterwards.
+        run: python3 tools/regression_check.py pins
+
+      - name: Descriptions cover the whole denominator
+        # The inventories under surface enumerate 764 targets and
+        # descriptions declares the variants. A target losing its
+        # description shrinks the numerator silently, because every later
+        # measurement joins on the variant name.
+        run: python3 tools/regression_check.py coverage
+
+      - name: Derived artefacts still match the control inventory
+        # Nothing in CI runs tools/object_graph.py chains or
+        # tools/ctrl_rank.py rank, so a driver bump that moves the control
+        # inventory leaves rm-chains.json and rm-control-rank.json stale with
+        # no signal. tools/trace2seed.py chains and tools/syzlang_gen.py emit
+        # both read them, and the seeds phase is otherwise the first thing to
+        # notice, at run time, on the system under test.
+        run: python3 tools/regression_check.py derived
+
+      - name: Generated reference pages still match the artefacts
+        # docs/src/content/docs/reference/surface/ renders the enumerated
+        # surface: 34 escapes, 531 control commands, 155 allocation classes
+        # and the 61 in-scope CVEs. Every row comes from an artefact under
+        # surface, so a driver bump that moves an inventory leaves
+        # the pages stating counts the tools no longer measure. The check
+        # regenerates into a temporary directory and diffs, which also
+        # catches a page edited by hand.
+        run: python3 tools/regression_check.py pages
+
       - name: Documentation writing register
         # Question-shaped headings and table column headers scan as labels, so
         # a read-through does not catch them. One reference table carried the
@@ -50,7 +96,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import glob, os, re, subprocess, sys
-          cmds, uses, bad = set(), [], []
+          cmds, bare, uses, bad = set(), set(), [], []
           # The agent prompts are checked always; the documentation site and
           # the README are checked when they exist. Pointing this at the docs
           # tree is what makes every command example on the site verified
@@ -67,11 +113,19 @@ jobs:
                   print("note: %s absent, not checked" % p)
           print("scanning %d prompt/doc file(s)" % len(scanned))
           for f in scanned:
-              txt = open(f).read()
+              txt = open(f, encoding="utf-8").read()
+              # The subcommand is optional. Requiring a lowercase word
+              # directly after the file name skipped every invocation whose
+              # first argument is a flag, and skipped its flags with it, which
+              # left 21 invocations across the prompts and the docs tree
+              # unchecked.
               for m in re.finditer(
-                      r"tools/(\w+)\.py\s+([a-z][a-z0-9-]*)"
+                      r"tools/(\w+)\.py(?:\s+(?!--)([a-z][a-z0-9-]*))?"
                       r"((?:\s+--[a-z-]+(?:\s+\S+)?|\s+\\\n\s*)*)", txt):
-                  cmds.add((m.group(1), m.group(2)))
+                  if m.group(2):
+                      cmds.add((m.group(1), m.group(2)))
+                  elif m.group(3).strip():
+                      bare.add((f, m.group(1)))
                   for fl in re.findall(r"--[a-z][a-z-]*", m.group(3)):
                       uses.append((f, m.group(1), m.group(2), fl))
           helps = {}
@@ -85,16 +139,35 @@ jobs:
               m = re.search(r"\{([a-z0-9,\-]+)\}", r.stdout + r.stderr)
               if m and sub not in set(m.group(1).split(",")):
                   bad.append("%s has no subcommand %r" % (path, sub))
+          # An invocation carrying flags and no subcommand, against a tool
+          # that requires one, runs nothing. The flag loop below cannot report
+          # it: it reads those flags against the tool's own --help, where a
+          # subcommand's flags never appear.
+          for f, tool in sorted(bare):
+              path = os.path.join("tools", tool + ".py")
+              if not os.path.exists(path):
+                  bad.append("%s does not exist" % path)
+                  continue
+              r = subprocess.run([sys.executable, path, "--help"],
+                                 capture_output=True, text=True)
+              m = re.search(r"\{([a-z0-9,\-]+)\}", r.stdout + r.stderr)
+              if m:
+                  bad.append("%s: %s is invoked with no subcommand and "
+                             "requires one of {%s}" % (f, path, m.group(1)))
           for f, tool, sub, fl in uses:
               key = (tool, sub)
               if key not in helps:
-                  r = subprocess.run(
-                      [sys.executable, os.path.join("tools", tool + ".py"),
-                       sub, "--help"], capture_output=True, text=True)
+                  argv = [sys.executable, os.path.join("tools", tool + ".py")]
+                  if sub:
+                      argv.append(sub)
+                  argv.append("--help")
+                  r = subprocess.run(argv, capture_output=True, text=True)
                   helps[key] = r.stdout + r.stderr
               if fl not in helps[key]:
-                  bad.append("%s: %s.py %s has no %s" % (f, tool, sub, fl))
-          print("checked %d subcommands, %d flag uses" % (len(cmds), len(uses)))
+                  bad.append("%s: %s.py %s has no %s"
+                             % (f, tool, sub or "(no subcommand)", fl))
+          print("checked %d subcommands, %d bare invocation(s) with flags, "
+                "%d flag uses" % (len(cmds), len(bare), len(uses)))
           for b in sorted(set(bad)):
               print("PROBLEM: " + b)
           sys.exit(1 if bad else 0)

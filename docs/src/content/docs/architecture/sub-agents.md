@@ -80,18 +80,24 @@ flowchart LR
   C2 --> MERGE["refine merges both"]
   F2 --> MERGE
   F3 --> MERGE
-  MERGE --> WL["worklist.md<br/>every item tagged<br/>[coverage] or [finding crash-NNNN]"]
+  MERGE --> WL["worklist.md<br/>every item tagged<br/>[surface], [finding crash-NNNN]<br/>or [history CVE-YYYY-NNNNN]"]
 ```
 
 | Signal | Produced by | Answers | Consumed by |
 |---|---|---|---|
-| Coverage | `coverage_ctl.py series` and `plateau` | Where the fuzzer has not been | `refine`, into `gaps.md` |
+| Coverage | `coverage_ctl.py series` and `plateau`, `surface_cov.py gaps` | Where the fuzzer has not been | `refine`, into `gaps.md` |
 | Findings | `pipeline_ctl.py finding-list` | Where the bugs have been | `refine`, into `worklist.md` |
+| History | `surface/worklist-round1.md` | Where the vendor has fixed bugs before | The round-1 `describe` and `seeds` phases |
 
-The two are not interchangeable. A loop following coverage alone keeps widening
-the surface and never returns to a subsystem that already yielded a bug. Every
-work-list item carries a `[coverage]` or `[finding crash-NNNN]` tag naming
-which signal produced it, and the `refine` gate reports the split.
+The three are not interchangeable. A loop following coverage alone keeps
+widening the surface and never returns to a subsystem that already yielded a
+bug. Every work-list item carries a `[surface]`, `[finding crash-NNNN]` or
+`[history CVE-YYYY-NNNNN]` tag naming which signal produced it, and the
+`refine` gate reports the split.
+
+`[surface]` absorbed the older `[coverage]` tag. `surface_cov.py gaps` names
+the exact enumerated command a corpus has not reached, where an edge count only
+gestures at a region.
 
 ## The feedback edge
 

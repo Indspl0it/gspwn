@@ -24,6 +24,63 @@ NVIDIA_SRC="$(cd "$NVIDIA_SRC" && pwd)"
 
 [[ "$RUNG" =~ ^[123]$ ]] || { echo "RUNG must be 1, 2 or 3"; exit 2; }
 
+# Symbols disabled deliberately below, and until now checked nowhere after
+# olddefconfig had its say. Each fails differently and none of the failures
+# names itself.
+REQUIRED_DISABLED=(
+  # KASLR shifts every address in every report. stack_hash strips offsets and
+  # module names and keeps function names, so the primary dedup key survives,
+  # and the RIP symbol crash_parse.py reads and every unsymbolized frame do
+  # not. The secondary key degrades silently, which is the failure mode the
+  # frameless-signature work exists to prevent.
+  CONFIG_RANDOMIZE_BASE
+  # An out-of-tree NVIDIA module is unsigned. Either of these surviving stops
+  # it loading, and the build gate then fails with nvidia-smi errors that say
+  # nothing about signing or lockdown.
+  CONFIG_MODULE_SIG_FORCE
+  CONFIG_SECURITY_LOCKDOWN_LSM_EARLY
+  # Selecting this compiles the debug info out from under DEBUG_INFO.
+  CONFIG_DEBUG_INFO_NONE
+)
+
+# check_config <config file> <context>
+# olddefconfig silently drops anything the tree does not offer, and
+# CONFIG_DEBUG_INFO stopped being user-selectable in 5.18 — exactly the class
+# of setting that goes missing without a word and is only noticed when
+# symbolization is useless months later. Check what actually took.
+check_config() {
+  local cfg="$1" context="$2" sym missing="" surviving=""
+  [[ -f "$cfg" ]] || { echo "ERROR: no config at $cfg ($context)" >&2; exit 1; }
+  # KCOV is coverage at all, INSTRUMENT_ALL is coverage outside the syscall
+  # entry paths, ENABLE_COMPARISONS is the __sanitizer_cov_trace_cmp* symbols
+  # the rung 1 and rung 2 module builds reference, KALLSYMS_ALL is
+  # symbolization of module frames.
+  for sym in CONFIG_KCOV CONFIG_KCOV_INSTRUMENT_ALL \
+             CONFIG_KCOV_ENABLE_COMPARISONS CONFIG_KASAN \
+             CONFIG_KASAN_GENERIC CONFIG_KALLSYMS_ALL; do
+    grep -q "^${sym}=y" "$cfg" || missing="$missing $sym"
+  done
+  # Debug info is a choice in newer trees; any of these three satisfies it.
+  grep -qE "^CONFIG_DEBUG_INFO(_DWARF[A-Z0-9_]*)?=y" "$cfg" \
+    || missing="$missing CONFIG_DEBUG_INFO"
+  for sym in "${REQUIRED_DISABLED[@]}"; do
+    ! grep -q "^${sym}=y" "$cfg" || surviving="$surviving $sym"
+  done
+  if [[ -n "$missing" ]]; then
+    echo "ERROR: these are not set in $cfg ($context):$missing" >&2
+    echo "       Fuzzing without them measures and symbolizes nothing." >&2
+    exit 1
+  fi
+  if [[ -n "$surviving" ]]; then
+    echo "ERROR: these are still enabled in $cfg ($context):$surviving" >&2
+    echo "       Each one was disabled on purpose; see REQUIRED_DISABLED in" >&2
+    echo "       this script for what each one costs." >&2
+    exit 1
+  fi
+  echo "config check ($context): KCOV, KCOV comparisons, KASAN, kallsyms," \
+       "debug info present; KASLR, module signing and lockdown off"
+}
+
 cd "$LINUX_SRC"
 KVER=""
 
@@ -35,6 +92,14 @@ if [[ "$SKIP_KERNEL" == "1" ]]; then
   echo "== kernel: SKIP_KERNEL=1, reusing the installed build =="
   [[ -f .config ]] || { echo "SKIP_KERNEL=1 but $LINUX_SRC/.config does not \
 exist; run rung 1 first"; exit 2; }
+  # The same check the build branch runs, against the config the reused
+  # kernel came from. Rung 2 compiles the NVIDIA modules with
+  # -fsanitize-coverage=trace-cmp against whatever kernel is installed: if
+  # that kernel's tree lost CONFIG_KCOV_ENABLE_COMPARISONS, insmod fails with
+  # 'Unknown symbol __sanitizer_cov_trace_cmp1' hours later, and skipping the
+  # check here is what lets rung 2 walk into the failure rung 1 checks for.
+  echo "== config check =="
+  check_config .config "reused kernel, SKIP_KERNEL=1"
 else
   echo "== kernel config (KASAN+KCOV) =="
   # Start from the config this machine actually boots with, not defconfig. A
@@ -53,8 +118,16 @@ else
     echo "         Set BASE_CONFIG to a config known good for this hardware."
     make defconfig 2>&1 | tee "$LOGDIR/build-kernel-config.log"
   fi
+  # CONFIG_KCOV_ENABLE_COMPARISONS is not implied by CONFIG_KCOV and
+  # carries no 'default y'. Without it kernel/kcov.c compiles out every
+  # __sanitizer_cov_trace_cmp* definition, and the NVIDIA modules built
+  # at rung 1 and rung 2 with -fsanitize-coverage=trace-cmp reference
+  # symbols the kernel does not export: insmod fails with 'Unknown
+  # symbol __sanitizer_cov_trace_cmp1'. syzkaller's comparison-hint
+  # mutation reads the same data.
   scripts/config --enable CONFIG_KCOV \
                  --enable CONFIG_KCOV_INSTRUMENT_ALL \
+                 --enable CONFIG_KCOV_ENABLE_COMPARISONS \
                  --enable CONFIG_KASAN \
                  --enable CONFIG_KASAN_GENERIC \
                  --enable CONFIG_UBSAN \
@@ -75,25 +148,8 @@ else
                  --set-str CONFIG_MODULE_SIG_KEY ""
   make olddefconfig 2>&1 | tee -a "$LOGDIR/build-kernel-config.log"
 
-  # olddefconfig silently drops anything the tree does not offer, and
-  # CONFIG_DEBUG_INFO stopped being user-selectable in 5.18 — exactly the
-  # class of setting that goes missing without a word and is only noticed
-  # when symbolization is useless months later. Check what actually took.
   echo "== config check =="
-  missing=""
-  for sym in CONFIG_KCOV CONFIG_KCOV_INSTRUMENT_ALL CONFIG_KASAN \
-             CONFIG_KASAN_GENERIC CONFIG_KALLSYMS_ALL; do
-    grep -q "^${sym}=y" .config || missing="$missing $sym"
-  done
-  # Debug info is a choice in newer trees; any of these three satisfies it.
-  grep -qE "^CONFIG_DEBUG_INFO(_DWARF[A-Z0-9_]*)?=y" .config \
-    || missing="$missing CONFIG_DEBUG_INFO"
-  if [[ -n "$missing" ]]; then
-    echo "ERROR: these did not survive olddefconfig:$missing" >&2
-    echo "       Fuzzing without them measures and symbolizes nothing." >&2
-    exit 1
-  fi
-  echo "instrumentation present: KCOV, KASAN, kallsyms, debug info"
+  check_config .config "after olddefconfig"
 
   echo "== kernel build (-j$JOBS) =="
   make -j"$JOBS" 2>&1 | tee "$LOGDIR/build-kernel.log"
@@ -181,9 +237,15 @@ echo "next boot: $ENTRY"
 
 echo "== manifest =="
 python3 - "$REPO_ROOT" "$RUNG" "$KVER" <<'EOF'
-import json, os, subprocess, sys
+import json, os, subprocess, sys, tempfile
 root, rung, kver = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-mpath = os.path.join(root, "artifacts", "builds", "manifest.json")
+mdir = os.path.join(root, "artifacts", "builds")
+mpath = os.path.join(mdir, "manifest.json")
+# This runs at the end of a multi-hour build and it is the only record of what
+# was built. A missing parent directory or an interrupt part-way through the
+# write costs that record and the build with it, so the directory is created
+# and the file is written through a temp file and renamed.
+os.makedirs(mdir, exist_ok=True)
 m = json.load(open(mpath)) if os.path.exists(mpath) else {}
 m.update({
   "instrumentation_rung": rung,
@@ -195,7 +257,18 @@ m.update({
   "nvidia_commit": subprocess.run(["git","-C",os.environ["NVIDIA_SRC"],
          "rev-parse","HEAD"],capture_output=True,text=True).stdout.strip(),
 })
-json.dump(m, open(mpath,"w"), indent=2)
+fd, tmp = tempfile.mkstemp(dir=mdir, suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(m, f, indent=2)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, mpath)
+except BaseException:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+    raise
 print("manifest updated:", mpath)
 EOF
 

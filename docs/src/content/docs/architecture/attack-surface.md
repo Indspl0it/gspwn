@@ -15,8 +15,12 @@ Three commands regenerate the inventories from a checkout:
 | [`ctrl_surface.py`](/gspwn/architecture/components/ctrl-surface/) | The RM control command space and its privilege classification |
 | [`object_graph.py`](/gspwn/architecture/components/object-graph/) | The RM object allocation DAG and its chaining depth |
 
-The records land under `artifacts/surface/`, which is not committed. The
-platform-side detail behind the numbers is in the knowledgebase:
+The records land under `surface/`, a committed tree. All ten artefacts
+travel with the repository, so a clean checkout runs the tools that consume
+them without a driver source tree. Producing them needs that tree; reading
+them does not.
+
+The platform-side detail behind the numbers is in the knowledgebase:
 [RM control surface](/gspwn/knowledgebase/rm-control-surface/),
 [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/),
 [container device access](/gspwn/knowledgebase/container-device-access/) and
@@ -45,15 +49,16 @@ can see a bug.
 | Set | Count | Consequence |
 |---|---|---|
 | Exported control methods | 1372 | The full export table |
-| Marked `NON_PRIVILEGED` | 767 | The flag word admits an unprivileged caller |
-| Also marked `INTERNAL` | 23 | Rejected before the privilege check, so not reachable from an ioctl |
+| Carrying the `NON_PRIVILEGED` flag | 790 | The flag word admits an unprivileged caller |
+| Of those, also carrying `INTERNAL` | 23 | Rejected before the privilege check, so not reachable from an ioctl |
+| Classified non-privileged | 767 | 790 less the 23 |
 | Carrying `ROUTE_TO_PHYSICAL` with no local handler | 236 of the 767 | The parameter buffer crosses the RPC queue to GSP firmware |
 | **Non-privileged with a kernel-side handler** | **531** | The set where a kernel memory-safety bug can exist and coverage can measure it |
 
 531 is the number a round should be sized against. A campaign that reports
-progress against 1372, or against the 2572 command numbers defined in the SDK
-headers, is measuring against a denominator that includes firmware it cannot
-instrument and internal commands it cannot call.
+progress against 1372, or against the 1787 distinct command numbers the SDK
+headers define, is measuring against a denominator that includes firmware it
+cannot instrument and internal commands it cannot call.
 
 ## Three ways to miscount this surface
 
@@ -78,7 +83,8 @@ inflates a count if taken at face value.
 
 151 of 222 classes sit at depth 4. A description set without resource chaining
 reaches the 25 classes at depth 1 and 2 and stops. Three allocations open the
-widest part of the tree.
+widest part of the tree, and the section below counts the control commands
+that opens.
 
 ```
 open("/dev/nvidiactl")
@@ -87,8 +93,9 @@ open("/dev/nvidiactl")
       -> KEPLER_CHANNEL_GROUP_A | GF100_CHANNEL_GPFIFO | NV20_SUBDEVICE_0
 ```
 
-| Parent | Classes unlocked | Unprivileged among them |
+| Parent | Classes in its subtree | Unprivileged among them |
 |---|---|---|
+| NV01_ROOT | 214 | 147 |
 | NV01_DEVICE_0 | 197 | 130 |
 | KEPLER_CHANNEL_GROUP_A | 80 | 78 |
 | GF100_CHANNEL_GPFIFO | 67 | 66 |
@@ -96,6 +103,69 @@ open("/dev/nvidiactl")
 
 Channel allocation returns the most per description authored and is the
 hardest to model, because it needs a GPFIFO buffer and an address space object.
+
+`object_graph.py` resolves a parent named in `RS_ENTRY` through the NVOC
+internal class it names, and that map is one internal class to many external
+classes. Resolving it to a single external class dropped every sibling edge.
+The parent lists now carry all of them, which takes the graph from 246 edges
+to 1216 over the same 222 records, changes 122 parent lists, and removes none.
+The recovered edges run to siblings of a parent a record already had, so no
+class changed depth and the table above is unmoved. `GF100_CHANNEL_GPFIFO` was
+the only GPFIFO class carrying its 67 children before, and all eleven from
+`GF100_CHANNEL_GPFIFO` through `BLACKWELL_CHANNEL_GPFIFO_B` now carry the
+same 67.
+
+## Measured reach per prologue
+
+`object_graph.py chains` walks the same tree with the privileged edges removed
+and records one chain per owning class in
+`surface/rm-chains.json`. The cumulative curve reads how many of the
+531 commands an unprivileged process reaches after N allocations.
+
+| Objects built | Commands unlocked | Share of 531 | Last class added at that count |
+|---|---|---|---|
+| 1 | 91 | 17% | `RmClientResource` |
+| 3 | 315 | 59% | `Device` |
+| 4 | 337 | 63% | `VgpuConfigApi` |
+| 11 | 429 | 81% | `ConfidentialComputeApi` |
+| 15 | 455 | 86% | `SemaphoreSurface` |
+| 38 | 514 | 97% | `ZbcApi` |
+
+Nothing unlocks beyond 38 allocations. Three allocations reach 59% of the
+control surface and four reach 63%.
+
+The greedy step buys the class with the highest command count per allocation
+the built set does not already hold, and every class allocated along the way
+is credited, so the curve rises at an allocation count no single chain has.
+`Subdevice` alone owns 182 of the 531, and its three-allocation chain also
+builds `RmClientResource` and `Device`, which own 91 and 42, giving 315.
+
+Every figure in the table is arithmetic over the `RS_ENTRY` table by way of
+`rm-chains.json`. No chain has been allocated and no GPU was involved, so the
+reach these numbers describe is unverified.
+
+| Reading | Count |
+|---|---|
+| Targetable control commands | 531 |
+| Owning class carries an `RS_ENTRY` record | 516 |
+| Reached by a chain an unprivileged process can build | 514 |
+| Reached by no chain | 17 |
+| Internal classes carrying an unprivileged chain | 82 of the 98 recorded |
+
+The three counts are different measurements and none replaces another. All
+531 name an owning class in the control inventory. 516 of those name a class
+the object graph carries an `RS_ENTRY` record for, the 15 absent belonging to
+`ProfilerBase` (9) and `Memory` (6). 514 of those have a chain an unprivileged
+process can build, the 2 further absent belonging to `MmuFaultBuffer` and
+`NvDispApi`. `rm-control-rank.json` closes the arithmetic in both directions.
+Its `no_chain_reason` field over the 531 records reads 514 null, 15 `no
+RS_ENTRY row for this class` and 2 `every external class requires allocation
+privilege`.
+
+The 17 belong to four owning classes. `Memory` and `ProfilerBase` are NVOC base
+classes with no `RS_ENTRY` row, and `MmuFaultBuffer` and `NvDispApi` have every
+external class marked `RS_FLAGS_ALLOC_PRIVILEGED`. Those are the entries the
+completion ledger closes under `chain-unbuildable` and `needs-privilege`.
 
 ## Scope corrections the source supports
 
@@ -173,7 +243,7 @@ by default: `NVreg_CreateImexChannel0` defaults to 0, and the one
 
 ## Prior art, settled
 
-Two questions that phase prompts currently guess at.
+Three questions the phase prompts currently guess at have settled answers.
 
 | Question | Answer |
 |---|---|
@@ -199,11 +269,36 @@ structure, and they cover `/dev/nvidia-modeset`, which is out of scope here.
 | The CWE distribution shows where bugs live | Weak. It shows where bugs get found, and NULL dereference is the cheapest class to notice |
 | Two bulletins hold half the kernel-module CVEs | Verified, and a caution. Bulletins 5415 and 5452 are batch fixes with near-identical descriptions, so they may describe one audit of one file |
 
+### The record as a steering signal
+
+The 61 records are mined against the driver's release tags and the result is a
+weighted term in the command ranking. `surface/cve-hotspots.json`
+carries a per-file and a per-function release count, and `ctrl_rank.py` reads
+it as the `cve` component at weight 0.30 against `depth` at 0.50 and `size` at
+0.20. A function-level match is scaled up by 1.5 over a file-level one,
+because it names the changed code and not the file holding it.
+
+| Reading | Count |
+|---|---|
+| Kernel-mode CVEs mined | 61 |
+| Resolved to a tag pair | 53, over 32 distinct pairs |
+| Resolved to a named function | 8 |
+| Of the 531 ranked commands, handler resolved to an implementation | 518 |
+| Handler in a file some fix touched | 245 |
+| Handler matching a function some fix changed | 11 |
+
+The signal is weak by construction and the ranking is built to survive that.
+Each record carries its `depth`, `cve` and `size` components beside the score,
+so a consumer that disagrees with the weights re-sorts on the components
+without re-running the scan. Whether the ranking finds bugs faster than an
+arbitrary order has not been measured, and the weights are a judgement no
+measurement here settles.
+
 ## Limits
 
-| Limit | Detail |
+| Limit | Mechanism |
 |---|---|
-| Chip gating is invisible | The class table spans generations. `gpuGetClassByClassId` decides at runtime which exist, and `config/machine.yaml` leaves `gpu_model` empty until provision runs |
+| Chip gating is invisible | The class table spans generations. `gpuGetClassByClassId` decides at runtime which exist, and `config/machine.yaml` leaves `gpu_model` empty until provision runs. The `object_graph.py` module docstring states the gate, and the source tree carries nothing that tests it, so every chain on this page is a path the table permits and not a path a part accepts |
 | Privilege flags are necessary and not sufficient | Class constructors and control handlers carry further checks |
 | GSP-routed commands are not measurable | 236 of the 767 non-privileged control commands cross the RPC queue, where KCOV cannot follow |
 | The escape inventory is one driver version | Every number is tied to commit `e4a5faa`. The ABI moves between branches |

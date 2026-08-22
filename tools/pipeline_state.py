@@ -31,6 +31,16 @@ STATE_PATH = os.environ.get("GSPWN_STATE") or DEFAULT_STATE_PATH
 # GSPWN_SPEND exists only so tools/selftest.py can point it at a tempdir.
 SPEND_PATH = os.environ.get("GSPWN_SPEND") or os.path.join(STATE_DIR,
                                                            "spend.json")
+# The completion ledger: one row per command-surface target that will not be
+# exercised, each carrying a written reason. Its own artefact rather than a key
+# in this file, because save() below rewrites the whole state under a lock on
+# every phase transition and every crash registration, and the surface has 764
+# targets against a state file of about 1200 bytes. It records the driver
+# release of the inventories it is counted against, so a driver bump
+# invalidates it. Campaign progress, so it sits beside pipeline.json and is
+# not committed.
+SURFACE_LEDGER_PATH = os.environ.get("GSPWN_SURFACE_LEDGER") or os.path.join(
+    STATE_DIR, "completion-ledger.json")
 
 SCHEMA_VERSION = 2
 
@@ -62,6 +72,62 @@ DISCLOSURE_STATUS = {"pending", "submitted", "resolved", "not_applicable"}
 TRACKS = {"K", "U"}
 COVERAGE_VERDICT = {"growing", "plateaued", "unknown"}
 ROUND_DECISION = {"continue", "stop"}
+
+# ------------------------------------------------- the completion ledger ---
+# Termination is `exercised + accounted-for = 764`: every target the corpus
+# never named carries a written reason, and no percentage threshold appears
+# anywhere. The reason is a closed vocabulary so the completion count can group
+# by it; free text would make "GSP" and "runs on gsp" two categories.
+#
+# The first four are the exclusion categories surface_cov already reports
+# outside the denominator, spelled identically so the two group together. They
+# apply to a target *inside* the 764 whose inventory classification turns out
+# too generous: surface_cov states its own limits, and 16 control commands are
+# already known to carry a capability check the RMCTRL flag word does not show.
+SURFACE_REASON = {
+    "control_gsp": "handler compiled out. The parameter buffer crosses the "
+                   "RPC queue and runs on GSP, where KCOV cannot follow",
+    "uvm_test": "gated on uvm_enable_builtin_tests=1, which the target does "
+                "not set",
+    "escape_dead": "declared with no dispatch case, so no kernel code runs",
+    "escape_mux": "a multiplexer whose leaves are counted in another family",
+    "needs-privilege": "the handler body checks a capability the modelled "
+                       "caller does not hold",
+    "chain-unbuildable": "no allocation chain a default tenant can build "
+                         "reaches the object this call needs",
+    "no-param-model": "the parameter struct cannot be modelled well enough "
+                      "for the call to reach its handler",
+    "deliberately-deferred": "in scope and reachable, left for a later "
+                             "campaign by an explicit decision. Recorded, and "
+                             "does not close the target",
+}
+# Reasons that assert something about driver source or the object graph. A
+# claim about code with no file:line behind it is a guess wearing a vocabulary,
+# and here it is a guess that closes out a target permanently.
+SURFACE_REASON_NEEDS_EVIDENCE = ("control_gsp", "escape_dead",
+                                 "needs-privilege", "chain-unbuildable",
+                                 "no-param-model")
+# Reasons that do not close a target. Seven of the eight say the target cannot
+# be reached, is not reachable by the modelled caller, or runs where coverage
+# cannot follow, and closing on those is what the completion identity means.
+# `deliberately-deferred` says the opposite: the target is reachable and was
+# skipped. Counting it into `closed` would make the identity read "exercised,
+# or excluded, or postponed", and the stop it fires prints "Nothing is left to
+# fuzz" over targets the ledger itself records as reachable. It stays a
+# recordable reason, because a campaign that defers work should say so here
+# instead of writing an unreachability claim that is not true, and its rows
+# are counted and reported on their own.
+SURFACE_REASON_DEFERRED = ("deliberately-deferred",)
+SURFACE_VERDICT = {"complete", "incomplete", "unknown"}
+SURFACE_LEDGER_SCHEMA = "gspwn.surface-ledger/1"
+
+# One accounted target. `variant` is the observation field: it is what a corpus
+# program names and what surface_cov matches on, and it is also the field a
+# driver refactor renames, which is why `key` and not `variant` is the identity.
+DEFAULT_ACCOUNT = {"key": "", "variant": "", "family": "", "reason": "",
+                   "detail": "", "evidence": [], "round": None,
+                   "first_recorded": None, "recorded": None}
+ACCOUNT_TEXT = ("key", "variant", "family", "reason", "detail")
 
 # Phases that may run concurrently once `build` is done (AGENTS.md).
 PARALLEL_AFTER_BUILD = {"describe", "seeds", "harness"}
@@ -215,6 +281,30 @@ DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  # (one per campaign), never a single campaign standing in for
                  # the whole round.
                  "run_hours_by_run": {},
+                 # The completion ledger this round accounted against, as a
+                 # path. Same shape and same reason as worklist: the file is an
+                 # artefact and the state holds the pointer, so no two prompts
+                 # have to agree on a filename. The ledger itself carries the
+                 # driver version it was built for, and reading it against a
+                 # different one is refused rather than compared.
+                 "surface_ledger": None,
+                 # The completion reading: complete when every one of the 764
+                 # targets is either exercised or accounted for. See
+                 # SURFACE_VERDICT and surface_stop_reason.
+                 "surface_verdict": "unknown",
+                 # The counts behind that verdict, so the report can quote them
+                 # and a later round can see them move. surface_closed is the
+                 # union of the first two and not their sum: a target can be
+                 # exercised in a later round after an earlier one wrote a
+                 # reason for it, so the sum can exceed the total while
+                 # targets remain.
+                 "surface_exercised": None, "surface_accounted": None,
+                 "surface_closed": None, "surface_total": None,
+                 # Accounted rows written under a reason that does not close a
+                 # target (SURFACE_REASON_DEFERRED). One integer, so the state
+                 # file does not grow with the denominator, and it is the only
+                 # place a report can see that a round put work aside.
+                 "surface_deferred": None,
                  "notes": ""}
 
 
@@ -557,6 +647,244 @@ def spend_for_budget():
     return spent_hours(load(DEFAULT_STATE_PATH))
 
 
+# ------------------------------------------------- the completion ledger ---
+
+
+class SurfaceLedgerMismatch(Exception):
+    """The ledger was built against a different driver release.
+
+    Loud rather than silent, because the failure it prevents is comparing an
+    accounted count from one release against a denominator from another and
+    reporting the difference as progress.
+    """
+
+
+def surface_ledger_path(path=None):
+    """The ledger path, resolved against the repo for a relative one.
+
+    The round stores it repo-relative, the same as worklist, so the pointer
+    survives being read on another machine. Resolving here means a caller with
+    a different working directory reads the same file instead of creating a
+    second empty ledger beside itself and reporting nothing accounted for.
+    """
+    path = path or SURFACE_LEDGER_PATH
+    return path if os.path.isabs(path) else os.path.join(REPO_ROOT, path)
+
+
+def empty_surface_ledger(driver_version=None, targets_total=None):
+    return {"schema": SURFACE_LEDGER_SCHEMA, "driver_version": driver_version,
+            "targets_total": targets_total, "updated": None, "accounted": {}}
+
+
+def load_surface_ledger(path=None, driver_version=None, targets_total=None):
+    """The ledger at `path`, or an empty one. Never invents an accounted row.
+
+    `driver_version` is the release the caller is about to count against. When
+    both it and the ledger's version are known and they differ, this raises:
+    the inventories are keyed by driver release, and a ledger written for one
+    release accounts for targets that another does not contain.
+
+    `targets_total` is the denominator the caller counted, used only to fill an
+    empty ledger's own field so a file that has never been written through
+    set_surface_account reports the denominator instead of null.
+    """
+    path = surface_ledger_path(path)
+    if not os.path.exists(path):
+        return empty_surface_ledger(driver_version, targets_total)
+    with open(path) as f:
+        try:
+            raw = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError("%s is not valid JSON (%s). Restore it from "
+                             "%s.bak. Do not re-create it empty, because an "
+                             "empty ledger reads as 'nothing is accounted "
+                             "for' and silently reopens every closed target."
+                             % (path, e, path))
+    if not isinstance(raw, dict) or not isinstance(raw.get("accounted"), dict):
+        raise ValueError("%s must be a JSON object with an 'accounted' "
+                         "mapping of target key to record" % path)
+    # Every value as well as the mapping. A row that is a bare string reaches
+    # .get() in three callers and raises AttributeError out of all of them,
+    # and the ledger is hand edited often enough for that to be the shape a
+    # recovery attempt takes. Saying which key is wrong is the difference
+    # between a fixable file and a traceback.
+    bad = sorted(k for k, row in raw["accounted"].items()
+                 if not isinstance(row, dict))
+    if bad:
+        raise ValueError("%s holds %d accounted row(s) that are not JSON "
+                         "objects: %s. Each row is a record with at least a "
+                         "key, a variant, a reason and a detail; delete the "
+                         "row or write it out in full"
+                         % (path, len(bad), ", ".join(bad[:5])))
+    was = raw.get("driver_version")
+    if driver_version and was and was != driver_version:
+        raise SurfaceLedgerMismatch(
+            "%s accounts for driver %s but the inventories describe %s. The "
+            "denominator moved, so the accounted rows cannot be counted "
+            "against it. Re-account against the new release, or point the "
+            "round at a ledger built for it." % (path, was, driver_version))
+    return raw
+
+
+def normalize_account(record):
+    """Validate one accounting record -> the stored dict.
+
+    Unknown keys are refused rather than dropped, on the same grounds as
+    normalize_finding: a misspelled `reasons` would otherwise leave `reason`
+    empty while the command reported success, and this record is what removes
+    a target from the campaign permanently.
+    """
+    if not isinstance(record, dict):
+        raise ValueError("an accounting record must be a JSON object, got %s"
+                         % type(record).__name__)
+    unknown = sorted(set(record) - set(DEFAULT_ACCOUNT))
+    if unknown:
+        raise ValueError("unknown accounting field(s): %s (expected one of %s)"
+                         % (", ".join(unknown),
+                            ", ".join(sorted(DEFAULT_ACCOUNT))))
+    out = dict(DEFAULT_ACCOUNT)
+    out["evidence"] = []
+    out.update({k: v for k, v in record.items() if v is not None})
+    out["evidence"] = _finding_strings(out["evidence"], "evidence",
+                                       kind="accounting")
+    for k in ACCOUNT_TEXT:
+        if not isinstance(out[k], str):
+            raise ValueError("accounting field %r must be a string, got %s"
+                             % (k, type(out[k]).__name__))
+        out[k] = out[k].strip()
+    for k in ("key", "variant"):
+        if not out[k]:
+            raise ValueError("an accounting record needs a %s" % k)
+    if out["reason"] not in SURFACE_REASON:
+        raise ValueError(
+            "unknown reason: %r. It is a closed vocabulary so the completion "
+            "count can group by it, and 'not reached yet' is not one of them. "
+            "A target nobody has reached yet belongs in the worklist. "
+            "Expected one of: %s"
+            % (out["reason"], ", ".join(sorted(SURFACE_REASON))))
+    if not out["detail"]:
+        raise ValueError(
+            "reason %r needs a detail saying why this target is accounted for "
+            "with no fuzzing. The category alone closes a target out with "
+            "nothing a later round can re-examine" % out["reason"])
+    if out["reason"] in SURFACE_REASON_NEEDS_EVIDENCE and not out["evidence"]:
+        raise ValueError(
+            "reason %r asserts something about the driver source or the "
+            "object graph, so it needs the file:line it rests on. Without one "
+            "the target is closed out on an assertion nobody can check"
+            % out["reason"])
+    if out["round"] is not None and not (isinstance(out["round"], int)
+                                         and not isinstance(out["round"], bool)
+                                         and out["round"] > 0):
+        raise ValueError("accounting field 'round' must be a positive integer "
+                         "or absent, got %r" % (out["round"],))
+    return out
+
+
+def set_surface_account(record, path=None, driver_version=None,
+                        targets_total=None):
+    """Record one target as accounted for -> the stored row.
+
+    Idempotent on the target key: re-accounting the same target replaces its
+    reason and detail and keeps `first_recorded`, so a round that revises a
+    judgement corrects the row instead of adding a second one and inflating
+    the accounted count past the denominator.
+
+    Its own lock file, so this is safe to call while a state transaction() is
+    open — the refine phase holds one for the rest of its bookkeeping.
+    """
+    path = surface_ledger_path(path)
+    row = normalize_account(record)
+    with _ledger_transaction(path):
+        ledger = load_surface_ledger(path, driver_version)
+        if driver_version:
+            ledger["driver_version"] = driver_version
+        if targets_total is not None:
+            ledger["targets_total"] = targets_total
+        ledger.setdefault("schema", SURFACE_LEDGER_SCHEMA)
+        previous = ledger["accounted"].get(row["key"])
+        row["first_recorded"] = ((previous or {}).get("first_recorded")
+                                 or row["recorded"] or _now())
+        row["recorded"] = _now()
+        ledger["accounted"][row["key"]] = row
+        ledger["updated"] = row["recorded"]
+        save(ledger, path)
+    return row
+
+
+def clear_surface_account(key, path=None, driver_version=None):
+    """Remove one accounted row -> the row removed, or None if there was none.
+
+    The way out of a wrong accounting, and the reason the completion stop can
+    be a hard one. A row closes its target permanently, the verdict built on
+    it is a stop round-decide refuses to override, and without this the only
+    recovery is a hand edit of the ledger file. Reopening a target moves the
+    campaign back towards fuzzing it, which is the safe direction, so nothing
+    here refuses anything beyond an unknown key.
+    """
+    path = surface_ledger_path(path)
+    with _ledger_transaction(path):
+        ledger = load_surface_ledger(path, driver_version)
+        row = ledger["accounted"].pop(key, None)
+        if row is None:
+            return None
+        ledger["updated"] = _now()
+        save(ledger, path)
+    return row
+
+
+def surface_ledger_keys(path=None, driver_version=None):
+    """-> (every accounted key, the subset written under a deferring reason).
+
+    One read, because the two sets are compared against each other and a
+    second load could see a ledger another process had changed in between.
+    """
+    rows = load_surface_ledger(path, driver_version)["accounted"]
+    deferred = {k for k, row in rows.items()
+                if row.get("reason") in SURFACE_REASON_DEFERRED}
+    return set(rows), deferred
+
+
+def accounted_keys(path=None, driver_version=None):
+    """The set of target keys carrying a written reason, deferrals included."""
+    return surface_ledger_keys(path, driver_version)[0]
+
+
+def surface_completion(exercised_keys, accounted, targets_total,
+                       deferred=None):
+    """-> (verdict, counts, closed). Arithmetic over sets, not a threshold.
+
+    A union and not a sum: a target can be both exercised and accounted for,
+    once a round writes a reason for something a later round goes on to reach.
+    Adding the two counts would then close the ledger while targets remained,
+    which is the one way this rule can stop a campaign that is not finished.
+
+    `deferred` names the accounted keys whose reason does not close a target,
+    and they are subtracted before the union. See SURFACE_REASON_DEFERRED: a
+    deferred target is reachable and unfuzzed, so admitting it would let a
+    campaign close its ledger by writing down what it decided to skip. They
+    are counted on their own so the deferral stays visible.
+
+    `unknown` when the exercised set could not be measured at all. It is the
+    fail-closed direction: unknown never satisfies the completion stop, so a
+    broken corpus read cannot end a campaign by claiming it is done.
+    """
+    deferred = set(deferred or ())
+    accounted = set(accounted or ())
+    closing = accounted - deferred
+    if exercised_keys is None or not targets_total:
+        return "unknown", {"exercised": None, "accounted": len(closing),
+                           "deferred": len(deferred), "closed": None,
+                           "total": targets_total or 0}, None
+    exercised = set(exercised_keys)
+    closed = exercised | closing
+    counts = {"exercised": len(exercised), "accounted": len(closing),
+              "deferred": len(deferred), "closed": len(closed),
+              "total": targets_total}
+    verdict = "complete" if len(closed) >= targets_total else "incomplete"
+    return verdict, counts, closed
+
+
 def update_phase(state, phase, status, notes=""):
     if phase not in PHASES:
         raise ValueError("unknown phase: %s (expected one of %s)"
@@ -630,7 +958,7 @@ def next_action(state):
 
 def end_round(state, verdict=None, new_crashes=None, edges_start=None,
               edges_end=None, run_hours=None, notes=None, worklist=None,
-              billed=None):
+              billed=None, surface=None):
     """Record the measured outcome of the current round.
 
     run_hours ACCUMULATES: a round routinely spans several campaigns, and
@@ -639,6 +967,12 @@ def end_round(state, verdict=None, new_crashes=None, edges_start=None,
     {run_id: hours} those hours came from; re-billing a run id corrects its
     entry (and the total by the delta) rather than double-counting. Every
     other field is last-write-wins.
+
+    `surface` is the completion reading, as
+    {"verdict", "exercised", "accounted", "deferred", "closed", "total",
+    "ledger"}. It decides the
+    primary stop, so an unmeasurable one must arrive as verdict "unknown" and
+    never be omitted into a stale "complete" from the previous call.
     """
     r = current_round(state)
     if verdict is not None:
@@ -647,6 +981,19 @@ def end_round(state, verdict=None, new_crashes=None, edges_start=None,
                              "%s)" % (verdict, ", ".join(sorted(
                                  COVERAGE_VERDICT))))
         r["coverage_verdict"] = verdict
+    if surface is not None:
+        sv = surface.get("verdict", "unknown")
+        if sv not in SURFACE_VERDICT:
+            raise ValueError("unknown surface verdict: %s (expected one of "
+                             "%s)" % (sv, ", ".join(sorted(SURFACE_VERDICT))))
+        r["surface_verdict"] = sv
+        for field, key in (("surface_exercised", "exercised"),
+                           ("surface_accounted", "accounted"),
+                           ("surface_deferred", "deferred"),
+                           ("surface_closed", "closed"),
+                           ("surface_total", "total"),
+                           ("surface_ledger", "ledger")):
+            r[field] = surface.get(key)
     for key, val in (("new_crashes", new_crashes), ("edges_start", edges_start),
                      ("edges_end", edges_end),
                      ("notes", notes), ("worklist", worklist)):
@@ -675,16 +1022,65 @@ def record_decision(state, decision, reason=""):
     return r
 
 
+def surface_stop_reason(state):
+    """The completion stop, or None while targets remain.
+
+    This is the campaign's primary termination and it is non-overridable:
+    every one of the enumerated targets has either been exercised or carries a
+    written reason that says it cannot be reached, so there is nothing left to
+    fuzz. Overriding it would authorise a campaign with an empty worklist.
+
+    A verdict that rests on a row which should not have been written is left
+    by removing the row (clear_surface_account, or pipeline_ctl.py
+    surface-unaccount) and running round-end again. The verdict is recomputed
+    from the ledger on every round-end, so the campaign reopens rather than
+    needing the stop overridden. A reason that only defers a target does not
+    close it at all: see SURFACE_REASON_DEFERRED.
+
+    It is deliberately not a percentage. The denominator is counted from the
+    inventories rather than estimated, so the rule is a ledger identity and the
+    operation on it is subtraction.
+    """
+    r = current_round(state)
+    if r.get("surface_verdict") != "complete":
+        return None
+    total = r.get("surface_total")
+    exercised = r.get("surface_exercised")
+    accounted = r.get("surface_accounted")
+    return ("command surface complete: %s of %s target(s) exercised and %s "
+            "accounted for, leaving none unaddressed. Nothing is left to fuzz"
+            % (exercised if exercised is not None else "?",
+               total if total is not None else "?",
+               accounted if accounted is not None else "?"))
+
+
 def hard_cap_reason(state, max_rounds, max_total_run_hours=None):
     """The non-overridable stop reason, or None when no hard cap has tripped.
 
-    Round-cap and budget stops are the spend ceiling: AGENTS.md forbids
-    overriding them, so round-decide recomputes this before accepting an
+    Three stops sit here and they are not the same kind of thing. Completion
+    means the campaign finished its work. The round cap and the budget mean it
+    ran out of the allowance the user authorised, and AGENTS.md forbids
+    overriding those, so round-decide recomputes this before accepting an
     explicit --decision continue.
+
+    Completion is checked first so that a campaign finishing on its last
+    permitted round records why it finished rather than which limit it hit.
+
+    The round cap is a backstop against a runaway loop and no longer the
+    expected termination: against 764 targets from an empty corpus, a campaign
+    that reaches it has failed to converge, and the reason says so.
     """
     r = current_round(state)
+    complete = surface_stop_reason(state)
+    if complete:
+        return complete
     if r["round"] >= max_rounds:
-        return "round cap reached (%d of %d)" % (r["round"], max_rounds)
+        return ("round cap reached (%d of %d) without converging: the loop "
+                "stopped on its backstop and not on completion or a plateau, "
+                "so the surface is neither exercised nor accounted for. Read "
+                "the completion ledger before treating this round as a "
+                "finished campaign"
+                % (r["round"], max_rounds))
     if max_total_run_hours is not None:
         spent = spent_hours(state)
         if spent >= max_total_run_hours:
@@ -693,23 +1089,53 @@ def hard_cap_reason(state, max_rounds, max_total_run_hours=None):
     return None
 
 
+def _plateau_reason(r):
+    """What a two-flat-curve round means, read against the ledger.
+
+    Both curves flat is not one condition. With the ledger unclosed it says the
+    corpus is stuck: the fuzzer stopped finding edges while targets it was
+    told about are still unreached, which is a resource-chain problem and not
+    a finished campaign. With no ledger reading at all, the round cannot tell
+    those apart and the reason says that instead of implying the first.
+    """
+    verdict = r.get("surface_verdict")
+    if verdict == "incomplete":
+        closed = r.get("surface_closed")
+        total = r.get("surface_total")
+        left = (total - closed) if (isinstance(total, int)
+                                    and isinstance(closed, int)) else None
+        deferred = r.get("surface_deferred")
+        # A deferred target sits in `left` and is there by a decision, not by
+        # a stuck corpus. Naming the two apart stops the round reading as a
+        # resource-chain problem it is not.
+        aside = ((", %d of them deliberately deferred" % deferred)
+                 if isinstance(deferred, int) and deferred > 0 else "")
+        return ("both curves flat in round %d and the completion ledger is "
+                "open (%s target(s) neither exercised nor accounted for%s): "
+                "the corpus is stuck and the surface is not exhausted"
+                % (r["round"], left if left is not None else "some", aside))
+    return ("coverage plateaued in round %d, with no completion reading to "
+            "say whether the surface is exhausted or the search has stalled "
+            "short of it (run: coverage_ctl.py completion)" % r["round"])
+
+
 def loop_decision(state, max_rounds, max_total_run_hours=None,
                   stop_on_plateau=True):
     """Apply the configured caps to the current round -> (decision, reason).
 
     Caps are checked before the coverage verdict: a plateau is a reason to
-    stop, but so is running out of the budget the user authorised, and the
-    budget must win even while coverage is still growing.
+    stop, but so is completing the surface or running out of the budget the
+    user authorised, and both must win even while coverage is still growing.
     """
     hard = hard_cap_reason(state, max_rounds, max_total_run_hours)
     if hard:
         return ("stop", hard)
     r = current_round(state)
     if stop_on_plateau and r["coverage_verdict"] == "plateaued":
-        return ("stop", "coverage plateaued in round %d" % r["round"])
+        return ("stop", _plateau_reason(r))
     if r["coverage_verdict"] == "unknown":
-        return ("stop", "no coverage verdict recorded for round %d — refusing "
-                        "to spend another campaign blind" % r["round"])
+        return ("stop", "no coverage verdict recorded for round %d. The loop "
+                        "refuses to spend another campaign blind" % r["round"])
     return ("continue", "coverage still growing after round %d" % r["round"])
 
 
@@ -717,8 +1143,8 @@ def advance_round(state):
     """Open the next round: reset the round phases, keep setup and crashes."""
     r = current_round(state)
     if r["decision"] != "continue":
-        raise ValueError("current round decision is %r, not 'continue' — "
-                         "record a continue decision before advancing"
+        raise ValueError("current round decision is %r, not 'continue'. "
+                         "Record a continue decision before advancing"
                          % r["decision"])
     not_done = [p for p in ROUND_PHASES
                 if state["phases"][p]["status"] != "done"]
@@ -729,21 +1155,25 @@ def advance_round(state):
         # the loop, so say those rather than one that does not work.
         raise ValueError(
             "cannot advance to round %d: round phase(s) not done: %s. Finish "
-            "them, or stop the loop instead of advancing (round-decide "
-            "--decision stop --reason \"...\") and run the report phase. "
-            "Marking a phase blocked does not satisfy this check"
+            "them, or stop the loop (round-decide --decision stop --reason "
+            "\"...\") and run the report phase. Marking a phase blocked does "
+            "not satisfy this check"
             % (r["round"] + 1, ", ".join(not_done)))
     if not r.get("ended") or r.get("run_hours") is None:
         raise ValueError("cannot advance to round %d: round %d has no "
-                         "recorded round-end — measure it first: "
+                         "recorded round-end. Measure it first: "
                          "pipeline_ctl.py round-end --from-run <run-id>"
                          % (r["round"] + 1, r["round"]))
     for p in ROUND_PHASES:
         state["phases"][p] = dict(DEFAULT_PHASE)
-    # Carry the worklist forward: besides the corpus, it is the only state the
-    # new round inherits from the last one.
+    # Carry the worklist and the ledger pointer forward. The worklist is what
+    # the new round executes. The pointer is which ledger it accounts against,
+    # and resetting it sends a campaign using a non-default ledger back to the
+    # default one for the whole of every later round, where it reads nothing
+    # accounted for and re-opens every closed target.
     state["rounds"].append(_new_round(round=r["round"] + 1, started=_now(),
-                                      worklist_in=r.get("worklist")))
+                                      worklist_in=r.get("worklist"),
+                                      surface_ledger=r.get("surface_ledger")))
     return current_round(state)
 
 
@@ -856,11 +1286,11 @@ def normalize_finding(finding):
             raise ValueError("unknown %s: %r (expected one of %s)"
                              % (k, out[k], ", ".join(vocab)))
     if not out["subsystem"]:
-        raise ValueError("a finding needs a subsystem — it is the key refine "
-                         "groups by, so a finding without one cannot raise "
+        raise ValueError("a finding needs a subsystem. Refine groups by "
+                         "subsystem, so a finding without one cannot raise "
                          "any target's priority")
     if not any(out[k] for k in FINDING_TARGETING):
-        raise ValueError("a finding needs at least one of %s — a record that "
+        raise ValueError("a finding needs at least one of %s. A record that "
                          "names no call and no state cannot steer describe or "
                          "seeds, and the feedback edge would carry nothing"
                          % ", ".join(FINDING_TARGETING))
@@ -1033,7 +1463,7 @@ def impact_support_gap(impact):
             and not reason:
         return ("primitive=%s consequence=%s, and no undetermined_reason "
                 "saying what blocked the analysis. Undetermined is a valid "
-                "answer here; an unexplained one is not, because nobody "
+                "answer here, but an unexplained one is not, because nobody "
                 "later can tell it apart from an analysis that was skipped"
                 % (primitive, consequence))
     if primitive in PRIMITIVE_NEEDS_EVIDENCE and not evidence:
@@ -1049,8 +1479,8 @@ def impact_support_gap(impact):
         if not control or control <= {"none", "unknown"}:
             return ("consequence=%s with attacker_control=%s. An outcome "
                     "above denial of service needs the attacker to influence "
-                    "something; if they influence nothing, the defensible "
-                    "answer is dos-only"
+                    "something. With no influence, the defensible answer is "
+                    "dos-only"
                     % (consequence, ", ".join(sorted(control)) or "empty"))
     return None
 
@@ -1177,7 +1607,7 @@ def validate(state, triage_settings=None):
                 # links point at a duplicate and get flagged. duplicate_of
                 # must reference the surviving, non-duplicate entry.
                 problems.append("%s duplicates %s, which is itself a "
-                                "duplicate — link directly to the surviving "
+                                "duplicate. Link directly to the surviving "
                                 "entry (chains and cycles are not allowed)"
                                 % (cid, dup))
         elif c.get("status") == "duplicate":
@@ -1206,9 +1636,9 @@ def validate(state, triage_settings=None):
             # survived it for the next round to act on. Keyed on the stamp,
             # so the poc phase writing a reproduction class over the status
             # does not retire the check.
-            problems.append("%s was analysed by rca but has no finding — the "
-                            "round learned nothing from it (record one with: "
-                            "pipeline_ctl.py finding-set %s --json ...)"
+            problems.append("%s was analysed by rca but has no finding, so "
+                            "the round learned nothing from it (record one "
+                            "with: pipeline_ctl.py finding-set %s --json ...)"
                             % (cid, cid))
         if c.get("impact") is not None:
             try:
@@ -1225,8 +1655,8 @@ def validate(state, triage_settings=None):
             # A crash analysed but never assessed reaches the report as a
             # reproducer with no severity behind it, which is a bug report
             # rather than a vulnerability report.
-            problems.append("%s was analysed by rca but has no impact record "
-                            "— the report would carry a reproducer with no "
+            problems.append("%s was analysed by rca but has no impact record, "
+                            "so the report would carry a reproducer with no "
                             "argued severity (record one with: "
                             "pipeline_ctl.py impact-set %s --json ...)"
                             % (cid, cid))
@@ -1237,6 +1667,18 @@ def validate(state, triage_settings=None):
         if r.get("coverage_verdict") not in COVERAGE_VERDICT:
             problems.append("round %d has invalid coverage verdict %r"
                             % (i, r.get("coverage_verdict")))
+        if r.get("surface_verdict") not in SURFACE_VERDICT:
+            problems.append("round %d has invalid surface verdict %r"
+                            % (i, r.get("surface_verdict")))
+        if r.get("surface_verdict") == "complete" and not r.get(
+                "surface_ledger"):
+            # The completion stop is hard and non-overridable, so the evidence
+            # for it has to be on record. A complete verdict with no ledger
+            # path is a stop nobody can audit afterwards.
+            problems.append(
+                "round %d records the surface as complete but names no "
+                "completion ledger, so the primary stop would rest on a "
+                "number with nothing behind it" % i)
         if r.get("decision") is not None and r["decision"] not in ROUND_DECISION:
             problems.append("round %d has invalid decision %r"
                             % (i, r.get("decision")))

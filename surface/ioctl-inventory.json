@@ -1,0 +1,3748 @@
+{
+  "source_tree": "artifacts/src/open-gpu-kernel-modules",
+  "source": {
+    "path": "artifacts/src/open-gpu-kernel-modules",
+    "driver_version": "610.57.04"
+  },
+  "encoding": {
+    "ioctl_magic": 70,
+    "ioctl_base": 200,
+    "direction_bits": 3,
+    "direction_bits_source": "kernel-open/common/inc/nv.h:84 (__NV_IOWR)",
+    "platform_size_limit_note": "NV_PLATFORM_MAX_IOCTL_SIZE, the per-platform ceiling __NV_IOWR_ASSERT enforces, is not defined in the open modules. IOC_SIZE_MAX is the architectural limit; the real switchover to XFER may happen lower.",
+    "ioc_size_bits": 14,
+    "ioc_size_max": 16383,
+    "absolute_max_ioctl_size": 16384,
+    "uvm_max_ioctl_param_stack_size": 288,
+    "xfer_escape": "NV_ESC_IOCTL_XFER_CMD"
+  },
+  "nodes": [
+    {
+      "paths": [
+        "/dev/nvidiactl",
+        "/dev/nvidiaN"
+      ],
+      "module": "nvidia",
+      "entry": "nvidia_unlocked_ioctl -> nvidia_ioctl (kernel-open/nvidia/nv.c)",
+      "scheme": "linux_ioc",
+      "commands": [
+        {
+          "name": "NV_ESC_RM_ALLOC_MEMORY",
+          "nr": 39,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:31",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:391",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:308",
+          "param_struct": "nv_ioctl_nvos02_parameters_with_fd",
+          "param_size": 56,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "actual_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_ALLOC_MEMORY",
+          "requests": [
+            "0xc0384627"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_ALLOC_OBJECT",
+          "nr": 40,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:32",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:442",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:309",
+          "param_struct": "NVOS05_PARAMETERS",
+          "param_size": 20,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_ALLOC_OBJECT",
+          "requests": [
+            "0xc0144628"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_FREE",
+          "nr": 41,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:33",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:509",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:310",
+          "param_struct": "NVOS00_PARAMETERS",
+          "param_size": 16,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_FREE",
+          "requests": [
+            "0xc0104629"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_CONTROL",
+          "nr": 42,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:34",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:793",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:311",
+          "param_struct": "NVOS54_PARAMETERS",
+          "param_size": 32,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_CONTROL",
+          "requests": [
+            "0xc020462a"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_ALLOC",
+          "nr": 43,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:35",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:458",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:331",
+          "param_struct": "NVOS64_PARAMETERS",
+          "param_size": 48,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": null,
+          "node_restriction_conditional": "control_device_only",
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_ALLOC",
+          "param_struct_alt": "NVOS21_PARAMETERS",
+          "param_size_alt": 32,
+          "requests": [
+            "0xc030462b",
+            "0xc020462b"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_DUP_OBJECT",
+          "nr": 52,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:36",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:733",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:312",
+          "param_struct": "NVOS55_PARAMETERS",
+          "param_size": 28,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_DUP_OBJECT",
+          "requests": [
+            "0xc01c4634"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_SHARE",
+          "nr": 53,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:37",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:749",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:313",
+          "param_struct": "NVOS57_PARAMETERS",
+          "param_size": 24,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_SHARE",
+          "requests": [
+            "0xc0184635"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_I2C_ACCESS",
+          "nr": 57,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:38",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:552",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:314",
+          "param_struct": "NVOS_I2C_ACCESS_PARAMS",
+          "param_size": 32,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "actual_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_I2C_ACCESS",
+          "requests": [
+            "0xc0204639"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_IDLE_CHANNELS",
+          "nr": 65,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:39",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:568",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:315",
+          "param_struct": "NVOS30_PARAMETERS",
+          "param_size": 56,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_IDLE_CHANNELS",
+          "requests": [
+            "0xc0384641"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_VID_HEAP_CONTROL",
+          "nr": 74,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:40",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:532",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:316",
+          "param_struct": "NVOS32_PARAMETERS",
+          "param_size": 184,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_VID_HEAP_CONTROL",
+          "requests": [
+            "0xc0b8464a"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_ACCESS_REGISTRY",
+          "nr": 77,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:41",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:643",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:317",
+          "param_struct": "NVOS38_PARAMETERS",
+          "param_size": 72,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_ACCESS_REGISTRY",
+          "requests": [
+            "0xc048464d"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_MAP_MEMORY",
+          "nr": 78,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:42",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:584",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:318",
+          "param_struct": "nv_ioctl_nvos33_parameters_with_fd",
+          "param_size": 56,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_MAP_MEMORY",
+          "requests": [
+            "0xc038464e"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_UNMAP_MEMORY",
+          "nr": 79,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:43",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:627",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:319",
+          "param_struct": "NVOS34_PARAMETERS",
+          "param_size": 32,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_UNMAP_MEMORY",
+          "requests": [
+            "0xc020464f"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_GET_EVENT_DATA",
+          "nr": 82,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:44",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/osapi.c:2997",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/osapi.c:2923",
+          "param_struct": "NVOS41_PARAMETERS",
+          "param_size": 16,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": null,
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_GET_EVENT_DATA",
+          "requests": [
+            "0xc0104652"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_ALLOC_CONTEXT_DMA2",
+          "nr": 84,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:45",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:669",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:320",
+          "param_struct": "NVOS39_PARAMETERS",
+          "param_size": 56,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_ALLOC_CONTEXT_DMA2",
+          "requests": [
+            "0xc0384654"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_MAP_MEMORY_DMA",
+          "nr": 87,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:47",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:701",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:321",
+          "param_struct": "NVOS46_PARAMETERS",
+          "param_size": 64,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_MAP_MEMORY_DMA",
+          "requests": [
+            "0xc0404657"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_UNMAP_MEMORY_DMA",
+          "nr": 88,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:48",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:717",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:322",
+          "param_struct": "NVOS47_PARAMETERS",
+          "param_size": 48,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_UNMAP_MEMORY_DMA",
+          "requests": [
+            "0xc0304658"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_BIND_CONTEXT_DMA",
+          "nr": 89,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:49",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:685",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:323",
+          "param_struct": "NVOS49_PARAMETERS",
+          "param_size": 16,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_BIND_CONTEXT_DMA",
+          "requests": [
+            "0xc0104659"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_UPDATE_DEVICE_MAPPING_INFO",
+          "nr": 94,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:52",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:857",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:324",
+          "param_struct": "NVOS56_PARAMETERS",
+          "param_size": 40,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_UPDATE_DEVICE_MAPPING_INFO",
+          "requests": [
+            "0xc028465e"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_RM_LOCKLESS_DIAGNOSTIC",
+          "nr": 95,
+          "defined_at": "src/nvidia/arch/nvalloc/unix/include/nv_escape.h:53",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:882",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:325",
+          "param_struct": "NV_LOCKLESS_DIAGNOSTIC_PARAMS",
+          "param_size": 15412,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": true,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_RM_LOCKLESS_DIAGNOSTIC",
+          "requests": [
+            "0xfc34465f"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_CARD_INFO",
+          "nr": 200,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:35",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2606",
+          "validation_site": "kernel-open/nvidia/nv.c:2419",
+          "param_struct": "nv_ioctl_card_info_t",
+          "param_size": 72,
+          "is_argument_array": true,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_CARD_INFO",
+          "request_one_element": "0xc04846c8",
+          "max_direct_elements": 227,
+          "requests": [],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_REGISTER_FD",
+          "nr": 201,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:36",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:921",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:326",
+          "param_struct": "nv_ioctl_register_fd_t",
+          "param_size": 4,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": null,
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_REGISTER_FD",
+          "requests": [
+            "0xc00446c9"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_ALLOC_OS_EVENT",
+          "nr": 206,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:37",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/osapi.c:2971",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/osapi.c:2921",
+          "param_struct": "nv_ioctl_alloc_os_event_t",
+          "param_size": 16,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": null,
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_ALLOC_OS_EVENT",
+          "requests": [
+            "0xc01046ce"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_FREE_OS_EVENT",
+          "nr": 207,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:38",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/osapi.c:2984",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/osapi.c:2922",
+          "param_struct": "nv_ioctl_free_os_event_t",
+          "param_size": 16,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": null,
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_FREE_OS_EVENT",
+          "requests": [
+            "0xc01046cf"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_STATUS_CODE",
+          "nr": 209,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:39",
+          "dispatch_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:765",
+          "validation_site": "src/nvidia/arch/nvalloc/unix/src/escape.c:307",
+          "param_struct": "nv_ioctl_status_code_t",
+          "param_size": 12,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_STATUS_CODE",
+          "requests": [
+            "0xc00c46d1"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_CHECK_VERSION_STR",
+          "nr": 210,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:40",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2682",
+          "validation_site": "kernel-open/nvidia/nv.c:2416",
+          "param_struct": "nv_ioctl_rm_api_version_t",
+          "param_size": 72,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_CHECK_VERSION_STR",
+          "requests": [
+            "0xc04846d2"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_IOCTL_XFER_CMD",
+          "nr": 211,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:41",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2499",
+          "validation_site": "kernel-open/nvidia/nv.c:2417",
+          "param_struct": "nv_ioctl_xfer_t",
+          "param_size": 16,
+          "is_argument_array": false,
+          "restriction_source": "no_case_body",
+          "node_restriction": null,
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_IOCTL_XFER_CMD",
+          "requests": [
+            "0xc01046d3"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_ATTACH_GPUS_TO_FD",
+          "nr": 212,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:42",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2616",
+          "validation_site": "kernel-open/nvidia/nv.c:2418",
+          "param_struct": "NvU32",
+          "param_size": 4,
+          "is_argument_array": true,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_ATTACH_GPUS_TO_FD",
+          "request_one_element": "0xc00446d4",
+          "max_direct_elements": 4095,
+          "requests": [],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_QUERY_DEVICE_INTR",
+          "nr": 213,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:43",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2587",
+          "validation_site": "kernel-open/nvidia/nv.c:2420",
+          "param_struct": "nv_ioctl_query_device_intr_t",
+          "param_size": 8,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "actual_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_QUERY_DEVICE_INTR",
+          "requests": [
+            "0xc00846d5"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_SYS_PARAMS",
+          "nr": 214,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:44",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2691",
+          "validation_site": "kernel-open/nvidia/nv.c:2421",
+          "param_struct": "nv_ioctl_sys_params_t",
+          "param_size": 8,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "control_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_SYS_PARAMS",
+          "requests": [
+            "0xc00846d6"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_NUMA_INFO",
+          "nr": 215,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numa.h:44",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2711",
+          "validation_site": "kernel-open/nvidia/nv.c:2424",
+          "param_struct": "nv_ioctl_numa_info_t",
+          "param_size": 560,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "actual_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_NUMA_INFO",
+          "requests": [
+            "0xc23046d7"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_SET_NUMA_STATUS",
+          "nr": 216,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numa.h:45",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2731",
+          "validation_site": "kernel-open/nvidia/nv.c:2425",
+          "param_struct": "nv_ioctl_set_numa_status_t",
+          "param_size": 4,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "actual_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_SET_NUMA_STATUS",
+          "requests": [
+            "0xc00446d8"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_EXPORT_TO_DMABUF_FD",
+          "nr": 217,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:45",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2806",
+          "validation_site": "kernel-open/nvidia/nv.c:2422",
+          "param_struct": "nv_ioctl_export_to_dma_buf_fd_t",
+          "param_size": 2608,
+          "is_argument_array": false,
+          "restriction_source": "case_body",
+          "node_restriction": "actual_device_only",
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_EXPORT_TO_DMABUF_FD",
+          "requests": [
+            "0xca3046d9"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        },
+        {
+          "name": "NV_ESC_WAIT_OPEN_COMPLETE",
+          "nr": 218,
+          "defined_at": "kernel-open/common/inc/nv-ioctl-numbers.h:46",
+          "dispatch_site": "kernel-open/nvidia/nv.c:2546",
+          "validation_site": "kernel-open/nvidia/nv.c:2423",
+          "param_struct": "nv_ioctl_wait_open_complete_t",
+          "param_size": 8,
+          "is_argument_array": false,
+          "restriction_source": "no_case_body",
+          "node_restriction": null,
+          "node_restriction_conditional": null,
+          "requires_admin": false,
+          "requires_admin_conditional": false,
+          "syzlang": "ioctl$NV_ESC_WAIT_OPEN_COMPLETE",
+          "requests": [
+            "0xc00846da"
+          ],
+          "xfer_only": false,
+          "size_source": "measured"
+        }
+      ]
+    },
+    {
+      "paths": [
+        "/dev/nvidia-uvm"
+      ],
+      "module": "nvidia-uvm",
+      "entry": "uvm_unlocked_ioctl_entry (kernel-open/nvidia-uvm/uvm.c)",
+      "scheme": "bare_command_number",
+      "commands": [
+        {
+          "param_struct": "UVM_REGISTER_GPU_VASPACE_PARAMS",
+          "handler": "uvm_api_register_gpu_va_space",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1022",
+          "name": "UVM_REGISTER_GPU_VASPACE",
+          "nr": 25,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:288",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x19"
+          ],
+          "syzlang": "ioctl$UVM_REGISTER_GPU_VASPACE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_UNREGISTER_GPU_VASPACE_PARAMS",
+          "handler": "uvm_api_unregister_gpu_va_space",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1023",
+          "name": "UVM_UNREGISTER_GPU_VASPACE",
+          "nr": 26,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:302",
+          "param_size": 20,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x1a"
+          ],
+          "syzlang": "ioctl$UVM_UNREGISTER_GPU_VASPACE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_REGISTER_CHANNEL_PARAMS",
+          "handler": "uvm_api_register_channel",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1024",
+          "name": "UVM_REGISTER_CHANNEL",
+          "nr": 27,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:313",
+          "param_size": 56,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x1b"
+          ],
+          "syzlang": "ioctl$UVM_REGISTER_CHANNEL",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_UNREGISTER_CHANNEL_PARAMS",
+          "handler": "uvm_api_unregister_channel",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1025",
+          "name": "UVM_UNREGISTER_CHANNEL",
+          "nr": 28,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:329",
+          "param_size": 12,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x1c"
+          ],
+          "syzlang": "ioctl$UVM_UNREGISTER_CHANNEL",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_ENABLE_PEER_ACCESS_PARAMS",
+          "handler": "uvm_api_enable_peer_access",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1011",
+          "name": "UVM_ENABLE_PEER_ACCESS",
+          "nr": 29,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:341",
+          "param_size": 36,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x1d"
+          ],
+          "syzlang": "ioctl$UVM_ENABLE_PEER_ACCESS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_DISABLE_PEER_ACCESS_PARAMS",
+          "handler": "uvm_api_disable_peer_access",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1012",
+          "name": "UVM_DISABLE_PEER_ACCESS",
+          "nr": 30,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:353",
+          "param_size": 36,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x1e"
+          ],
+          "syzlang": "ioctl$UVM_DISABLE_PEER_ACCESS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_MAP_EXTERNAL_ALLOCATION_PARAMS",
+          "handler": "uvm_api_map_external_allocation",
+          "copy_storage": "alloc",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1014",
+          "name": "UVM_MAP_EXTERNAL_ALLOCATION",
+          "nr": 33,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:365",
+          "param_size": 9264,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x21"
+          ],
+          "syzlang": "ioctl$UVM_MAP_EXTERNAL_ALLOCATION",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_FREE_PARAMS",
+          "handler": "uvm_api_free",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1016",
+          "name": "UVM_FREE",
+          "nr": 34,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:383",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x22"
+          ],
+          "syzlang": "ioctl$UVM_FREE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_REGISTER_GPU_PARAMS",
+          "handler": "uvm_api_register_gpu",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1009",
+          "name": "UVM_REGISTER_GPU",
+          "nr": 37,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:405",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x25"
+          ],
+          "syzlang": "ioctl$UVM_REGISTER_GPU",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_UNREGISTER_GPU_PARAMS",
+          "handler": "uvm_api_unregister_gpu",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1010",
+          "name": "UVM_UNREGISTER_GPU",
+          "nr": 38,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:421",
+          "param_size": 20,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x26"
+          ],
+          "syzlang": "ioctl$UVM_UNREGISTER_GPU",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_PAGEABLE_MEM_ACCESS_PARAMS",
+          "handler": "uvm_api_pageable_mem_access",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1007",
+          "name": "UVM_PAGEABLE_MEM_ACCESS",
+          "nr": 39,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:429",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x27"
+          ],
+          "syzlang": "ioctl$UVM_PAGEABLE_MEM_ACCESS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_SET_PREFERRED_LOCATION_PARAMS",
+          "handler": "uvm_api_set_preferred_location",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1018",
+          "name": "UVM_SET_PREFERRED_LOCATION",
+          "nr": 42,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:440",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x2a"
+          ],
+          "syzlang": "ioctl$UVM_SET_PREFERRED_LOCATION",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_UNSET_PREFERRED_LOCATION_PARAMS",
+          "handler": "uvm_api_unset_preferred_location",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1019",
+          "name": "UVM_UNSET_PREFERRED_LOCATION",
+          "nr": 43,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:454",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x2b"
+          ],
+          "syzlang": "ioctl$UVM_UNSET_PREFERRED_LOCATION",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_ENABLE_READ_DUPLICATION_PARAMS",
+          "handler": "uvm_api_enable_read_duplication",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1026",
+          "name": "UVM_ENABLE_READ_DUPLICATION",
+          "nr": 44,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:466",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x2c"
+          ],
+          "syzlang": "ioctl$UVM_ENABLE_READ_DUPLICATION",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_DISABLE_READ_DUPLICATION_PARAMS",
+          "handler": "uvm_api_disable_read_duplication",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1027",
+          "name": "UVM_DISABLE_READ_DUPLICATION",
+          "nr": 45,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:478",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x2d"
+          ],
+          "syzlang": "ioctl$UVM_DISABLE_READ_DUPLICATION",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_SET_ACCESSED_BY_PARAMS",
+          "handler": "uvm_api_set_accessed_by",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1020",
+          "name": "UVM_SET_ACCESSED_BY",
+          "nr": 46,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:490",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x2e"
+          ],
+          "syzlang": "ioctl$UVM_SET_ACCESSED_BY",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_UNSET_ACCESSED_BY_PARAMS",
+          "handler": "uvm_api_unset_accessed_by",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1021",
+          "name": "UVM_UNSET_ACCESSED_BY",
+          "nr": 47,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:503",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x2f"
+          ],
+          "syzlang": "ioctl$UVM_UNSET_ACCESSED_BY",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_MIGRATE_PARAMS",
+          "handler": "uvm_api_migrate",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1028",
+          "name": "UVM_MIGRATE",
+          "nr": 51,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:602",
+          "param_size": 80,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x33"
+          ],
+          "syzlang": "ioctl$UVM_MIGRATE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_READ_PROCESS_MEMORY_PARAMS",
+          "handler": "uvm_api_tools_read_process_memory",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1029",
+          "name": "UVM_TOOLS_READ_PROCESS_MEMORY",
+          "nr": 62,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:687",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x3e"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_READ_PROCESS_MEMORY",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_WRITE_PROCESS_MEMORY_PARAMS",
+          "handler": "uvm_api_tools_write_process_memory",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1030",
+          "name": "UVM_TOOLS_WRITE_PROCESS_MEMORY",
+          "nr": 63,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:700",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x3f"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_WRITE_PROCESS_MEMORY",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_PARAMS",
+          "handler": "uvm_api_tools_get_processor_uuid_table",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1031",
+          "name": "UVM_TOOLS_GET_PROCESSOR_UUID_TABLE",
+          "nr": 64,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:713",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x40"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_GET_PROCESSOR_UUID_TABLE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_MAP_DYNAMIC_PARALLELISM_REGION_PARAMS",
+          "handler": "uvm_api_map_dynamic_parallelism_region",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1032",
+          "name": "UVM_MAP_DYNAMIC_PARALLELISM_REGION",
+          "nr": 65,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:723",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x41"
+          ],
+          "syzlang": "ioctl$UVM_MAP_DYNAMIC_PARALLELISM_REGION",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_UNMAP_EXTERNAL_PARAMS",
+          "handler": "uvm_api_unmap_external",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1033",
+          "name": "UVM_UNMAP_EXTERNAL",
+          "nr": 66,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:735",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x42"
+          ],
+          "syzlang": "ioctl$UVM_UNMAP_EXTERNAL",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_FLUSH_EVENTS_PARAMS",
+          "handler": "uvm_api_tools_flush_events",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1034",
+          "name": "UVM_TOOLS_FLUSH_EVENTS",
+          "nr": 67,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:748",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x43"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_FLUSH_EVENTS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_ALLOC_SEMAPHORE_POOL_PARAMS",
+          "handler": "uvm_api_alloc_semaphore_pool",
+          "copy_storage": "alloc",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1035",
+          "name": "UVM_ALLOC_SEMAPHORE_POOL",
+          "nr": 68,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:757",
+          "param_size": 9248,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x44"
+          ],
+          "syzlang": "ioctl$UVM_ALLOC_SEMAPHORE_POOL",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_CLEAN_UP_ZOMBIE_RESOURCES_PARAMS",
+          "handler": "uvm_api_clean_up_zombie_resources",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1036",
+          "name": "UVM_CLEAN_UP_ZOMBIE_RESOURCES",
+          "nr": 69,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:770",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x45"
+          ],
+          "syzlang": "ioctl$UVM_CLEAN_UP_ZOMBIE_RESOURCES",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_PAGEABLE_MEM_ACCESS_ON_GPU_PARAMS",
+          "handler": "uvm_api_pageable_mem_access_on_gpu",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1008",
+          "name": "UVM_PAGEABLE_MEM_ACCESS_ON_GPU",
+          "nr": 70,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:779",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x46"
+          ],
+          "syzlang": "ioctl$UVM_PAGEABLE_MEM_ACCESS_ON_GPU",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_POPULATE_PAGEABLE_PARAMS",
+          "handler": "uvm_api_populate_pageable",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1037",
+          "name": "UVM_POPULATE_PAGEABLE",
+          "nr": 71,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:791",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x47"
+          ],
+          "syzlang": "ioctl$UVM_POPULATE_PAGEABLE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_VALIDATE_VA_RANGE_PARAMS",
+          "handler": "uvm_api_validate_va_range",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1038",
+          "name": "UVM_VALIDATE_VA_RANGE",
+          "nr": 72,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:834",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x48"
+          ],
+          "syzlang": "ioctl$UVM_VALIDATE_VA_RANGE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_CREATE_EXTERNAL_RANGE_PARAMS",
+          "handler": "uvm_api_create_external_range",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1013",
+          "name": "UVM_CREATE_EXTERNAL_RANGE",
+          "nr": 73,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:842",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x49"
+          ],
+          "syzlang": "ioctl$UVM_CREATE_EXTERNAL_RANGE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_MAP_EXTERNAL_SPARSE_PARAMS",
+          "handler": "uvm_api_map_external_sparse",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1015",
+          "name": "UVM_MAP_EXTERNAL_SPARSE",
+          "nr": 74,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:850",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x4a"
+          ],
+          "syzlang": "ioctl$UVM_MAP_EXTERNAL_SPARSE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_MM_INITIALIZE_PARAMS",
+          "handler": "uvm_api_mm_initialize",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1005",
+          "name": "UVM_MM_INITIALIZE",
+          "nr": 75,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:887",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x4b"
+          ],
+          "syzlang": "ioctl$UVM_MM_INITIALIZE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_V2_PARAMS",
+          "handler": "uvm_api_tools_get_processor_uuid_table_v2",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1039",
+          "name": "UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_V2",
+          "nr": 77,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:897",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x4d"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_V2",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_ALLOC_DEVICE_P2P_PARAMS",
+          "handler": "uvm_api_alloc_device_p2p",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1040",
+          "name": "UVM_ALLOC_DEVICE_P2P",
+          "nr": 78,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:903",
+          "param_size": 56,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x4e"
+          ],
+          "syzlang": "ioctl$UVM_ALLOC_DEVICE_P2P",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_CLEAR_ALL_ACCESS_COUNTERS_PARAMS",
+          "handler": "uvm_api_clear_all_access_counters",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1041",
+          "name": "UVM_CLEAR_ALL_ACCESS_COUNTERS",
+          "nr": 79,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:917",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x4f"
+          ],
+          "syzlang": "ioctl$UVM_CLEAR_ALL_ACCESS_COUNTERS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_DISCARD_PARAMS",
+          "handler": "uvm_api_discard",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1017",
+          "name": "UVM_DISCARD",
+          "nr": 80,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:927",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x50"
+          ],
+          "syzlang": "ioctl$UVM_DISCARD",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_QUERY_RESIDENCY_PARAMS",
+          "handler": "uvm_api_query_residency",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1042",
+          "name": "UVM_QUERY_RESIDENCY",
+          "nr": 81,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:939",
+          "param_size": 80,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x51"
+          ],
+          "syzlang": "ioctl$UVM_QUERY_RESIDENCY",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_INITIALIZE_PARAMS",
+          "handler": "uvm_api_initialize",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1004",
+          "name": "UVM_INITIALIZE",
+          "nr": 805306369,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_linux_ioctl.h:32",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x30000001"
+          ],
+          "syzlang": "ioctl$UVM_INITIALIZE",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": null,
+          "handler": null,
+          "copy_storage": "none",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm.c:1001",
+          "name": "UVM_DEINITIALIZE",
+          "nr": 805306370,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_linux_ioctl.h:40",
+          "param_size": null,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x30000002"
+          ],
+          "syzlang": "ioctl$UVM_DEINITIALIZE",
+          "size_source": "no_parameter_struct",
+          "reachable": true
+        }
+      ]
+    },
+    {
+      "paths": [
+        "/dev/nvidia-uvm-tools"
+      ],
+      "module": "nvidia-uvm",
+      "entry": "uvm_tools_unlocked_ioctl_entry (kernel-open/nvidia-uvm/uvm_tools.c)",
+      "scheme": "bare_command_number",
+      "commands": [
+        {
+          "param_struct": "UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS",
+          "handler": "uvm_api_tools_init_event_tracker",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_tools.c:673",
+          "name": "UVM_TOOLS_INIT_EVENT_TRACKER",
+          "nr": 56,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:622",
+          "param_size": 56,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x38"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_INIT_EVENT_TRACKER",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_SET_NOTIFICATION_THRESHOLD_PARAMS",
+          "handler": "uvm_api_tools_set_notification_threshold",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_tools.c:674",
+          "name": "UVM_TOOLS_SET_NOTIFICATION_THRESHOLD",
+          "nr": 57,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:637",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x39"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_SET_NOTIFICATION_THRESHOLD",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_EVENT_QUEUE_ENABLE_EVENTS_PARAMS",
+          "handler": "uvm_api_tools_event_queue_enable_events",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_tools.c:675",
+          "name": "UVM_TOOLS_EVENT_QUEUE_ENABLE_EVENTS",
+          "nr": 58,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:647",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x3a"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_EVENT_QUEUE_ENABLE_EVENTS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_EVENT_QUEUE_DISABLE_EVENTS_PARAMS",
+          "handler": "uvm_api_tools_event_queue_disable_events",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_tools.c:676",
+          "name": "UVM_TOOLS_EVENT_QUEUE_DISABLE_EVENTS",
+          "nr": 59,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:657",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x3b"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_EVENT_QUEUE_DISABLE_EVENTS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_ENABLE_COUNTERS_PARAMS",
+          "handler": "uvm_api_tools_enable_counters",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_tools.c:677",
+          "name": "UVM_TOOLS_ENABLE_COUNTERS",
+          "nr": 60,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:667",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x3c"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_ENABLE_COUNTERS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_DISABLE_COUNTERS_PARAMS",
+          "handler": "uvm_api_tools_disable_counters",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_tools.c:678",
+          "name": "UVM_TOOLS_DISABLE_COUNTERS",
+          "nr": 61,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:677",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x3d"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_DISABLE_COUNTERS",
+          "size_source": "measured",
+          "reachable": true
+        },
+        {
+          "param_struct": "UVM_TOOLS_INIT_EVENT_TRACKER_V2_PARAMS",
+          "handler": "uvm_api_tools_init_event_tracker_v2",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_tools.c:679",
+          "name": "UVM_TOOLS_INIT_EVENT_TRACKER_V2",
+          "nr": 76,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_ioctl.h:894",
+          "param_size": 56,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x4c"
+          ],
+          "syzlang": "ioctl$UVM_TOOLS_INIT_EVENT_TRACKER_V2",
+          "size_source": "measured",
+          "reachable": true
+        }
+      ]
+    },
+    {
+      "paths": [
+        "/dev/nvidia-uvm"
+      ],
+      "module": "nvidia-uvm",
+      "entry": "uvm_test_ioctl (kernel-open/nvidia-uvm/uvm_test.c), fallthrough from uvm_ioctl",
+      "scheme": "bare_command_number",
+      "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)",
+      "commands": [
+        {
+          "param_struct": "UVM_TEST_GET_GPU_REF_COUNT_PARAMS",
+          "handler": "uvm_test_get_gpu_ref_count",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:267",
+          "name": "UVM_TEST_GET_GPU_REF_COUNT",
+          "nr": 200,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:38",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xc8"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_GPU_REF_COUNT",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RNG_SANITY_PARAMS",
+          "handler": "uvm_test_rng_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:268",
+          "name": "UVM_TEST_RNG_SANITY",
+          "nr": 201,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:48",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xc9"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RNG_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RANGE_TREE_DIRECTED_PARAMS",
+          "handler": "uvm_test_range_tree_directed",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:269",
+          "name": "UVM_TEST_RANGE_TREE_DIRECTED",
+          "nr": 202,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:54",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xca"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RANGE_TREE_DIRECTED",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RANGE_TREE_RANDOM_PARAMS",
+          "handler": "uvm_test_range_tree_random",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:270",
+          "name": "UVM_TEST_RANGE_TREE_RANDOM",
+          "nr": 203,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:60",
+          "param_size": 176,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xcb"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RANGE_TREE_RANDOM",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_RANGE_INFO_PARAMS",
+          "handler": "uvm_test_va_range_info",
+          "copy_storage": "alloc",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:271",
+          "name": "UVM_TEST_VA_RANGE_INFO",
+          "nr": 204,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:188",
+          "param_size": 4200,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xcc"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_RANGE_INFO",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RM_MEM_SANITY_PARAMS",
+          "handler": "uvm_test_rm_mem_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:272",
+          "name": "UVM_TEST_RM_MEM_SANITY",
+          "nr": 205,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:215",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xcd"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RM_MEM_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GPU_SEMAPHORE_SANITY_PARAMS",
+          "handler": "uvm_test_gpu_semaphore_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:273",
+          "name": "UVM_TEST_GPU_SEMAPHORE_SANITY",
+          "nr": 206,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:222",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xce"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GPU_SEMAPHORE_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PEER_REF_COUNT_PARAMS",
+          "handler": "uvm_test_peer_ref_count",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:274",
+          "name": "UVM_TEST_PEER_REF_COUNT",
+          "nr": 207,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:229",
+          "param_size": 48,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xcf"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PEER_REF_COUNT",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_RANGE_SPLIT_PARAMS",
+          "handler": "uvm_test_va_range_split",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:275",
+          "name": "UVM_TEST_VA_RANGE_SPLIT",
+          "nr": 208,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:251",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd0"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_RANGE_SPLIT",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_RANGE_INJECT_SPLIT_ERROR_PARAMS",
+          "handler": "uvm_test_va_range_inject_split_error",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:276",
+          "name": "UVM_TEST_VA_RANGE_INJECT_SPLIT_ERROR",
+          "nr": 209,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:266",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd1"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_RANGE_INJECT_SPLIT_ERROR",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PAGE_TREE_PARAMS",
+          "handler": "uvm_test_page_tree",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:277",
+          "name": "UVM_TEST_PAGE_TREE",
+          "nr": 210,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:273",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd2"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PAGE_TREE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_CHANGE_PTE_MAPPING_PARAMS",
+          "handler": "uvm_test_change_pte_mapping",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:278",
+          "name": "UVM_TEST_CHANGE_PTE_MAPPING",
+          "nr": 211,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:315",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd3"
+          ],
+          "syzlang": "ioctl$UVM_TEST_CHANGE_PTE_MAPPING",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_TRACKER_SANITY_PARAMS",
+          "handler": "uvm_test_tracker_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:279",
+          "name": "UVM_TEST_TRACKER_SANITY",
+          "nr": 212,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:334",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd4"
+          ],
+          "syzlang": "ioctl$UVM_TEST_TRACKER_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PUSH_SANITY_PARAMS",
+          "handler": "uvm_test_push_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:280",
+          "name": "UVM_TEST_PUSH_SANITY",
+          "nr": 213,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:340",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd5"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PUSH_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_CHANNEL_SANITY_PARAMS",
+          "handler": "uvm_test_channel_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:281",
+          "name": "UVM_TEST_CHANNEL_SANITY",
+          "nr": 214,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:347",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd6"
+          ],
+          "syzlang": "ioctl$UVM_TEST_CHANNEL_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_CHANNEL_STRESS_PARAMS",
+          "handler": "uvm_test_channel_stress",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:282",
+          "name": "UVM_TEST_CHANNEL_STRESS",
+          "nr": 215,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:368",
+          "param_size": 28,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd7"
+          ],
+          "syzlang": "ioctl$UVM_TEST_CHANNEL_STRESS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_CE_SANITY_PARAMS",
+          "handler": "uvm_test_ce_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:283",
+          "name": "UVM_TEST_CE_SANITY",
+          "nr": 216,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:387",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd8"
+          ],
+          "syzlang": "ioctl$UVM_TEST_CE_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_BLOCK_INFO_PARAMS",
+          "handler": "uvm_test_va_block_info",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:286",
+          "name": "UVM_TEST_VA_BLOCK_INFO",
+          "nr": 217,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:394",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xd9"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_BLOCK_INFO",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_LOCK_SANITY_PARAMS",
+          "handler": "uvm_test_lock_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:287",
+          "name": "UVM_TEST_LOCK_SANITY",
+          "nr": 218,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:415",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xda"
+          ],
+          "syzlang": "ioctl$UVM_TEST_LOCK_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PERF_UTILS_SANITY_PARAMS",
+          "handler": "uvm_test_perf_utils_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:288",
+          "name": "UVM_TEST_PERF_UTILS_SANITY",
+          "nr": 219,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:421",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xdb"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PERF_UTILS_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_KVMALLOC_PARAMS",
+          "handler": "uvm_test_kvmalloc",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:289",
+          "name": "UVM_TEST_KVMALLOC",
+          "nr": 220,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:427",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xdc"
+          ],
+          "syzlang": "ioctl$UVM_TEST_KVMALLOC",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_QUERY_PARAMS",
+          "handler": "uvm_test_pmm_query",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:290",
+          "name": "UVM_TEST_PMM_QUERY",
+          "nr": 221,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:433",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xdd"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_QUERY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_CHECK_LEAK_PARAMS",
+          "handler": "uvm_test_pmm_check_leak",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:291",
+          "name": "UVM_TEST_PMM_CHECK_LEAK",
+          "nr": 222,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:450",
+          "param_size": 48,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xde"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_CHECK_LEAK",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PERF_EVENTS_SANITY_PARAMS",
+          "handler": "uvm_test_perf_events_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:292",
+          "name": "UVM_TEST_PERF_EVENTS_SANITY",
+          "nr": 223,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:461",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xdf"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PERF_EVENTS_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PERF_MODULE_SANITY_PARAMS",
+          "handler": "uvm_test_perf_module_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:293",
+          "name": "UVM_TEST_PERF_MODULE_SANITY",
+          "nr": 224,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:468",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe0"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PERF_MODULE_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RANGE_ALLOCATOR_SANITY_PARAMS",
+          "handler": "uvm_test_range_allocator_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:294",
+          "name": "UVM_TEST_RANGE_ALLOCATOR_SANITY",
+          "nr": 225,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:478",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe1"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RANGE_ALLOCATOR_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GET_RM_PTES_PARAMS",
+          "handler": "uvm_test_get_rm_ptes",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:295",
+          "name": "UVM_TEST_GET_RM_PTES",
+          "nr": 226,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:490",
+          "param_size": 48,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe2"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_RM_PTES",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_FAULT_BUFFER_FLUSH_PARAMS",
+          "handler": "uvm_test_fault_buffer_flush",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:296",
+          "name": "UVM_TEST_FAULT_BUFFER_FLUSH",
+          "nr": 227,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:514",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe3"
+          ],
+          "syzlang": "ioctl$UVM_TEST_FAULT_BUFFER_FLUSH",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_INJECT_TOOLS_EVENT_PARAMS",
+          "handler": "uvm_test_inject_tools_event",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:297",
+          "name": "UVM_TEST_INJECT_TOOLS_EVENT",
+          "nr": 228,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:521",
+          "param_size": 72,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe4"
+          ],
+          "syzlang": "ioctl$UVM_TEST_INJECT_TOOLS_EVENT",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_INCREMENT_TOOLS_COUNTER_PARAMS",
+          "handler": "uvm_test_increment_tools_counter",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:298",
+          "name": "UVM_TEST_INCREMENT_TOOLS_COUNTER",
+          "nr": 229,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:532",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe5"
+          ],
+          "syzlang": "ioctl$UVM_TEST_INCREMENT_TOOLS_COUNTER",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_MEM_SANITY_PARAMS",
+          "handler": "uvm_test_mem_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:299",
+          "name": "UVM_TEST_MEM_SANITY",
+          "nr": 230,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:545",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe6"
+          ],
+          "syzlang": "ioctl$UVM_TEST_MEM_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_MAKE_CHANNEL_STOPS_IMMEDIATE_PARAMS",
+          "handler": "uvm_test_make_channel_stops_immediate",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:300",
+          "name": "UVM_TEST_MAKE_CHANNEL_STOPS_IMMEDIATE",
+          "nr": 232,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:552",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe8"
+          ],
+          "syzlang": "ioctl$UVM_TEST_MAKE_CHANNEL_STOPS_IMMEDIATE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_BLOCK_INJECT_ERROR_PARAMS",
+          "handler": "uvm_test_va_block_inject_error",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:301",
+          "name": "UVM_TEST_VA_BLOCK_INJECT_ERROR",
+          "nr": 233,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:601",
+          "param_size": 48,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xe9"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_BLOCK_INJECT_ERROR",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PEER_IDENTITY_MAPPINGS_PARAMS",
+          "handler": "uvm_test_peer_identity_mappings",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:302",
+          "name": "UVM_TEST_PEER_IDENTITY_MAPPINGS",
+          "nr": 234,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:616",
+          "param_size": 36,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xea"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PEER_IDENTITY_MAPPINGS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_RESIDENCY_INFO_PARAMS",
+          "handler": "uvm_test_va_residency_info",
+          "copy_storage": "alloc",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:303",
+          "name": "UVM_TEST_VA_RESIDENCY_INFO",
+          "nr": 235,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:626",
+          "param_size": 20856,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xeb"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_RESIDENCY_INFO",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_ASYNC_ALLOC_PARAMS",
+          "handler": "uvm_test_pmm_async_alloc",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:304",
+          "name": "UVM_TEST_PMM_ASYNC_ALLOC",
+          "nr": 236,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:675",
+          "param_size": 28,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xec"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_ASYNC_ALLOC",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SET_PREFETCH_FILTERING_PARAMS",
+          "handler": "uvm_test_set_prefetch_filtering",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:305",
+          "name": "UVM_TEST_SET_PREFETCH_FILTERING",
+          "nr": 237,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:690",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xed"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SET_PREFETCH_FILTERING",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_SANITY_PARAMS",
+          "handler": "uvm_test_pmm_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:306",
+          "name": "UVM_TEST_PMM_SANITY",
+          "nr": 240,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:704",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xf0"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_INVALIDATE_TLB_PARAMS",
+          "handler": "uvm_test_invalidate_tlb",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:307",
+          "name": "UVM_TEST_INVALIDATE_TLB",
+          "nr": 241,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:736",
+          "param_size": 48,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xf1"
+          ],
+          "syzlang": "ioctl$UVM_TEST_INVALIDATE_TLB",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_BLOCK_PARAMS",
+          "handler": "uvm_test_va_block",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:308",
+          "name": "UVM_TEST_VA_BLOCK",
+          "nr": 242,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:751",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xf2"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_BLOCK",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_EVICT_CHUNK_PARAMS",
+          "handler": "uvm_test_evict_chunk",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:309",
+          "name": "UVM_TEST_EVICT_CHUNK",
+          "nr": 243,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:780",
+          "param_size": 64,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xf3"
+          ],
+          "syzlang": "ioctl$UVM_TEST_EVICT_CHUNK",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_FLUSH_DEFERRED_WORK_PARAMS",
+          "handler": "uvm_test_flush_deferred_work",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:310",
+          "name": "UVM_TEST_FLUSH_DEFERRED_WORK",
+          "nr": 244,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:812",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xf4"
+          ],
+          "syzlang": "ioctl$UVM_TEST_FLUSH_DEFERRED_WORK",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_NV_KTHREAD_Q_PARAMS",
+          "handler": "uvm_test_nv_kthread_q",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:311",
+          "name": "UVM_TEST_NV_KTHREAD_Q",
+          "nr": 245,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:821",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xf5"
+          ],
+          "syzlang": "ioctl$UVM_TEST_NV_KTHREAD_Q",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SET_PAGE_PREFETCH_POLICY_PARAMS",
+          "handler": "uvm_test_set_page_prefetch_policy",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:312",
+          "name": "UVM_TEST_SET_PAGE_PREFETCH_POLICY",
+          "nr": 246,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:834",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xf6"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SET_PAGE_PREFETCH_POLICY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GET_PREFETCH_FAULTS_REENABLE_LAPSE_PARAMS",
+          "handler": "uvm_test_get_prefetch_faults_reenable_lapse",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:313",
+          "name": "UVM_TEST_GET_PREFETCH_FAULTS_REENABLE_LAPSE",
+          "nr": 250,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:841",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xfa"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_PREFETCH_FAULTS_REENABLE_LAPSE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SET_PREFETCH_FAULTS_REENABLE_LAPSE_PARAMS",
+          "handler": "uvm_test_set_prefetch_faults_reenable_lapse",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:315",
+          "name": "UVM_TEST_SET_PREFETCH_FAULTS_REENABLE_LAPSE",
+          "nr": 251,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:848",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xfb"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SET_PREFETCH_FAULTS_REENABLE_LAPSE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GET_KERNEL_VIRTUAL_ADDRESS_PARAMS",
+          "handler": "uvm_test_get_kernel_virtual_address",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:317",
+          "name": "UVM_TEST_GET_KERNEL_VIRTUAL_ADDRESS",
+          "nr": 252,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:855",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xfc"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_KERNEL_VIRTUAL_ADDRESS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMA_ALLOC_FREE_PARAMS",
+          "handler": "uvm_test_pma_alloc_free",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:318",
+          "name": "UVM_TEST_PMA_ALLOC_FREE",
+          "nr": 253,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:865",
+          "param_size": 64,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xfd"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMA_ALLOC_FREE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_ALLOC_FREE_ROOT_PARAMS",
+          "handler": "uvm_test_pmm_alloc_free_root",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:319",
+          "name": "UVM_TEST_PMM_ALLOC_FREE_ROOT",
+          "nr": 254,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:882",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xfe"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_ALLOC_FREE_ROOT",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_INJECT_PMA_EVICT_ERROR_PARAMS",
+          "handler": "uvm_test_pmm_inject_pma_evict_error",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:320",
+          "name": "UVM_TEST_PMM_INJECT_PMA_EVICT_ERROR",
+          "nr": 255,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:892",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0xff"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_INJECT_PMA_EVICT_ERROR",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RECONFIGURE_ACCESS_COUNTERS_PARAMS",
+          "handler": "uvm_test_reconfigure_access_counters",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:323",
+          "name": "UVM_TEST_RECONFIGURE_ACCESS_COUNTERS",
+          "nr": 256,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:914",
+          "param_size": 44,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x100"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RECONFIGURE_ACCESS_COUNTERS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RESET_ACCESS_COUNTERS_PARAMS",
+          "handler": "uvm_test_reset_access_counters",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:324",
+          "name": "UVM_TEST_RESET_ACCESS_COUNTERS",
+          "nr": 257,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:947",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x101"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RESET_ACCESS_COUNTERS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SET_IGNORE_ACCESS_COUNTERS_PARAMS",
+          "handler": "uvm_test_set_ignore_access_counters",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:325",
+          "name": "UVM_TEST_SET_IGNORE_ACCESS_COUNTERS",
+          "nr": 258,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:962",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x102"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SET_IGNORE_ACCESS_COUNTERS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_CHECK_CHANNEL_VA_SPACE_PARAMS",
+          "handler": "uvm_test_check_channel_va_space",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:326",
+          "name": "UVM_TEST_CHECK_CHANNEL_VA_SPACE",
+          "nr": 259,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:972",
+          "param_size": 40,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x103"
+          ],
+          "syzlang": "ioctl$UVM_TEST_CHECK_CHANNEL_VA_SPACE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_ENABLE_STATIC_PEER_ACCESS_PARAMS",
+          "handler": "uvm_test_enable_static_peer_access",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:327",
+          "name": "UVM_TEST_ENABLE_STATIC_PEER_ACCESS",
+          "nr": 260,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:987",
+          "param_size": 36,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x104"
+          ],
+          "syzlang": "ioctl$UVM_TEST_ENABLE_STATIC_PEER_ACCESS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_DISABLE_STATIC_PEER_ACCESS_PARAMS",
+          "handler": "uvm_test_disable_static_peer_access",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:328",
+          "name": "UVM_TEST_DISABLE_STATIC_PEER_ACCESS",
+          "nr": 261,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:998",
+          "param_size": 36,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x105"
+          ],
+          "syzlang": "ioctl$UVM_TEST_DISABLE_STATIC_PEER_ACCESS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GET_PAGE_THRASHING_POLICY_PARAMS",
+          "handler": "uvm_test_get_page_thrashing_policy",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:329",
+          "name": "UVM_TEST_GET_PAGE_THRASHING_POLICY",
+          "nr": 262,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1016",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x106"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_PAGE_THRASHING_POLICY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SET_PAGE_THRASHING_POLICY_PARAMS",
+          "handler": "uvm_test_set_page_thrashing_policy",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:330",
+          "name": "UVM_TEST_SET_PAGE_THRASHING_POLICY",
+          "nr": 263,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1026",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x107"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SET_PAGE_THRASHING_POLICY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_SPACE_MM_RETAIN_PARAMS",
+          "handler": "uvm_test_va_space_mm_retain",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:331",
+          "name": "UVM_TEST_VA_SPACE_MM_RETAIN",
+          "nr": 267,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1038",
+          "param_size": 48,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x10b"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_SPACE_MM_RETAIN",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_CHUNK_WITH_ELEVATED_PAGE_PARAMS",
+          "handler": "uvm_test_pmm_chunk_with_elevated_page",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:332",
+          "name": "UVM_TEST_PMM_CHUNK_WITH_ELEVATED_PAGE",
+          "nr": 269,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1071",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x10d"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_CHUNK_WITH_ELEVATED_PAGE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GET_GPU_TIME_PARAMS",
+          "handler": "uvm_test_get_gpu_time",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:334",
+          "name": "UVM_TEST_GET_GPU_TIME",
+          "nr": 270,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1077",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x10e"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_GPU_TIME",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_ACCESS_COUNTERS_ENABLED_BY_DEFAULT_PARAMS",
+          "handler": "uvm_test_access_counters_enabled_by_default",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:321",
+          "name": "UVM_TEST_ACCESS_COUNTERS_ENABLED_BY_DEFAULT",
+          "nr": 271,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1088",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x10f"
+          ],
+          "syzlang": "ioctl$UVM_TEST_ACCESS_COUNTERS_ENABLED_BY_DEFAULT",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_SPACE_INJECT_ERROR_PARAMS",
+          "handler": "uvm_test_va_space_inject_error",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:333",
+          "name": "UVM_TEST_VA_SPACE_INJECT_ERROR",
+          "nr": 272,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1129",
+          "param_size": 20,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x110"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_SPACE_INJECT_ERROR",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_RELEASE_FREE_ROOT_CHUNKS_PARAMS",
+          "handler": "uvm_test_pmm_release_free_root_chunks",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:335",
+          "name": "UVM_TEST_PMM_RELEASE_FREE_ROOT_CHUNKS",
+          "nr": 273,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1146",
+          "param_size": 20,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x111"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_RELEASE_FREE_ROOT_CHUNKS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_DRAIN_REPLAYABLE_FAULTS_PARAMS",
+          "handler": "uvm_test_drain_replayable_faults",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:336",
+          "name": "UVM_TEST_DRAIN_REPLAYABLE_FAULTS",
+          "nr": 274,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1161",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x112"
+          ],
+          "syzlang": "ioctl$UVM_TEST_DRAIN_REPLAYABLE_FAULTS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMA_GET_BATCH_SIZE_PARAMS",
+          "handler": "uvm_test_pma_get_batch_size",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:338",
+          "name": "UVM_TEST_PMA_GET_BATCH_SIZE",
+          "nr": 275,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1171",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x113"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMA_GET_BATCH_SIZE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_QUERY_PMA_STATS_PARAMS",
+          "handler": "uvm_test_pmm_query_pma_stats",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:339",
+          "name": "UVM_TEST_PMM_QUERY_PMA_STATS",
+          "nr": 276,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1181",
+          "param_size": 120,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x114"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_QUERY_PMA_STATS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_NUMA_CHECK_AFFINITY_PARAMS",
+          "handler": "uvm_test_numa_check_affinity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:340",
+          "name": "UVM_TEST_NUMA_CHECK_AFFINITY",
+          "nr": 278,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1201",
+          "param_size": 20,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x116"
+          ],
+          "syzlang": "ioctl$UVM_TEST_NUMA_CHECK_AFFINITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_SPACE_ADD_DUMMY_THREAD_CONTEXTS_PARAMS",
+          "handler": "uvm_test_va_space_add_dummy_thread_contexts",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:341",
+          "name": "UVM_TEST_VA_SPACE_ADD_DUMMY_THREAD_CONTEXTS",
+          "nr": 279,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1209",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x117"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_SPACE_ADD_DUMMY_THREAD_CONTEXTS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_SPACE_REMOVE_DUMMY_THREAD_CONTEXTS_PARAMS",
+          "handler": "uvm_test_va_space_remove_dummy_thread_contexts",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:343",
+          "name": "UVM_TEST_VA_SPACE_REMOVE_DUMMY_THREAD_CONTEXTS",
+          "nr": 280,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1218",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x118"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_SPACE_REMOVE_DUMMY_THREAD_CONTEXTS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_THREAD_CONTEXT_SANITY_PARAMS",
+          "handler": "uvm_test_thread_context_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:345",
+          "name": "UVM_TEST_THREAD_CONTEXT_SANITY",
+          "nr": 281,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1224",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x119"
+          ],
+          "syzlang": "ioctl$UVM_TEST_THREAD_CONTEXT_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_THREAD_CONTEXT_PERF_PARAMS",
+          "handler": "uvm_test_thread_context_perf",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:346",
+          "name": "UVM_TEST_THREAD_CONTEXT_PERF",
+          "nr": 282,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1233",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x11a"
+          ],
+          "syzlang": "ioctl$UVM_TEST_THREAD_CONTEXT_PERF",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GET_PAGEABLE_MEM_TYPE_PARAMS",
+          "handler": "uvm_test_get_pageable_mem_type",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:347",
+          "name": "UVM_TEST_GET_PAGEABLE_MEM_TYPE",
+          "nr": 283,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1263",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x11b"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_PAGEABLE_MEM_TYPE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_TOOLS_FLUSH_REPLAY_EVENTS_PARAMS",
+          "handler": "uvm_test_tools_flush_replay_events",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:348",
+          "name": "UVM_TEST_TOOLS_FLUSH_REPLAY_EVENTS",
+          "nr": 284,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1281",
+          "param_size": 20,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x11c"
+          ],
+          "syzlang": "ioctl$UVM_TEST_TOOLS_FLUSH_REPLAY_EVENTS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_REGISTER_UNLOAD_STATE_BUFFER_PARAMS",
+          "handler": "uvm_test_register_unload_state_buffer",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:349",
+          "name": "UVM_TEST_REGISTER_UNLOAD_STATE_BUFFER",
+          "nr": 285,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1306",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x11d"
+          ],
+          "syzlang": "ioctl$UVM_TEST_REGISTER_UNLOAD_STATE_BUFFER",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RB_TREE_DIRECTED_PARAMS",
+          "handler": "uvm_test_rb_tree_directed",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:350",
+          "name": "UVM_TEST_RB_TREE_DIRECTED",
+          "nr": 286,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1319",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x11e"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RB_TREE_DIRECTED",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_RB_TREE_RANDOM_PARAMS",
+          "handler": "uvm_test_rb_tree_random",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:351",
+          "name": "UVM_TEST_RB_TREE_RANDOM",
+          "nr": 287,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1326",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x11f"
+          ],
+          "syzlang": "ioctl$UVM_TEST_RB_TREE_RANDOM",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_HOST_SANITY_PARAMS",
+          "handler": "uvm_test_host_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:284",
+          "name": "UVM_TEST_HOST_SANITY",
+          "nr": 288,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1345",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x120"
+          ],
+          "syzlang": "ioctl$UVM_TEST_HOST_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_SPACE_MM_OR_CURRENT_RETAIN_PARAMS",
+          "handler": "uvm_test_va_space_mm_or_current_retain",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:285",
+          "name": "UVM_TEST_VA_SPACE_MM_OR_CURRENT_RETAIN",
+          "nr": 289,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1353",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x121"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_SPACE_MM_OR_CURRENT_RETAIN",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GET_USER_SPACE_END_ADDRESS_PARAMS",
+          "handler": "uvm_test_get_user_space_end_address",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:352",
+          "name": "UVM_TEST_GET_USER_SPACE_END_ADDRESS",
+          "nr": 290,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1369",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x122"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_USER_SPACE_END_ADDRESS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_GET_CPU_CHUNK_ALLOC_SIZES_PARAMS",
+          "handler": "uvm_test_get_cpu_chunk_allocation_sizes",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:353",
+          "name": "UVM_TEST_GET_CPU_CHUNK_ALLOC_SIZES",
+          "nr": 291,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1376",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x123"
+          ],
+          "syzlang": "ioctl$UVM_TEST_GET_CPU_CHUNK_ALLOC_SIZES",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_RANGE_INJECT_ADD_GPU_VA_SPACE_ERROR_PARAMS",
+          "handler": "uvm_test_va_range_inject_add_gpu_va_space_error",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:354",
+          "name": "UVM_TEST_VA_RANGE_INJECT_ADD_GPU_VA_SPACE_ERROR",
+          "nr": 293,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1390",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x125"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_RANGE_INJECT_ADD_GPU_VA_SPACE_ERROR",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_DESTROY_GPU_VA_SPACE_DELAY_PARAMS",
+          "handler": "uvm_test_destroy_gpu_va_space_delay",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:356",
+          "name": "UVM_TEST_DESTROY_GPU_VA_SPACE_DELAY",
+          "nr": 294,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1401",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x126"
+          ],
+          "syzlang": "ioctl$UVM_TEST_DESTROY_GPU_VA_SPACE_DELAY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SEC2_SANITY_PARAMS",
+          "handler": "uvm_test_sec2_sanity",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:357",
+          "name": "UVM_TEST_SEC2_SANITY",
+          "nr": 295,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1408",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x127"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SEC2_SANITY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_CGROUP_ACCOUNTING_SUPPORTED_PARAMS",
+          "handler": "uvm_test_cgroup_accounting_supported",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:359",
+          "name": "UVM_TEST_CGROUP_ACCOUNTING_SUPPORTED",
+          "nr": 296,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1414",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x128"
+          ],
+          "syzlang": "ioctl$UVM_TEST_CGROUP_ACCOUNTING_SUPPORTED",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SPLIT_INVALIDATE_DELAY_PARAMS",
+          "handler": "uvm_test_split_invalidate_delay",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:360",
+          "name": "UVM_TEST_SPLIT_INVALIDATE_DELAY",
+          "nr": 298,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1420",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x12a"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SPLIT_INVALIDATE_DELAY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SEC2_CPU_GPU_ROUNDTRIP_PARAMS",
+          "handler": "uvm_test_sec2_cpu_gpu_roundtrip",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:358",
+          "name": "UVM_TEST_SEC2_CPU_GPU_ROUNDTRIP",
+          "nr": 299,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1429",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x12b"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SEC2_CPU_GPU_ROUNDTRIP",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_CPU_CHUNK_API_PARAMS",
+          "handler": "uvm_test_cpu_chunk_api",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:361",
+          "name": "UVM_TEST_CPU_CHUNK_API",
+          "nr": 300,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1435",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x12c"
+          ],
+          "syzlang": "ioctl$UVM_TEST_CPU_CHUNK_API",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_FORCE_CPU_TO_CPU_COPY_WITH_CE_PARAMS",
+          "handler": "uvm_test_force_cpu_to_cpu_copy_with_ce",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:362",
+          "name": "UVM_TEST_FORCE_CPU_TO_CPU_COPY_WITH_CE",
+          "nr": 301,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1441",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x12d"
+          ],
+          "syzlang": "ioctl$UVM_TEST_FORCE_CPU_TO_CPU_COPY_WITH_CE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_SPACE_ALLOW_MOVABLE_ALLOCATIONS_PARAMS",
+          "handler": "uvm_test_va_space_allow_movable_allocations",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:363",
+          "name": "UVM_TEST_VA_SPACE_ALLOW_MOVABLE_ALLOCATIONS",
+          "nr": 302,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1448",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x12e"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_SPACE_ALLOW_MOVABLE_ALLOCATIONS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SKIP_MIGRATE_VMA_PARAMS",
+          "handler": "uvm_test_skip_migrate_vma",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:365",
+          "name": "UVM_TEST_SKIP_MIGRATE_VMA",
+          "nr": 303,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1455",
+          "param_size": 8,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x12f"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SKIP_MIGRATE_VMA",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_INJECT_TOOLS_EVENT_V2_PARAMS",
+          "handler": "uvm_test_inject_tools_event_v2",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:366",
+          "name": "UVM_TEST_INJECT_TOOLS_EVENT_V2",
+          "nr": 304,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1462",
+          "param_size": 80,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x130"
+          ],
+          "syzlang": "ioctl$UVM_TEST_INJECT_TOOLS_EVENT_V2",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SET_P2P_SUSPENDED_PARAMS",
+          "handler": "uvm_test_set_p2p_suspended",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:367",
+          "name": "UVM_TEST_SET_P2P_SUSPENDED",
+          "nr": 305,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1473",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x131"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SET_P2P_SUSPENDED",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_INJECT_NVLINK_ERROR_PARAMS",
+          "handler": "uvm_test_inject_nvlink_error",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:368",
+          "name": "UVM_TEST_INJECT_NVLINK_ERROR",
+          "nr": 306,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1483",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x132"
+          ],
+          "syzlang": "ioctl$UVM_TEST_INJECT_NVLINK_ERROR",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_FILE_INITIALIZE_PARAMS",
+          "handler": "uvm_test_file_initialize",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:369",
+          "name": "UVM_TEST_FILE_INITIALIZE",
+          "nr": 307,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1491",
+          "param_size": 4,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x133"
+          ],
+          "syzlang": "ioctl$UVM_TEST_FILE_INITIALIZE",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_FILE_UNMAP_PARAMS",
+          "handler": "uvm_test_file_unmap",
+          "copy_storage": "stack",
+          "requires_initialized_fd": false,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:370",
+          "name": "UVM_TEST_FILE_UNMAP",
+          "nr": 308,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1497",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x134"
+          ],
+          "syzlang": "ioctl$UVM_TEST_FILE_UNMAP",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_QUERY_ACCESS_COUNTERS_PARAMS",
+          "handler": "uvm_test_query_access_counters",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:371",
+          "name": "UVM_TEST_QUERY_ACCESS_COUNTERS",
+          "nr": 309,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1511",
+          "param_size": 28,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x135"
+          ],
+          "syzlang": "ioctl$UVM_TEST_QUERY_ACCESS_COUNTERS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_VA_BLOCK_DISCARD_STATUS_PARAMS",
+          "handler": "uvm_test_va_block_discard_status",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:372",
+          "name": "UVM_TEST_VA_BLOCK_DISCARD_STATUS",
+          "nr": 310,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1521",
+          "param_size": 16,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x136"
+          ],
+          "syzlang": "ioctl$UVM_TEST_VA_BLOCK_DISCARD_STATUS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_PMM_GET_ALLOC_LIST_PARAMS",
+          "handler": "uvm_test_pmm_get_alloc_list",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:373",
+          "name": "UVM_TEST_PMM_GET_ALLOC_LIST",
+          "nr": 311,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1538",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x137"
+          ],
+          "syzlang": "ioctl$UVM_TEST_PMM_GET_ALLOC_LIST",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_DUMP_ACCESS_BITS_PARAMS",
+          "handler": "uvm_test_dump_access_bits",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:374",
+          "name": "UVM_TEST_DUMP_ACCESS_BITS",
+          "nr": 312,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1550",
+          "param_size": 56,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x138"
+          ],
+          "syzlang": "ioctl$UVM_TEST_DUMP_ACCESS_BITS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_DEAD_CHANNEL_PARAMS",
+          "handler": "uvm_test_dead_channel",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:375",
+          "name": "UVM_TEST_DEAD_CHANNEL",
+          "nr": 313,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1566",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x139"
+          ],
+          "syzlang": "ioctl$UVM_TEST_DEAD_CHANNEL",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_SET_NON_REPLAYABLE_DELAY_PARAMS",
+          "handler": "uvm_test_set_non_replayable_delay",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:376",
+          "name": "UVM_TEST_SET_NON_REPLAYABLE_DELAY",
+          "nr": 314,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1591",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x13a"
+          ],
+          "syzlang": "ioctl$UVM_TEST_SET_NON_REPLAYABLE_DELAY",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_DRAIN_ACCESS_COUNTERS_PARAMS",
+          "handler": "uvm_test_drain_access_counters",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:337",
+          "name": "UVM_TEST_DRAIN_ACCESS_COUNTERS",
+          "nr": 315,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1608",
+          "param_size": 32,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x13b"
+          ],
+          "syzlang": "ioctl$UVM_TEST_DRAIN_ACCESS_COUNTERS",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        },
+        {
+          "param_struct": "UVM_TEST_QUERY_CDMM_DEVMEM_PARAMS",
+          "handler": "uvm_test_query_cdmm_devmem",
+          "copy_storage": "stack",
+          "requires_initialized_fd": true,
+          "dispatch_site": "kernel-open/nvidia-uvm/uvm_test.c:377",
+          "name": "UVM_TEST_QUERY_CDMM_DEVMEM",
+          "nr": 316,
+          "defined_at": "kernel-open/nvidia-uvm/uvm_test_ioctl.h:1618",
+          "param_size": 24,
+          "is_argument_array": false,
+          "xfer_only": false,
+          "requests": [
+            "0x13c"
+          ],
+          "syzlang": "ioctl$UVM_TEST_QUERY_CDMM_DEVMEM",
+          "size_source": "measured",
+          "reachable": false,
+          "reachability_gate": "uvm_enable_builtin_tests module parameter (kernel-open/nvidia-uvm/uvm_test.c:260)"
+        }
+      ]
+    }
+  ],
+  "dead_escapes": [
+    "NV_ESC_RM_ADD_VBLANK_CALLBACK",
+    "NV_ESC_RM_EXPORT_OBJECT_TO_FD",
+    "NV_ESC_RM_IMPORT_OBJECT_FROM_FD"
+  ],
+  "unresolved_param_structs": [],
+  "counts": {
+    "rm_escapes_dispatched": 34,
+    "uvm_commands_dispatched": 39,
+    "uvm_tools_commands_dispatched": 7,
+    "uvm_test_commands_dispatched": 104,
+    "sizes_measured": 183,
+    "sizes_unresolved": 0
+  }
+}

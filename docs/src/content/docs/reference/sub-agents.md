@@ -30,7 +30,7 @@ independent only from round 2 on.
 
 ## provision
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | `config/machine.yaml`, `config/campaign.yaml` |
 | **Writes** | `config/machine.yaml`, `artifacts/builds/manifest.json`, `/etc/sudoers.d/gspwn`, the orchestrator unit |
@@ -40,7 +40,7 @@ independent only from round 2 on.
 
 ## build
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | `config/machine.yaml`, `artifacts/src/linux`, `artifacts/src/open-gpu-kernel-modules` |
 | **Writes** | The installed kernel and modules, `config/machine.yaml`, `artifacts/builds/manifest.json`, per-rung failure notes |
@@ -50,37 +50,37 @@ independent only from round 2 on.
 
 ## describe
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | The driver source, the syzkaller toolchain, the kernel tree, and from round 2 on the work list and `finding-list` |
-| **Writes** | `artifacts/descriptions/*.txt`, `artifacts/eval/description-audit.md` |
+| **Writes** | `descriptions/*.txt`, `artifacts/eval/description-audit.md` |
 | **Tools** | `pipeline_ctl.py worklist`, `pipeline_ctl.py finding-list`, `syz-extract`, `syz-compile` |
 | **Gate** | syzlang compiles, a smoke run reaches the driver with dmesg evidence, no device node early-outs uniformly, and five sampled descriptions are audited against source |
 | **Rules** | Descriptions are agent-authored and treated as untrusted until measured. All four gate checks are required, and their evidence goes in the gate. Every number and struct layout comes from the driver source: the ABI shifts between branches, and a wrong direction bit produces descriptions that compile, run and never reach the driver |
 
 ## seeds
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | The `NV_*` header from `describe`, the work list, `finding-list`, the seed bank |
-| **Writes** | `artifacts/seeds/*.syz`, `tools/ioctl_map.json`, `artifacts/seeds/trace.txt` |
-| **Tools** | `trace2seed.py`, `corpus_ctl.py stats`, `pipeline_ctl.py worklist` |
-| **Gate** | Seeds exist and parse under syz-manager, with the mapped and unmapped counts reported |
-| **Rules** | A precondition that cannot be reached from any available CUDA workload is reported as unreached |
+| **Writes** | `artifacts/seeds/chain-*.syz`, `artifacts/seeds/seed-*.syz`, `tools/ioctl_map.json`, `artifacts/seeds/trace.txt` |
+| **Tools** | `trace2seed.py chains/convert`, `regression_check.py names`, `corpus_ctl.py stats`, `pipeline_ctl.py worklist` |
+| **Gate** | Both seed sources present and parsing under syz-manager, the chain account line, the `names` check, and the mapped, unmapped and multiplexer counts |
+| **Rules** | A precondition that cannot be reached from any available CUDA workload is reported as unreached. A control command reaches a program through `chains` and never through a trace |
 
 ## harness
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | `libnvidia-container` and `nvidia-container-toolkit` source, `track_u.docker_image` |
-| **Writes** | `artifacts/harnesses/<target>/`, `run_all.sh`, `TARGETS.md`, `track_u.targets` |
+| **Writes** | `harnesses/<target>/`, `run_all.sh`, `TARGETS.md`, `track_u.targets` |
 | **Tools** | The container toolchain from `track_u.docker_image` |
 | **Gate** | Harnesses build, each produces coverage on its seeds in a 60-second run, and `TARGETS.md` carries the ranked entry points with reachability justifications and a `{input}` replay command per harness |
 | **Rules** | Entry points are enumerated from the checked-out source and ranked by how directly attacker-controlled bytes reach them. Sanitizer settings are explicit per harness: `detect_leaks` is a stated choice, and UBSan runs with `halt_on_error=1` so the crashing input still matches the report |
 
 ## fuzz
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | `config/campaign.yaml`, `track_u.targets`, the seed bank, the previous run's corpus |
 | **Writes** | The campaign units, the deadline, the coverage series, campaign events |
@@ -90,7 +90,7 @@ independent only from round 2 on.
 
 ## triage
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | The syzkaller workdir, the Track U crash directory, every harvested crash log |
 | **Writes** | The crash registry, `artifacts/crashes/QUEUE.md` |
@@ -99,7 +99,7 @@ independent only from round 2 on.
 
 ## rca
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | The crash reports, the driver source, the build manifest |
 | **Writes** | `artifacts/rca/<crash-id>.md`, a research record and an impact record per analysed crash |
@@ -109,7 +109,7 @@ independent only from round 2 on.
 
 ## poc
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | The registry, the syzkaller crash directories, `TARGETS.md` |
 | **Writes** | `artifacts/pocs/<crash-id>/`, the reproduction rate and classification in the registry |
@@ -119,27 +119,27 @@ independent only from round 2 on.
 
 ## eval
 
-| Item | Detail |
+| Property | Value |
 |---|---|
-| **Reads** | The coverage series, the registry, the round history, the RCA files |
-| **Writes** | `artifacts/eval/`: coverage artifacts, the findings table, the round progression, `rca-audit.md`, `version-persistence.md` |
-| **Tools** | `coverage_ctl.py series/compare`, `pipeline_ctl.py round-show/impact-list` |
+| **Reads** | The coverage series, the registry, the round history, the RCA files, the run's corpus |
+| **Writes** | `artifacts/eval/`: coverage artifacts, `surface-report.json`, `surface-targets.json`, the findings table, the round progression, `rca-audit.md`, `version-persistence.md` |
+| **Tools** | `coverage_ctl.py series/compare/completion`, `surface_cov.py report/targets`, `pipeline_ctl.py round-show/impact-list` |
 | **Gate** | A listing of `artifacts/eval/` with a one-line description of each artifact, including `version-persistence.md` |
 | **Rules** | Version persistence replays every reliable PoC against one newer driver branch. It has no tooling behind it, and its outcome is required: a recorded `skipped: <why>` satisfies the gate, and the gate fails when the file is absent. The impact audit re-reads the evidence for every record claiming `privilege-escalation` or `container-escape`, the two claims a vendor challenges first |
 
 ## refine
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | The coverage series, the syzkaller workdir, the descriptions, the seed bank, `finding-list`, the round history |
-| **Writes** | `artifacts/eval/<run-id>/gaps.md`, `artifacts/eval/<run-id>/worklist.md` |
-| **Tools** | `coverage_ctl.py series/plateau/gpu-health`, `pipeline_ctl.py finding-list/round-show/round-end`, `corpus_ctl.py promote` |
-| **Gate** | Both files written, every item tagged, the plateau verdict with its detail line, the promotion count, the `round-end` summary, and the split of items by source |
+| **Writes** | `artifacts/eval/<run-id>/gaps.md`, `artifacts/eval/<run-id>/worklist.md`, `surface/completion-ledger.json` |
+| **Tools** | `coverage_ctl.py series/plateau/gpu-health/completion`, `surface_cov.py report/gaps`, `pipeline_ctl.py finding-list/round-show/round-end/surface-account`, `corpus_ctl.py promote` |
+| **Gate** | Both files written, every item tagged, both curve verdicts with their detail lines, the completion reading, the promotion count, the `round-end` summary, and the split of items by source |
 | **Rules** | `refine` does not reimplement syzkaller's inner loop. It models ioctls syzkaller has no description for, and supplies valid object-chain seeds syzkaller cannot generate |
 
 ## report
 
-| Item | Detail |
+| Property | Value |
 |---|---|
 | **Reads** | The registry, the RCA files, the impact records, the PoC READMEs, the build manifest |
 | **Writes** | `artifacts/report/<date>-report.md`, `artifacts/report/disclosure/<crash-id>/` |

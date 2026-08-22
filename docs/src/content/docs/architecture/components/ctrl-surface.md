@@ -38,7 +38,7 @@ One invocation walks the generated directory and writes the inventory.
 | Flag | Effect | Default |
 |---|---|---|
 | `--src` | The open-gpu-kernel-modules checkout to read | `artifacts/src/open-gpu-kernel-modules` |
-| `--out` | The JSON inventory to write | `artifacts/surface/rm-control-inventory.json` |
+| `--out` | The JSON inventory to write | `surface/rm-control-inventory.json` |
 | `-v`, `--verbose` | Logs every table found at DEBUG level | Off |
 
 Standard output carries the totals: methods, owning classes, driver version,
@@ -132,8 +132,8 @@ The `#if` gate is a free correctness check. NVOC writes each entry's own
 `flags` value into the `NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG` condition above
 it, so an entry whose parsed `flags` disagrees with its gate proves the line
 collector crossed an entry boundary. The `pClassInfo` check is the same idea
-against the enclosing table. Both fire zero times on `610.57.04`, which is
-what makes the 1372-of-1372 parse credible.
+against the enclosing table. Both fire zero times on `610.57.04`, which makes
+the 1372-of-1372 parse credible.
 
 Privilege classification is ordered to match the driver, `INTERNAL` first,
 then `PRIVILEGED`, then `NON_PRIVILEGED`, with kernel-only as the default. The

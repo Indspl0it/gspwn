@@ -27,6 +27,17 @@ Subcommands:
   impact-list [--primitive P] [--consequence C] [--json]
                                  the impact records, with the CWE rollup and
                                  the count that can carry a severity
+  surface-account --json PATH|-   record why one command-surface target will
+                                 not be exercised. Completion is exercised
+                                 plus accounted-for equal to the whole
+                                 denominator, so every target the campaign
+                                 will not reach needs a written reason here
+  surface-unaccount --variant NAME | --key KEY
+                                 remove one accounted row, reopening its
+                                 target. The way out of a reason written in
+                                 error, including one the completion stop is
+                                 now resting on
+  surface-ledger [--json]        the accounted targets, grouped by reason
   campaign-add --track k|u --note TEXT
   round-show [--json]            round history + loop budget
   round-add-run --run-id ID      attach a campaign run to the current round
@@ -40,9 +51,9 @@ Subcommands:
   worklist                       print the worklist this round must execute
   round-decide [--decision continue|stop] [--reason TEXT]
                                  apply the configured loop caps; an explicit
-                                 continue cannot override a budget/round-cap
-                                 stop, and overriding a plateau/unknown stop
-                                 requires --reason
+                                 continue cannot override a completion, budget
+                                 or round-cap stop, and overriding a
+                                 plateau/unknown stop requires --reason
   round-advance                  open the next round (requires all round
                                  phases done and a recorded round-end)
   validate                       check integrity; exit 1 if problems found
@@ -111,7 +122,7 @@ def cmd_show(a):
                         "wait": lambda: _wait_line(*val),
                         "decide": lambda: "round-decide (round phases done)",
                         "advance-round": lambda: "round-advance",
-                        "done": lambda: "complete — all phases done"}[kind]())
+                        "done": lambda: "complete: all phases done"}[kind]())
     crashes = st["crashes"]
     if crashes:
         by_status = {}
@@ -125,7 +136,7 @@ def cmd_show(a):
         print("crashes: none registered")
     problems = ps.validate(st, _triage_cfg())
     if problems:
-        print("INTEGRITY: %d problem(s) — run: pipeline_ctl.py validate"
+        print("INTEGRITY: %d problem(s). Run: pipeline_ctl.py validate"
               % len(problems))
     return 0
 
@@ -140,7 +151,7 @@ def _print_noise_line(crashes):
     noise = sum(1 for c in crashes.values() if c.get("signal") == "noise")
     if noise:
         print("  of these %d are noise Xids (the fuzzer causes them by "
-              "design; not counted as findings)" % noise)
+              "design, and they are not counted as findings)" % noise)
 
 
 def _loop_cfg():
@@ -185,9 +196,9 @@ def _next_action(st):
 
 
 def _wait_line(run_id, left_h):
-    return ("wait  (run %s has %.1f h left of its campaign window; the round "
-            "cannot be measured until it ends: python3 tools/campaign_ctl.py "
-            "wait --run-id %s)" % (run_id, left_h, run_id))
+    return ("wait  (run %s has %.1f h left of its campaign window, and the "
+            "round cannot be measured until it ends: python3 "
+            "tools/campaign_ctl.py wait --run-id %s)" % (run_id, left_h, run_id))
 
 
 def cmd_next(a):
@@ -199,7 +210,7 @@ def cmd_next(a):
     if kind == "phase":
         print(val)
     elif kind == "decide":
-        print("decide  (round %d phases are done — run: pipeline_ctl.py "
+        print("decide  (round %d phases are done. Run: pipeline_ctl.py "
               "round-decide)" % ps.round_number(st))
     elif kind == "advance-round":
         print("advance-round  (run: pipeline_ctl.py round-advance)")
@@ -225,8 +236,16 @@ def cmd_round_show(a):
         print("  round %-3d %-10s %-10s crashes=%-4s run_h=%-6.1f%s"
               % (r["round"], r["status"], r["coverage_verdict"],
                  r["new_crashes"], r["run_hours"] or 0.0, edges))
+        if r.get("surface_total"):
+            print("            surface:  %s (%s exercised + %s accounted of "
+                  "%s)%s" % (r.get("surface_verdict"),
+                             r.get("surface_exercised"),
+                             r.get("surface_accounted"), r.get("surface_total"),
+                             ", %s deferred and still open"
+                             % r["surface_deferred"]
+                             if r.get("surface_deferred") else ""))
         if r["decision"]:
-            print("            decision: %s — %s"
+            print("            decision: %s (%s)"
                   % (r["decision"], r["decision_reason"]))
         if r["run_ids"]:
             print("            runs: %s" % ", ".join(r["run_ids"]))
@@ -234,6 +253,8 @@ def cmd_round_show(a):
             print("            executing: %s" % r["worklist_in"])
         if r.get("worklist"):
             print("            produced:  %s" % r["worklist"])
+        if r.get("surface_ledger"):
+            print("            ledger:    %s" % r["surface_ledger"])
     return 0
 
 
@@ -323,13 +344,14 @@ def cmd_round_end(a):
         from_runs = [from_runs]      # tolerate a scalar from programmatic callers
     if not from_runs:
         sys.exit("error: round-end needs at least one --from-run to measure "
-                 "(pass one per campaign this round; hours accumulate)")
+                 "(pass one per campaign this round, and hours accumulate)")
     # Measuring a campaign that is still running is the wrong number in every
     # column at once: the curve stops where the sampler happens to be, the
     # billed hours are the elapsed ones rather than the campaign's, and the
     # crash count is whatever had landed by then. Refusing is cheap; the
     # measurement it prevents is what the whole round is for.
     import campaign_ctl
+    import coverage_ctl
     now = time.time()
     still_live = [(rid, (campaign_ctl.read_deadline(rid) - now) / 3600.0)
                   for rid in from_runs
@@ -348,6 +370,27 @@ def cmd_round_end(a):
                 "new_crashes": a.new_crashes, "edges_start": a.edges_start,
                 "edges_end": a.edges_end, "run_hours": a.run_hours,
                 "notes": a.notes, "worklist": a.worklist}
+    # The completion reading, measured from the runs' own corpora rather than
+    # the seed bank, so it does not depend on corpus_ctl.py promote having run
+    # first. It decides the primary stop, so it is recorded on every round-end
+    # and never carried over: an unmeasurable one lands as "unknown", which
+    # stops the loop rather than ending it.
+    #
+    # Taken before the transaction opens. It unpacks and rescans one corpus
+    # per run, each bounded at coverage.unpack_timeout_sec, and the
+    # transaction holds the exclusive flock on the state file that every other
+    # pipeline_ctl and campaign_ctl command waits on. What it costs is a
+    # reading of a state one instant older, against several minutes of every
+    # other command blocking.
+    #
+    # --ledger names which ledger this round accounts against and pins the
+    # round's pointer to it. Without it the pointer the round already carries
+    # wins, and a round that has been ended once cannot be re-pointed at all.
+    ledger = (getattr(a, "ledger", None)
+              or ps.current_round(ps.load()).get("surface_ledger"))
+    completion = coverage_ctl.completion_status(run_ids=from_runs,
+                                                ledger_path=ledger)
+    ledger_rel = _repo_rel(ps.surface_ledger_path(ledger))
     with ps.transaction() as st:
         cfg = _loop_cfg()
         derived = [_derive_run(rid, cfg) for rid in from_runs]
@@ -376,6 +419,13 @@ def cmd_round_end(a):
                     max(0, d["edges_end"] - d["edges_start"]) for d in measured)
         if vals["new_crashes"] is None:
             vals["new_crashes"] = _derived_new_crashes(st)
+        surface = {"verdict": completion["verdict"],
+                   "exercised": completion["exercised"],
+                   "accounted": completion["accounted"],
+                   "deferred": completion["deferred"],
+                   "closed": completion["closed"],
+                   "total": completion["total"],
+                   "ledger": ledger_rel}
         billed = {d["run_id"]: d["run_hours"] for d in derived
                   if d["run_hours"] is not None}
         unbilled = [d["run_id"] for d in derived if d["run_hours"] is None]
@@ -385,7 +435,8 @@ def cmd_round_end(a):
                              edges_start=vals["edges_start"],
                              edges_end=vals["edges_end"],
                              run_hours=vals["run_hours"], notes=vals["notes"],
-                             worklist=vals["worklist"], billed=billed)
+                             worklist=vals["worklist"], billed=billed,
+                             surface=surface)
         except ValueError as e:
             sys.exit("error: %s" % e)
         # Bill every derived run to the machine-global spend ledger — the
@@ -408,10 +459,16 @@ def cmd_round_end(a):
     print(summary)
     for d in derived:
         print("  measured from run %s: %s" % (d["run_id"], d["detail"]))
+    print("  surface %s: %s" % (completion["verdict"], completion["detail"]))
+    if completion["verdict"] == "unknown":
+        print("  WARNING: the completion reading failed, so the loop cannot "
+              "stop on completion this round and will fall back to the "
+              "plateau rule. Fix it with: python3 tools/coverage_ctl.py "
+              "completion --run-id %s" % from_runs[0])
     if unbilled:
         print("  WARNING: run(s) %s had no usable coverage samples and billed "
-              "0.0 h — check the sampler; unmeasured spend must not pass "
-              "silently" % ", ".join(unbilled))
+              "0.0 h. Check the sampler, because unmeasured spend must not "
+              "pass silently" % ", ".join(unbilled))
     return 0
 
 
@@ -421,12 +478,12 @@ def cmd_worklist(a):
     r = ps.current_round(st)
     path = r.get("worklist_in")
     if not path:
-        print("none — round %d has no inherited worklist (first round, or the "
+        print("none: round %d has no inherited worklist (first round, or the "
               "previous round's refine recorded none)" % r["round"])
         return 1
     full = path if os.path.isabs(path) else os.path.join(ps.REPO_ROOT, path)
     if not os.path.exists(full):
-        print("%s (MISSING — refine recorded it but the file is not there)"
+        print("%s (MISSING: refine recorded it but the file is not there)"
               % path)
         return 1
     print(path)
@@ -439,7 +496,7 @@ def cmd_round_add_run(a):
         if a.run_id not in r["run_ids"]:
             r["run_ids"].append(a.run_id)
         rnd, n = r["round"], len(r["run_ids"])
-    print("round %d now has %d run(s); added %s" % (rnd, n, a.run_id))
+    print("round %d now has %d run(s) after adding %s" % (rnd, n, a.run_id))
     return 0
 
 
@@ -452,17 +509,29 @@ def cmd_round_decide(a):
             stop_on_plateau=cfg["stop_on_plateau"])
         if a.decision:
             if a.decision == "continue" and computed == "stop":
-                # The budget and the round cap are the spend ceiling; AGENTS.md
-                # forbids overriding them, and the state machine enforces it.
+                # Three stops sit behind hard_cap_reason. The budget and the
+                # round cap are the spend ceiling and AGENTS.md forbids
+                # overriding them. Completion says the work is done, and the
+                # way past a wrong one is to correct the ledger it was
+                # computed from, so the refusal names that route instead of
+                # leaving the operator to hand edit the ledger file.
                 hard = ps.hard_cap_reason(st, cfg["max_rounds"],
                                           cfg["max_total_run_hours"])
                 if hard:
-                    sys.exit("error: computed decision is stop (%s) — a "
-                             "budget or round-cap stop cannot be overridden"
-                             % hard)
+                    out = ("error: computed decision is stop (%s). A "
+                           "completion, budget or round-cap stop cannot be "
+                           "overridden" % hard)
+                    if ps.surface_stop_reason(st):
+                        out += (". The completion verdict is recomputed from "
+                                "the ledger on every round-end, so a target "
+                                "closed by a row that should not have been "
+                                "written is reopened by removing the row "
+                                "(pipeline_ctl.py surface-unaccount --variant "
+                                "NAME) and running round-end again")
+                    sys.exit(out)
                 if not (a.reason or "").strip():
-                    sys.exit("error: computed decision is stop (%s) — "
-                             "overriding it requires --reason"
+                    sys.exit("error: computed decision is stop (%s). "
+                             "Overriding it requires --reason"
                              % computed_reason)
             decision, reason = a.decision, (a.reason or "set explicitly")
         else:
@@ -472,7 +541,7 @@ def cmd_round_decide(a):
         except ValueError as e:
             sys.exit("error: %s" % e)
         rnd = ps.round_number(st)
-    print("round %d: %s — %s" % (rnd, decision, reason))
+    print("round %d: %s (%s)" % (rnd, decision, reason))
     print("next: %s" % ("pipeline_ctl.py round-advance"
                         if decision == "continue" else "run the report phase"))
     return 0
@@ -485,7 +554,7 @@ def cmd_round_advance(a):
         except ValueError as e:
             sys.exit("error: %s" % e)
         n = r["round"]
-    print("opened round %d; round phases reset to pending (setup and crash "
+    print("opened round %d. Round phases reset to pending (setup and crash "
           "registry kept)" % n)
     return 0
 
@@ -554,23 +623,23 @@ def _apply_crash_set(st, cid, a):
                 ps.set_crash_status(c, "unique")
         else:
             if a.status and a.status != "duplicate":
-                raise ValueError("--duplicate-of implies status 'duplicate' "
-                                 "— it cannot be combined with --status %s"
+                raise ValueError("--duplicate-of implies status 'duplicate', "
+                                 "so it cannot be combined with --status %s"
                                  % a.status)
             if a.duplicate_of == cid:
                 raise ValueError("a crash cannot duplicate itself")
             if a.duplicate_of not in st["crashes"]:
                 raise ValueError("unknown crash id: %s" % a.duplicate_of)
             if st["crashes"][a.duplicate_of]["status"] == "duplicate":
-                raise ValueError("%s is itself a duplicate — link directly to "
+                raise ValueError("%s is itself a duplicate. Link directly to "
                                  "the surviving entry (chains and cycles are "
                                  "not allowed)" % a.duplicate_of)
             c["duplicate_of"] = a.duplicate_of
             ps.set_crash_status(c, "duplicate")
     if c["status"] == "duplicate" and not c.get("duplicate_of"):
-        raise ValueError("status 'duplicate' requires --duplicate-of <id> — "
-                         "an unlinked duplicate is excluded from the RCA "
-                         "queue with nothing pointing at the surviving entry")
+        raise ValueError("status 'duplicate' requires --duplicate-of <id>. An "
+                         "unlinked duplicate is excluded from the RCA queue "
+                         "with nothing pointing at the surviving entry")
     if a.disclosure:
         if a.disclosure not in ps.DISCLOSURE_STATUS:
             raise ValueError("unknown disclosure status: %s (expected one of "
@@ -677,7 +746,7 @@ def cmd_finding_list(a):
         print()
         return 0
     if not rows:
-        print("no findings recorded — rca has not produced a research record "
+        print("no findings recorded: rca has not produced a research record "
               "yet, so this round can only steer on coverage")
         return 0
     for cid, f in rows:
@@ -702,6 +771,177 @@ def cmd_finding_list(a):
         print("These cannot, and rca should revisit them:")
         for cid, why in dead:
             print("  %s: %s" % (cid, why))
+    return 0
+
+
+def _surface_targets():
+    """-> (targets by variant, driver version). Exits with the tool's message.
+
+    surface_cov is imported here rather than at module scope for the same
+    reason coverage_ctl is: pipeline_ctl runs on a box where the inventories
+    may not have been generated yet, and `show` must not die because of it.
+    """
+    import surface_cov
+    try:
+        targets, _excluded, meta = surface_cov.load_targets()
+    except surface_cov.SurfaceError as e:
+        sys.exit("error: %s" % e)
+    return targets, meta["driver_version"], len(targets)
+
+
+def cmd_surface_account(a):
+    """Record why one command-surface target will not be exercised.
+
+    JSON rather than a flag per field, mirroring finding-set: the record is
+    authored as a whole and a half-written one is the thing that must not be
+    stored. This one closes a target out of the campaign permanently, so it is
+    validated harder than it is convenient — the reason is a closed
+    vocabulary, the detail is required, and a reason asserting something about
+    driver source needs the file:line behind it.
+
+    The record names its target by `variant`, which is what
+    `surface_cov.py gaps` prints. The ledger stores it under the composite ABI
+    key that variant resolves to, because a control variant carries the C
+    handler function name and a driver refactor renames those freely: keyed on
+    the variant, every accounted row would silently disappear at the next
+    driver bump while the file still looked full.
+    """
+    record = _read_json_arg(a.json_path, "accounting record")
+    if not isinstance(record, dict):
+        sys.exit("error: an accounting record must be a JSON object, got %s"
+                 % type(record).__name__)
+    variant = record.get("variant")
+    if not variant or not isinstance(variant, str):
+        sys.exit("error: an accounting record needs a variant. The variant is "
+                 "the name surface_cov.py gaps prints in brackets, and the "
+                 "only handle the ledger can resolve to a target")
+    # The inventories key on the part after `ioctl$`, which is what a corpus
+    # program's call name reduces to. An agent copying the full syzlang call
+    # name is naming the same target, so accept both spellings rather than
+    # refusing one of them on a prefix.
+    variant = record["variant"] = variant.strip()
+    if variant.startswith("ioctl$"):
+        variant = record["variant"] = variant[len("ioctl$"):]
+    targets, driver, total = _surface_targets()
+    target = targets.get(variant)
+    if target is None:
+        sys.exit("error: %s is not one of the %d targetable command(s) for "
+                 "driver %s. Accounting for something outside the denominator "
+                 "would close the ledger against a target it never counted. "
+                 "Check the name against: python3 tools/surface_cov.py gaps"
+                 % (variant, total, driver or "unknown"))
+    with ps.transaction() as st:
+        r = ps.current_round(st)
+        record.setdefault("round", r["round"])
+        record["key"] = target["abi_key"]
+        record["family"] = target["family"]
+        try:
+            row = ps.set_surface_account(record, path=a.ledger,
+                                         driver_version=driver,
+                                         targets_total=total)
+        except (ValueError, ps.SurfaceLedgerMismatch) as e:
+            sys.exit("error: %s" % e)
+        r["surface_ledger"] = _repo_rel(ps.surface_ledger_path(a.ledger))
+    print("%s: %s (%s)" % (row["variant"], row["reason"], row["detail"]))
+    print("  key %s (recorded %s, first %s)"
+          % (row["key"], row["recorded"], row["first_recorded"]))
+    print("  ledger %s" % _repo_rel(ps.surface_ledger_path(a.ledger)))
+    return 0
+
+
+def cmd_surface_unaccount(a):
+    """Remove one accounting row, reopening its target.
+
+    The way out of a reason written in error. A row closes its target out of
+    the campaign, and once the union reaches the denominator the completion
+    stop is one round-decide refuses to override, so without a removal the
+    only recovery is a hand edit of the ledger file. Reopening a target moves
+    the campaign back towards fuzzing it, so this refuses nothing but a name
+    it cannot resolve.
+
+    --variant resolves through the inventories, the same handle
+    surface-account takes. --key names the stored key directly and is the only
+    handle on a row whose target no inventory contains any more.
+    """
+    if bool(a.variant) == bool(a.key):
+        sys.exit("error: name the row with --variant (as surface_cov.py gaps "
+                 "prints it) or with --key (as surface-ledger --json stores "
+                 "it), and not with both")
+    key, driver = a.key, None
+    if a.variant:
+        variant = a.variant.strip()
+        if variant.startswith("ioctl$"):
+            variant = variant[len("ioctl$"):]
+        targets, driver, total = _surface_targets()
+        target = targets.get(variant)
+        if target is None:
+            sys.exit("error: %s is not one of the %d targetable command(s) "
+                     "for driver %s. A row whose target no inventory contains "
+                     "any more has no variant to resolve and is removed by "
+                     "its stored key: --key <key>, as surface-ledger --json "
+                     "prints it" % (variant, total, driver or "unknown"))
+        key = target["abi_key"]
+    try:
+        row = ps.clear_surface_account(key, path=a.ledger,
+                                       driver_version=driver)
+    except (ValueError, ps.SurfaceLedgerMismatch) as e:
+        sys.exit("error: %s" % e)
+    if row is None:
+        print("%s: no accounted row, so nothing was removed" % key)
+        return 1
+    print("removed %s: %s (%s)" % (row.get("variant") or key,
+                                   row.get("reason"), row.get("detail")))
+    print("  key %s (first recorded %s)" % (key, row.get("first_recorded")))
+    print("  ledger %s" % _repo_rel(ps.surface_ledger_path(a.ledger)))
+    print("  the target is open again. The round still carries the verdict it "
+          "was measured with, so re-measure before the loop reads it: python3 "
+          "tools/pipeline_ctl.py round-end --from-run <run-id>")
+    return 0
+
+
+def cmd_surface_ledger(a):
+    """The accounted rows and what is still open, grouped by reason."""
+    targets, driver, total = _surface_targets()
+    try:
+        ledger = ps.load_surface_ledger(a.ledger, driver, targets_total=total)
+    except (ValueError, ps.SurfaceLedgerMismatch) as e:
+        sys.exit("error: %s" % e)
+    rows = ledger["accounted"]
+    if a.json:
+        json.dump(ledger, sys.stdout, indent=2, sort_keys=True)
+        print()
+        return 0
+    print("ledger %s" % _repo_rel(ps.surface_ledger_path(a.ledger)))
+    print("driver %s, %d of %d target(s) accounted for"
+          % (ledger.get("driver_version") or "unknown", len(rows), total))
+    if not rows:
+        print("nothing accounted for yet. Completion is exercised plus "
+              "accounted-for equal to %d, so until a reason is written for "
+              "every unreachable target the loop cannot stop on completion."
+              % total)
+        return 0
+    by_reason = {}
+    for row in rows.values():
+        by_reason.setdefault(row.get("reason", "?"), []).append(row)
+    for reason in sorted(by_reason, key=lambda k: (-len(by_reason[k]), k)):
+        print("  %-24s %d%s"
+              % (reason, len(by_reason[reason]),
+                 "   does not close the target"
+                 if reason in ps.SURFACE_REASON_DEFERRED else ""))
+    deferred = sum(len(v) for k, v in by_reason.items()
+                   if k in ps.SURFACE_REASON_DEFERRED)
+    if deferred:
+        print("%d row(s) record a target as reachable and put aside, so they "
+              "are counted here and not towards completion. The campaign "
+              "either fuzzes those targets or writes a reason that says why "
+              "they cannot be reached." % deferred)
+    keys = {t["abi_key"] for t in targets.values()}
+    stale = sorted(set(rows) - keys)
+    if stale:
+        print("%d row(s) name a target no inventory contains and are not "
+              "counted (a driver bump, or a hand-edited ledger):" % len(stale))
+        for key in stale[:10]:
+            print("  %s" % key)
     return 0
 
 
@@ -770,9 +1010,9 @@ def cmd_impact_list(a):
         print()
         return 0
     if not rows:
-        print("no impact records — rca has analysed no crash for what the "
-              "fault gives an attacker, so the report can only describe "
-              "crashes, not argue severities")
+        print("no impact records: rca has analysed no crash for what the "
+              "fault gives an attacker, so the report can describe crashes "
+              "and argue no severity for any of them")
         return 0
     for cid, im in rows:
         _print_impact(cid, im, ps.cwe_of(st["crashes"][cid]))
@@ -821,9 +1061,10 @@ def cmd_brief(a):
     # editing the command in the systemd unit.
     last = a.last if a.last is not None else ag["brief_knowledge_entries"]
     r = ps.current_round(st)
-    print("# gspwn brief — generated %s" % ps._now())
-    print("Derived from %s at read time. Re-run it rather than trusting a "
-          "copy;\nnothing here is authoritative once the state file moves on."
+    print("# gspwn brief, generated %s" % ps._now())
+    print("Derived from %s at read time. Re-run it for a current answer, "
+          "because\nnothing here stays authoritative once the state file "
+          "moves on."
           % _repo_rel(ps.STATE_PATH))
 
     print("\n## Where the pipeline is")
@@ -836,7 +1077,7 @@ def cmd_brief(a):
         "wait": lambda: _wait_line(*val),
         "decide": lambda: "pipeline_ctl.py round-decide",
         "advance-round": lambda: "pipeline_ctl.py round-advance",
-        "done": lambda: "complete — all phases done"}[kind]())
+        "done": lambda: "complete: all phases done"}[kind]())
     for label, sel in (("done", "done"), ("in progress", "in_progress"),
                        ("blocked", "blocked"), ("failed", "failed")):
         names = [p for p in ps.PHASES if st["phases"][p]["status"] == sel]
@@ -847,11 +1088,19 @@ def cmd_brief(a):
         if ph["status"] in ("blocked", "failed") and ph["notes"]:
             print("  %s %s: %s" % (p, ph["status"], ph["notes"]))
 
+    if r.get("surface_total"):
+        # The primary stop rests on this line, so a resumed agent has to see
+        # it in the same place it sees the round and the budget.
+        print("command surface: %s, %s of %s exercised, %s accounted for%s"
+              % (r.get("surface_verdict"), r.get("surface_exercised"),
+                 r.get("surface_total"), r.get("surface_accounted"),
+                 ", %s deferred and still open" % r["surface_deferred"]
+                 if r.get("surface_deferred") else ""))
     if r.get("worklist_in"):
         print("\nthis round executes: %s" % r["worklist_in"])
     prev = st["rounds"][-2] if len(st["rounds"]) > 1 else None
     if prev and prev.get("decision"):
-        print("previous round %d: %s — %s"
+        print("previous round %d: %s (%s)"
               % (prev["round"], prev["decision"], prev["decision_reason"]))
 
     print("\n## Crashes")
@@ -868,13 +1117,13 @@ def cmd_brief(a):
         _print_noise_line(crashes)
         flagged = by_status.get("flagged", 0)
         if flagged:
-            print("%d flagged — triage cannot pass its gate until that queue "
+            print("%d flagged. Triage cannot pass its gate until that queue "
                   "is empty" % flagged)
 
     print("\n## Findings (what steers the next round)")
     rows = ps.findings(st)
     if not rows:
-        print("none recorded — the loop can only steer on coverage")
+        print("none recorded: the loop can only steer on coverage")
     else:
         by_sub = {}
         for _cid, f in rows:
@@ -884,14 +1133,14 @@ def cmd_brief(a):
                                       ", ".join(sorted(set(by_sub[sub])))))
         dead = ps.findings_steering_nothing(st)
         if dead:
-            print("  %d of %d steer nothing new (finding-list says which) — "
-                  "the loop is back on coverage alone for those"
+            print("  %d of %d steer nothing new (finding-list says which). "
+                  "The loop is back on coverage alone for those"
                   % (len(dead), len(rows)))
 
     print("\n## Impact (what the report can argue)")
     imps = ps.impacts(st)
     if not imps:
-        print("none assessed — the report would carry reproducers with no "
+        print("none assessed: the report would carry reproducers with no "
               "argued severity")
     else:
         by_cons = {}
@@ -981,8 +1230,8 @@ def cmd_spend_init(a):
           % ("ledger already present at" if existed else "seeded ledger",
              ps.SPEND_PATH, total))
     if existed:
-        print("(no change — delete the ledger first if you truly mean to "
-              "rebuild it from the state file)")
+        print("(no change. Delete the ledger first to rebuild it from the "
+              "state file)")
     return 0
 
 
@@ -1020,7 +1269,7 @@ def build_parser():
 
     p = sub.add_parser("crash-set", help="update crash registry entries")
     p.add_argument("crash_id", nargs="+", metavar="CRASH_ID",
-                   help="one or more crash ids; the same edit is applied to "
+                   help="one or more crash ids. The same edit is applied to "
                         "each, and a rejected id aborts the whole call")
     p.add_argument("--status")
     p.add_argument("--duplicate-of", dest="duplicate_of",
@@ -1033,7 +1282,7 @@ def build_parser():
     p = sub.add_parser("brief",
                        help="derived handoff: state + findings + knowledge")
     p.add_argument("--last", type=int, default=None, metavar="N",
-                   help="knowledge entries per file; defaults to "
+                   help="knowledge entries per file. Defaults to "
                         "agent.brief_knowledge_entries in campaign.yaml")
     p.set_defaults(fn=cmd_brief)
 
@@ -1055,6 +1304,39 @@ def build_parser():
     p.add_argument("--bug-class", dest="bug_class", choices=ps.BUG_CLASS)
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_finding_list)
+
+    p = sub.add_parser("surface-account",
+                       help="record why a command-surface target will not be "
+                            "exercised")
+    p.add_argument("--json", dest="json_path", required=True, metavar="PATH",
+                   help="file holding the accounting record, or - for stdin. "
+                        "Fields: variant (required, as surface_cov.py gaps "
+                        "prints it), reason (required, one of %s), detail "
+                        "(required), evidence[] (file:line, required for %s), "
+                        "round"
+                        % ("|".join(sorted(ps.SURFACE_REASON)),
+                           "|".join(ps.SURFACE_REASON_NEEDS_EVIDENCE)))
+    p.add_argument("--ledger", default=None,
+                   help="ledger path (default %s)" % ps.SURFACE_LEDGER_PATH)
+    p.set_defaults(fn=cmd_surface_account)
+
+    p = sub.add_parser("surface-unaccount",
+                       help="remove one accounted row, reopening its target")
+    p.add_argument("--variant",
+                   help="the target's variant, as surface_cov.py gaps prints "
+                        "it")
+    p.add_argument("--key",
+                   help="the stored ABI key, for a row whose target no "
+                        "inventory contains any more")
+    p.add_argument("--ledger", default=None,
+                   help="ledger path (default %s)" % ps.SURFACE_LEDGER_PATH)
+    p.set_defaults(fn=cmd_surface_unaccount)
+
+    p = sub.add_parser("surface-ledger",
+                       help="the accounted targets, grouped by reason")
+    p.add_argument("--ledger", default=None)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_surface_ledger)
 
     p = sub.add_parser("impact-set",
                        help="attach rca's impact record to a crash")
@@ -1084,7 +1366,7 @@ def build_parser():
 
     p = sub.add_parser("campaign-add", help="record a campaign event")
     p.add_argument("--track", required=True,
-                   help="k or u (case-insensitive; stored as K/U)")
+                   help="k or u (case-insensitive, stored as K/U)")
     p.add_argument("--note", required=True)
     p.set_defaults(fn=cmd_campaign_add)
 
@@ -1100,8 +1382,8 @@ def build_parser():
     p.add_argument("--from-run", dest="from_run", action="append",
                    metavar="RUN_ID",
                    help="measure verdict/edges/run-hours from this run's "
-                        "coverage.csv instead of passing them by hand; "
-                        "repeatable — pass every campaign this round ran, "
+                        "coverage.csv, so they need not be passed by hand. "
+                        "Repeatable: pass every campaign this round ran, and "
                         "each is measured and billed independently")
     p.add_argument("--coverage-verdict", dest="coverage_verdict",
                    choices=sorted(ps.COVERAGE_VERDICT),
@@ -1111,11 +1393,15 @@ def build_parser():
     p.add_argument("--edges-end", dest="edges_end", type=int)
     p.add_argument("--run-hours", dest="run_hours", type=float,
                    help="bill these hours to the round (added to the round "
-                        "total; derived per-run hours are preferred)")
+                        "total, and derived per-run hours are preferred)")
     p.add_argument("--notes")
     p.add_argument("--worklist",
-                   help="path to this round's worklist.md; the next round's "
+                   help="path to this round's worklist.md. The next round's "
                         "describe/seeds agents read it via `worklist`")
+    p.add_argument("--ledger", default=None,
+                   help="completion ledger to measure against, pinned onto "
+                        "the round. Omit to use the one the round already "
+                        "names, or %s" % ps.SURFACE_LEDGER_PATH)
     p.add_argument("--force", action="store_true",
                    help="measure a run whose campaign window has not elapsed "
                         "(only when the campaign really is finished and its "
@@ -1129,9 +1415,9 @@ def build_parser():
     p = sub.add_parser("round-decide",
                        help="apply the configured loop caps -> continue|stop")
     p.add_argument("--decision", choices=sorted(ps.ROUND_DECISION),
-                   help="override the computed decision (a budget or "
-                        "round-cap stop cannot be overridden; a plateau or "
-                        "unknown stop requires --reason)")
+                   help="override the computed decision (a completion, "
+                        "budget or round-cap stop cannot be overridden, and a "
+                        "plateau or unknown stop requires --reason)")
     p.add_argument("--reason", default="")
     p.set_defaults(fn=cmd_round_decide)
 

@@ -23,9 +23,9 @@ failure is expected work.
 | Item | Value |
 | --- | --- |
 | Source read | `artifacts/src/libnvidia-container` at `08cb279`, `artifacts/src/nvidia-container-toolkit` at `1780ac6` |
-| Build entry point | `artifacts/harnesses/build_all.sh` |
-| Campaign entry point | `artifacts/harnesses/run_all.sh` |
-| Seed generator | `artifacts/harnesses/seedgen.py`, re-runnable |
+| Build entry point | `harnesses/build_all.sh` |
+| Campaign entry point | `harnesses/run_all.sh` |
+| Seed generator | `harnesses/seedgen.py`, re-runnable |
 | Compiled and coverage-checked | None. Gate evidence is absent until `build_all.sh` and the 60-second smoke run in `agents/harness.md` have both been done |
 
 ## Ranked entry points
@@ -121,12 +121,12 @@ repository root.
 
 | Harness | Replay command |
 | --- | --- |
-| `fuzz_ldcache` | `artifacts/harnesses/fuzz_ldcache/build/fuzz_ldcache {input}` |
-| `fuzz_path_resolve` | `artifacts/harnesses/fuzz_path_resolve/build/fuzz_path_resolve {input}` |
-| `fuzz_dsl_evaluate` | `artifacts/harnesses/fuzz_dsl_evaluate/build/fuzz_dsl_evaluate {input}` |
-| `fuzz_options_parse` | `artifacts/harnesses/fuzz_options_parse/build/fuzz_options_parse {input}` |
-| `fuzz_imex_channels` | `artifacts/harnesses/fuzz_imex_channels/build/fuzz_imex_channels {input}` |
-| `fuzz_path_join` | `artifacts/harnesses/fuzz_path_join/build/fuzz_path_join {input}` |
+| `fuzz_ldcache` | `harnesses/fuzz_ldcache/build/fuzz_ldcache {input}` |
+| `fuzz_path_resolve` | `harnesses/fuzz_path_resolve/build/fuzz_path_resolve {input}` |
+| `fuzz_dsl_evaluate` | `harnesses/fuzz_dsl_evaluate/build/fuzz_dsl_evaluate {input}` |
+| `fuzz_options_parse` | `harnesses/fuzz_options_parse/build/fuzz_options_parse {input}` |
+| `fuzz_imex_channels` | `harnesses/fuzz_imex_channels/build/fuzz_imex_channels {input}` |
+| `fuzz_path_join` | `harnesses/fuzz_path_join/build/fuzz_path_join {input}` |
 | `go_cudacompat_elf` | `cd artifacts/src/nvidia-container-toolkit && go test ./cmd/nvidia-cdi-hook/cudacompat/ -run=FuzzGetCUDACompatElfHeaderFromReader/{input}` |
 
 The six C binaries are libFuzzer or AFL++ driver targets and both accept a file

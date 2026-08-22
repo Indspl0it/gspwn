@@ -53,7 +53,7 @@ count.
 | Stage | Measured from | Fix when it loses a target |
 |---|---|---|
 | targetable | The three inventories | None. This stage is the denominator |
-| modelled | `artifacts/descriptions/` | The describe phase writes the missing syzlang variant |
+| modelled | `descriptions/` | The describe phase writes the missing syzlang variant |
 | exercised | The corpus under `artifacts/seeds/` | The programs do not build the state the call needs, which is a resource-chain problem before it is a seed problem |
 
 modelled over targetable measures the describe phase's own completeness.
@@ -96,17 +96,31 @@ writes only the JSON file `targets --out` is given.
 | `targets [--json] [--out PATH]` | The denominator per family, then the four excluded groups with the reason for each |
 | `modelled [--top N]` | Modelled against targetable per family, then the variants the descriptions declare that no inventory names |
 | `report [--json]` | The three-stage decomposition per family, the loss at each stage, and the excluded counts |
-| `gaps [--stage model\|corpus] [--family F] [--top N]` | The uncovered targets, one worklist-ready line each |
+| `gaps [--stage model\|corpus] [--family F] [--top N]` | The uncovered targets, one worklist-ready line each, each carrying its variant in brackets |
 
-`--desc` defaults to `artifacts/descriptions` and `--corpus` to
-`artifacts/seeds`. `--family` accepts `escape`, `uvm`, `uvm_tools`, `control`
-or `alloc`. `-v` logs at DEBUG.
+`--desc` defaults to `descriptions`. `--family` accepts `escape`,
+`uvm`, `uvm_tools`, `control` or `alloc`. `-v` logs at DEBUG.
+
+Two flags name the corpus, and they are refused together.
+
+| Flag | Corpus measured |
+|---|---|
+| `--corpus DIR` | A directory of programs. Omitting both falls back to `artifacts/seeds`, the seed bank |
+| `--run-id ID` | `artifacts/runs/<id>/workdir/corpus.db`, unpacked through syz-db into a temporary directory and removed afterwards |
+
+Every report prints the corpus path, its modification time and its program
+count, and `report --json` carries `corpus`, `corpus_mtime` and
+`corpus_programs`. The seed-bank fallback prints an extra line saying the bank
+holds this round's programs only after `corpus_ctl.py promote` has run.
 
 | Function | Returns |
 |---|---|
 | `load_targets()` | The target map keyed by syzlang variant, the excluded map, and the version metadata |
+| `abi_key(record)` | The composite ABI identity the completion ledger stores a target under |
 | `scan_variants(paths, what)` | Variant name to the files naming it, over syzlang or program text |
-| `stages(desc_dir, corpus_dir)` | The targets, the exclusions, the metadata, and the modelled and exercised variant sets |
+| `stages(desc_dir, corpus_dir, label, stamp)` | The targets, the exclusions, the metadata, and the modelled and exercised variant sets |
+| `unpack_run_corpus(run_id, dest)` | Programs written, unpacking a run's `corpus.db` through syz-db |
+| `measure(desc_dir, corpus=None, run_id=None)` | `stages()` over a corpus named either way, removing any unpack afterwards |
 
 ## Callers
 
@@ -126,6 +140,9 @@ or `alloc`. `-v` logs at DEBUG.
 | The corpus directory holds no program | Warning, and `report` states the exercised column is empty by construction | 0 |
 | A file under either directory cannot be read | Warning naming the path, and the file is skipped | 0 |
 | `gaps` finds nothing uncovered | The heading and a count of zero | 0 |
+| `--corpus` and `--run-id` are both given | Refused, because they name two different corpora | 1 |
+| `--run-id` names a run with no `corpus.db` | Message naming the run, the path and the two states that produce it | 1 |
+| syz-db is absent, or the unpack fails or times out | Message naming the binary and `coverage.unpack_timeout_sec` | 1 |
 | No subcommand given | argparse usage message | 2 |
 
 ## Concurrency and durability
@@ -163,12 +180,50 @@ actually issues appears in the variant name `syzlang_gen.py` assigns. A
 measurement keyed on request numbers would collapse the control family to a
 single target.
 
-`modelled` reports the variants a description declares that no inventory names
-because two different causes land in the same list. One class taking two
-parameter structs produces an alternate calling form of a counted target, which
-is expected. A description outside the tenant surface and a stale inventory are
-both defects. The generated baseline produces exactly one such variant,
-`NV_ESC_RM_ALLOC_NVOS21`, the alternate allocation form.
+`modelled` reports the variants a description declares that no inventory names.
+Two different causes land in that list. An alternate calling form or an
+alternate route to a counted target is expected, and a description outside the
+tenant surface or a stale inventory is a defect. The generated baseline
+produces 81 such variants: 49 per-parent allocation forms, 31 XFER wrapper
+routes, and `NV_ESC_RM_ALLOC_NVOS21`.
+
+`--run-id` exists because a run's corpus is a syzkaller `corpus.db` under
+`artifacts/runs/<id>/workdir/`, and only `corpus_ctl.py promote` turns one into
+`.syz` files in the seed bank. A report taken against the bank before promotion
+describes the bank the round started from, whatever the round went on to find.
+Reading the run's own corpus removes the ordering requirement, and printing the
+corpus path with its modification time makes a stale read visible either way.
+
+The flag needs syz-db and therefore needs the target, which is a property of the
+corpus format and not of an import. No `pipeline_state` import was added: the
+run directory and the syz-db path are derived from the repository root this
+module already computes, so `--corpus` and every read-only subcommand still run
+on the Windows workstation.
+
+`abi_key(record)` is the identity the completion ledger stores a target under,
+and it is not the variant name. A control variant carries the C handler function
+name, which a driver refactor renames freely, and a ledger keyed on it would
+lose every accounted row at the next driver bump while still looking full.
+
+| Family | Key | Distinct |
+|---|---|---|
+| control | `control/<class_id>/<method_id>/<owning_class>` | 531 of 531 |
+| escape | `escape/<nr>` | 32 |
+| uvm | `uvm/<nr>` | 39 |
+| uvm_tools | `uvm_tools/<nr>` | 7 |
+| alloc | `alloc/<external_class>` | 155 |
+
+`(sdk_prefix, method_id)` is not sufficient for the control family: it yields
+521 values for 531 commands, because five NV0090 commands are each exported by
+three owning classes, and those three are three different allocation chains
+reaching one ABI command. Escape, UVM and allocation names are ABI names and
+not function names, so they carry no rename risk.
+
+`rm-object-graph.json` records carry no numeric field, so `load_targets` builds
+an owning-class to class-id lookup over every method in the control inventory
+and joins each allocation record's `internal_class` against it. 62 of the 155
+recover a class id that way and 93 store an explicit null, keyed on the ABI
+class name, which is unique on its own.
 
 ## See also
 
@@ -177,4 +232,3 @@ both defects. The generated baseline produces exactly one such variant,
 - [ctrl_surface.py](/gspwn/architecture/components/ctrl-surface/)
 - [object_graph.py](/gspwn/architecture/components/object-graph/)
 - [surface_verify.py](/gspwn/architecture/components/surface-verify/)
-</content>

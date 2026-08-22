@@ -27,11 +27,22 @@ x86-64, runs them, and writes the sizes JSON this tool reads back through
 `--sizes`. A struct whose size is absent is reported as unresolved and its
 request number is omitted. No size is ever guessed to fill a row.
 
+The measured sizes are committed as surface/ioctl-sizes.json and are
+the default `--sizes`, so a checkout regenerates the inventory without a
+compiler:
+
+    python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules
+
+Re-measuring against a new driver release takes the full route:
+
     python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules \
         --emit-probe tmp/surface/probe
     bash tmp/surface/probe/measure_sizes.sh          # on a machine with gcc
-    python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules \
-        --sizes tools/ioctl_sizes.json --out artifacts/descriptions/inventory.json
+    cp tmp/surface/probe/sizes.json surface/ioctl-sizes.json
+    python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules
+
+Every request number is derived from a measured size, so a build with fewer
+sizes than the committed inventory records is refused rather than written.
 """
 import argparse
 import json
@@ -70,6 +81,24 @@ VERSION_MK = "version.mk"
 # regeneration unless this module emits it too.
 MAP_VERSION_KEY = "comment_driver_version"
 
+# The section of tools/ioctl_map.json holding the multiplexer request numbers.
+# Its key starts with "comment" so that both readers of the map skip it where
+# they iterate request-number entries: tools/trace2seed.py's loader and
+# tools/regression_check.py's read_ioctl_map(). trace2seed reads the section
+# by name.
+MAP_MULTIPLEXER_KEY = "comment_multiplexers"
+
+# Escapes whose request number names a dispatcher and not a command, mapped to
+# the parameter-struct field that selects the leaf. The describe phase emits one
+# syzlang variant per leaf, so no single call name is correct for the request
+# number, and putting one in the name map produces seeds naming a syscall
+# syzkaller does not know. tools/surface_cov.py carries the same set as
+# MULTIPLEXERS, without the field names.
+MULTIPLEXER_SELECTOR = {
+    "NV_ESC_RM_CONTROL": "cmd",
+    "NV_ESC_RM_ALLOC": "hClass",
+}
+
 REQUIRED_FILES = ESCAPE_NUMBER_FILES + [
     ESCAPE_C, OSAPI_C, NV_C, NV_H, UVM_IOCTL_H, UVM_LINUX_IOCTL_H,
     UVM_TEST_IOCTL_H, UVM_C, UVM_TOOLS_C, UVM_TEST_C, UVM_API_H,
@@ -88,9 +117,46 @@ PROBE_INCLUDES_RM = [
 ]
 PROBE_INCLUDES_UVM = ["kernel-open/nvidia-uvm"] + PROBE_INCLUDES_RM
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def repo_relative(path):
+    """A path as the repository sees it, in forward slashes.
+
+    An artefact that recorded an absolute path carried the author's home
+    directory into a committed file, and differed between two checkouts of
+    the same tree. A path outside the repository is returned absolute,
+    because relative to nothing is worse than long.
+    """
+    absolute = os.path.abspath(path)
+    try:
+        rel = os.path.relpath(absolute, REPO_ROOT)
+    except ValueError:                      # a different drive on Windows
+        return absolute.replace(os.sep, "/")
+    if rel.split(os.sep)[0] == os.pardir:
+        return absolute.replace(os.sep, "/")
+    return rel.replace(os.sep, "/")
+
+
+# Anchored on the repository and not the process working directory, so the
+# producer and every consumer agree about where the file lives whatever
+# directory the tool is invoked from. ctrl_surface.py, surface_cov.py,
+# refgen.py, surface_verify.py and syzlang_gen.py all derive theirs the same
+# way.
+DEFAULT_OUT = os.path.join(REPO_ROOT, "surface", "ioctl-inventory.json")
+DEFAULT_SIZES = os.path.join(REPO_ROOT, "surface", "ioctl-sizes.json")
+
 # _IOC_SIZE is a 14-bit field, so the direct ioctl path cannot express an
 # argument larger than this. NV_ESC_IOCTL_XFER_CMD carries the size in its own
 # payload and is bounded by NV_ABSOLUTE_MAX_IOCTL_SIZE instead.
+#
+# The two ceilings differ by one byte and both are correct. IOC_SIZE_MAX is
+# 16383, the largest size the _IOC encoding can carry, so an argument above it
+# has no direct request number. NV_ABSOLUTE_MAX_IOCTL_SIZE is 16384 and
+# kernel-open/nvidia/nv.c:2513 rejects only what exceeds it, so 16384 passes
+# through XFER. An escape of exactly 16384 bytes is therefore reachable only
+# through the wrapper. syzlang_gen.XFER_MAX_ARG_SIZE holds the second value
+# and surface_cov reads xfer_only to credit such an escape to its wrapper.
 IOC_SIZE_BITS = 14
 IOC_SIZE_MAX = (1 << IOC_SIZE_BITS) - 1
 
@@ -923,6 +989,19 @@ MAP_COMMENTS = {
         "if a build turns them on."),
 }
 
+MULTIPLEXER_DOC = (
+    "NV_ESC_RM_CONTROL and NV_ESC_RM_ALLOC dispatch on a field inside the "
+    "parameter struct, so their request numbers name a dispatcher and not a "
+    "command. The describe phase emits one syzlang variant per leaf, 531 "
+    "control commands and 155 allocation classes, and no single call name "
+    "covers the request number. Naming the bare escape here produced seeds "
+    "calling a syscall no description declares. strace cannot decode the "
+    "parameter struct, so the selector field never appears in a trace and no "
+    "entry in the name map above can recover it. tools/trace2seed.py reads "
+    "this section to write an honest comment for a traced multiplexer call, "
+    "and its `chains` subcommand builds the command-targeted programs from "
+    "surface/rm-chains.json instead.")
+
 
 def build_map(inventory, stamp=None):
     """Return the trace2seed request-number map for this inventory.
@@ -930,8 +1009,15 @@ def build_map(inventory, stamp=None):
     Commands whose size did not resolve are left out: a key that names the
     wrong request number silently converts one ioctl into a description for
     another, which is worse than the unmapped count that omitting it produces.
+
+    The two multiplexers in MULTIPLEXER_SELECTOR are left out of the name map
+    for the same reason and recorded under MAP_MULTIPLEXER_KEY instead. Their
+    request numbers carry 686 of the 764 targets between them and dominate a
+    real CUDA trace, and the name the escape used to carry is declared by no
+    description.
     """
     out = dict(MAP_COMMENTS)
+    multiplexers = {}
     if stamp:
         out[MAP_VERSION_KEY] = stamp
     else:
@@ -951,6 +1037,9 @@ def build_map(inventory, stamp=None):
             if not keys:
                 skipped.append(c["name"])
                 continue
+            if c["name"] in MULTIPLEXER_SELECTOR:
+                multiplexers.update(multiplexer_entries(c, keys))
+                continue
             for k in keys:
                 if k in out and out[k] != c["syzlang"]:
                     collisions.append("%s and %s both claim %s"
@@ -960,10 +1049,86 @@ def build_map(inventory, stamp=None):
         raise InventoryError(
             "two commands resolve to the same request number, so the map "
             "cannot represent both:\n  - %s" % "\n  - ".join(collisions))
-    logger.info("map covers %d request numbers; %d commands omitted (%s)",
-                sum(1 for k in out if not k.startswith("comment")), len(skipped),
-                "gated or size unresolved")
+    if multiplexers:
+        out[MAP_MULTIPLEXER_KEY] = {"doc": MULTIPLEXER_DOC,
+                                    "requests": multiplexers}
+    logger.info("map covers %d request numbers, %d multiplexer request "
+                "numbers; %d commands omitted (%s)",
+                sum(1 for k in out if not k.startswith("comment")),
+                len(multiplexers), len(skipped), "gated or size unresolved")
     return out, skipped
+
+
+def multiplexer_entries(command, keys):
+    """-> {request number: multiplexer record} for one dispatching escape.
+
+    Every request number a multiplexer carries gets a record naming the
+    parameter struct that request number's size came from, so a reader can tell
+    the 48-byte NVOS64 allocation form from the 32-byte NVOS21 one. The size
+    field is read back out of the request number rather than taken from the
+    order of `requests`, so a change to how that list is assembled cannot
+    silently pair a number with the wrong struct.
+    """
+    if command.get("param_size") is None or not command.get("param_struct"):
+        raise InventoryError(
+            "%s dispatches on a field inside its parameter struct, so the map "
+            "records the struct instead of a call name, and this inventory "
+            "record carries no param_struct/param_size pair to record. The "
+            "request numbers %s were built from a measured size, so a record "
+            "that has them and not the size it was measured from is "
+            "malformed." % (command["name"], ", ".join(keys)))
+    by_size = {command["param_size"]: command["param_struct"]}
+    if command.get("param_size_alt") is not None:
+        by_size[command["param_size_alt"]] = command["param_struct_alt"]
+    out = {}
+    for key in keys:
+        size = (int(key, 0) >> 16) & 0x3FFF
+        struct = by_size.get(size)
+        if struct is None:
+            raise InventoryError(
+                "%s request number %s encodes size %d, which matches neither "
+                "its parameter struct %s (%s bytes) nor its alternate form"
+                % (command["name"], key, size, command["param_struct"],
+                   command["param_size"]))
+        out[key] = {
+            "escape": command["name"],
+            "param_struct": struct,
+            "selector_field": MULTIPLEXER_SELECTOR[command["name"]],
+            "variant_prefix": command["syzlang"] + "_",
+        }
+    return out
+
+
+def refuse_size_regression(out_path, inventory):
+    """Refuse to replace a fully measured inventory with a less measured one.
+
+    Every request number is derived from a measured struct size, so an
+    inventory built without --sizes parses, validates and writes cleanly while
+    carrying no request numbers at all. Downstream that is silent: syzlang_gen
+    emits fewer variants, surface_cov reports a smaller surface, and nothing
+    names the cause. The committed artefact is the only record of those
+    measurements, so overwriting it with an unmeasured build destroys them.
+    """
+    if not os.path.isfile(out_path):
+        return
+    try:
+        with open(out_path, encoding="utf-8") as fh:
+            existing = json.load(fh)
+    except (OSError, ValueError) as exc:
+        logger.warning("could not read the existing inventory at %s: %s",
+                       out_path, exc)
+        return
+    was = existing.get("counts", {}).get("sizes_measured", 0)
+    now = inventory["counts"]["sizes_measured"]
+    if now >= was:
+        return
+    raise InventoryError(
+        "refusing to overwrite %s: it records %d measured struct size(s) and "
+        "this run measured %d. Request numbers are derived from those sizes, "
+        "so writing this build would drop %d of them and every consumer would "
+        "report a smaller surface without saying why. Pass --sizes pointing "
+        "at the measured sizes, or --out pointing somewhere else."
+        % (out_path, was, now, was - now))
 
 
 def load_sizes(path):
@@ -1045,13 +1210,13 @@ def build_inventory(src, sizes):
                          if c["size_source"] == "unresolved"})
 
     return {
-        # source_tree predates the source block and is read by syzlang-gen.
-        # Both are kept: removing it would break a live consumer, and the
-        # block is the shape tools/surface_verify.py and the other two
+        # source_tree predates the source block. No tool in this repository
+        # reads it; it is kept for a consumer outside the tree. The block
+        # below is the shape tools/surface_verify.py and the other two
         # surface artefacts agree on.
-        "source_tree": os.path.abspath(src),
+        "source_tree": repo_relative(src),
         "source": {
-            "path": os.path.abspath(src),
+            "path": repo_relative(src),
             "driver_version": driver_version(src),
         },
         "encoding": {
@@ -1135,16 +1300,28 @@ def write_json(path, payload):
         raise InventoryError("cannot write %s: %s" % (path, e))
 
 
-def main(argv=None):
+def build_parser():
+    """The argument parser, separated so the defaults are testable.
+
+    Every sibling tool in this partition exposes one. The defaults here are
+    what makes `python3 tools/ioctl_inventory.py --src <checkout>` runnable as
+    the version guard prints it, so they are worth asserting directly rather
+    than through a full run that would rewrite the committed inventory.
+    """
     ap = argparse.ArgumentParser(
         description="Derive the in-scope ioctl inventory from an "
                     "open-gpu-kernel-modules checkout.")
     ap.add_argument("--src", required=True,
                     help="path to the open-gpu-kernel-modules checkout")
-    ap.add_argument("--out", help="write the inventory JSON here")
-    ap.add_argument("--sizes",
+    ap.add_argument("--out", default=DEFAULT_OUT,
+                    help="write the inventory JSON here (default: %s). "
+                         "--emit-map writes the request-number map as well as "
+                         "this file."
+                         % os.path.relpath(DEFAULT_OUT, REPO_ROOT))
+    ap.add_argument("--sizes", default=DEFAULT_SIZES,
                     help="JSON of measured struct sizes, from the runner that "
-                         "--emit-probe writes")
+                         "--emit-probe writes (default: %s)"
+                         % os.path.relpath(DEFAULT_SIZES, REPO_ROOT))
     ap.add_argument("--emit-probe", metavar="DIR",
                     help="write the C size probes and their runner into DIR "
                          "and exit")
@@ -1153,7 +1330,11 @@ def main(argv=None):
                          "(tools/ioctl_map.json)")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="log every parsing step")
-    a = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
 
     logging.basicConfig(
         level=logging.DEBUG if a.verbose else logging.INFO,
@@ -1166,9 +1347,6 @@ def main(argv=None):
     if missing:
         logger.error("--src %s is missing %d required source file(s): %s",
                      a.src, len(missing), ", ".join(missing))
-        return 2
-    if not a.emit_probe and not a.out and not a.emit_map:
-        logger.error("one of --out, --emit-map or --emit-probe is required")
         return 2
 
     try:
@@ -1191,10 +1369,11 @@ def main(argv=None):
             mapping, skipped = build_map(inventory, version_stamp(a.src))
             write_json(a.emit_map, mapping)
             requests = sum(1 for k in mapping if not k.startswith("comment"))
-            print("wrote %s (%d request numbers, %d commands omitted)"
-                  % (a.emit_map, requests, len(skipped)))
-            if not a.out:
-                return 0
+            muxes = len(mapping.get(MAP_MULTIPLEXER_KEY, {}).get("requests", {}))
+            print("wrote %s (%d request numbers, %d multiplexer request "
+                  "numbers carrying no call name, %d commands omitted)"
+                  % (a.emit_map, requests, muxes, len(skipped)))
+        refuse_size_regression(a.out, inventory)
         write_json(a.out, inventory)
     except InventoryError as e:
         logger.error("%s", e)

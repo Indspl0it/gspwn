@@ -48,10 +48,18 @@ research and impact records, and the spend ledger.
 | `findings_steering_nothing(state)`, `impacts_unsupported(state)` | `[(crash_id, record, why)]` | |
 | `cwe_of(crash)` | The CWE string, from the impact override or derived from `bug_class` | |
 | `current_round(state)`, `round_number(state)` | The round dict, the round number | |
-| `end_round(state, verdict=None, new_crashes=None, edges_start=None, edges_end=None, run_hours=None, notes=None, worklist=None, billed=None)` | `None`; `run_hours` accumulates | |
+| `end_round(state, verdict=None, new_crashes=None, edges_start=None, edges_end=None, run_hours=None, notes=None, worklist=None, billed=None, surface=None)` | `None`; `run_hours` accumulates, and `surface` writes the seven completion fields as a unit | `ValueError` on a verdict outside `SURFACE_VERDICT` |
 | `record_decision(state, decision, reason='')` | `None` | |
 | `loop_decision(state, max_rounds, max_total_run_hours=None, stop_on_plateau=True)` | `(decision, reason)` | `SpendLedgerMissing` |
-| `hard_cap_reason(state, max_rounds, max_total_run_hours=None)` | The non-overridable stop reason, or `None` | `SpendLedgerMissing` |
+| `hard_cap_reason(state, max_rounds, max_total_run_hours=None)` | The non-overridable stop reason, or `None`. Checks completion, then the round cap, then the budget | `SpendLedgerMissing` |
+| `surface_stop_reason(state)` | The completion stop reason, or `None` while targets remain | |
+| `surface_ledger_path(path=None)` | The ledger path, a relative one resolved against the repository | |
+| `load_surface_ledger(path=None, driver_version=None)` | The ledger, or an empty one | `SurfaceLedgerMismatch` on a release disagreement, `ValueError` on malformed JSON |
+| `empty_surface_ledger(driver_version=None, targets_total=None)` | A ledger with no accounted rows | |
+| `normalize_account(record)` | The accounting record with its derived fields filled | `ValueError` on an unknown field, an unknown reason, an empty detail, or missing evidence |
+| `set_surface_account(record, path=None, driver_version=None, targets_total=None)` | The stored row | `ValueError`, `SurfaceLedgerMismatch` |
+| `clear_surface_account(key, path=None, driver_version=None)` | The row removed, or `None` when the key named none | `SurfaceLedgerMismatch` |
+| `surface_completion(exercised_keys, accounted, targets_total)` | `(verdict, counts, closed)`, computed as a union over sets, with the deferred rows subtracted before the union | |
 | `advance_round(state)` | `None` | `ValueError` when a round phase is unfinished |
 | `record_run_hours(run_id, hours, path=None)` | `None`; idempotent per run id | `ValueError` on an empty run id or negative hours |
 | `total_spend_hours(path=None)` | `float` | `ValueError` on a malformed ledger |
@@ -65,7 +73,10 @@ research and impact records, and the spend ledger.
 
 Exported constants: `PHASES`, `SETUP_PHASES`, `ROUND_PHASES`, `FINAL_PHASES`,
 `PHASE_STATUS`, `CRASH_STATUS`, `CRASH_SIGNAL`, `TRACKS`, `DISCLOSURE_STATUS`,
-`COVERAGE_VERDICT`, `ROUND_DECISION`, `BUG_CLASS`, `TRIGGER`, `CONFIDENCE`,
+`COVERAGE_VERDICT`, `SURFACE_VERDICT`, `SURFACE_REASON`,
+`SURFACE_REASON_NEEDS_EVIDENCE`, `SURFACE_REASON_DEFERRED`,
+`SURFACE_LEDGER_PATH`,
+`SURFACE_LEDGER_SCHEMA`, `ROUND_DECISION`, `BUG_CLASS`, `TRIGGER`, `CONFIDENCE`,
 `PRIMITIVE`, `CONSEQUENCE`, `ACCESS_TYPE`, `OVERWRITE_TARGET`,
 `ATTACKER_CONTROL`, `CWE_OF_BUG_CLASS`, `REPO_ROOT`, `STATE_DIR`, `STATE_PATH`,
 `SPEND_PATH`, `SCHEMA_VERSION`.
@@ -111,6 +122,10 @@ Exported constants: `PHASES`, `SETUP_PHASES`, `ROUND_PHASES`, `FINAL_PHASES`,
 | Never fall back to zero spend when the ledger is missing while hours are recorded | The condition raises `SpendLedgerMissing` |
 | Never alias a module-level mutable into a new round | `_new_round` copies `run_ids` and `run_hours_by_run`, because `dict(DEFAULT_ROUND)` shares one list across every round created in the process |
 | Never resolve `SPEND_PATH` at import time in a signature default | It resolves at call time, so redirecting the ledger redirects it |
+| Never key the completion ledger on the variant name | A control variant carries a C handler function name, which a driver refactor renames freely, and the ledger would lose every accounted row at the next bump while still looking full |
+| Never re-create a corrupt completion ledger empty | An empty ledger reads as "nothing is accounted for" and silently reopens every closed target. The load path names the `.bak` to restore from |
+| Never write the completion fields on a round one at a time | Omitting one leaves a stale `complete` from a previous call in place, so `end_round` writes all six together and an unmeasurable reading arrives as `unknown` |
+| Never add exercised and accounted to close the ledger | The two sets overlap, and the sum can reach the total while targets remain |
 
 ## Design notes
 
@@ -131,6 +146,49 @@ delta.
 
 `advance_round` refuses a round with an unfinished phase and names the two ways
 out. Marking a phase blocked does not satisfy the check.
+
+`hard_cap_reason` holds three stops that are not the same kind of thing.
+Completion means the campaign finished its work. The round cap and the budget
+mean it ran out of the allowance the user authorised. Completion is checked
+first, so a campaign finishing on its last permitted round records why it
+finished and not which limit it also touched. The round cap's own reason names
+the failure to converge and points at the completion ledger.
+
+The completion ledger is its own artefact. `state/pipeline.json` is 1177 bytes
+and `save()` rewrites it whole under a lock on every phase transition and every
+crash registration, so 764 rows do not belong in it. The round carries a
+repo-relative path to the ledger under `surface_ledger`, and
+`surface_ledger_path` resolves a relative one against the repository root,
+because a caller with a different working directory would otherwise create a
+second empty ledger beside itself and report nothing accounted for.
+
+`SURFACE_REASON_DEFERRED` names the reasons that do not close a target, and
+today it holds `deliberately-deferred` alone. Seven of the eight reasons assert
+that the target cannot be reached by this campaign as configured, and the
+completion identity means "exercised, or excluded". `deliberately-deferred`
+asserts the opposite, so `surface_completion` subtracts its rows before the
+union and reports them separately as `deferred`. Counting them in would make
+the identity read "exercised, or excluded, or postponed", and the stop it fires
+would print "Nothing is left to fuzz" over targets the ledger itself records as
+reachable.
+
+`clear_surface_account` is the way out of a wrong accounting, and it is the
+reason the completion stop can stay non-overridable. A row closes its target
+permanently and the verdict built on it is a stop `round-decide` refuses to
+override. Reopening a target moves the campaign back towards fuzzing it, which
+is the safe direction, so nothing there refuses anything beyond an unknown key.
+A wrong `no-param-model` or `chain-unbuildable` row needs this as much as a
+wrong deferral does.
+
+`load_surface_ledger` validates each accounted row as well as the mapping, and
+raises `ValueError` naming a row that is not an object. `completion_status`
+catches that into `unknown`, which fails closed, and both CLI readers already
+catch `ValueError` and exit with the message. It also takes `targets_total` and
+passes it to `empty_surface_ledger`, so `surface-ledger --json` on a ledger
+that has never been written still reports the denominator.
+
+`validate` reports a round marked `complete` with no ledger path. The primary
+stop is non-overridable, so its evidence has to be auditable afterwards.
 
 ## See also
 

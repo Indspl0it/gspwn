@@ -5,12 +5,12 @@ description: The in-scope ioctl surface read out of the driver source, the two n
 
 Derives the dispatched ioctl surface of the three in-scope device nodes from an
 open-gpu-kernel-modules checkout, and generates `tools/ioctl_map.json` from it.
-The `describe` phase needs one command per syzlang description; the `seeds`
-phase needs the 32-bit request number `strace` prints for each. Both live in the
+The `describe` phase needs one command per syzlang description, and the
+`seeds` phase needs the 32-bit request number `strace` prints for each. Both live in the
 driver source and both move when the driver branch moves.
 
 The module runs off the source tree and a sizes file. Producing the sizes file
-needs a C compiler once; every later run reads it back.
+needs a C compiler once, and every later run reads it back.
 
 ## Responsibility
 
@@ -33,11 +33,31 @@ from them. It writes only the JSON files it is given.
 
 ## Interface
 
-`--src` selects the checkout. `--out` writes the inventory JSON, `--emit-map`
-writes the request-number map, and `--emit-probe DIR` writes the size probes and
-exits. `--sizes` names the measured-size JSON; without it every command is
-reported unresolved and no request number is emitted. `-v` logs each parsing
-step.
+`--src` selects the checkout and is the only required flag.
+
+| Flag | Argument | Default | Effect |
+|---|---|---|---|
+| `--src` | `DIR` | Required | The open-gpu-kernel-modules checkout |
+| `--out` | `PATH` | `surface/ioctl-inventory.json` | Where the inventory JSON is written |
+| `--sizes` | `PATH` | `surface/ioctl-sizes.json` | The measured struct sizes, from the runner `--emit-probe` writes |
+| `--emit-map` | `PATH` | Off | Also write the request-number map, at `tools/ioctl_map.json` |
+| `--emit-probe` | `DIR` | Off | Write the C size probes and their runner into `DIR` and exit |
+| `-v` | None | Off | Log each parsing step |
+
+The shipped invocation is therefore one line, and it reproduces the committed
+inventory byte for byte.
+
+```
+python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules
+```
+
+Every request number is derived from a measured struct size, so a run without
+`--sizes` writes an inventory carrying 0 sizes measured, 183 unresolved and no
+request numbers at all. That file parses, validates and reads clean downstream
+while every consumer reports a smaller surface with nothing naming the cause.
+`refuse_size_regression` refuses to replace an inventory with one measuring
+fewer sizes, so such a run fails at exit 1 and the committed measurements
+survive.
 
 | Function | Returns |
 |---|---|
@@ -67,7 +87,7 @@ Exported constants: `DIRECTION_BITS`, `DIRECTION_SOURCE`, `IOC_SIZE_MAX`,
 | Condition | Behaviour | Exit |
 |---|---|---|
 | `--src` is not a directory, or a required source file is absent | Message naming the count and every missing path | 2 |
-| None of `--out`, `--emit-map`, `--emit-probe` given | Message naming the three flags | 2 |
+| The run measured fewer struct sizes than the inventory it would replace | `refuse_size_regression` names both counts and the file, and nothing is written | 1 |
 | `NV_IOCTL_MAGIC` or `NV_IOCTL_BASE` absent from the header | Message stating the header changed shape and the request numbers would be wrong | 1 |
 | The dual-size check for `NV_ESC_RM_ALLOC` is absent | Message stating one request number for it would miss half the traffic | 1 |
 | The Linux `UVM_IOCTL_BASE(i) -> i` definition is absent | Message stating UVM request numbers rest on that identity | 1 |
@@ -77,7 +97,7 @@ Exported constants: `DIRECTION_BITS`, `DIRECTION_SOURCE`, `IOC_SIZE_MAX`,
 | Two commands resolve to the same request number | Message naming both and the shared key | 1 |
 | `--sizes` names a file that is absent, is not JSON, or holds a non-positive size | Message naming the file and the offending entry | 1 |
 | A parameter struct has no measured size | Recorded `unresolved`, its request number omitted, and the struct listed in `unresolved_param_structs` | 0 |
-| `--sizes` omitted entirely | Warning that every command will read unresolved | 0 |
+| `--sizes` names no file and the default is absent | Warning that every command will read unresolved, then the size-regression refusal above | 1 |
 | The output directory does not exist | Created, and the creation is logged | 0 |
 
 ## Concurrency and durability
@@ -104,7 +124,7 @@ pipeline that needs `gcc`.
 | Never guess a struct size to fill a map row | The size is 16 bits of the request number. A wrong one produces a key `strace` never shows, so the command reads as unmapped, and a key that collides with a real request converts one ioctl into a description for another |
 | Never emit a fixed request key for an argument-array escape | `NV_ESC_CARD_INFO` and `NV_ESC_ATTACH_GPUS_TO_FD` are validated as any nonzero multiple of the element size, so the element count lands in the request number. One key names one element count. The map carries the one-element form and the inventory carries `max_direct_elements`; covering the rest needs `trace2seed.py` to decompose the request into `(nr, size)` |
 | Never assume UVM follows the RM numbering | `UVM_IOCTL_BASE(i)` expands to `i` on Linux and both UVM switches read the raw `cmd`. There is no magic, no size field and no direction, and `_IOC_SIZE` is never read on that path. Encoding a UVM command the RM way yields a number no switch matches |
-| Never treat `NV_ESC_IOCTL_XFER_CMD` as one command among the rest | It is a second entry path to every escape: `nv.c` substitutes the command, the size and the buffer pointer from its payload, then re-validates. Every call through it carries one request number, so a trace cannot say which escape it was, and a description for it models a struct holding a pointer to a second buffer |
+| Never treat `NV_ESC_IOCTL_XFER_CMD` as one command among the rest | It is a second entry path to every escape: `nv.c` substitutes the command, the size and the buffer pointer from its payload, then re-validates. Every call through it carries one request number, so a trace cannot say which escape it was. `syzlang_gen.py emit_xfer` models the route as 32 variants, each pinning the inner escape number and typing the payload pointer as a pointer to that escape's own parameter struct |
 | Never read the argument size from `_IOC_SIZE` for a UVM command | The route macro copies `sizeof(params)` regardless. A description sized from the request number describes a field the driver does not consult |
 | Never take a `case` label as a dispatch site without checking its brace depth | `uvm.c` switches on unrelated `UVM_*` enumerators, and `NV_ESC_RM_ALLOC` contains a nested switch. A line-only scan invents commands and misattributes privilege checks |
 | Never strip block comments with a pattern that runs before line comments | `escape.c` opens with a `//*****` banner whose second and third characters are a valid `/*`. A block-comment pattern consumes the file to the next `*/`, and all 21 escape dispatch sites in it disappear with no error |
@@ -127,8 +147,8 @@ describes a closed component's behaviour.
 
 A ceiling on the direct path sits above the architectural one and cannot be
 resolved from the open tree. `__NV_IOWR_ASSERT` refuses any type larger than
-`NV_PLATFORM_MAX_IOCTL_SIZE`, which is defined nowhere in the checkout. 16383 is
-what the 14-bit `_IOC_SIZE` field allows, and the size at which the user-mode
+`NV_PLATFORM_MAX_IOCTL_SIZE`, which is defined nowhere in the checkout. The
+14-bit `_IOC_SIZE` field allows 16383, and the size at which the user-mode
 driver switches to the transfer path may be lower.
 
 The transfer path adds one byte over the direct path, so the description of it
@@ -149,6 +169,13 @@ One cross-check covers the whole UVM half. The STACK route macro asserts
 the opposite, both as `BUILD_BUG_ON`. Re-deriving that from the measured sizes
 turns a silent mispairing into a raised error, because a command paired with the
 wrong struct almost always lands on the wrong side of 288.
+
+## Stated limits
+
+| Limit | Consequence |
+|---|---|
+| Measured sizes come from a committed file | `surface/ioctl-sizes.json` is the `--sizes` default. A checkout without it measures nothing, and `refuse_size_regression` fails the run at exit 1 before the smaller inventory is written. See [Artifacts](/gspwn/reference/artifacts/) |
+| Measuring the sizes needs the driver headers compiled | `--emit-probe` writes the probes and a runner, and running them needs a toolchain and the headers. A clean checkout cannot produce the measurements itself |
 
 ## See also
 

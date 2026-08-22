@@ -106,6 +106,13 @@ series` and `coverage_ctl.py plateau` print both on every invocation.
 | Kernel-side reachable code only | GSP firmware is uninstrumented. On a GSP-based GPU a large part of the Resource Manager runs where KCOV cannot see it, and a plateau verdict describes none of it |
 | No total-coverage claim | The aggregate edge counter supports a fitted discovery curve and an extrapolation from it. A fraction-of-driver-covered figure needs per-edge frequency counts that syz-manager does not report |
 
+A second curve carries a denominator the edge curve cannot. `surface_cov.py`
+counts the distinct targets of the 764 the run's corpus has a program for, so
+its reading is a fraction and its ceiling is known. That answers whether the
+round is still reaching new targets, and the edge curve answers whether it is
+still reaching new code inside the targets it already has. See
+[Coverage and plateau](/gspwn/architecture/coverage-and-plateau/).
+
 ### Descriptions
 
 Fuzzing quality is decided in the `describe` phase. Every coverage number and
@@ -121,8 +128,11 @@ every crash is downstream of the syzlang grammar.
 
 Some paths need a real object or handle chain that random generation does not
 construct. `refine` classifies those surfaces `unreachable-by-construction`,
-and the remedy is a seed derived from a real workload trace through
-`trace2seed.py`.
+and the remedy is a seed from `trace2seed.py`, from either of its two
+subcommands. `convert` derives a program from a real workload trace.
+`chains` builds the allocation prologue from `rm-chains.json` and reaches 514
+of the 531 control commands, which no trace names, because `strace` decodes no
+NVIDIA parameter struct.
 
 A seed that does not establish a precondition leaves the path unexercised. The
 `seeds` gate names every precondition it could not reach, so the next round
@@ -135,7 +145,7 @@ retains the target.
 | syz-manager produced no reproducer | The crash is `unreproducible`. Nothing hand-crafts one |
 | The dmesg ring wraps under crash spam | Runs are void and re-run, up to `poc.void_retry_factor` attempts per still-needed counted run |
 | The crash title yields no signature | Verification exits. Scoring against generic patterns is not attempted |
-| A Track U harness has no replay command in `artifacts/harnesses/TARGETS.md` | The crash cannot be scored, and `poc` blocks it on the `harness` phase |
+| A Track U harness has no replay command in `harnesses/TARGETS.md` | The crash cannot be scored, and `poc` blocks it on the `harness` phase |
 
 ### Impact analysis
 
