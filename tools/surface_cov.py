@@ -157,6 +157,15 @@ MULTIPLEXERS = {"NV_ESC_RM_CONTROL", "NV_ESC_RM_ALLOC"}
 # that surface_verify.py flags invalidates this count with the rest.
 IN_HANDLER_CHECKS = 16
 
+# Commands of the drm family that carry DRM_MASTER in nv_drm_ioctls[], which
+# drm_ioctl_permit refuses unless the opening file is the current DRM master.
+# A second conditionality, unrelated to the control-family checks above and
+# counted apart from them: drm_master_open grants master when the device has
+# none, which is likely on a headless host and is not guaranteed. Both are
+# reported together, because either one alone understates the gap between
+# targetable and callable.
+DRM_MASTER_COMMANDS = 2
+
 
 class SurfaceError(Exception):
     """An inventory is missing or lacks the fields this tool needs."""
@@ -1093,9 +1102,12 @@ def cmd_report(args):
     print("A corpus drifting onto the %d GSP-routed command(s) raises "
           "executions and never edges, so read a plateau verdict against this "
           "table before believing it." % gsp)
-    print("targetable is an upper bound: %d control command(s) carry a "
-          "capability check inside the handler that the RMCTRL flag word does "
-          "not show, and that count is itself a floor." % IN_HANDLER_CHECKS)
+    print("targetable is an upper bound on two counts. %d control "
+          "command(s) carry a capability check inside the handler that "
+          "the RMCTRL flag word does not show, and that count is itself "
+          "a floor. %d drm command(s) carry DRM_MASTER and reach a "
+          "handler only while the opening file is the current DRM "
+          "master." % (IN_HANDLER_CHECKS, DRM_MASTER_COMMANDS))
     return 0
 
 

@@ -119,7 +119,7 @@ Four prohibitions:
 |---|---|
 | No coverage percentage without the exclusion list beside it | 351 commands sit outside the denominator, and a bare percentage reads as coverage of the driver |
 | No fraction built on the KCOV edge count | it measures an edge space of unknown size and has no denominator |
-| State `targetable` as an upper bound, citing the 16 in-handler capability checks | a tenant can call fewer than 852 |
+| State `targetable` as an upper bound, citing the 16 in-handler capability checks and the 2 drm commands carrying `DRM_MASTER` | a tenant can call fewer than 852, and the two conditions come from unrelated mechanisms |
 | Track U carries no denominator | its coverage is described by `harnesses/TARGETS.md` and nothing else, and the Track K ratio must not read as covering both |
 
 Add a short methodology note naming the six excluded groups and why each is
