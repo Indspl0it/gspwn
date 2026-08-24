@@ -302,7 +302,7 @@ The mining could not start on these 8. Neither the fixed release nor the release
 
 ## Fixed functions that are entry points
 
-Functions a security fix touched that are themselves a control command handler or a UVM command handler. 16 of the 270 ranked functions qualify. A function whose only join is `escape_file` is absent, because the artefact's own note on that kind states the file-level join places the function on no single escape's path. `Releases` counts the bracketed releases the function was changed in, which is the measure the `cve` rank component on [Control commands](/gspwn/reference/surface/control-commands/) is computed from. The family column carries the surface family `tools/surface_cov.py` places the command in, so a row outside the 764-target model is visible as one.
+Functions a security fix touched that are themselves a control command handler or a UVM command handler. 16 of the 270 ranked functions qualify. A function whose only join is `escape_file` is absent, because the artefact's own note on that kind states the file-level join places the function on no single escape's path. `Releases` counts the bracketed releases the function was changed in, which is the measure the `cve` rank component on [Control commands](/gspwn/reference/surface/control-commands/) is computed from. The family column carries the surface family `tools/surface_cov.py` places the command in, so a row outside the 828-target model is visible as one.
 
 | Function | File | Releases | Lines changed | Signals | Disclosures bracketing it | Target | Owning class | Reachability | Allocation depth | Surface family |
 |---|---|---|---|---|---|---|---|---|---|---|

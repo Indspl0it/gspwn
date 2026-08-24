@@ -60,7 +60,7 @@ fails loudly and does not leave the default in force. If it exits non-zero,
 stop and report. Do not proceed on defaults.
 
 The loop's primary termination is completion, `exercised + accounted-for =
-764`, which is measured and not configured. Three declared stopping rules bound
+828`, which is measured and not configured. Three declared stopping rules bound
 an unattended run that does not converge: `loop.max_total_run_hours`,
 `loop.max_rounds` (a backstop, default 10, and a campaign reaching it has
 failed to converge), and `loop.campaign_hours` (each campaign
@@ -148,7 +148,7 @@ phase to keep making progress.
 |---|---|---|
 | provision | agents/provision.md | the gate section of `agents/provision.md` holds this phase's full evidence list, and it is the authority. The main items are manifest.json written, `crashlog_ctl.py verify` prints READY, the test panic harvested, a clean `orchestrator_ctl.py preflight`, and a `surface_verify.py check --no-running` verdict. A failing preflight is a blocked gate, and so is exit 3 or exit 4 from that check |
 | build | agents/build.md | booted into the instrumented kernel, KASAN state matches the rung in manifest, and `nvidia-smi` works |
-| describe | agents/describe.md | `surface_verify.py check` exits 0, meaning two or more version sources agree; Syzlang compiles; smoke run reaches driver (dmesg evidence); `regression_check.py pins` exits 0 and the `NV_ESC_IOCTL_XFER_CMD` `cmd` constraint set is quoted; `surface_cov.py modelled` still reports 764/764, which is a regression check and not evidence of work done; `surface_cov.py gaps --stage corpus` names fewer targets with `--run-id <smoke run id>` than it does over `artifacts/seeds`, which is the round's starting position, and that delta is the phase's measured output; audit sample logged. Where the phase regenerated the surface artefacts, `regression_check.py all` exits 0 over all seven checks and the reference pages are committed with them |
+| describe | agents/describe.md | `surface_verify.py check` exits 0, meaning two or more version sources agree; Syzlang compiles; smoke run reaches driver (dmesg evidence); `regression_check.py pins` exits 0 and the `NV_ESC_IOCTL_XFER_CMD` `cmd` constraint set is quoted; `surface_cov.py modelled` still reports 828/828, which is a regression check and not evidence of work done; `surface_cov.py gaps --stage corpus` names fewer targets with `--run-id <smoke run id>` than it does over `artifacts/seeds`, which is the round's starting position, and that delta is the phase's measured output; audit sample logged. Where the phase regenerated the surface artefacts, `regression_check.py all` exits 0 over all seven checks and the reference pages are committed with them |
 | seeds | agents/seeds.md | `artifacts/seeds/chain-*.syz` exist, `trace2seed.py chains` exits 0, and its account line is reported with all three of its numbers: commands emitted, commands dropped before emission, commands with no chain. The three close on the whole control surface and no round emits all 531, because 17 reach no chain by construction, so this clause is a regression check on the artefacts and not evidence of work done. Also: every syscall name in the seed bank is declared by a description (`regression_check.py names` exits 0); seeds parse under syz-manager; the per-item report names for every `[finding ...]`, `[history ...]` and `[surface]` item whether a seed establishes its precondition |
 | harness | agents/harness.md | Track U harnesses build and produce coverage under `artifacts/runs/<id>/u/<harness>/`, `harnesses/TARGETS.md` lists every harness with its reachability justification and its `{input}` replay command, `track_u.targets` in `config/campaign.yaml` names every harness directory, and `run_all.sh` runs `replay_crashes.sh` at harvest. A harness that failed to build is named with the number of inputs its failure leaves unreplayed |
 | fuzz | agents/fuzz.md | both systemd units active and coverage increases within the smoke window, then the campaign window has elapsed (`campaign_ctl.py wait --run-id <id>`). The smoke window only says the campaign started. Everything after this phase measures the run, so advancing on the smoke window measures the first half hour of a 24-hour campaign |
@@ -180,9 +180,18 @@ coverage on both tracks, then `refine` writes
 round, where `describe` and `seeds` read it back with `pipeline_ctl.py
 worklist`.
 
+The 828 decompose into six families: 32 escape, 39 uvm, 7 uvm_tools, 531
+control, 155 alloc and 64 modeset. The modeset family is
+`/dev/nvidia-modeset`, which `libnvidia-container` creates in a default
+container and withholds only under `OPT_NO_MODESET`. Its 64 commands share
+one kernel request number and carry the leaf in `NvKmsIoctlParams.cmd`, so a
+strace-shaped trace names the family and never the command, and
+`tools/trace2seed.py` cannot recover which modeset command a traced call was.
+That limit is accepted for this branch.
+
 Three signals steer the next round, and they are not interchangeable.
 Surface names the commands nothing has reached: `tools/surface_cov.py gaps`
-lists them against the driver's own enumerated 764, and it is the primary
+lists them against the driver's own enumerated 828, and it is the primary
 unexplored-surface signal because it is the only one that names a call. The
 edge curve `refine` derives from the run says whether the fuzzer is still
 finding new code inside the calls it already makes. It steers the stop
@@ -230,7 +239,7 @@ written reason.
 | flat | flat | open | The corpus is stuck on a resource-chain problem, and the campaign is unfinished |
 | flat | flat | closed | Complete, and nothing is left to fuzz |
 
-Completion is `exercised + accounted-for = 764` and no percentage threshold
+Completion is `exercised + accounted-for = 828` and no percentage threshold
 decides it. It is the campaign's primary termination and it sits in the hard
 non-overridable set alongside the run-hour budget, because a campaign with
 nothing left to fuzz has no work an override could authorise.
@@ -277,7 +286,7 @@ and not configured. The rest come from `loop:` in config/campaign.yaml, and
 they are the spend ceiling, so never raise them mid-loop to keep a campaign
 alive.
 
-- the surface is accounted for: `exercised + accounted-for = 764`, where every
+- the surface is accounted for: `exercised + accounted-for = 828`, where every
   target in the accounted-for set carries a written reason saying it cannot be
   reached. A row written as `deliberately-deferred` records a reachable target
   put aside, so it is counted separately as `deferred` and does not close one.

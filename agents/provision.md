@@ -111,6 +111,30 @@ instrumented kernel fuzzing.
    Also write the GSP firmware version (from `nvidia-smi -q`) into the
    manifest, and report.md consumes it from there.
 6. Build syzkaller (`make` in its dir) so bin/syz-manager exists.
+7. Measure the tenant surface on this instance, before any campaign spend.
+
+   ```
+   python3 tools/verify_tenant_surface.py runtime-mode
+   python3 tools/verify_tenant_surface.py measure
+   ```
+
+   The threat model states which device nodes a container tenant receives.
+   That statement is derived from `libnvidia-container` and
+   `nvidia-container-toolkit` source, and the two injection paths disagree:
+   the legacy path withholds `/dev/nvidia-modeset` without the `display`
+   capability, and the CDI path injects it with no capability check. Source
+   settles what the code can do. Only this instance settles what this
+   instance does.
+
+   Exit 1 means the measured node set and `surface/entry-points.json`
+   disagree, and it is a blocked gate. A node the container received that the
+   artefact places outside the tenant surface is reachable surface the
+   campaign does not model, and every coverage figure the campaign reports is
+   measured against the wrong denominator. A node the artefact places inside
+   that the container never received is budgeted effort no attacker can use.
+
+   Exit 2 means the measurement could not be taken. Record why. An unmeasured
+   tenant surface is not a passing one.
 
 ## State
 Run `python3 tools/pipeline_ctl.py init` first. It creates
@@ -130,6 +154,14 @@ from step 5, with the versions it printed. Exit 3 and exit 4 are both a
 blocked gate here, and without the verdict in the evidence nothing records
 that the comparison was made. A wrong tag is otherwise caught two phases
 later, after the clone and the kernel build.
+
+Also the full output of `verify_tenant_surface.py measure` from step 7,
+including the injection path it detected and the node list it measured. The
+node list is the evidence that the campaign's denominator covers the surface
+this tenant actually holds. Paste it whole: a summary line stating agreement
+records no measurement, and this is the one gate that is cheaper to satisfy
+before the instance bill starts than after a campaign has run against the
+wrong surface.
 
 ## Errors
 One retry per failed step with the error log. On a second failure, write

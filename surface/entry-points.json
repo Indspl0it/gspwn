@@ -155,7 +155,7 @@
       ],
       "modelled": false,
       "tenant_surface": true,
-      "reason": "lookup_devices at libnvidia-container/src/nvc_info.c:515 creates the node in a default container, so it is inside the tenant surface. The description set opens no descriptor on it at this revision, and its command family is not in the denominator.",
+      "reason": "The node reaches a default tenant on the CDI path. controlDeviceNodeDiscoverer at nvidia-container-toolkit/pkg/nvcdi/common-nvml.go:52-63 lists it beside /dev/nvidiactl, /dev/nvidia-uvm and /dev/nvidia-uvm-tools with no capability check, and nvidia-container-toolkit/internal/info/auto.go:89 makes that path the default runtime mode. The legacy path needs the display capability: libnvidia-container/src/nvc_mount.c:786 skips the modeset minor unless OPT_DISPLAY is set, libnvidia-container/src/options.h:92 sets that flag from the display capability alone, and libnvidia-container/src/options.h:100 leaves display out of the default capability set. The description set opens a descriptor on the node and its 64 commands are inside the denominator. The mmap and poll entry points of this table are not modelled.",
       "notes": {},
       "entry_points": [
         {

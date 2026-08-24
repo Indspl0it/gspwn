@@ -44,13 +44,14 @@ description set. It writes only the files under its output directory.
 
 | Subcommand | Output |
 |---|---|
-| `emit [--out-dir DIR]` | `nvidia.txt`, `nvidia_ctrl.txt`, `nvidia_uvm.txt`, `nvidia_structs.txt`, the `_IOWR` header, and `generation.json` |
+| `emit [--out-dir DIR]` | `nvidia.txt`, `nvidia_ctrl.txt`, `nvidia_uvm.txt`, `nvidia_modeset.txt`, `nvidia_structs.txt`, the `_IOWR` header, and `generation.json` |
 | `emit-probe --probe-dir DIR` | One C translation unit per SDK header group, plus a runner that compiles them for x86-64 and writes `sizes.json` |
 | `verify` | The size-match table and nothing else |
 | `summary` | Counts per category, and control coverage by SDK prefix |
+| `compile` | The verdict of syzkaller's own `pkg/compiler` over the staged set, with the driver's diagnostics unchanged |
 
-`--src` selects the checkout. `--inventory`, `--control` and `--graph` select
-the three inventory files. `--strict` turns any size disagreement into exit 2.
+`--src` selects the checkout. `--inventory`, `--control`, `--graph` and
+`--nvkms` select the four inventory files. `--strict` turns any size disagreement into exit 2.
 `--max-control` caps the control family, `--control-order` picks between chain
 depth and table order, `--uvm-test` adds the 104 test commands, and
 `--all-classes` adds the privileged allocation classes.
@@ -128,7 +129,7 @@ compile and contribute sizes for structs the current set no longer names.
 |---|---|
 | Never emit a struct whose derived layout disagrees with its measured `sizeof` | The ioctl request number encodes the size the driver expects. A wrong layout compiles, runs, and lands on a different field or on none |
 | Never model `NV_ESC_RM_CONTROL` as one escape carrying an opaque buffer | `agents/describe.md` step 4b. One opaque ioctl gives the fuzzer no command number to mutate and no parameter structure, and it puts the command number out of reach of any corpus-text measurement |
-| Never emit a description for `nvidia-drm`, `nvidia-modeset` or `/dev/dri/*` | Those nodes sit outside the threat model, and a seed naming them fails the syzkaller parse gate |
+| Never emit a description for `nvidia-drm` or `/dev/dri/*` | Those nodes sit outside the threat model on the legacy path, and the CDI path for DRM nodes is untraced, so a seed naming them claims reach the campaign has not established. `/dev/nvidia-modeset` is inside the model and is the sixth family |
 | Never classify a record carrying no `RS_FLAGS_ALLOC_*` flag with the privileged ones | The three such records are the root client classes. Filtering them drops the client allocation and every description that consumes its handle |
 | Never widen a variant's file descriptor argument past its node restriction | `NV_ESC_RM_CONTROL` carries `NV_CTL_DEVICE_ONLY`, so all 531 control variants take `fd_nvidiactl` |
 | Never leave padding to syzkaller | Whether its alignment rules agree with the compiler's is an assumption no compile gate checks |
@@ -152,13 +153,14 @@ measures which commands a corpus reaches with no KCOV, no syz-manager and no
 GPU. Variants are named after the handler and not the command number, so the 5
 duplicate method ids in the export table still produce distinct descriptions.
 
-`surface_cov.py` measures the generated baseline at 764 of 764 targets
+`surface_cov.py` measures the generated baseline at 828 of 828 targets
 modelled, 100.0%. The denominator decomposes as 32 escapes, 39 UVM commands, 7
-UVM tools commands, 531 control commands and 155 allocation classes. The set
-declares 845 `ioctl$` variants, split 268 in `nvidia.txt`, 531 in
-`nvidia_ctrl.txt` and 46 in `nvidia_uvm.txt`, plus four `openat$` descriptions.
+UVM tools commands, 531 control commands, 155 allocation classes and 64 modeset
+commands. The set declares 909 `ioctl$` variants, split 268 in `nvidia.txt`,
+531 in `nvidia_ctrl.txt`, 46 in `nvidia_uvm.txt` and 64 in
+`nvidia_modeset.txt`, plus five `openat$` descriptions.
 
-81 of the 845 sit outside the denominator, and every one of them is an
+81 of the 909 sit outside the denominator, and every one of them is an
 additional calling form or an additional route to a target the denominator
 already counts.
 
@@ -172,9 +174,9 @@ already counts.
 `sizeof(NVOS64_PARAMETERS)` at 48 and `sizeof(NVOS21_PARAMETERS)` at 32, so one
 class takes two parameter structs where the inventories count one target.
 
-595 of the 1540 emitted structs are named directly by a description and were
+595 of the 1923 emitted structs are named directly by a description and were
 measured by the probe. All 595 derived layouts match their measured `sizeof`,
-so `generation.json` records a size-mismatch count of zero. The remaining 945
+so `generation.json` records a size-mismatch count of zero. The remaining 1328
 structs are nested inside those, or are synthetic names for an anonymous inner
 struct or union. A nested struct has no `sizeof` of its own to check, and a
 wrong nested layout moves its parent's total, which the check does see.
@@ -185,15 +187,20 @@ mismatches, each falling back to an opaque array at the measured size.
 `tools/selftest.py` carries the same invariant as five scenario tests against
 `Emitter.ensure`.
 
-Nothing in the set has been through `syz-compile`. This repository carries no
-syzkaller tree, so 845 variants and 1540 structs have never met the syzlang
-parser, and compiling them is the `describe` phase's first SUT gate. Three
-spellings the set depends on are unverified against the compiler:
+The `compile` subcommand runs syzkaller's own `pkg/compiler` over the staged
+set against a pinned checkout. It reports 927 syscalls, which is 921 from the
+description set plus the 6 `syz_builtinN` pseudo-syscalls `pkg/compiler`
+prepends to every compile, over 178 resources and 4803 types, with nothing
+unsupported. The 921 are the 909 `ioctl$` variants, the 5 `openat$`
+descriptions, the 6 entry-point calls and `syz_nvidia_uvm_init`.
+
+Three spellings the set depends on are settled by that gate:
 `array[const[0, int8], N]` for explicit padding, `ptr64[in, T]` for the `NvP64`
 parameter pointers, and a resource produced by an inout struct field. Every
 allocation depends on the third of those, because syzkaller has to treat
 `hObjectNew` as an output. A smoke run reporting uniform early-out across a
-device node is the symptom of it doing otherwise.
+device node is the symptom of the driver disagreeing at run time about
+something the parser accepted.
 
 Request numbers are literal in the description files. `syz-extract` produces
 the `.const` file that would let them be named constants, and its exact format
@@ -203,8 +210,10 @@ was compiled and its macros evaluated as an independent check on the encoding,
 and `NV_ESC_RM_ALLOC`, `NV_ESC_RM_CONTROL` and `UVM_REGISTER_GPU` expand to the
 numbers the inventory computed.
 
-Four header constructs defeat a straightforward member parser, and each
-accounted for parameter types the first generation could not lay out. `nvos.h`
+Four header constructs in the RM tree defeat a straightforward member parser,
+and each accounted for parameter types the first generation could not lay out.
+The modeset section above carries three more that appear only under
+`src/nvidia-modeset/interface`. `nvos.h`
 places `#define` lines between struct members, which makes a naive splitter
 read a macro and the field after it as one declaration. 25 control parameter
 structs carry an `enum` typed field, and `ctrl2080gr.h` uses an enumerator as
@@ -212,6 +221,44 @@ an array bound. 41 control parameter types are typedef aliases of another
 command's struct. 17 allocation parameter types are macro aliases, and
 `nv-ioctl-numa.h` spells alignment `__aligned(8)` where the rest of the tree
 uses `NV_DECLARE_ALIGNED`.
+
+## The modeset family
+
+`/dev/nvidia-modeset` multiplexes its whole command set through one kernel
+request number. `nvkms-ioctl.h:47` builds `NVKMS_IOCTL_IOWR` as
+`_IOWR(NVKMS_IOCTL_MAGIC, NVKMS_IOCTL_CMD, struct NvKmsIoctlParams)`, which
+evaluates to `0xc0106d00`, and `nvKmsIoctl` reads the leaf out of
+`NvKmsIoctlParams.cmd` after `copy_from_user`. The emission mirrors
+`emit_control`: one variant per leaf, each carrying a per-variant copy of the
+16-byte envelope with `cmd` pinned to the dispatch ordinal, `size` pinned to
+the command's own parameter size, and `address` typed as a pointer to the
+parameter struct `surface/nvkms-command-inventory.json` names.
+
+The request number is derived from the two macros and the measured envelope
+size. A driver that renumbers the node moves it, and no literal in this tool
+has to be edited to follow.
+
+Three parser rules exist for this family and for nothing else in the tree.
+
+| Construct | Occurrences | Layout rule |
+|---|---|---|
+| A run of single-bit `NvBool` members | `NvKmsLayerCapabilities` in `nvkms-api-types.h:499` | gcc allocates them into one byte-wide storage unit on x86-64, and the layout follows. Any other bitfield width still raises `LayoutError` |
+| A member declared by enumeration tag, `enum NvKmsEventType eventType` | 30 struct definitions on the modeset ioctl path | It takes the size and alignment of `unsigned int`. Every RM header reaches an enumeration through a typedef, so this form appears nowhere else |
+| A function-pointer typedef | `NVRgInterruptCallbackProc` at `nvkms-api-types.h:806` | It registers as an eight-byte pointer. The alias scanner's word-only pattern cannot spell the declaration |
+
+Ten handle typedefs at `nvkms-api-types.h:55` become ten flat resources, one
+per typedef, with no hierarchy between them, because the modeset handle scheme
+carries no parent/child polymorphism to model where RM's does. A member is
+typed by its C type and never by its field name. That works here because each
+typedef is distinct. RM spells every handle `NvHandle`, so the type carries no
+information there. Each parameter struct is pointed at `inout`, so `pkg/compiler`
+counts one member as both a constructor and an input for its resource. A reply
+field carrying a handle and a request field consuming one are exactly those
+two things.
+
+Two of the 66 declared enumerators carry no dispatch entry and no description
+is emitted for either: `NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES` at
+ordinal 35 and `NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS` at ordinal 36.
 
 ## The parent rule
 

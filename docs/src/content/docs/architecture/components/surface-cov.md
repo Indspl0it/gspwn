@@ -10,11 +10,12 @@ driver's edge space has no known size, so an edge count cannot support a
 of it.
 
 The inventories supply a denominator that has been measured.
-`ioctl_inventory.py`, `ctrl_surface.py` and `object_graph.py` enumerate the 764
-targets a default tenant may call, across escapes, UVM commands, RM control
-commands and class allocations. Counting how many of those a corpus names
-is a ratio over that denominator, and the ratio is a claim about the command
-surface and never about lines of driver code.
+`ioctl_inventory.py`, `ctrl_surface.py`, `object_graph.py` and
+`nvkms_inventory.py` enumerate the 828 targets a default tenant may call,
+across escapes, UVM commands, RM control commands, class allocations and
+modeset commands. Counting how many of those a corpus names is a ratio over
+that denominator, and the ratio is a claim about the command surface and never
+about lines of driver code.
 
 The module reads committed artefacts. It reaches no device and needs no KCOV,
 no syz-manager and no GPU.
@@ -31,9 +32,10 @@ no syz-manager and no GPU.
 | uvm_tools | 7 | Commands on `/dev/nvidia-uvm-tools` |
 | control | 531 | Non-privileged RM control commands carrying a kernel-side handler |
 | alloc | 155 | Unprivileged allocatable classes, plus the three root classes the file descriptor itself gates |
-| total | 764 | |
+| modeset | 64 | Commands on `/dev/nvidia-modeset` carrying a dispatch entry |
+| total | 828 | |
 
-Four groups are counted and reported outside the denominator. Folding any of
+Five groups are counted and reported outside the denominator. Folding any of
 them in would move the ratio with no campaign changing.
 
 | Group | Count | Exclusion reason |
@@ -42,6 +44,7 @@ them in would move the ratio with no campaign changing.
 | uvm_test | 104 | Reachable only under `uvm_enable_builtin_tests=1`, which the target does not set |
 | escape_dead | 3 | Declared in `nv_escape.h` with no dispatch case |
 | escape_mux | 2 | `NV_ESC_RM_CONTROL` and `NV_ESC_RM_ALLOC`, multiplexers whose leaves are counted in the control and alloc families |
+| modeset_undispatched | 2 | Declared in `enum NvKmsIoctlCommand` with an empty dispatch entry, so `nvKmsIoctl` returns before any handler runs |
 
 The 236 GSP-routed commands are worth fuzzing. A tenant can call them and the
 marshalling runs kernel-side, and the handler itself runs on firmware KCOV
@@ -52,7 +55,7 @@ count.
 
 | Stage | Measured from | Fix when it loses a target |
 |---|---|---|
-| targetable | The three inventories | None. This stage is the denominator |
+| targetable | The four inventories | None. This stage is the denominator |
 | modelled | `descriptions/` | The describe phase writes the missing syzlang variant |
 | exercised | The corpus under `artifacts/seeds/` | The programs do not build the state the call needs, which is a resource-chain problem before it is a seed problem |
 
@@ -61,7 +64,7 @@ exercised over modelled measures whether the fuzzer builds programs valid
 enough to emit the call at all. A headline ratio on its own hides which stage
 lost the surface.
 
-The generated baseline models 764 of 764 targets, 100.0% in every family. The
+The generated baseline models 828 of 828 targets, 100.0% in every family. The
 exercised column reads 0 because no campaign has run, and `report` states that
 an empty corpus says nothing about the descriptions.
 

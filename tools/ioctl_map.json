@@ -28,6 +28,23 @@
       }
     }
   },
+  "comment_modeset": {
+    "doc": "/dev/nvidia-modeset accepts one kernel ioctl request number for its whole command set. nvkms_ioctl() refuses any other _IOC_NR or _IOC_SIZE with -ENOTTY, and the command itself is NvKmsIoctlParams.cmd, read after copy_from_user. The number below resolves the family for triage and never the sub-command, because the selector sits in the payload and no ioctl trace carries it. That is F18, accepted as a permanent limitation of this branch: a crash or a traced call matched on this number is matched at family level, and taking it for a command-level match is an error. tools/nvkms_inventory.py enumerates the commands behind it. No single call name covers the number, so it is recorded here and never in the name map above, where trace2seed and regression_check would read it as a description name.",
+    "requests": {
+      "0xc0106d00": {
+        "node": "/dev/nvidia-modeset",
+        "escape": "NVKMS_IOCTL_CMD",
+        "param_struct": "NvKmsIoctlParams",
+        "param_size": 16,
+        "selector_field": "cmd",
+        "magic": "m",
+        "nr": 0,
+        "resolves": "family",
+        "source": "kernel-open/nvidia-modeset/nvkms-ioctl.h",
+        "dispatch_source": "kernel-open/nvidia-modeset/nvidia-modeset-linux.c:1981 (nvkms_ioctl)"
+      }
+    }
+  },
   "0xc0384627": "ioctl$NV_ESC_RM_ALLOC_MEMORY",
   "0xc0144628": "ioctl$NV_ESC_RM_ALLOC_OBJECT",
   "0xc0104629": "ioctl$NV_ESC_RM_FREE",

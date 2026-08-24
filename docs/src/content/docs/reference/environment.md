@@ -37,7 +37,7 @@ before it would drop off the budget.
 
 The ledger sits beside the inventories it is counted against and not in the
 state file, because `pipeline_state.save()` rewrites the whole state under a
-lock on every phase transition, and the ledger carries 764 targets against a
+lock on every phase transition, and the ledger carries 828 targets against a
 state file of about 1200 bytes.
 
 ## Configured values one variable overrides

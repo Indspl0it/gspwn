@@ -212,7 +212,7 @@ every crash registration. `GSPWN_SURFACE_LEDGER` overrides the path.
 |---|---|---|
 | `artifacts/**` | No | Campaign output. `.gitkeep` alone is committed, to version-control the tree shape |
 | `state/**` | No | Machine state. `.gitkeep` alone is committed |
-| `surface/*.json` | Yes | The three inventories are the 764-target denominator, the derived artefacts key on them, and CI computes neither without a driver source tree it does not have |
+| `surface/*.json` | Yes | The four inventories are the 828-target denominator, the derived artefacts key on them, and CI computes neither without a driver source tree it does not have |
 | `surface/worklist-round1.md` | Yes | Round 1 reads it before any campaign has run |
 | `descriptions/*.txt`, `nvidia_gspwn.h`, `generation.json` | Yes | The numerator CI compares against the denominator, and the digests the set was emitted at |
 | `harnesses/**` | Yes | Hand-written C and Go that no phase regenerates |

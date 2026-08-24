@@ -98,6 +98,7 @@ SYZ_DB = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller", "bin",
 IOCTL_INV = os.path.join(SURFACE_DIR, "ioctl-inventory.json")
 CTRL_INV = os.path.join(SURFACE_DIR, "rm-control-inventory.json")
 OBJ_GRAPH = os.path.join(SURFACE_DIR, "rm-object-graph.json")
+NVKMS_INV = os.path.join(SURFACE_DIR, "nvkms-command-inventory.json")
 
 # A syzlang call line, and a call site inside a program. Both spell the variant
 # the same way, so one pattern reads a description file and a corpus program.
@@ -108,6 +109,9 @@ ROOT = "<root fd>"
 
 CONTROL_PREFIX = "NV_ESC_RM_CONTROL_"
 ALLOC_PREFIX = "NV_ESC_RM_ALLOC_"
+# Every NvKmsIoctlCommand enumerator carries it, so it names the family in a
+# variant name and in a corpus program alike.
+MODESET_PREFIX = "NVKMS_IOCTL_"
 
 # Families in report order. The first five are the denominator; the rest are
 # counted and excluded, each for a reason `report` prints.
@@ -116,14 +120,17 @@ ALLOC_PREFIX = "NV_ESC_RM_ALLOC_"
 ESCAPE_PREFIX = "NV_ESC_"
 XFER_VARIANT_PREFIX = "NV_ESC_IOCTL_XFER_CMD_"
 
-FAMILIES = ["escape", "uvm", "uvm_tools", "control", "alloc"]
-EXCLUDED = ["control_gsp", "uvm_test", "escape_dead", "escape_mux"]
+FAMILIES = ["escape", "uvm", "uvm_tools", "control", "alloc", "modeset"]
+EXCLUDED = ["control_gsp", "uvm_test", "escape_dead", "escape_mux",
+            "modeset_undispatched"]
 
 EXCLUSION_REASON = {
     "control_gsp": "handler compiled out; runs on GSP where KCOV cannot follow",
     "uvm_test": "needs uvm_enable_builtin_tests=1, which the target does not set",
     "escape_dead": "declared in nv_escape.h with no dispatch case",
     "escape_mux": "a multiplexer whose leaves are already counted in another family",
+    "modeset_undispatched": "declared in NvKmsIoctlCommand with a NULL "
+                            "dispatch entry",
 }
 
 # Two escapes select the real target from a field in their own parameter
@@ -216,11 +223,13 @@ def load_targets():
     inv = _load(IOCTL_INV, "the ioctl inventory")
     ctrl = _load(CTRL_INV, "the RM control inventory")
     graph = _load(OBJ_GRAPH, "the RM object graph")
+    nvkms = _load(NVKMS_INV, "the modeset command inventory")
 
     versions = {p: _driver_version(o) for p, o in
                 (("ioctl-inventory.json", inv),
                  ("rm-control-inventory.json", ctrl),
-                 ("rm-object-graph.json", graph))}
+                 ("rm-object-graph.json", graph),
+                 ("nvkms-command-inventory.json", nvkms))}
     distinct = {v for v in versions.values() if v}
     if len(distinct) > 1:
         raise SurfaceError(
@@ -355,6 +364,37 @@ def load_targets():
             "class_id": class_of_owner.get(internal),
             "source": "resource_list.h",
         }
+
+    # /dev/nvidia-modeset. Every command reaches the kernel through one
+    # request number and the leaf is the ordinal in NvKmsIoctlParams.cmd, so
+    # the ordinal is the ABI identity and the command name is only the join
+    # key the description set and the corpus spell. The two commands the
+    # dispatch table leaves NULL are counted apart: nvKmsIoctl returns FALSE
+    # for either before any handler runs.
+    dispatched = 0
+    for command in nvkms.get("commands", []):
+        name = command.get("command")
+        if not name:
+            continue
+        is_dispatched = bool(command.get("dispatched"))
+        dispatched += is_dispatched
+        record = {
+            "variant": name,
+            "family": "modeset" if is_dispatched else "modeset_undispatched",
+            "label": "%s %s" % (command.get("ordinal"),
+                                command.get("proc") or "(no handler)"),
+            "detail": command.get("param_struct") or "",
+            "nr": command.get("ordinal"),
+            "source": command.get("source") or "",
+        }
+        (targets if is_dispatched else excluded)[name] = record
+    claimed = (nvkms.get("summary") or {}).get("dispatched")
+    if claimed is not None and claimed != dispatched:
+        raise SurfaceError(
+            "the modeset inventory records %d dispatched command(s) against "
+            "a summary claiming %d. The denominator would be wrong either "
+            "way; regenerate %s with tools/nvkms_inventory.py."
+            % (dispatched, claimed, NVKMS_INV))
 
     for record in list(targets.values()) + list(excluded.values()):
         record["abi_key"] = abi_key(record)
@@ -764,15 +804,19 @@ def report_entry_points():
         print("entry points: not counted (%s)" % exc)
         return
     print()
-    print("entry points  %d registered on the %d modelled device node(s), "
-          "of %d across" % (modelled,
-                            sum(len(t.get("paths") or []) for t in tables),
-                            registered))
-    print("              every file_operations table the driver defines. "
-          "Counted here and")
-    print("              not part of the command total above: an entry point "
-          "has no method")
-    print("              id, no parameter struct and no inventory row.")
+    print("entry points  %d registered on the %d device node(s) whose entry "
+          "points are" % (modelled,
+                          sum(len(t.get("paths") or []) for t in tables)))
+    print("              modelled, of %d across every file_operations table "
+          "the driver" % registered)
+    print("              defines. Counted here and not part of the command "
+          "total above: an")
+    print("              entry point has no method id, no parameter struct "
+          "and no")
+    print("              inventory row. /dev/nvidia-modeset is opened for the "
+          "modeset")
+    print("              command family and its own mmap and poll are not "
+          "modelled.")
     print("              %d call(s) declared: %s"
           % (len(entry_point_calls(tables)),
              ", ".join(sorted(entry_point_calls(tables)))))
