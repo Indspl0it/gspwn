@@ -1433,9 +1433,13 @@ OUTSIDE_TENANT_SURFACE = (
 # modelled, while the mmap and poll this table registers are not, so it is
 # recorded here as unmodelled and its `reason` says which half is which.
 # /dev/dri reaches a default tenant on the CDI injection path, and the
-# campaign does not model its command surface. Both halves are stated here
-# because the pair is the finding: reachable surface that no description
-# covers is surface every coverage figure is measured against wrongly.
+# campaign models its command surface. nv_drm_fops is recorded as modelled,
+# its 24 dispatched commands are inside the denominator, and the 4 declared
+# without an entry in nv_drm_ioctls[] are counted as drm_undispatched
+# outside it. Both halves are stated here because reachable surface that no
+# description covers is surface every coverage figure is measured against
+# wrongly, and that was the condition this pair recorded until the drm
+# family landed.
 #
 # The CDI path adds every DRM node found for a GPU's PCI bus id to that
 # device's spec, with no capability argument anywhere on the call chain:

@@ -117,14 +117,15 @@ Four prohibitions:
 
 | Prohibition | Reason |
 |---|---|
-| No coverage percentage without the exclusion list beside it | 347 commands sit outside the denominator, and a bare percentage reads as coverage of the driver |
+| No coverage percentage without the exclusion list beside it | 351 commands sit outside the denominator, and a bare percentage reads as coverage of the driver |
 | No fraction built on the KCOV edge count | it measures an edge space of unknown size and has no denominator |
 | State `targetable` as an upper bound, citing the 16 in-handler capability checks | a tenant can call fewer than 852 |
 | Track U carries no denominator | its coverage is described by `harnesses/TARGETS.md` and nothing else, and the Track K ratio must not read as covering both |
 
-Add a short methodology note naming the five excluded groups and why each is
+Add a short methodology note naming the six excluded groups and why each is
 excluded: 236 control commands routed to GSP, 104 uvm_test commands behind
-`uvm_enable_builtin_tests=1`, 3 escapes declared with no dispatch case, the
+`uvm_enable_builtin_tests=1`, 4 DRM commands declared at 0x19 to 0x1c with no
+entry in `nv_drm_ioctls[]`, 3 escapes declared with no dispatch case, the
 2 multiplexer escapes whose leaves count in the control and alloc families, and
 the 2 modeset commands declared in `enum NvKmsIoctlCommand` with an empty
 dispatch entry. The

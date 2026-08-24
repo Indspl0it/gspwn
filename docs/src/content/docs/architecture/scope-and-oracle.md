@@ -54,7 +54,7 @@ attempt cap.
 | An information leak that never faults | KASAN reports a bad access. A correct read of data that should not have been returned produces no report |
 | Symlink TOCTOU and mount-escape logic on Track U | Fuzzing finds these poorly. Recorded in the report as future work |
 | Memory corruption in the Go toolkit | Go is memory-safe. A panic there supports a denial-of-service finding only |
-| Anything behind an unmodelled device node | No description declares a call on it. `/dev/dri/card*` and `/dev/dri/renderD*` sit inside the attacker definition and carry none. `/dev/nvidia-nvlink` sits outside that definition |
+| Anything behind an unmodelled device node | No description declares a call on it. `/dev/nvidia-nvlink`, the nvswitch nodes and the `nvidia-caps` nodes reach no default tenant. `/dev/dri/card*` and `/dev/dri/renderD*` do reach one and are modelled, so they left this row when the drm family landed |
 | Anything behind an ioctl with no syzlang description | syzkaller generates what the grammar describes |
 
 The information-leak row is the widest gap on Track K. A driver returning

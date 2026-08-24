@@ -32,14 +32,15 @@ configurations. Report what happened, including when it is uninteresting.
    The JSON carries `corpus` and `corpus_mtime`. Quote both wherever the
    exercised number appears, so a reader can tell which corpus produced it.
 
-   The denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc
-   and 64 modeset targets. Five groups sit outside it and stay outside every
-   percentage:
+   The denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc,
+   64 modeset and 24 drm targets. Six groups sit outside it and stay outside
+   every percentage:
 
    | Group | Count | Reason for exclusion |
    |---|---|---|
    | control_gsp | 236 | Control commands routed to GSP, whose handler is compiled out and where KCOV cannot follow |
    | uvm_test | 104 | Commands that need `uvm_enable_builtin_tests=1` |
+   | drm_undispatched | 4 | Declared in the `DRM_NVIDIA_*` command range at 0x19 to 0x1c with no entry in `nv_drm_ioctls[]`, so the DRM core finds no handler for them |
    | escape_dead | 3 | Escapes declared in nv_escape.h with no dispatch case |
    | escape_mux | 2 | NV_ESC_RM_CONTROL and NV_ESC_RM_ALLOC, whose leaves already count in the control and alloc families |
    | modeset_undispatched | 2 | Declared in `enum NvKmsIoctlCommand` with an empty dispatch entry, so `nvKmsIoctl` returns before any handler runs |
@@ -70,7 +71,7 @@ configurations. Report what happened, including when it is uninteresting.
    > On driver <version>, the campaign exercised N of the 852 commands a
    > default `compute,utility` container tenant can reach. The remaining
    > 852 minus N are accounted for, each with a recorded reason. The
-   > accounted-for set excludes the 347 commands outside the denominator by
+   > accounted-for set excludes the 351 commands outside the denominator by
    > construction.
 
    That template covers the remainder only where the ledger holds no
@@ -89,7 +90,7 @@ configurations. Report what happened, including when it is uninteresting.
    | 2 | `surface_cov.py targets --json --out .../surface-targets.json` | the denominator, stamped with its driver version |
    | 3 | `surface_cov.py report --run-id <run-id>`, all three stages, naming the corpus path and its modification time | the measurement, against the right corpus |
    | 4 | `regression_check.py pins` exit 0 | the denominator bounds the corpus, because no emitted selector including `NV_ESC_IOCTL_XFER_CMD`'s inner `cmd` is free |
-   | 5 | the exclusion line verbatim: 236 control_gsp, 104 uvm_test, 3 escape_dead, 2 escape_mux | the population the percentage is taken over |
+   | 5 | the exclusion line verbatim: 236 control_gsp, 104 uvm_test, 4 drm_undispatched, 3 escape_dead, 2 escape_mux, 2 modeset_undispatched | the population the percentage is taken over |
    | 6 | the 16 in-handler capability checks, stated as a floor | `targetable` is an upper bound on what a tenant can call |
 
    Missing any of the six, report the three stages and state no completion
