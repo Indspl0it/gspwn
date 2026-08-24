@@ -166,7 +166,33 @@ production branch. Record every commit and the `gcc` version in
 `artifacts/builds/manifest.json`, because the `report` phase reads affected
 versions from there.
 
-## 7. Build syzkaller
+## 7. Install the Go toolchain
+
+syzkaller is written in Go and its build runs on the host. The pinned revision
+declares `go 1.26.0` in `go.mod`, and no distribution package meets that floor,
+because Ubuntu 24.04 ships Go 1.22. The toolchain comes from the upstream
+tarball, following syzkaller's own setup documentation.
+
+```
+GO_VERSION=1.26.2
+curl -fsSLO https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
+export PATH=/usr/local/go/bin:${PATH}
+```
+
+```
+go version
+```
+
+The `export` covers the current shell alone. Add the same line to the campaign
+user's shell profile, because the `describe` phase runs `syzlang_gen.py compile`
+in a later session and that command exits 3 when `go` is absent from `PATH`.
+
+A toolchain below the floor leaves the next step failing on the `go.mod`
+directive, and the error names the version required.
+
+## 8. Build syzkaller
 
 ```
 cd artifacts/src/syzkaller
@@ -184,7 +210,7 @@ Three binaries must exist afterwards, because other tools invoke them by path:
 
 A missing binary blocks the `fuzz` phase. Re-run `make` and read its error.
 
-## 8. Create the state file
+## 9. Create the state file
 
 ```
 python3 tools/pipeline_ctl.py init

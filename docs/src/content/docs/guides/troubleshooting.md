@@ -151,6 +151,9 @@ both.
 | `WARNING: mokutil is not installed` | Secure Boot state is unknown | Install `mokutil`, or confirm Secure Boot is off in firmware |
 | `ERROR: no GRUB menu entry for <kver>` | The kernel installed but nothing would boot it | The next reboot would come back on the old kernel and fail the build gate for a reason that looks like the build |
 | The NVIDIA module build drops the instrumentation flags | `conftest.sh` strips unknown CFLAGS from the environment | Patch `kernel-open/conftest.sh` minimally to append them, log the patch, retry once per rung |
+| `make: go: No such file or directory` in the syzkaller tree | No Go toolchain is installed. `build-essential` carries none, and syzkaller builds on the host | [Installation](/gspwn/getting-started/installation/) step 7 |
+| `go.mod requires go >= 1.26.0` from `make` or from `syzlang_gen.py compile` | The toolchain is older than the floor the pinned syzkaller declares. Ubuntu 24.04 ships Go 1.22, so an `apt` install reproduces this | Install the upstream tarball, [Installation](/gspwn/getting-started/installation/) step 7 |
+| `syzlang_gen.py compile` exits 3 with `go` installed | The phase's shell has no `/usr/local/go/bin` on `PATH`. The install step's `export` covers one shell | Add the `PATH` line to the campaign user's shell profile |
 
 ## Disk
 
