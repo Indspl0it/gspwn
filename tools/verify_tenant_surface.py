@@ -327,6 +327,62 @@ def compare(measured, inside, outside):
     return unmodelled, unreachable, matched
 
 
+# What a container receives on each mode the toolkit accepts. A mode absent
+# from this table still reaches a verdict through mode_verdict, because a
+# branch chain that falls through prints nothing, and nothing reads as
+# agreement to an operator checking the gate.
+#
+# `auto` is the value the toolkit packages write into config.toml at install
+# time, so it is the reading a stock instance produces.
+# nvidia-container-toolkit/internal/info/auto.go:89 resolves it to jit-cdi on
+# an NVML platform from toolkit 1.18.0 onward.
+CDI_VERDICT = (
+    "The CDI path injects /dev/nvidia-modeset and every /dev/dri node found "
+    "for the GPU's PCI bus id, with no capability check. That is the device "
+    "set surface/entry-points.json records as the tenant surface.")
+
+LEGACY_VERDICT = (
+    "The legacy path withholds /dev/nvidia-modeset unless the display "
+    "capability is requested, and injects no /dev/dri node at all. A tenant "
+    "on this host holds less than the recorded tenant surface, and the "
+    "campaign would budget effort against surface it cannot reach.")
+
+MODE_VERDICTS = {
+    "auto": "This host resolves auto to jit-cdi. " + CDI_VERDICT,
+    "cdi": CDI_VERDICT,
+    "jit-cdi": CDI_VERDICT,
+    "legacy": LEGACY_VERDICT,
+    "csv": ("The csv path mounts the files listed under "
+            "/etc/nvidia-container-runtime/host-files-for-container.d, so "
+            "the device set is whatever those files name and neither the CDI "
+            "nor the legacy reading applies. Only `measure` settles it."),
+}
+
+UNSTATED_VERDICT = (
+    "No mode is stated, so the toolkit default applies, which is jit-cdi on "
+    "an NVML platform from 1.18.0 onward. " + CDI_VERDICT)
+
+
+def mode_verdict(mode):
+    """-> what a container receives on this mode, as a paragraph.
+
+    Never returns an empty string. A mode this module has not seen is
+    reported as unrecognised together with the two device nodes that
+    distinguish the paths, because an operator reading a blank verdict
+    concludes the host agrees with the record.
+    """
+    if mode is None:
+        return UNSTATED_VERDICT
+    known = MODE_VERDICTS.get(mode)
+    if known is not None:
+        return known
+    return ("%r is not a mode this tool recognises, so which injection path "
+            "it takes is unknown. The two paths differ over "
+            "/dev/nvidia-modeset and /dev/dri, and the display capability "
+            "gates the first of them on the legacy path. Run `measure` to "
+            "settle it." % mode)
+
+
 def cmd_expected(args):
     tables = load_tables(args.root)
     inside, outside = expected_surface(tables)
@@ -355,13 +411,7 @@ def cmd_runtime_mode(args):
         print("  mode      %s" % mode)
     print("  evidence  %s" % evidence)
     print()
-    if mode == "legacy":
-        print("The legacy path withholds /dev/nvidia-modeset unless the "
-              "display capability is requested.")
-    elif mode in ("cdi", "jit-cdi") or mode is None:
-        print("The CDI path injects /dev/nvidia-modeset with no capability "
-              "check. A tenant surface derived from the legacy path "
-              "understates what this host gives a container.")
+    print(mode_verdict(mode))
     return 0
 
 
