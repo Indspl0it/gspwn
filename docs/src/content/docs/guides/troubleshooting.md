@@ -17,8 +17,7 @@ description: Symptom to cause to fix, for the failure modes the tools guard agai
 
 ## Plateau verdicts
 
-`plateau` exits 0 for `growing`, 3 for `plateaued` and 1 for `unknown`. Each
-`unknown` message has its own cause and its own response.
+`plateau` exits 0 for `growing`, 3 for `plateaued` and 1 for `unknown`.
 
 | Message | Cause | Action |
 |---|---|---|
@@ -37,7 +36,7 @@ authorise another campaign.
 
 `completion` exits 0 for `complete`, 3 for `incomplete` and 1 for `unknown`.
 `unknown` never satisfies the completion stop, so a corpus that cannot be read
-cannot end a campaign by claiming it is finished.
+cannot end a campaign.
 
 | Message | Cause | Action |
 |---|---|---|
@@ -70,7 +69,7 @@ cannot end a campaign by claiming it is finished.
 | `refusing to measure a live campaign` | `round-end` was called while a run is still fuzzing | Wait it out. `--force` is for a campaign that really is finished with only a stale deadline file |
 | `cannot advance to round N: round phase(s) not done` | A round phase is not `done` | Finish it, or stop the loop with `round-decide --decision stop --reason "..."` and run `report`. Marking a phase `blocked` does not satisfy the check |
 | `cannot advance to round N: round M has no recorded round-end` | The round was never measured | Run `round-end --from-run <run-id>` |
-| `A budget or round-cap stop cannot be overridden` | `--decision continue` against a hard cap | Raise the cap in the configuration, deliberately |
+| `A completion, budget or round-cap stop cannot be overridden` | `--decision continue` against a hard cap | Raise the cap in the configuration, deliberately |
 | `Overriding it requires --reason` | `--decision continue` against a plateau or `unknown` stop | State the reason |
 
 ## Triage
@@ -136,7 +135,7 @@ both.
 | `the container did not run` and the error names an unknown runtime `nvidia` | The NVIDIA container toolkit is absent, or `nvidia-ctk runtime configure` was never run | [Installation](/gspwn/getting-started/installation/) step 5. The distribution's `docker.io` package carries no `nvidia` runtime |
 | `could not pull ubuntu:22.04` | The instance has no registry access | Pre-load the image and pass `--no-pull`, or set `GSPWN_VERIFY_IMAGE` to one already present |
 | `REACHABLE AND NOT MODELLED` | The container received a node the record places outside the tenant surface | Stop. The threat model understates the attacker, and every coverage figure would be measured against the wrong denominator. Widen the model before spending |
-| `MODELLED AND NOT REACHABLE` naming the modeset and DRM nodes | The measurement reached the legacy injection path | Check `runtime-mode`. A `legacy` verdict means this host withholds those nodes; a measurement taken with `--via gpus` on Docker 29.1.x or older reports legacy whatever the host is configured for |
+| `MODELLED AND NOT REACHABLE` naming the modeset and DRM nodes | The measurement reached the legacy injection path | Check `runtime-mode`. A `legacy` verdict means this host withholds those nodes. A measurement taken with `--via gpus` on Docker 29.1.x or older reports legacy whatever the host is configured for |
 | `MODELLED AND NOT REACHABLE` naming `/dev/nvidia-nvswitch*` | Those nodes are conditional on `NVIDIA_NVSWITCH` | Expected on a host without NVSwitch. Record the condition and continue |
 | `runtime-mode` reports `not stated on this host` | No `config.toml` was found | The toolkit default applies. `measure` settles what the host actually does |
 | `surface/entry-points.json does not exist` | The artefact was never generated | `python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules --emit-entry-points surface/entry-points.json` |
@@ -161,9 +160,3 @@ both.
 |---|---|---|
 | `WARN: N GB free, under loop.min_free_disk_gb` | kdump dumps and the corpus have grown | `sudo python3 tools/crashlog_ctl.py prune --keep 10`, or grow the volume |
 | Everything fails at once | The disk is full | The fuzzer, the sampler and every state write stop together |
-
-## See also
-
-- [FAQ](/gspwn/project/faq/) answers the questions the code answers
-  non-obviously.
-- [Exit codes](/gspwn/reference/exit-codes/) lists every non-standard code.

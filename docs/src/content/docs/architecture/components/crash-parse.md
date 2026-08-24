@@ -7,9 +7,29 @@ Harvests crashes from every source and deduplicates them into the registry. One
 invocation scans the syzkaller workdir, the Track U crash directory and an
 optional kernel log, and registers what it finds.
 
-A crash's identity is two keys: the canonical title and the stack hash. Both are
-normalised identically across sources, so the same bug found in two places
-collides.
+A crash's identity is two keys, normalised identically across sources, so the
+same bug found in two places collides.
+
+| Key | Derivation |
+|---|---|
+| Primary | The canonicalised report title: whitespace collapsed, a leading `kernel ` or `NVRM ` prefix stripped, `BUG: ` folded off a `KASAN:` or `UBSAN:` title, and every hex address replaced with `0xADDR` |
+| Secondary | The first 16 hex digits of the SHA-1 over the top `triage.stack_hash_frames` function names, with addresses, offsets and module names stripped |
+| Identity | The tuple of title, stack hash and source directory |
+
+An empty stack hash is no evidence and never drives a stack-based decision.
+
+| Condition | Outcome |
+|---|---|
+| The identity tuple matches an existing entry | Nothing is registered, which makes a re-scan idempotent |
+| Same title and same non-empty stack as a non-duplicate entry | Registered as a duplicate linked to that entry, and both sources are cross-noted |
+| Same title, neither sighting has a stack | Flagged |
+| Same title, only one sighting has a stack | Flagged |
+| Same title, different stacks | Flagged |
+| Same stack, different title | Flagged |
+| No match on either key | Unique |
+
+A flagged entry persists in the registry, so the review queue outlives the run
+that produced it.
 
 ## Responsibility
 
@@ -26,32 +46,11 @@ registry only inside one `pipeline_state` transaction.
 | The dedup settings behind the stored hashes are recoverable | `stamp_triage_settings` runs before the first registration and writes once |
 | The whole scan is one atomic registry update | `main` wraps every scan in a single transaction |
 
-## Interface
-
-The command form takes `--run-id`, `--syz-workdir`, `--track-u-dir` and
-`--dmesg`, and prints the registry total and the flagged count.
-
-| Function | Returns | Raises |
-|---|---|---|
-| `canon_title(t)` | The source-independent title | |
-| `stack_frames(text)` | Function names in log order | |
-| `stack_hash(report_text, depth=None)` | sha1 of the top frames, or `''` when the text carries no frames | |
-| `block_signature(block, lines=None, chars=None)` | Title and context hash for a frameless report block | |
-| `report_blocks(text)` | Yields `(start_line, block_text)`, one kernel report per block | |
-| `xid_class(title)` | `(class, why)`, or `(None, '')` when the title carries no Xid | |
-| `sanitizer_title(text)` | The title from a sanitizer signature, or `None` | |
-| `existing_keys(state)` | `(title index, hash index, identity index)` | |
-| `register(state, track, title, shash, srcdir, signal=None, signal_note='')` | The registration outcome | |
-| `scan_syz(state, workdir)`, `scan_track_u(state, udir)`, `scan_dmesg(state, path)` | `None` | |
-| `resolve_workdir(a, state)` | The workdir path, or `None` | |
-
-Exported constant: `XID_CLASS`.
-
 ## Callers
 
 | Direction | Modules |
 |---|---|
-| Imports this module | Nothing at run time. `selftest.py` imports it, and the `triage` sub-agent documents `XID_CLASS` |
+| Imports this module | `repro_ctl.py`, for the report-file suffix it looks for. The `triage` sub-agent documents `XID_CLASS` |
 | This module imports | `pipeline_state.py`, `gspwn_config.py` |
 
 ## Failure modes
@@ -91,14 +90,13 @@ re-scan a no-op. Durability comes from `pipeline_state.save`.
 
 ## Design notes
 
-Both keys are normalised identically across sources, so the same bug found in
-the syzkaller workdir and again in a harvested dmesg log collides. That collision
-makes the duplicate registration meaningful: the second sighting is linked to
-the first, and both sources stay addressable as durable state.
+The collision between a bug found in the syzkaller workdir and the same bug
+found again in a harvested dmesg log makes the duplicate registration
+meaningful. The second sighting is linked to the first, and both sources stay
+addressable as durable state.
 
-Volatile fields are blanked before hex blanking. An eight-digit PID would
-otherwise be consumed as an address first and never recognised as a PID, so the
-same panic would split on task id alone.
+An eight-digit PID left until after hex blanking is consumed as an address and
+never recognised as a PID, so the same panic splits on task id alone.
 
 `report_blocks` runs a small state machine over the log. `Oops` and
 `Kernel panic` lines are not always the start of a new report: they can be the
@@ -110,10 +108,9 @@ The Xid number pattern consumes the parenthesised bus id as a group. Skipping it
 loosely reads the first field of the bus id as the Xid number, which classifies
 every crash as an unknown Xid 0.
 
-`stamp_triage_settings` is called before the first registration, so `validate`
-can later report that the settings moved underneath the stored hashes. It is
-self-guarded: written once and never overwritten, because rewriting it would
-erase the evidence it exists to preserve.
+`stamp_triage_settings` is self-guarded, written once and never overwritten,
+because rewriting it would erase the evidence it exists to preserve. `validate`
+reads that stamp to report that the settings moved underneath the stored hashes.
 
 Duplicates are kept out of the title and hash indexes, so a later sighting links
 against the surviving finding.
@@ -125,4 +122,3 @@ warns when nothing is registered. The `triage` sub-agent is told to always pass
 ## See also
 
 - [Crash identity](/gspwn/architecture/crash-identity/)
-- [crash_parse.py reference](/gspwn/reference/cli/crash-parse/)

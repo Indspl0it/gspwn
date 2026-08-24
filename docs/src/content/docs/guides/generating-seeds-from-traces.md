@@ -13,10 +13,9 @@ A seed bank is built from two sources, and neither half works alone.
 The trace half exists because random generation rarely produces valid Resource
 Manager object-allocation chains and real workloads exercise them directly.
 The chains half exists because `NV_ESC_RM_CONTROL` and `NV_ESC_RM_ALLOC`
-dispatch on a field inside the parameter struct, `strace` decodes no NVIDIA
-parameter struct, and the request number is identical for every leaf behind the
-dispatcher, so no trace can name a control command however the map is
-written.
+dispatch on a field inside the parameter struct that `strace` does not decode,
+and the request number is identical for every leaf behind the dispatcher, so no
+trace can name a control command however the map is written.
 
 ## 1. Populate the ioctl map
 
@@ -83,8 +82,7 @@ with gaps is not overwritten.
 The summary line counts three outcomes apart, and a second line appears when
 the count of dispatching escapes is above zero. A conversion of a trace
 holding one `NV_ESC_REGISTER_FD`, one `NV_ESC_RM_ALLOC`, one
-`NV_ESC_RM_CONTROL`, one `NV_ESC_RM_FREE`, one unknown request and one open of
-`/dev/nvidia-modeset`:
+`NV_ESC_RM_CONTROL`, one `NV_ESC_RM_FREE` and one unknown request:
 
 ```
 $ python3 tools/trace2seed.py convert --trace tmp/trace.txt --out-dir tmp/out
@@ -104,7 +102,6 @@ ioctl$NV_ESC_REGISTER_FD(r0, 0xc00446c9, &AUTO)
 # NV_ESC_RM_CONTROL on r0, request 0xc020462a: NVOS54_PARAMETERS.cmd selects the command and strace does not decode it, so no ioctl$NV_ESC_RM_CONTROL_* call can be named from this trace (32-byte parameter form)
 ioctl$NV_ESC_RM_FREE(r0, 0xc0104629, &AUTO)
 # unmapped ioctl 0xdeadbeef on fd 3
-# skipped: nvidia-modeset out of scope
 close(r0)
 ```
 
@@ -117,11 +114,10 @@ close(r0)
 | `close(3)` | `close(r0)` |
 | An ioctl on one of the three dispatching request numbers | A comment naming the escape, the parameter struct and the selector field, and a header block once per program |
 | An ioctl with no map entry | `# unmapped ioctl 0xdeadbeef on fd 3` |
-| An out-of-scope device | `# skipped: nvidia-modeset out of scope` |
+| A device no description models | `# skipped: <path> out of scope`. `OUT_OF_SCOPE` and `OUT_OF_SCOPE_PREFIXES` in `tools/trace2seed.py` are both empty on this branch, so no traced node takes this route |
 
 A dispatching escape is a comment and never a call, so no seed carries a name
-the description set does not declare. The header block names the `chains`
-route that supplies the commands the trace could not.
+the description set does not declare.
 
 File descriptors become syzkaller resources, so the generated program chains
 handles the way the workload did. Descriptors are tracked per process, because
@@ -140,8 +136,7 @@ looks like a description problem.
 
 ## 4. Read the ratio
 
-The summary line's three counts each mean a different thing, and the seeds
-gate reads all three.
+The seeds gate reads all three counts on the summary line.
 
 | Count | Meaning | Action |
 |---|---|---|
@@ -150,15 +145,12 @@ gate reads all three.
 | multiplexer calls carrying no decodable command | The call reached one of the three dispatching request numbers | None. The commands come from the chains half |
 
 Unmapped requests become comments, so a mostly-unmapped seed is an
-open-and-close chain that exercises nothing. A high unmapped count means
-`tools/ioctl_map.json` is missing entries the `describe` phase should have
-produced. The seeds gate reports the ratio as evidence.
+open-and-close chain that exercises nothing. The seeds gate reports the ratio
+as evidence.
 
 The third count is never a map gap. No entry in a map keyed by request number
-can carry an identity the trace does not hold, and the selector field sits
-inside a parameter struct `strace` prints as a bare pointer. A rising
-multiplexer count means the workload is doing real Resource Manager work, and
-the commands it issued come from the chains half.
+can carry an identity the trace does not hold. A rising multiplexer count means
+the workload is doing real Resource Manager work.
 
 ## 4b. Build the chain-shaped programs
 
@@ -238,7 +230,7 @@ journalctl -u gspwn-k -f
 A seed that does not parse is silently dropped by syz-manager, so the run
 starts with fewer programs than the bank holds and nothing says so.
 
-## Out-of-scope devices
+## Modeset and DRM nodes
 
 `/dev/nvidia-modeset` is modelled from this branch onward and converts to
 `openat$nvidia_modeset`. A trace does not name the modeset sub-command. Every
@@ -260,5 +252,5 @@ target for the next round.
 ## See also
 
 - [Corpus and seeds](/gspwn/guides/corpus-and-seeds/) covers the bank itself.
-- [trace2seed.py reference](/gspwn/reference/cli/trace2seed/)
+- [trace2seed.py reference](/gspwn/architecture/components/trace2seed/)
 - [object_graph.py](/gspwn/architecture/components/object-graph/)

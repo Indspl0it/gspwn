@@ -37,52 +37,25 @@ verdict. It is the sole writer of each run's `coverage.csv`.
 | A truncated inventory cannot fire the completion stop | `completion_status` requires every family in `surface_cov.FAMILIES` to contribute at least one target, and raises `SurfaceError` naming the empty ones otherwise, which yields `unknown` |
 | A flat edge curve against a climbing surface curve is not a plateau | `plateau_verdict` takes the second curve and returns `growing` with a detail line naming both |
 
-## Interface
+## Operations
 
 | Subcommand | Purpose |
 |---|---|
-| `sample` | Append one sample for a run and track. `--skip-surface` omits the surface column on this sample |
+| `sample` | Append one sample for a run and track |
 | `install-timer`, `remove-timer` | Install or remove the sampler timer for a run |
 | `series` | Print the recorded series for a metric |
 | `plateau` | Print the verdict for a run |
 | `gpu-health` | Probe the GPU and print status and detail |
 | `compare` | Compare series across runs |
-| `completion` | The ledger identity: whether every target is exercised or accounted for. Exit 0 complete, 3 incomplete, 1 unknown |
-| `migrate-csv` | Add the columns a run's CSV header lacks and pad every existing row. Both tracks by default |
-
-| Function | Returns | Raises |
-|---|---|---|
-| `read_rows(run_id, track='k')` | Recorded rows, oldest first | |
-| `metric_rows(run_id, metric='edges', track='k')` | Rows carrying a usable value for the metric | |
-| `collect(run_id, url, track='k')` | `(row_dict, source)`; never raises | |
-| `collect_u(run_id)` | `(row, source)` summed across the run's harnesses | |
-| `plateau_verdict(rows, window_min, min_growth, horizon_hours=None, cov=None, surface=None)` | `(verdict, detail)`, verdict one of `growing`, `plateaued`, `unknown` | |
-| `collect_surface(run_id)` | `(count, note)`; never raises | |
-| `surface_due(run_id, track, path, interval_min=None)` | `(should sample, why not)` | |
-| `surface_growth(rows, cov=None, min_samples=None)` | `(state, detail)`, state one of `growing`, `flat`, `unknown` | |
-| `surface_sample_min()` | Minutes between surface samples, read per call | |
-| `run_verdict(run_id, window_min, min_growth, tracks=TRACKS, horizon_hours=None)` | Per-track verdicts and the combined one | |
-| `accumulate(rows, metric='edges')` | `[(cum_execs or None, cum_metric)]` | |
-| `heaps_fit(points)` | The fitted curve as a dict, or `None` | |
-| `expected_new_edges(fit, extra_execs)` | Edges the fit expects from further executions | |
-| `exec_rate_per_hour(rows)` | Executions per hour, or `None` | |
-| `since_last_reset(rows)` | `(rows since the last restart, whether it restarted)` | |
-| `migrate_csv(path, fields=None)` | `(columns added, rows kept)` | `OSError`, `RuntimeError` |
-| `unhealthy_gpu_samples(window)` | `{status: count}` for samples not recording `ok` | |
-| `gpu_health(timeout=None)` | `(status, detail)` | |
-| `disk_free_mb(path=None)` | Free megabytes, or `None` | |
-| `disk_warning(free_mb=None)` | A warning line, or `''` | |
-| `campaign_finished(run_id)` | `bool` | |
-| `registered_runs(state)` | Run ids the pipeline knows about | |
-
-Exported constants: `TRACKS`, `FIELDS`, `GPU_OK`, `GPU_NOT_APPLICABLE`.
+| `completion` | The ledger identity: whether every target is exercised or accounted for |
+| `migrate-csv` | Add the columns a run's CSV header lacks and pad every existing row |
 
 ## Callers
 
 | Direction | Modules |
 |---|---|
 | Imports this module | `pipeline_ctl.py` for `_derive_run`, `campaign_ctl.py` for `measured_run_hours`, `crashlog_ctl.py` for `report_disk`, `orchestrator_ctl.py` for `cmd_preflight` |
-| This module imports | `pipeline_state.py`, `gspwn_config.py` |
+| This module imports | `pipeline_state.py`, `gspwn_config.py`, and `surface_cov.py` lazily for the surface column and the completion ledger |
 
 `crashlog_ctl` and `orchestrator_ctl` import it inside a `try`, so a broken
 import cannot stop a harvest or a resume.
@@ -132,22 +105,13 @@ suppressed by `campaign_finished`, which bounds the file's growth.
 
 ## Design notes
 
-`corpus` is a program count and `corpus_bytes` is a file size, in separate
-columns. A single combined column makes any comparison spanning a source change
-meaningless.
-
-The Track K source ladder tries the JSON endpoints, then scrapes the dashboard
-HTML, then falls back to the corpus database's size, because syz-manager's HTTP
-surface has changed across syzkaller versions. Whichever answered is written
-into every row.
-
 `_dig` handles both shapes syz-manager has used: direct mappings, and
 `{"name": ..., "value": ...}` records inside a stats list.
 
-Track U sums `fuzzer_stats` across harnesses. Each keeps its own coverage
-bitmap, so the sum is a per-run trend line for the whole track. AFL++ keeps its
-queue in the same directory it writes `fuzzer_stats` to, so counting both would
-double every AFL++ harness's corpus.
+Track U sums AFL++ `fuzzer_stats` across the run's harnesses. Each harness
+keeps its own coverage bitmap, so the sum is a per-run trend line for the whole
+track. AFL++ keeps its queue in the same directory it writes `fuzzer_stats` to,
+and counting both would double every AFL++ harness's corpus.
 
 `_ols` returns `None` on a degenerate fit. A slope of zero would read as a flat
 and fully trusted curve.
@@ -159,22 +123,18 @@ end of the run. A source that stopped reporting executions mid-run leaves the
 tail covering only the prefix, and without the guard a run whose last hours
 quadrupled its coverage reports a plateau quoting the flat prefix.
 
-The surface column is appended last in `FIELDS`, never inserted, so the column
-order of every file already on disk survives anything reading it with
-`cut -d,`. It stays out of `TEXT_FIELDS`, so `read_rows` runs it through
-`_to_int`, and an older CSV yields an empty value with no `KeyError`. A run
+The surface column stays out of `TEXT_FIELDS`, so `read_rows` runs it through
+`_to_int` and an older CSV yields an empty value with no `KeyError`. A run
 already in progress gains no surface curve from a sample, because `cmd_sample`
 appends under the header the file carries. That case warns and the run reads
-`surface_verdict=unknown`, which is the behaviour of a campaign that is never
-migrated, and it now costs nothing: `surface_due` refuses before the unpack.
+`surface_verdict=unknown`.
 
 `migrate-csv` is the path to the column for a run already in flight. The header
-rewrite is deliberately not automatic. Doing it from inside a sample would
-rewrite a file the root sampler holds, so it is an operator step with the
-sampler stopped. `migrate_csv` writes a temp file in the same directory and
-calls `os.replace`, carries the original's mode over, and compares the file's
-size before and after, so a sample landing mid-rewrite aborts the migration
-with the original untouched and drops no row.
+rewrite is not automatic, because doing it from inside a sample would rewrite a
+file the root sampler holds. `migrate_csv` writes a temp file in the same
+directory and calls `os.replace`, carries the original's mode over, and
+compares the file's size before and after, so a sample landing mid-rewrite
+aborts the migration with the original untouched and drops no row.
 
 `since_last_reset` takes only the rows. It reads the edge curve, where a drop
 means the fuzzer process restarted and its counter went back to zero. The
@@ -184,23 +144,21 @@ falling surface count therefore contributes nothing and is never attributed to
 a restart, which left the metric parameter with no caller and no way to acquire
 one.
 
-`completion_status` requires every family in `surface_cov.FAMILIES` to
-contribute at least one target. A truncated inventory yields a smaller
-denominator that a corpus can close, which would fire the completion stop over
-commands nobody counted. It yields `unknown` instead, which fails closed. No
-expected count is stored and no constant can drift: a truncated
+A truncated inventory yields a smaller denominator that a corpus can close,
+which would fire the completion stop over commands nobody counted.
+`completion_status` yields `unknown` instead, which fails closed. No expected
+count is stored and no constant can drift. A truncated
 `rm-control-inventory.json` empties `control`, a truncated ioctl inventory
-empties the three escape and UVM families, and a truncated object graph empties
-`alloc`.
+empties the three escape and UVM families, a truncated object graph empties
+`alloc`, a truncated `nvkms-command-inventory.json` empties `modeset`, and a
+truncated `drm-command-inventory.json` empties `drm`.
 
-The completion check is its own subcommand and not a fourth state on
-`plateau`'s exit map. `plateau` keeps `growing`, `plateaued` and `unknown` with
-its three exit codes, and `completion` carries `complete`, `incomplete` and
-`unknown` with its own.
+The completion check is its own subcommand. `plateau` keeps `growing`,
+`plateaued` and `unknown` with its three exit codes, and `completion` carries
+`complete`, `incomplete` and `unknown` with its own.
 
 ## See also
 
 - [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/)
 - [surface_cov.py](/gspwn/architecture/components/surface-cov/)
 - [pipeline_state.py](/gspwn/architecture/components/pipeline-state/)
-- [coverage_ctl.py reference](/gspwn/reference/cli/coverage-ctl/)

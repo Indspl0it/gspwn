@@ -28,8 +28,7 @@ flowchart TB
 
 ## The microcontrollers
 
-A GPU package contains several processors besides the SMs. Older ones are
-Falcon cores; newer designs use RISC-V.
+Older microcontrollers are Falcon cores. Newer designs use RISC-V.
 
 | Processor | Responsibility |
 | --- | --- |
@@ -54,13 +53,10 @@ from the host is signed and verified on the GPU before it executes.
 | Kernel module | The host kernel's module signing policy, where enforced | Yes. The source is published. |
 | Userspace libraries | Nothing beyond ordinary file permissions | Yes |
 
-The boundary sits between the kernel module and the GSP firmware. Code on the
-module's side is inspectable and modifiable. Code on the far side is signed and
-unpublished, and no host tool can read or alter it.
+The boundary sits between the kernel module and the GSP firmware. No host tool
+reads or alters anything on the firmware side.
 
 ## VBIOS
-
-The VBIOS holds the board's identity and its initialisation tables.
 
 | Contents | Use |
 | --- | --- |

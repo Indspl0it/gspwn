@@ -11,8 +11,7 @@ control commands are added and removed, and class privilege flags change.
 
 A mismatch produces no error anywhere else. The map parses, syzkaller runs, the
 descriptions compile, the campaign reports coverage, and the driver being
-measured is not the driver installed. This module is the only place that
-mismatch becomes visible.
+measured is not the driver installed.
 
 ## Responsibility
 
@@ -29,43 +28,29 @@ It reads every other source and writes only that one key.
 | Each disagreement carries its own remedy | Artefact-against-checkout and artefact-against-target are reported separately, because the fix differs |
 | A missing `nvidia-smi` is not an error | The subprocess failure is logged at DEBUG and the source is reported absent |
 
-## Interface
+## The verdict
 
-| Subcommand | Output |
-|---|---|
-| `check [--allow-single-source] [--no-running]` | Every available source, then agreement or a per-problem verdict with its remedy |
-| `stamp` | Records the checkout's `NVIDIA_VERSION` and short commit into the ioctl map |
-| `show` | Every source and the checkout commit, with no verdict |
+The gate compares a driver version read from four places and reports whether
+the independent readings agree. The version it takes as the checkout's own is
+`NVIDIA_VERSION` in `version.mk` of the source tree, never a running driver.
+Every inventory was derived from that source tree, and a workstation's own GPU
+says nothing about the release under test.
 
-`--src` selects the checkout and is accepted before or after the subcommand.
-
-| Function | Returns |
-|---|---|
-| `checkout_version(src)` | `NVIDIA_VERSION` from `version.mk`, or `None` |
-| `artefact_versions()` | Version per artefact file that records one, across `tools/ioctl_map.json`, `surface/*.json` and `descriptions/*.json` |
-| `running_version()` | The loaded driver from `/proc/driver/nvidia/version` or `nvidia-smi`, or `None` |
-| `declared_version()` | `driver_branch` from `config/machine.yaml`, or `None` |
-
-## Callers
-
-| Direction | Modules |
-|---|---|
-| Imports this module | Nothing at run time. The `describe` and `seeds` phases invoke it as a command, and `describe` gates on it |
-| This module imports | Nothing in `tools/`. It shells out to `git` and `nvidia-smi` |
-
-## Failure modes
-
-| Condition | Behaviour | Exit |
+| Verdict | Condition | Remedy |
 |---|---|---|
-| Groups agree | The agreement and the groups compared, by name and file count | 0 |
-| Groups disagree | Each problem with its remedy, then the regeneration commands | 3 |
-| One group, without `--allow-single-source` | Reports that nothing was compared, then the sources that could supply a second reading | 4 |
-| One group, with `--allow-single-source` | The same report, accepted | 0 |
-| No source at all | Reports which four reads came back empty. `--allow-single-source` does not cover this | 4 |
-| A partial regeneration inside the artefact group | Reported separately from the group count, and still exit 3 | 3 |
-| `version.mk` present but defines no `NVIDIA_VERSION` | Message naming the file and stating the format changed | 1 |
-| `stamp` with no checkout under `--src` | Message naming the flag to point at a checkout | 1 |
-| `git` or `nvidia-smi` absent | Logged, the source is reported absent, the run continues | unchanged |
+| Agreement | Two or more independent groups answered and agree | None |
+| Disagreement | Two or more groups answered and disagree, or a partial regeneration sits inside the artefact group | Named per problem, since the two disagreements have different remedies |
+| Nothing compared | Only one group could answer | Bring a second group up, or accept the single source deliberately |
+
+A disagreement and an unmeasured comparison exit differently, because the
+operator does different work for each. A disagreement means the artefacts model
+a release the target is not running, and the fix is to regenerate them against
+the installed release. Nothing compared means the guard measured nothing, and
+the fix is to bring a second group up. A single code for both would lose that
+distinction.
+
+A missing `git` or `nvidia-smi` is not an error. The source is reported absent,
+and the run continues on the sources that answered.
 
 ## Concurrency and durability
 
@@ -99,8 +84,7 @@ the loaded driver is the authority, and the flag is left off.
 ## Independent source groups
 
 A group is independent when its answer can differ from every other group's
-answer. Independence is a question of whether two observations can disagree,
-and not of causal isolation.
+answer.
 
 | Group | Members | Observation |
 |---|---|---|
@@ -109,45 +93,35 @@ and not of causal isolation.
 | `running driver` | `/proc/driver/nvidia/version`, or `nvidia-smi` | The release the kernel actually has loaded |
 | `config/machine.yaml driver_branch` | One field | The release provisioning intended |
 
-The artefacts are one group. `ioctl_inventory.py`, `ctrl_surface.py` and
-`object_graph.py` each read one checkout, and `generation.json` copies the
-value out of the control inventory, so all six take their `driver_version` from
-one `version.mk`. They cannot disagree with each other except through a partial
-regeneration, which `check` reports separately and still fails on.
+The artefacts are one group. Every extractor reads one checkout, and the
+generation record copies the value out of the control inventory, so all eleven
+files take their `driver_version` from one `version.mk`. They cannot disagree
+with each other except through a partial regeneration, which is reported
+separately and still fails.
 
 The checkout is a second group even when the artefacts were built from that
-same tree, because a checkout can be updated without regenerating. The guard
-exists to catch that divergence.
+same tree, because a checkout can be updated without regenerating.
 
 ```
 $ python3 tools/surface_verify.py check --no-running --src artifacts/src/open-gpu-kernel-modules
-agreement across 2 independent sources: artefacts (6 files), checkout version.mk
+agreement across 2 independent sources: artefacts (11 files), checkout version.mk
 ```
 
 With `--no-running` and no reachable checkout, the same tree reports:
 
 ```
-only the artefacts carry a version, and 6 file(s) built from one checkout are one source
+only the artefacts carry a version, and 11 file(s) built from one checkout are one source
 ```
 
-and exits 4. `--allow-single-source` accepts the artefact group as the one
-deliberate source, and it still cannot mask a disagreement.
+`--allow-single-source` accepts the artefact group as the one deliberate
+source, and it still cannot mask a disagreement.
 
-Exit 3 and exit 4 are separate codes because the operator does different work
-for each. Exit 3 means the artefacts model a release the target is not running,
-and the fix is to regenerate them against the installed release. Exit 4 means
-the guard compared nothing, and the fix is to bring a second group up. A single
-code for both would lose the distinction the printed remedy already draws. The
-value 4 was chosen because argparse exits 2 on a usage error, so a mistyped flag
-cannot be read as a verdict.
-
-`descriptions/generation.json` counts as a source because the
-description set is the artefact syzkaller consumes, so its staleness carries
-the most weight. A fresh inventory paired with descriptions generated from an
-older checkout used to pass `check` cleanly. The four `.txt` files carry the
-same version in their headers, written by the same `syzlang_gen.py` run that
-writes the generation record, so reading the record covers them without adding
-rows that always agree.
+`descriptions/generation.json` counts as a source because the description set
+is the artefact syzkaller consumes, so its staleness carries the most weight. A
+fresh inventory paired with descriptions generated from an older checkout would
+otherwise pass cleanly. The description files carry the same version in their
+headers, written by the same run that writes the generation record, so reading
+the record covers them without adding rows that always agree.
 
 ## See also
 

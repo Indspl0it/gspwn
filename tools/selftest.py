@@ -13675,13 +13675,7 @@ class TestTheRegisterCheckTellsACleftFromADeterminer(unittest.TestCase):
     right for a reproduction and wrong for the cleft pattern, because a cleft
     is routinely completed by an identifier."""
 
-    DETERMINERS = [
-        ("architecture/crash-identity.md", 183),
-        ("architecture/durability.md", 163),
-        ("architecture/loops.md", 460),
-        ("reference/cli/campaign-ctl.md", 188),
-        ("reference/cli/orchestrator-ctl.md", 118),
-    ]
+    DETERMINER = "is the one"
 
     def hits(self, text):
         directory = tempfile.mkdtemp()
@@ -13721,28 +13715,32 @@ class TestTheRegisterCheckTellsACleftFromADeterminer(unittest.TestCase):
                       "over."), [])
 
     def test_the_determiner_pages_report_no_cleft(self):
-        # Located by the phrase and not by the line number the review
-        # recorded, because these pages belong to another partition and a
-        # line number goes stale on the next edit. The count guard keeps the
-        # test from passing over a corpus that has moved away entirely.
+        # The carrying pages are found by the phrase rather than named. An
+        # earlier version listed five paths with the line the review recorded;
+        # two of those pages were later deleted and the line numbers had
+        # already moved, so the list described a corpus that no longer
+        # existed. The count guard keeps the test from passing vacuously over
+        # a corpus carrying the phrase nowhere.
         root = os.path.join(register_check.REPO_ROOT, "docs", "src",
                             "content", "docs")
         checked = 0
-        for rel, _line in self.DETERMINERS:
-            path = os.path.join(root, *rel.split("/"))
-            if not os.path.exists(path):
-                continue
-            with open(path, encoding="utf-8") as handle:
-                lines = handle.read().split("\n")
-            carrying = [i + 1 for i, text in enumerate(lines)
-                        if "is the one" in text]
-            if not carrying:
-                continue
-            hits = [h for h in register_check.check_file(path, rel)
-                    if h[0] == "cleft construction" and h[1] in carrying]
-            self.assertEqual(hits, [], rel)
-            checked += 1
-        self.assertGreaterEqual(checked, 3)
+        for directory, _sub, names in os.walk(root):
+            for name in sorted(names):
+                if not name.endswith((".md", ".mdx")):
+                    continue
+                path = os.path.join(directory, name)
+                rel = os.path.relpath(path, root).replace(os.sep, "/")
+                with open(path, encoding="utf-8") as handle:
+                    lines = handle.read().split("\n")
+                carrying = [i + 1 for i, text in enumerate(lines)
+                            if self.DETERMINER in text]
+                if not carrying:
+                    continue
+                hits = [h for h in register_check.check_file(path, rel)
+                        if h[0] == "cleft construction" and h[1] in carrying]
+                self.assertEqual(hits, [], rel)
+                checked += 1
+        self.assertGreaterEqual(checked, 1)
 
     def test_a_code_span_is_still_exempt_from_every_other_rule(self):
         directory = tempfile.mkdtemp()
@@ -14817,23 +14815,31 @@ class TestTheSyzlangWorkflow(unittest.TestCase):
 
 
 class TestTheCompileGateIsDocumented(unittest.TestCase):
-    """The gate replaces a hand-produced result, so the prompts and the exit
-    code table have to name it."""
+    """The gate replaces a hand-produced result, so the tool and the prompt
+    have to name it. The exit codes were asserted against a reference page
+    until the documentation restructure removed it; they are asserted against
+    the tool's own docstring now, which is where a reader of the codebase
+    finds them and which sits beside the implementation."""
 
     def read(self, *parts):
         with open(os.path.join(os.path.dirname(HERE), *parts),
                   encoding="utf-8") as handle:
             return handle.read()
 
-    def test_the_exit_code_table_carries_the_toolchain_code(self):
-        text = self.read("docs", "src", "content", "docs", "reference",
-                         "exit-codes.md")
-        self.assertIn("| `syzlang_gen.py` | `compile` | 3 |", text)
+    def test_the_tool_names_the_toolchain_exit_code(self):
+        # 3 is kept apart from 1 on purpose: a missing Go toolchain is an
+        # environment the gate cannot obtain, and a set that does not compile
+        # is a result.
+        self.assertIn("3 `compile` found no Go", self.read("tools",
+                                                           "syzlang_gen.py"))
 
-    def test_the_exit_code_table_carries_the_compile_failure_code(self):
-        text = self.read("docs", "src", "content", "docs", "reference",
-                         "exit-codes.md")
-        self.assertIn("| `syzlang_gen.py` | `compile` | 1 |", text)
+    def test_the_tool_names_the_compile_failure_exit_code(self):
+        self.assertIn("1 bad input or unreadable source or a set that",
+                      self.read("tools", "syzlang_gen.py"))
+
+    def test_the_describe_prompt_refuses_exit_three_as_a_pass(self):
+        self.assertIn("Exit 3 is not a pass", self.read("agents",
+                                                        "describe.md"))
 
     def test_the_describe_prompt_cites_the_command(self):
         self.assertIn("python3 tools/syzlang_gen.py compile",

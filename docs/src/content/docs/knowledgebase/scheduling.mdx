@@ -46,7 +46,7 @@ runlist.
 | --- | --- |
 | Slice length | Set per group by the driver, in microseconds |
 | Order | Round robin within a priority level |
-| Priority | Channels carry a priority; higher levels are serviced first |
+| Priority | Channels carry a priority, and higher levels are serviced first |
 | Yield | A group with no runnable work releases the remainder of its slice |
 
 Time slicing serialises contexts and partitions nothing. Two contexts sharing an
@@ -62,10 +62,9 @@ The alternatives are covered in [partitioning modes](/gspwn/knowledgebase/partit
 | Instruction | Pascal and later | Any instruction | High, because the full SM state is saved |
 
 Instruction-level preemption bounds a long-running kernel's effect on other
-contexts. The cost is the state: every resident warp's
-registers, program counter and shared memory must be written to memory and read
-back. That state runs to megabytes per SM, and it is why a preemption is
-measured in tens of microseconds.
+contexts. Every resident warp's registers, program counter and shared memory
+must be written to memory and read back. That state runs to megabytes per SM,
+and a preemption is measured in tens of microseconds.
 
 ## Context switch state
 
@@ -90,8 +89,8 @@ contexts is bounded by memory.
 | A non-replayable fault from a copy engine | The channel is faulted off with no replay |
 | Robust channel recovery | Neighbouring channels continue. The faulting context is left in an error state and every later call on it returns an error. |
 
-A context that has faulted is not recoverable. `cudaDeviceReset` destroys it and
-builds a new one; the process cannot continue with the old one.
+A context that has faulted is not recoverable. `cudaDeviceReset` destroys it
+and builds a new one.
 
 ## Multi-Process Service
 

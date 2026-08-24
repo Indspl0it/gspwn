@@ -66,8 +66,8 @@ It checks that `/sys/fs/pstore` exists on bare metal, that `kdump-tools` is
 active, that `crashkernel=` reached `/proc/cmdline`, and on EC2 that the `aws`
 CLI is present. It exits 1 listing the failures.
 
-The verification is not complete until a real panic has been captured. `READY`
-means the machinery is in place; the sysrq test proves it works.
+`READY` means the machinery is in place. The verification is not complete until
+the sysrq test has captured a real panic.
 
 ## Harvest
 
@@ -96,11 +96,11 @@ in place means the next panic has nowhere to write, and on a machine that panics
 by design that loses findings. It also means every later harvest re-copies the
 same records.
 
-Every unharvested `/var/crash` dump is taken, including all dumps written since
-the previous harvest. Several panics can land between two harvests, and taking
-only the last one silently discards the earlier crashes. Files can vanish mid-harvest, since `kdump-tools`
-may be writing at the same time, so each file is copied independently and a
-failure on one does not abandon the rest.
+Every unharvested `/var/crash` dump is taken, because several panics can land
+between two harvests and taking only the last one silently discards the
+earlier crashes. Files can vanish mid-harvest, since `kdump-tools` may be
+writing at the same time, so each file is copied independently and a failure on
+one does not abandon the rest.
 
 :::danger[harvest must run as root]
 `/sys/fs/pstore` and `/var/crash` are root-only. Run as anyone else the globs
@@ -145,8 +145,8 @@ done
 [ -e <harvest>/console-output.log ] && python3 tools/crash_parse.py --dmesg <harvest>/console-output.log
 ```
 
-`vmcore` files are too large to scan and are skipped; the dmesg or console text
-alongside them carries the signature.
+`vmcore` files are too large to scan and are skipped, and the dmesg or console
+text alongside them carries the signature.
 
 ## Reclaiming space
 
@@ -166,18 +166,13 @@ disk: harvested 1.8 GB, /var/crash 3.4 GB, 392.4 GB free
 ```
 
 Pruning is never automatic. Harvested logs are evidence, so no tool removes
-them on its own. `prune` makes reclaiming the space one command, and the
-retained count is a stated decision. It keeps the newest `--keep`
-directories by modification time, defaulting to 10, and requires root because
-the harvest directories are written by the root harvester.
+them on its own. `prune` keeps the newest `--keep` directories by modification
+time, defaulting to 10, and requires root because the harvest directories are
+written by the root harvester.
 
 `--keep 0` removes every harvest directory.
 
 ## The free-space floor
-
-Everything lands on one filesystem: kernel dumps, the corpus, the coverage CSVs
-and the agent transcript. A full disk stops the fuzzer, the sampler and every
-state write at the same moment.
 
 ```yaml
 loop:
@@ -203,6 +198,4 @@ WARN: 14.2 GB free, under loop.min_free_disk_gb (20 GB). A full disk stops the f
 
 - [Cloud runbook](/gspwn/guides/cloud-runbook/) covers the EC2 console path in
   context.
-- [Artifacts](/gspwn/reference/artifacts/) documents the harvest directory
-  layout.
-- [crashlog_ctl.py reference](/gspwn/reference/cli/crashlog-ctl/)
+- [crashlog_ctl.py reference](/gspwn/architecture/components/crashlog-ctl/)

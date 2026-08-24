@@ -13,8 +13,6 @@ sub-command.
 
 ## Two sources, reconciled
 
-Neither file holds the whole answer.
-
 | Source | Location | Holds |
 |---|---|---|
 | `enum NvKmsIoctlCommand` | `src/nvidia-modeset/interface/nvkms-api.h` | The declared command space and each ordinal |
@@ -23,26 +21,19 @@ Neither file holds the whole answer.
 A declared command with no dispatch entry leaves its array slot
 zero-initialised, `dispatch[cmd].proc` reads NULL, and `nvKmsIoctl()` rejects
 the call. The record carries `dispatched: false` for it. Reading the enum alone
-overstates the reachable surface; reading the dispatch table alone loses the
-ordinals the enum assigns.
+overstates the reachable surface, and reading the dispatch table alone loses
+the ordinals the enum assigns.
 
 Two macros populate the array. `ENTRY` takes the plain form. `ENTRY_CUSTOM_USER`
 adds a prepare and a done callback plus an extra user-state struct, and the
 record notes which of the two declared each entry.
 
-## Interface
+## Drift assertion
 
-| Flag | Effect | Default |
-|---|---|---|
-| `--src` | `open-gpu-kernel-modules` checkout to read | `artifacts/src/open-gpu-kernel-modules` |
-| `--out` | JSON inventory to write | `surface/nvkms-command-inventory.json` |
-| `--expect-declared` | Declared count to assert | 66 |
-| `--expect-dispatched` | Dispatched count to assert | 64 |
-| `-v` | Log every entry read | off |
-
-The two expectation flags turn a silent drift in the driver source into a
-failure. A driver release that adds a command fails the assertion, and the new
-count becomes a deliberate edit with the release named beside it.
+The tool asserts the counts it expects, 66 declared and 64 dispatched, and
+fails when the source disagrees. A driver release that adds a command
+therefore stops the run, and the new count becomes a deliberate edit with the
+release named beside it.
 
 ## Artefact
 
@@ -52,22 +43,22 @@ dispatched count, and the split between the two entry macros. Each record
 carries the command name, its ordinal, whether it is dispatched, and the
 handler it dispatches to.
 
-The undispatched commands are named with their ordinals, and none is dropped. A
-command declared and unreachable is a fact about the driver, and an artefact
-omitting it would read as though the enum and the table agreed.
+The undispatched commands are named with their ordinals, and none is dropped.
 
-## Callers
+## Consumers
 
-| Direction | Modules |
-|---|---|
-| Imports this module | Nothing |
-| Reads the artefact | [`refgen.py`](/gspwn/architecture/components/refgen/) renders `reference/surface/modeset-commands.md`; [`syzlang_gen.py`](/gspwn/architecture/components/syzlang-gen/) emits the `modeset` family; [`surface_cov.py`](/gspwn/architecture/components/surface-cov/) counts it in the denominator |
-| Invokes it | The `describe` sub-agent |
+Three components read the artefact.
+[`refgen.py`](/gspwn/architecture/components/refgen/) renders
+[Modeset commands](/gspwn/reference/surface/modeset-commands/) from it,
+[`syzlang_gen.py`](/gspwn/architecture/components/syzlang-gen/) emits the
+`modeset` description family, and
+[`surface_cov.py`](/gspwn/architecture/components/surface-cov/) counts its 64
+dispatched commands in the 852-target denominator.
 
 ## Limits
 
-The inventory names the command space. It does not model the parameter struct
-behind each command, which `syzlang_gen.py` derives separately.
+The inventory does not model the parameter struct behind each command, which
+`syzlang_gen.py` derives separately.
 
 `ARRAY_LEN(dispatch)` bounds the index space before the lookup, so a declared
 ordinal outside that bound is rejected by the driver ahead of the NULL check.

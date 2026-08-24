@@ -54,9 +54,9 @@ flowchart TB
 | `mig-manager` | DaemonSet | Applies a named MIG layout from a node label and restarts the device plugin |
 | GPU Operator | Deployment | Installs and reconciles all of the above from one custom resource |
 
-The operator exists because the ordering matters. The driver has to be loaded
-before the toolkit is configured, the toolkit before the device plugin can
-report anything usable, and a driver upgrade has to drain GPU pods first.
+The operator applies an ordering. The driver is loaded before the toolkit is
+configured, the toolkit before the device plugin can report anything usable,
+and a driver upgrade drains GPU pods first.
 
 ## The device plugin protocol
 

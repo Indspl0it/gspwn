@@ -16,15 +16,15 @@ flowchart TB
   IOCTL["ioctl NV_ESC_RM_CONTROL 0x2A<br/>NVOS54_PARAMETERS: hClient, hObject, cmd, params"]
   LOOK["Table lookup<br/>cmd matched against methodId in the<br/>target object's exported method table"]
   COOKIE["serverControl_ValidateCookie<br/>flags, access rights, allowlist"]
-  PROLOG["resControl_Prologue"]
+  PROLOG["rmresControl_Prologue<br/>tests ROUTE_TO_PHYSICAL"]
   LOCAL["Local handler<br/>pFunc compiled into nvidia.ko"]
   GSP["Physical RM<br/>on the GSP microcontroller"]
 
   IOCTL --> LOOK
   LOOK --> COOKIE
   COOKIE --> PROLOG
-  PROLOG -->|NV_OK| LOCAL
-  PROLOG -->|NV_WARN_NOTHING_TO_DO| GSP
+  PROLOG -->|"NV_OK"| LOCAL
+  PROLOG -->|"NV_RM_RPC_CONTROL,<br/>then NV_WARN_NOTHING_TO_DO"| GSP
 ```
 
 ## Measurement
@@ -40,8 +40,7 @@ move between driver branches.
 
 ## Export table entry
 
-NVOC emits one entry per exported control method. Each entry is self
-describing.
+NVOC emits one entry per exported control method.
 
 | Field | Contents |
 | --- | --- |
@@ -122,9 +121,11 @@ method. `RMCTRL_FLAGS_ALL_CLIENT_LOCK` (`0x200000`) appears on none.
 command carries `ROUTE_TO_PHYSICAL` without
 `PHYSICAL_IMPLEMENTED_ON_VGPU_GUEST`. 753 commands carry
 `ROUTE_TO_PHYSICAL`, and 679 of them have no handler in this tree. For those,
-`resControl_Prologue` returns `NV_WARN_NOTHING_TO_DO` and the parameter
-buffer is serialised across the RPC queue to the GSP, where the
-implementation lives in signed firmware.
+`rmresControl_Prologue_IMPL` in
+`src/nvidia/src/kernel/rmapi/resource.c` issues `NV_RM_RPC_CONTROL` itself and
+then returns `NV_WARN_NOTHING_TO_DO`, which tells the caller the work is
+already done and the local handler is to be skipped. The implementation lives
+in signed firmware on the GSP.
 
 | Set | Total | Handler in `nvidia.ko` | Forwarded to the GSP |
 | --- | --- | --- | --- |
@@ -145,9 +146,9 @@ and none of them replaces another.
 | 516 | Whose owning class has an `RS_ENTRY` record in the object graph | `ProfilerBase` 9 and `Memory` 6, both NVOC base classes with no row |
 | 514 | With a chain an unprivileged process can build | `MmuFaultBuffer` 1 and `NvDispApi` 1, whose every external class carries `RS_FLAGS_ALLOC_PRIVILEGED` |
 
-`rm-control-rank.json` carries the same decomposition on each record. Its
-`no_chain_reason` field over the 531 reads 514 null, 15 `no RS_ENTRY row for
-this class` and 2 `every external class requires allocation privilege`.
+`rm-control-rank.json` carries the same decomposition on each record, in its
+`no_chain_reason` field, tabulated on
+[Control commands](/gspwn/reference/surface/control-commands/).
 
 Chain length is the allocation cost of reaching a command, and it concentrates
 hard.
@@ -165,6 +166,11 @@ Every figure here is arithmetic over the `RS_ENTRY` table. No chain has been
 allocated against a GPU, and chip gating decides at run time which classes an
 installed part carries, so a chain the table permits is not yet a chain a part
 accepts.
+
+Control is the largest of the seven ioctl families a tenant can reach. Its 531
+targetable commands sit in a denominator of 852, beside escape 32, uvm 39,
+uvm_tools 7, alloc 155, modeset 64 and drm 24. The 841 exported control
+commands outside that 531 are the unmodelled remainder of this one family.
 
 ## Owning classes
 
@@ -240,12 +246,14 @@ pointer and the caller supplies no parameter buffer at all.
 ## Non-privileged commands with kernel-side implementations
 
 531 commands are non-privileged and carry a handler compiled into `nvidia.ko`.
-`tools/ctrl_rank.py` ranks all 531 and writes
-`surface/rm-control-rank.json`, which is the ordering
-`syzlang_gen.py --max-control N` truncates and the ordering a chain-shaped seed
-program lays its commands out in.
+`tools/ctrl_rank.py` ranks all 531 and writes `surface/rm-control-rank.json`,
+the artefact behind
+[Control commands](/gspwn/reference/surface/control-commands/). The ordering is
+consumed as a prefix: the number of commands modelled is configurable, and a
+lower setting keeps the head of the ranking and drops the tail. The ordering
+therefore decides which commands are reached at all when the full 531 are not.
 
-Three measurements separate the commands, and each is already on disk.
+Three measurements separate the commands.
 
 | Component | Weight | Source | Normalisation |
 | --- | --- | --- | --- |
@@ -261,23 +269,11 @@ has one whatever their other components say. Ties break on `chain_length`, then
 `cve_releases` descending, then command number, so the ordering is stable
 across runs and across hosts.
 
-The head of the ordering reads as follows in the committed artefact.
-
-| Rank | Command | Class | Handler | Chain | `paramSize` | Score |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | `0x00000b04` | `RmClientResource` | `cliresCtrlCmdGpuAcctGetAccountingPids` | 1 | 16012 | 0.884923 |
-| 2 | `0x0000012b` | `RmClientResource` | `cliresCtrlCmdSystemGetP2pCapsV2` | 1 | 8348 | 0.874370 |
-| 3 | `0x00000288` | `RmClientResource` | `cliresCtrlCmdGpuGetActiveDeviceIds` | 1 | 3076 | 0.858196 |
-| 4 | `0x00000a04` | `RmClientResource` | `cliresCtrlCmdSyncGpuBoostGroupInfo` | 1 | 2244 | 0.853088 |
-| 5 | `0x00003d0b` | `RmClientResource` | `cliresCtrlCmdOsUnixExportObjectsToFd` | 1 | 2128 | 0.852228 |
-| 6 | `0x0000013a` | `RmClientResource` | `cliresCtrlCmdSystemGetP2pCapsMatrix` | 1 | 1352 | 0.844883 |
-| 7 | `0x00000133` | `RmClientResource` | `cliresCtrlCmdSystemGetVgxSystemInfo` | 1 | 1288 | 0.844098 |
-| 8 | `0x0000013e` | `RmClientResource` | `cliresCtrlCmdSystemGetBuildVersionV2` | 1 | 1032 | 0.840511 |
-
-The head is entirely `RmClientResource` because `depth` outweighs the other
-two components and a client-level command costs one allocation. The tail is the
-17 with no chain, and the last three records are `Memory`, `MmuFaultBuffer` and
-`ProfilerBase`.
+[Control commands](/gspwn/reference/surface/control-commands/) lists all 531 in
+rank order with their components. The head is entirely `RmClientResource`
+because `depth` outweighs the other two components and a client-level command
+costs one allocation. The tail is the 17 with no chain, and the last three
+records are `Memory`, `MmuFaultBuffer` and `ProfilerBase`.
 
 | Reading over the 531 records | Count |
 | --- | --- |

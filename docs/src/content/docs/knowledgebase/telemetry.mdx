@@ -3,11 +3,11 @@ title: Telemetry
 description: "Where GPU counters originate, what the utilisation figure actually measures, the throttle reasons, Xid and ECC reporting, and one low-throughput device diagnosed from counters alone."
 ---
 
-GPU counters originate in hardware registers and reach every consumer through
-one interface. The Resource Manager reads the registers, NVML exposes them, and
-`nvidia-smi`, DCGM and the Prometheus exporters are clients of NVML. CUPTI
-reaches the performance monitors on a separate path and requires privileges
-NVML does not.
+GPU counters originate in hardware registers.
+The Resource Manager reads the registers, NVML exposes them, and `nvidia-smi`
+and DCGM are clients of NVML. The Prometheus exporters read DCGM, not NVML.
+CUPTI reaches the performance monitors on a separate path and requires
+privileges NVML does not.
 
 ```mermaid
 flowchart LR
@@ -66,7 +66,7 @@ saturating the part. DCGM reports the occupancy directly, through
 
 A GPU reporting high utilisation and low throughput with a power cap throttle
 active is power limited. The same GPU with a thermal slowdown active is a
-cooling problem. The two are read from one field.
+cooling problem.
 
 ## Xid
 
@@ -144,12 +144,12 @@ An inference service reports a third of its expected throughput. The GPU shows
 4. `dcgmi dmon -e 1002,1004` reports SM activity at 12% and tensor pipe activity
    near zero. Most of the device is idle even though a kernel is always
    resident.
-5. Those two facts together identify the shape of the problem: small kernels
-   launched back to back, each occupying a fraction of the device, keeping
-   `utilization.gpu` pinned at 99% while the SMs are mostly empty.
+5. The workload is small kernels launched back to back, each occupying a
+   fraction of the device, so `utilization.gpu` stays at 99% while the SMs are
+   mostly empty.
 6. `nvidia-smi pmon -i 0` shows one process, so the device is not being shared.
 7. The power cap and the low SM activity have separate causes. Raising the
-   power limit recovers clock headroom; the throughput ceiling requires larger
+   power limit recovers clock headroom. The throughput ceiling requires larger
    batches or concurrent streams to fill the SMs.
 
 Steps 1 through 3 use `nvidia-smi` alone and identify the power cap. Step 4

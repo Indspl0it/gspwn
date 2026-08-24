@@ -1538,14 +1538,13 @@ def page_index(docs, rows):
         "`%s` regenerates all %d pages into a temporary directory and "
         "compares them against the committed copies, naming the page and the "
         "first differing line when they disagree. It runs in the same offline "
-        "CI job as the other seven artefact checks, so an artefact "
+        "CI job as the other nine artefact checks, so an artefact "
         "regenerated against a new driver release without regenerating these "
         "pages fails the build." % (CHECK, len(BUILDERS) + 1),
         "",
         "## See also",
         "",
         "- [Attack surface](/gspwn/architecture/attack-surface/)",
-        "- [Artifacts](/gspwn/reference/artifacts/)",
         "- [`surface_cov.py`](/gspwn/architecture/components/surface-cov/)",
     ]
     return "\n".join(parts).rstrip() + "\n"

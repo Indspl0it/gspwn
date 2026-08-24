@@ -5,8 +5,7 @@ sidebar:
   order: 1
 ---
 
-Every term below carries the meaning given here throughout the documentation.
-The [glossary](/gspwn/reference/glossary/) repeats the same definitions.
+The glossary repeats these definitions.
 
 ## Terms
 
@@ -52,7 +51,7 @@ paths.
 Gate evidence is checked against files on disk. A sub-agent's assertion does
 not satisfy a gate. A phase whose evidence cannot be confirmed is marked
 `blocked`, and the pipeline stops there.
-[Sub-agents](/gspwn/reference/sub-agents/) lists the gate for every phase.
+[Sub-agents](/gspwn/architecture/sub-agents/) lists the gate for every phase.
 
 ## Rounds and campaigns
 
@@ -60,7 +59,7 @@ A round inherits two things from its predecessor: the corpus and the worklist.
 A round contains at least one campaign. A round with a Track K campaign and a
 Track U campaign contains two.
 
-A campaign survives the kernel panics the pipeline expects. The systemd units
+A campaign survives the kernel panics the pipeline expects: the systemd units
 restart after the reboot, and the deadline is a file on disk.
 
 The run id names the campaign directory (`artifacts/runs/<run-id>/`), its

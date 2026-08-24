@@ -9,8 +9,7 @@ and keeps corpus-advancing inputs. gspwn does not modify it, and exposes no
 mutator plugin API.
 
 The outer loop supplies what the fuzzer cannot produce for itself: models for
-ioctls it has no description for, and valid object-chain seeds. Every extension
-point below serves one of those two.
+ioctls it has no description for, and valid object-chain seeds.
 
 | Extension point | Cost | Files touched |
 |---|---|---|
@@ -22,8 +21,8 @@ point below serves one of those two.
 
 ## 1. A syzlang description
 
-Fuzzing quality is decided in the `describe` phase. Every coverage number and
-every crash is downstream of the grammar.
+Fuzzing quality is decided in the `describe` phase. See
+[Scope and oracle](/gspwn/architecture/scope-and-oracle/).
 
 | Aspect | Requirement |
 |---|---|
@@ -33,9 +32,9 @@ every crash is downstream of the grammar.
 | Chain handles | With syzkaller resources, so generated programs build valid object trees |
 | Gate | A smoke run whose dmesg shows programs reaching the driver, plus an audit of five sampled descriptions against source |
 
-A description that compiles and never reaches the driver is a failure. The
-symptom is one device node early-outing uniformly in the smoke run, and the
-usual cause is missing resource chaining.
+A description that compiles and never reaches the driver shows one device node
+early-outing uniformly in the smoke run, and the usual cause is missing
+resource chaining.
 
 Adding a description for a device node the threat model excludes is a scope
 change, recorded in [Threat model](/gspwn/architecture/threat-model/) first.
@@ -51,9 +50,9 @@ change, recorded in [Threat model](/gspwn/architecture/threat-model/) first.
 | Registered in | `track_u.targets` in `config/campaign.yaml`, and `harnesses/run_all.sh` |
 | Replay command | Recorded in `harnesses/TARGETS.md` with `{input}` where the path goes |
 
-The replay command is required. Without it a Track U crash from that harness
-cannot be scored for reproduction rate, and the `poc` phase blocks the crash on
-the `harness` phase. No invocation is guessed.
+Without a replay command a Track U crash from that harness cannot be scored for
+reproduction rate, and the `poc` phase blocks the crash on the `harness` phase.
+No invocation is guessed.
 
 ```
 ./build/parse_cfg {input}
@@ -153,31 +152,24 @@ looks like for that phase, and repeats the public-repository constraint. See
 
 ## Verification after a change
 
-```
-python3 tools/selftest.py
-python3 -m pyflakes tools/*.py
-bash -n tools/build_kernel.sh
-python3 tools/gspwn_config.py
-python3 tools/regression_check.py all
-```
+Five checks run against a change, and CI runs all five.
 
-| Command | Checks |
+| Check | Failure it catches |
 |---|---|
-| `selftest.py` | The tool behaviour `AGENTS.md` requires before the tools are trusted |
-| `pyflakes` | Undefined names and unused imports across every tool |
-| `bash -n` | Syntax of the build script, which runs unattended for hours |
-| `gspwn_config.py` | The effective configuration, defaults merged and fully validated |
-| `regression_check.py` | The committed surface artefacts still agree with each other, and the five generated pages still follow from them |
+| The self-test suite | The tool behaviour `AGENTS.md` requires before the tools are trusted |
+| A static analysis pass over every tool | Undefined names and unused imports |
+| A syntax check of the build script | A script that runs unattended for hours failing at hour three |
+| A configuration load | The effective configuration, defaults merged and fully validated |
+| The regression check | The committed surface artefacts no longer agreeing with each other |
 
-CI runs all five commands above, plus the writing-register check and a check
-that every command example in the prose files matches the tools' real `--help`
-output. `regression_check.py all` is itself eight subcommands: `names`, `pins`,
-`coverage`, `derived`, `pages`, `stale`, `harnesses` and `agents`.
-`regression_check.py` fails on a surface artefact edited by hand without a
-corresponding edit to the tool that writes it.
+`regression_check.py all` is itself ten checks: `names`, `pins`, `coverage`,
+`derived`, `families`, `pages`, `stale`, `harnesses`, `agents` and `figures`.
+`figures` asserts every published surface figure against the committed
+artefacts, so a denominator that moves in the inventories fails the build until
+every figure derived from it moves with it. `regression_check.py` also fails on
+a surface artefact edited by hand without a corresponding edit to the tool that
+writes it.
 
 ## See also
 
 - [Components](/gspwn/architecture/components/)
-- [Development](/gspwn/project/development/)
-- [Contributing](/gspwn/project/contributing/)
