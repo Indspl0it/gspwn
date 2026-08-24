@@ -1,6 +1,6 @@
 ---
 title: regression_check.py
-description: Nine CI checks that compare committed artefacts which have to agree, and the defect class each one closes.
+description: Ten CI checks that compare committed artefacts which have to agree, and the defect class each one closes.
 ---
 
 Compares the committed surface artefacts against each other, and the generated
@@ -14,7 +14,7 @@ offline self-test.
 
 ## Responsibility
 
-The module owns the nine comparisons and their exit codes. It writes nothing.
+The module owns the ten comparisons and their exit codes. It writes nothing.
 
 | Invariant | Enforced by |
 |---|---|
@@ -60,10 +60,11 @@ The module owns the nine comparisons and their exit codes. It writes nothing.
 | `stale` | The recorded checkout, then one row per recorded input with its path, record count and state, then each input whose file is absent or hashes to another digest, with both digests. A digest that moved on line endings alone is separated from one that moved on content, and carries its own remedy |
 | `harnesses` | The per-target table across the four sources, the declared exclusions and their reasons, then each target a source does not carry, naming that source and the ones that do |
 | `agents` | The per-brief command and exit-code counts, the declared exclusions and their reasons, then each command line that does not resolve, with the file, the line and what the tool declares instead |
-| `all` | The nine in `CHECK_ORDER`, each under its own header, reporting the worst verdict |
+| `figures` | The measured denominator, family count, exclusion total and group count, the retired denominators and the number of prose files read, then a table of every offending figure with its file, line and rule, then each one quoted in place |
+| `all` | The ten in `CHECK_ORDER`, each under its own header, reporting the worst verdict |
 
 `CHECK_ORDER` is `names`, `pins`, `coverage`, `derived`, `families`, `pages`,
-`stale`, `harnesses`, `agents`, which is the order the module docstring lists
+`stale`, `harnesses`, `agents`, `figures`, which is the order the module docstring lists
 and the order the CI steps carry. A check
 registered in `CHECKS` and absent from `CHECK_ORDER` runs last.
 
@@ -100,7 +101,7 @@ of the subcommand: `regression_check.py -v derived` and
 
 | Direction | Modules |
 |---|---|
-| Imports this module | `tools/selftest.py`. `.github/workflows/selftest.yml` invokes it as nine steps, at `:50`, `:58`, `:65`, `:74`, `:85`, `:95`, `:104`, `:112` and `:121` |
+| Imports this module | `tools/selftest.py`. `.github/workflows/selftest.yml` invokes it as ten steps |
 | This module imports | `tools/surface_cov.py`, for `load_targets`, `scan_variants`, `CONTROL_PREFIX` and the artefact paths. `tools/refgen.py`, for `render` and `write`, which `pages` regenerates through. `tools/gspwn_config.py`, for `load`, which `harnesses` reads `track_u.targets` through. `tools/value_families.py`, for `accepted_families`, `load_json` and `SourceError`, which `families` imports inside the check. Every tool a phase brief names, which `agents` imports one at a time inside the check |
 
 `surface_cov.py`, `refgen.py` and `gspwn_config.py` are the whole set of
@@ -333,11 +334,33 @@ known absence.
 | `go_cudacompat_elf` | `go test -fuzz` writes no `fuzzer_stats`, so it produces no coverage output for the sampler to read. `config/campaign.yaml` records the same reason against `track_u.targets` |
 
 
-The nine checks read committed artefacts. `coverage` cannot compute a
+The ten checks read committed artefacts. `coverage` cannot compute a
 denominator without the four inventories under `surface/`, and it cannot
 compute a numerator without the description set, so a checkout missing
 either measures 0 of 852 and fails on every run. See
 [Artifacts](/gspwn/reference/artifacts/) for the committed set.
+
+## Figure rules
+
+`figures` applies three rules to the prose, in order of precision. Each names
+the artefact that settles the figure, so a report carries the value the prose
+should have stated.
+
+| Rule | Condition | Settled by |
+|---|---|---|
+| `superseded` | A denominator this repository has retired, stated as a current one | `pipeline_state.DENOMINATOR_VERSIONS`, read with `ast` because `pipeline_state` needs `fcntl` |
+| `bound` | A figure the surrounding words bind to a quantity, such as the commands outside the denominator or the number of exclusion groups | The inventories, through `surface_cov.load_targets` |
+| `enumeration` | A family list, checked by its own sum | The per-family counts, which move when a family is added |
+
+The `enumeration` rule catches a family added to the surface and left out of a
+brief. Every figure in the list is right and the list is still wrong, so no
+per-figure comparison finds it. The sum moves, and the report names the family
+the list omits.
+
+A figure inside a code span or a fenced block is a reproduction of what a tool
+printed, and is read as immutable for the reason `register_check.py` gives.
+Prose wraps at 80 columns, so the lines are joined before matching and the
+offset is mapped back to a line for the report.
 
 ## Current readings
 
@@ -345,14 +368,16 @@ Against the committed artefacts at driver 610.57.04.
 
 | Check | Reading |
 |---|---|
-| `names` | 78 map entries over 78 distinct names, 909 declared calls, OK |
-| `pins` | 836 selector fields across 909 calls, control 531, alloc 207, xfer 31, modeset 64, outside every group 3. 531 control `cmd` values checked against the inventory over 521 distinct values and 64 modeset `cmd` values over 64, 0 the inventory does not carry. 2 calls whose `arg` resolves to no declared struct, 0 of them inside a reported group. OK, 4 unpinned by design |
-| `coverage` | 852 targetable, 852 modelled, 81 declared variants outside the denominator, denominator floor 852 across 7 families, OK |
+| `names` | 78 map entries over 78 distinct names, 933 declared calls, OK |
+| `pins` | 860 selector fields across 933 calls, control 531, alloc 207, xfer 31, modeset 64, drm 24, outside every group 3. 531 control `cmd` values checked against the inventory over 521 distinct values, 64 modeset `cmd` values over 64 and 24 drm requests over 24, 0 the inventory does not carry. 2 calls whose `arg` resolves to no declared struct, 0 of them inside a reported group. OK, 4 unpinned by design |
+| `coverage` | 852 targetable, 852 modelled, 81 declared variants outside the denominator, denominator floor 852 across 7 families, 24 entry points on the 6 modelled nodes of the 42 the driver registers, 10 entry-point calls required and 10 declared, OK |
 | `derived` | 531 targetable control commands. `rm-chains.json` 98 records implying 598 names and accounting for 531, `rm-control-rank.json` 531 records implying 531 and accounting for 531, 0 undeclared, 0 mismatched and 0 internal, OK |
-| `pages` | 6 generated pages. `allocation-classes.md` 253 records at 38706 bytes, `control-commands.md` 531 at 105433, `driver-cves.md` 61 at 59176, `escapes.md` 37 at 9350, `index.md` 5 at 8131, `modeset-commands.md` 66 at 14198, each equal to the committed copy, OK |
-| `stale` | 6 recorded inputs, 6 matching, driver 610.57.04 at commit `e4a5faa`, OK |
+| `families` | 72 derived families, 53 accepted by the audit, 53 bound to a field, 0 collisions and 0 accepted and unbound, OK |
+| `pages` | 7 generated pages. `allocation-classes.md` 253 records at 38706 bytes, `control-commands.md` 531 at 105433, `driver-cves.md` 61 at 59176, `drm-commands.md` 28 at 8854, `escapes.md` 37 at 9350, `index.md` 6 at 7921, `modeset-commands.md` 66 at 14198, each equal to the committed copy, OK |
+| `stale` | 9 recorded inputs, 9 matching, driver 610.57.04 at commit `e4a5faa`, OK |
 | `harnesses` | 6 targets across 4 sources, 2 declared exclusions, OK |
-| `agents` | 12 briefs, 179 command lines and 25 stated exit codes over 22 tools, 2 declared exclusions, OK |
+| `agents` | 12 briefs, 183 command lines and 26 stated exit codes over 23 tools, 2 declared exclusions, OK |
+| `figures` | 80 prose files read, denominator 852 over 7 families, 351 excluded over 6 groups, retired denominators 764 and 828, OK |
 
 The two calls whose `arg` resolves to no declared struct are
 `UVM_DEINITIALIZE`, which declares no pointer, and `NV_ESC_ATTACH_GPUS_TO_FD`,
@@ -363,7 +388,7 @@ records the same 521 against 531.
 
 ## Stated limits
 
-None of the nine checks says whether a pinned selector reaches the handler it
+None of the ten checks says whether a pinned selector reaches the handler it
 names. That is settled by a call on the target.
 
 `families` reads the audit's verdict and never the reasoning behind it. A
