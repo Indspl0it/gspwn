@@ -62,6 +62,33 @@ DEFAULT_IMAGE = os.getenv("GSPWN_VERIFY_IMAGE", "ubuntu:22.04")
 
 DEFAULT_RUNTIME = os.getenv("GSPWN_VERIFY_RUNTIME", "docker")
 
+# How the container is given the GPU. The two ways reach different injection
+# code and hand the container different device nodes, so a measurement that
+# does not record which one it used states nothing.
+#
+# `--runtime=nvidia` runs the nvidia-container-runtime binary, whose default
+# mode is jit-cdi from toolkit 1.18.0 onward
+# (internal/runtime/runtime_factory.go:111, internal/info/auto.go:89). ECS and
+# EKS both wire their GPU containers this way, so it is the production path.
+#
+# `--gpus all` on Docker Engine 29.1.x and older injects the
+# nvidia-container-runtime-hook prestart hook, and the hook pins its own
+# default to legacy (cmd/nvidia-container-runtime-hook/hook_config.go:120-123).
+# The legacy path withholds /dev/nvidia-modeset without the display capability
+# and withholds /dev/dri without display or graphics. Docker 29.2.0 and later
+# reads /var/run/cdi/nvidia.yaml and lands on the CDI device set again.
+#
+# Measuring only `--gpus all` on an older Docker therefore reports a device
+# set the campaign's own deployment will not see.
+VIA_RUNTIME = "runtime"
+VIA_GPUS = "gpus"
+VIA_CHOICES = (VIA_RUNTIME, VIA_GPUS, "both")
+DEFAULT_VIA = os.getenv("GSPWN_VERIFY_VIA", VIA_RUNTIME)
+
+# Docker Engine version at which `--gpus` stops using the hook and starts
+# reading a CDI specification.
+DOCKER_CDI_BOUNDARY = (29, 2, 0)
+
 # How long to wait for the container to start and list a directory. A pull on
 # a cold instance is slower than the listing, and is timed separately.
 RUN_TIMEOUT_SECONDS = int(os.getenv("GSPWN_VERIFY_RUN_TIMEOUT", "120"))
@@ -202,12 +229,44 @@ def detect_runtime_mode():
                   "yet")
 
 
-def measure_nodes(runtime, image, capabilities, pull):
+def docker_version(runtime):
+    """-> ((major, minor, patch), raw) for the server, or (None, reason)."""
+    code, out, err = run([runtime, "version", "--format",
+                          "{{.Server.Version}}"], RUN_TIMEOUT_SECONDS,
+                         "version query")
+    if code != 0:
+        return None, (err or out).strip()[:200]
+    raw = out.strip()
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)", raw)
+    if not match:
+        return None, raw
+    return tuple(int(g) for g in match.groups()), raw
+
+
+def gpus_flag_path(version):
+    """-> what `--gpus` reaches on this Docker, as a sentence."""
+    if version is None:
+        return ("the Docker version could not be read, so what `--gpus` "
+                "reaches is unknown")
+    if version >= DOCKER_CDI_BOUNDARY:
+        return ("Docker %s reads a CDI specification for `--gpus`, so it "
+                "reaches the same device set as --runtime=nvidia"
+                % ".".join(str(p) for p in version))
+    return ("Docker %s injects the prestart hook for `--gpus`, and the hook "
+            "defaults to legacy, which withholds /dev/nvidia-modeset and "
+            "/dev/dri" % ".".join(str(p) for p in version))
+
+
+def measure_nodes(runtime, image, capabilities, pull, via):
     """-> the NVIDIA device node paths visible inside a container.
 
     The listing comes from inside the container. A runtime's own report of
-    what it injected is a second-hand account, and the measurement this tool
-    exists to take is what a tenant process can open.
+    what it injected is a second-hand account, and this tool exists to
+    measure what a tenant process can open.
+
+    `via` selects how the GPU is given to the container. The two ways reach
+    different injection code, so the caller records which one produced a
+    reading.
     """
     which_runtime(runtime)
     if pull:
@@ -220,9 +279,13 @@ def measure_nodes(runtime, image, capabilities, pull):
         "for d in /dev /dev/dri /dev/nvidia-caps /dev/nvidia-caps-imex-channels; do "
         "  [ -d \"$d\" ] && for f in \"$d\"/*; do [ -e \"$f\" ] && echo \"$f\"; done; "
         "done")
-    argv = [runtime, "run", "--rm", "--gpus", "all",
-            "-e", "NVIDIA_DRIVER_CAPABILITIES=" + capabilities,
-            image, "sh", "-c", script]
+    if via == VIA_RUNTIME:
+        gpu_args = ["--runtime=nvidia", "-e", "NVIDIA_VISIBLE_DEVICES=all"]
+    else:
+        gpu_args = ["--gpus", "all"]
+    argv = ([runtime, "run", "--rm"] + gpu_args +
+            ["-e", "NVIDIA_DRIVER_CAPABILITIES=" + capabilities,
+             image, "sh", "-c", script])
     code, out, err = run(argv, RUN_TIMEOUT_SECONDS, "container run")
     if code != 0:
         raise VerifyError(
@@ -302,51 +365,72 @@ def cmd_runtime_mode(args):
     return 0
 
 
-def cmd_measure(args):
-    tables = load_tables(args.root)
-    inside, outside = expected_surface(tables)
-    mode, evidence = detect_runtime_mode()
-    measured = measure_nodes(args.runtime, args.image, args.capabilities,
-                             args.pull)
+def report_one(via, measured, inside, outside):
+    """Print one path's reading. -> that path's exit contribution."""
     unmodelled, unreachable, matched = compare(measured, inside, outside)
-
-    print("measured on this host")
-    print()
-    print("  runtime       %s" % args.runtime)
-    print("  image         %s" % args.image)
-    print("  capabilities  NVIDIA_DRIVER_CAPABILITIES=%s" % args.capabilities)
-    print("  injection     %s" % (mode or "not stated"))
-    print("  evidence      %s" % evidence)
-    print()
-    print("  nodes the container received: %d" % len(measured))
+    label = ("--runtime=nvidia" if via == VIA_RUNTIME else "--gpus all")
+    print("  path measured: %s" % label)
+    print("  nodes received: %d" % len(measured))
     for node in measured:
         print("    %s" % node)
     print()
     if matched:
-        print("  agreeing with the artefact: %d" % len(matched))
-        for line in matched:
-            print("    %s" % line)
-        print()
+        print("    agreeing with the artefact: %d" % len(matched))
     if unmodelled:
-        print("  REACHABLE AND NOT MODELLED: %d" % len(unmodelled))
+        print("    REACHABLE AND NOT MODELLED: %d" % len(unmodelled))
         for line in unmodelled:
-            print("    %s" % line)
+            print("      %s" % line)
         print()
-        print("  The threat model understates the attacker. Every node above "
-              "is one a tenant can open and the campaign does not model.")
-        print()
+        print("    The threat model understates the attacker. Every node "
+              "above is one a tenant can open and the campaign does not "
+              "model.")
     if unreachable:
-        print("  MODELLED AND NOT REACHABLE: %d" % len(unreachable))
+        print("    MODELLED AND NOT REACHABLE: %d" % len(unreachable))
         for line in unreachable:
-            print("    %s" % line)
+            print("      %s" % line)
         print()
-        print("  Campaign effort is budgeted for surface this tenant cannot "
-              "reach.")
-        print()
+        print("    Campaign effort is budgeted for surface this tenant "
+              "cannot reach.")
     if not unmodelled and not unreachable:
-        print("  The measured node set matches the recorded tenant surface.")
-        return 0
-    return 1
+        print("    The measured node set matches the recorded tenant "
+              "surface.")
+    print()
+    return 1 if (unmodelled or unreachable) else 0
+
+
+def cmd_measure(args):
+    tables = load_tables(args.root)
+    inside, outside = expected_surface(tables)
+    mode, evidence = detect_runtime_mode()
+    which_runtime(args.runtime)
+    version, raw = docker_version(args.runtime)
+
+    print("measured on this host")
+    print()
+    print("  runtime       %s" % args.runtime)
+    print("  server        %s" % (raw or "unknown"))
+    print("  image         %s" % args.image)
+    print("  capabilities  NVIDIA_DRIVER_CAPABILITIES=%s" % args.capabilities)
+    print("  config mode   %s" % (mode or "not stated"))
+    print("  evidence      %s" % evidence)
+    print("  --gpus        %s" % gpus_flag_path(version))
+    print()
+
+    paths = ([VIA_RUNTIME, VIA_GPUS] if args.via == "both" else [args.via])
+    status = 0
+    for via in paths:
+        try:
+            measured = measure_nodes(args.runtime, args.image,
+                                     args.capabilities, args.pull, via)
+        except VerifyError as exc:
+            print("  path measured: %s" % via)
+            print("    the measurement could not be taken: %s" % exc)
+            print()
+            status = 2
+            continue
+        status = max(status, report_one(via, measured, inside, outside))
+        args.pull = False
+    return status
 
 
 def build_parser():
@@ -381,6 +465,14 @@ def build_parser():
     p.add_argument("--capabilities", default=DEFAULT_CAPABILITIES,
                    help="NVIDIA_DRIVER_CAPABILITIES value the container "
                         "requests (default: %(default)s)")
+    p.add_argument("--via", default=DEFAULT_VIA, choices=VIA_CHOICES,
+                   help="how the container is given the GPU. `runtime` uses "
+                        "--runtime=nvidia, which ECS and EKS both use and "
+                        "which resolves to jit-cdi. `gpus` uses --gpus all, "
+                        "which on Docker before 29.2.0 injects the hook and "
+                        "resolves to legacy, withholding the modeset and DRM "
+                        "nodes. `both` measures each and reports them apart "
+                        "(default: %(default)s)")
     p.add_argument("--no-pull", dest="pull", action="store_false",
                    default=True,
                    help="skip pulling the image, for a host already holding "
