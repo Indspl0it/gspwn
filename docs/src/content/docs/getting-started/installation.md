@@ -168,10 +168,22 @@ versions from there.
 
 ## 7. Install the Go toolchain
 
-syzkaller is written in Go and its build runs on the host. The pinned revision
-declares `go 1.26.0` in `go.mod`, and no distribution package meets that floor,
-because Ubuntu 24.04 ships Go 1.22. The toolchain comes from the upstream
-tarball, following syzkaller's own setup documentation.
+syzkaller is written in Go and its build runs on the host. Nothing earlier on
+this page installs a toolchain.
+
+The pinned revision declares `go 1.26.0` in `go.mod`. Go 1.21 and later read
+that directive and download the named toolchain on demand, because
+`GOTOOLCHAIN` defaults to `auto`, so a distribution package at 1.21 or later
+also satisfies the build on a machine that can reach the Go module proxy.
+
+| Method | Requires | Behaviour |
+|---|---|---|
+| `sudo apt-get install -y golang-go` | Go 1.21 or later in the distribution, and access to `proxy.golang.org` | The first build downloads the 1.26 toolchain, which adds minutes to a metered instance |
+| The upstream tarball below | Nothing beyond the download | The declared version is present before the build starts |
+
+The tarball is the method used here, following syzkaller's own setup
+documentation. It keeps the toolchain download off the build's critical path
+and works on an instance with no module-proxy access.
 
 ```
 GO_VERSION=1.26.2
@@ -189,8 +201,9 @@ The `export` covers the current shell alone. Add the same line to the campaign
 user's shell profile, because the `describe` phase runs `syzlang_gen.py compile`
 in a later session and that command exits 3 when `go` is absent from `PATH`.
 
-A toolchain below the floor leaves the next step failing on the `go.mod`
-directive, and the error names the version required.
+A toolchain below 1.21 has no download mechanism and stops the next step on the
+`go.mod` directive, and the error names the version required. `GOTOOLCHAIN=local`
+produces the same stop on any version below the floor.
 
 ## 8. Build syzkaller
 
