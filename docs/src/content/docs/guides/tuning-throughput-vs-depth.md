@@ -86,7 +86,7 @@ decision the verdict authorises is another campaign of that length.
 `gspwn_config.py` prints a note when they differ:
 
 ```
-  note: horizon 48 h differs from loop.campaign_hours 24 h, so the verdict answers a different question than the one the next campaign asks
+  note: horizon 48 h differs from loop.campaign_hours 1000 h, so the verdict answers a different question than the one the next campaign asks
 ```
 
 ## Dedup depth

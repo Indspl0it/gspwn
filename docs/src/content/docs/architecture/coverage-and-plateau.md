@@ -95,7 +95,7 @@ execution rate.
 | Config key | Default | Effect |
 |---|---|---|
 | `coverage.plateau_new_edges` | 50 | Expected new edges below which the run is `plateaued` |
-| `coverage.horizon_hours` | 24 | How far ahead the extrapolation runs. Matches `loop.campaign_hours`, the unit of spend the decision authorises |
+| `coverage.horizon_hours` | 1000 | How far ahead the extrapolation runs. Matches `loop.campaign_hours`, the unit of spend the decision authorises |
 | `coverage.model_min_r2` | 0.90 | Fit quality below which no extrapolation is reported and the verdict is `unknown` |
 | `coverage.min_fit_samples` | 8 | Points needed inside the tail before extrapolating |
 | `coverage.fit_tail_fraction` | 0.5 | Fraction of the run's executions fitted. 1.0 fits everything |

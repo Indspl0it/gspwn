@@ -83,7 +83,7 @@ flowchart TB
 last permitted round records why it finished and not which limit it also
 touched. `loop.max_rounds` is 10 and is a backstop against a runaway loop: a
 campaign that reaches it has failed to converge, and its stop reason says so
-and points at the completion ledger. `loop.max_total_run_hours` at 216 is the
+and points at the completion ledger. `loop.max_total_run_hours` at 5000 is the
 spend ceiling. See
 [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/) for the
 two-curve decision table.
