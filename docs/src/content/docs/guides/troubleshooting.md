@@ -124,6 +124,23 @@ cannot end a campaign by claiming it is finished.
 | `WARN: could not measure the previous transcript` | `orchestrator.session_transcript_glob` is unset or matches nothing | Rotation falls back to the resume count, which does not track transcript growth |
 | The agent's usage is billed to the API account | `ANTHROPIC_API_KEY` is set in the unit environment | The variable takes precedence over a subscription login. Unset it for the unit. The generated unit does not set it |
 
+## The tenant surface gate
+
+`verify_tenant_surface.py measure` exits 1 when the record and the instance
+disagree, and 2 when nothing was measured. The `provision` phase blocks on
+both.
+
+| Symptom | Cause | Action |
+|---|---|---|
+| `'docker' is not on PATH` | No container runtime installed | Install `docker.io`, or pass `--runtime` with the runtime this host uses |
+| `the container did not run` and the error names an unknown runtime `nvidia` | The NVIDIA container toolkit is absent, or `nvidia-ctk runtime configure` was never run | [Installation](/gspwn/getting-started/installation/) step 5. The distribution's `docker.io` package carries no `nvidia` runtime |
+| `could not pull ubuntu:22.04` | The instance has no registry access | Pre-load the image and pass `--no-pull`, or set `GSPWN_VERIFY_IMAGE` to one already present |
+| `REACHABLE AND NOT MODELLED` | The container received a node the record places outside the tenant surface | Stop. The threat model understates the attacker, and every coverage figure would be measured against the wrong denominator. Widen the model before spending |
+| `MODELLED AND NOT REACHABLE` naming the modeset and DRM nodes | The measurement reached the legacy injection path | Check `runtime-mode`. A `legacy` verdict means this host withholds those nodes; a measurement taken with `--via gpus` on Docker 29.1.x or older reports legacy whatever the host is configured for |
+| `MODELLED AND NOT REACHABLE` naming `/dev/nvidia-nvswitch*` | Those nodes are conditional on `NVIDIA_NVSWITCH` | Expected on a host without NVSwitch. Record the condition and continue |
+| `runtime-mode` reports `not stated on this host` | No `config.toml` was found | The toolkit default applies. `measure` settles what the host actually does |
+| `surface/entry-points.json does not exist` | The artefact was never generated | `python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules --emit-entry-points surface/entry-points.json` |
+
 ## The build
 
 | Symptom | Cause | Action |
