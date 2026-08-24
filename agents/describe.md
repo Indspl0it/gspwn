@@ -246,7 +246,7 @@ coverage alone.
    and `surface/entry-points.json` records every table it defines with the
    entry points each registers. Entry points are counted beside the command
    denominator and never inside it: an `mmap` or a `poll` carries no method
-   id, no parameter struct and no inventory row, so the 828 counts commands
+   id, no parameter struct and no inventory row, so the 852 counts commands
    alone.
 
    The set also declares one pseudo-syscall, `syz_nvidia_uvm_init`. The
@@ -273,12 +273,12 @@ coverage alone.
    python3 tools/surface_cov.py gaps --stage model --top 40
    ```
 
-   `modelled` reports the share of the 828 targetable commands that have a
-   syzlang variant. The generated baseline already reaches 828 of 828, so this
+   `modelled` reports the share of the 852 targetable commands that have a
+   syzlang variant. The generated baseline already reaches 852 of 852, so this
    number is a regression check. It counts variants declared, never variants
    correct, and a lower number means a variant was lost or renamed. The
-   denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc and
-   64 modeset targets. It excludes the 236 control commands routed to GSP, the
+   denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc,
+   64 modeset and 24 drm targets. It excludes the 236 control commands routed to GSP, the
    104 uvm_test commands behind `uvm_enable_builtin_tests=1`, the 3 escapes
    declared with no dispatch case, the 2 multiplexer escapes whose leaves
    already count in the control and alloc families, and the 2 modeset commands
@@ -303,7 +303,7 @@ coverage alone.
    | after | `python3 tools/surface_cov.py gaps --stage corpus --run-id <smoke run id>` | the smoke run's own `workdir/corpus.db`, unpacked through syz-db |
 
    One smoke run answers both, and the "before" reading needs no run at all.
-   In round 1 the bank is empty, so the before reading is 828 by construction
+   In round 1 the bank is empty, so the before reading is 852 by construction
    and the delta measures the smoke run alone. The smoke run takes a run id of
    the form `r<round>-<n>` from the same namespace the fuzz phase allocates
    from, recorded with `pipeline_ctl.py round-add-run`, and the round's
@@ -518,7 +518,7 @@ Record progress with the state tool, never by editing pipeline.json:
   `docs/src/content/docs/reference/surface/` regenerated and committed with the
   artefacts.
 - The `surface_cov.py modelled` line, which is a regression check and still
-  reads 828/828.
+  reads 852/852.
 - The `NV_ESC_IOCTL_XFER_CMD` `cmd` constraint set quoted from the
   description, with `regression_check.py pins` output beside it.
 - Audit file path with the sampled verdicts and any in-handler capability

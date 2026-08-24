@@ -8298,8 +8298,13 @@
   "alloc_variants": 204,
   "control_reachable": 531,
   "control_variants": 531,
-  "entry_point_calls": 6,
-  "entry_point_structs": 3,
+  "drm_declared": 28,
+  "drm_dispatched": 24,
+  "drm_reachable_card": 24,
+  "drm_reachable_render": 21,
+  "drm_variants": 24,
+  "entry_point_calls": 10,
+  "entry_point_structs": 5,
   "escapes_emitted": 32,
   "escapes_total": 32,
   "modeset_declared": 66,
@@ -8310,13 +8315,255 @@
   "pseudo_syscalls": 1,
   "size_match": 595,
   "size_mismatch": 0,
-  "structs_emitted": 1923,
+  "structs_emitted": 1947,
   "unresolved": 0,
   "uvm_emitted": 46,
   "uvm_total": 46,
   "xfer_declined": 2,
   "xfer_variants": 31
  },
+ "drm": [
+  {
+   "command": "DRM_NVIDIA_GET_CRTC_CRC32",
+   "emitted": true,
+   "handler": "nv_drm_get_crtc_crc32_ioctl",
+   "nr": 0,
+   "param_size": 8,
+   "param_struct": "drm_nvidia_get_crtc_crc32_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GEM_IMPORT_NVKMS_MEMORY",
+   "emitted": true,
+   "handler": "nv_drm_gem_import_nvkms_memory_ioctl",
+   "nr": 1,
+   "param_size": 32,
+   "param_struct": "drm_nvidia_gem_import_nvkms_memory_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GEM_IMPORT_USERSPACE_MEMORY",
+   "emitted": true,
+   "handler": "nv_drm_gem_import_userspace_memory_ioctl",
+   "nr": 2,
+   "param_size": 24,
+   "param_struct": "drm_nvidia_gem_import_userspace_memory_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GET_DEV_INFO",
+   "emitted": true,
+   "handler": "nv_drm_get_dev_info_ioctl",
+   "nr": 3,
+   "param_size": 36,
+   "param_struct": "drm_nvidia_get_dev_info_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_FENCE_SUPPORTED",
+   "emitted": true,
+   "handler": "nv_drm_fence_supported_ioctl",
+   "nr": 4,
+   "param_size": 0,
+   "param_struct": null,
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_PRIME_FENCE_CONTEXT_CREATE",
+   "emitted": true,
+   "handler": "nv_drm_prime_fence_context_create_ioctl",
+   "nr": 5,
+   "param_size": 48,
+   "param_struct": "drm_nvidia_prime_fence_context_create_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GEM_PRIME_FENCE_ATTACH",
+   "emitted": true,
+   "handler": "nv_drm_gem_prime_fence_attach_ioctl",
+   "nr": 6,
+   "param_size": 16,
+   "param_struct": "drm_nvidia_gem_prime_fence_attach_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GET_CLIENT_CAPABILITY",
+   "emitted": true,
+   "handler": "nv_drm_get_client_capability_ioctl",
+   "nr": 8,
+   "param_size": 16,
+   "param_struct": "drm_nvidia_get_client_capability_params",
+   "render_allow": false,
+   "resource": "fd_dri_card"
+  },
+  {
+   "command": "DRM_NVIDIA_GEM_EXPORT_NVKMS_MEMORY",
+   "emitted": true,
+   "handler": "nv_drm_gem_export_nvkms_memory_ioctl",
+   "nr": 9,
+   "param_size": 24,
+   "param_struct": "drm_nvidia_gem_export_nvkms_memory_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GEM_MAP_OFFSET",
+   "emitted": true,
+   "handler": "nv_drm_gem_map_offset_ioctl",
+   "nr": 10,
+   "param_size": 16,
+   "param_struct": "drm_nvidia_gem_map_offset_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GEM_ALLOC_NVKMS_MEMORY",
+   "emitted": true,
+   "handler": "nv_drm_gem_alloc_nvkms_memory_ioctl",
+   "nr": 11,
+   "param_size": 24,
+   "param_struct": "drm_nvidia_gem_alloc_nvkms_memory_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GET_CRTC_CRC32_V2",
+   "emitted": true,
+   "handler": "nv_drm_get_crtc_crc32_v2_ioctl",
+   "nr": 12,
+   "param_size": 28,
+   "param_struct": "drm_nvidia_get_crtc_crc32_v2_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GEM_EXPORT_DMABUF_MEMORY",
+   "emitted": true,
+   "handler": "nv_drm_gem_export_dmabuf_memory_ioctl",
+   "nr": 13,
+   "param_size": 24,
+   "param_struct": "drm_nvidia_gem_export_dmabuf_memory_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GEM_IDENTIFY_OBJECT",
+   "emitted": true,
+   "handler": "nv_drm_gem_identify_object_ioctl",
+   "nr": 14,
+   "param_size": 8,
+   "param_struct": "drm_nvidia_gem_identify_object_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_DMABUF_SUPPORTED",
+   "emitted": true,
+   "handler": "nv_drm_dmabuf_supported_ioctl",
+   "nr": 15,
+   "param_size": 0,
+   "param_struct": null,
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GET_DPY_ID_FOR_CONNECTOR_ID",
+   "emitted": true,
+   "handler": "nv_drm_get_dpy_id_for_connector_id_ioctl",
+   "nr": 16,
+   "param_size": 8,
+   "param_struct": "drm_nvidia_get_dpy_id_for_connector_id_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GET_CONNECTOR_ID_FOR_DPY_ID",
+   "emitted": true,
+   "handler": "nv_drm_get_connector_id_for_dpy_id_ioctl",
+   "nr": 17,
+   "param_size": 8,
+   "param_struct": "drm_nvidia_get_connector_id_for_dpy_id_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GRANT_PERMISSIONS",
+   "emitted": true,
+   "handler": "nv_drm_grant_permission_ioctl",
+   "nr": 18,
+   "param_size": 12,
+   "param_struct": "drm_nvidia_grant_permissions_params",
+   "render_allow": false,
+   "resource": "fd_dri_card"
+  },
+  {
+   "command": "DRM_NVIDIA_REVOKE_PERMISSIONS",
+   "emitted": true,
+   "handler": "nv_drm_revoke_permission_ioctl",
+   "nr": 19,
+   "param_size": 8,
+   "param_struct": "drm_nvidia_revoke_permissions_params",
+   "render_allow": false,
+   "resource": "fd_dri_card"
+  },
+  {
+   "command": "DRM_NVIDIA_SEMSURF_FENCE_CTX_CREATE",
+   "emitted": true,
+   "handler": "nv_drm_semsurf_fence_ctx_create_ioctl",
+   "nr": 20,
+   "param_size": 32,
+   "param_struct": "drm_nvidia_semsurf_fence_ctx_create_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_SEMSURF_FENCE_CREATE",
+   "emitted": true,
+   "handler": "nv_drm_semsurf_fence_create_ioctl",
+   "nr": 21,
+   "param_size": 24,
+   "param_struct": "drm_nvidia_semsurf_fence_create_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_SEMSURF_FENCE_WAIT",
+   "emitted": true,
+   "handler": "nv_drm_semsurf_fence_wait_ioctl",
+   "nr": 22,
+   "param_size": 24,
+   "param_struct": "drm_nvidia_semsurf_fence_wait_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_SEMSURF_FENCE_ATTACH",
+   "emitted": true,
+   "handler": "nv_drm_semsurf_fence_attach_ioctl",
+   "nr": 23,
+   "param_size": 24,
+   "param_struct": "drm_nvidia_semsurf_fence_attach_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  },
+  {
+   "command": "DRM_NVIDIA_GET_DRM_FILE_UNIQUE_ID",
+   "emitted": true,
+   "handler": "nv_drm_get_drm_file_unique_id_ioctl",
+   "nr": 24,
+   "param_size": 8,
+   "param_struct": "drm_nvidia_get_drm_file_unique_id_params",
+   "render_allow": true,
+   "resource": "fd_dri"
+  }
+ ],
  "entry_points": {
   "calls": [
    {
@@ -8366,6 +8613,38 @@
     "offset_value": null,
     "operation": "poll",
     "resource": "fd_nvidia_uvm_tools"
+   },
+   {
+    "call": "mmap$dri_card",
+    "offset_authority": "kernel-open/nvidia-drm/nvidia-drm-gem.c:260",
+    "offset_pinned": false,
+    "offset_value": null,
+    "operation": "mmap",
+    "resource": "fd_dri_card"
+   },
+   {
+    "call": "mmap$dri_render",
+    "offset_authority": "kernel-open/nvidia-drm/nvidia-drm-gem.c:260",
+    "offset_pinned": false,
+    "offset_value": null,
+    "operation": "mmap",
+    "resource": "fd_dri_render"
+   },
+   {
+    "call": "poll$dri_card",
+    "offset_authority": null,
+    "offset_pinned": null,
+    "offset_value": null,
+    "operation": "poll",
+    "resource": "fd_dri_card"
+   },
+   {
+    "call": "poll$dri_render",
+    "offset_authority": null,
+    "offset_pinned": null,
+    "offset_value": null,
+    "operation": "poll",
+    "resource": "fd_dri_render"
    }
   ],
   "pseudo_syscall": {
@@ -8651,6 +8930,11 @@
   ],
   "driver_commit": "e4a5faa",
   "driver_version": "610.57.04",
+  "drm_inventory": {
+   "path": "surface/drm-command-inventory.json",
+   "records": 28,
+   "sha256": "74a740212cc2bf94adf0ce9358b5bfc422e241ebefe86d7bbafea93b8a727b1d"
+  },
   "escape_inventory": {
    "path": "surface/ioctl-inventory.json",
    "records": 4,
@@ -9254,6 +9538,7 @@
    "privileged": 67
   },
   "control": {},
+  "drm": {},
   "modeset": {}
  },
  "unresolved": [],

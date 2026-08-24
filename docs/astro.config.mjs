@@ -199,6 +199,8 @@ export default defineConfig({
                 { label: 'Control commands', slug: 'reference/surface/control-commands' },
                 { label: 'Allocation classes', slug: 'reference/surface/allocation-classes' },
                 { label: 'Driver CVEs', slug: 'reference/surface/driver-cves' },
+                { label: 'Modeset commands', slug: 'reference/surface/modeset-commands' },
+                { label: 'DRM commands', slug: 'reference/surface/drm-commands' },
               ],
             },
             { label: 'State file schema', slug: 'reference/state-file' },

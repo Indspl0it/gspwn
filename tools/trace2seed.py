@@ -72,12 +72,13 @@ OUT_OF_SCOPE = {}
 
 # Path prefixes, for a directory whose members carry a card or render-node
 # index and which no fixed key covers. Checked after the exact paths above.
-OUT_OF_SCOPE_PREFIXES = {
-    "/dev/dri/": "/dev/dri/* is outside the modelled surface. The description "
-                 "set declares no call on any of these nodes, and whether a "
-                 "default tenant receives them is an open question this tool "
-                 "does not settle.",
-}
+#
+# /dev/dri/ was the only member and moved into dev_desc when the DRM family
+# was modelled. Its two node types map to two calls, because the nodes do not
+# grant the same command set: drm_ioctl_permit refuses a render client any
+# command whose flag word omits DRM_RENDER_ALLOW, so a trace on a card node
+# and a trace on a render node convert to different programs.
+OUT_OF_SCOPE_PREFIXES = {}
 
 # Linux ioctl encoding: request = dir<<30 | size<<16 | type<<8 | nr.
 _IOC_DIR = {"_IOC_NONE": 0, "_IOC_WRITE": 1, "_IOC_READ": 2}
@@ -235,6 +236,10 @@ def dev_desc(path):
         return DEV_TO_DESC[path]
     if re.fullmatch(r"/dev/nvidia\d+", path):
         return "openat$nvidia"
+    if re.fullmatch(r"/dev/dri/card\d+", path):
+        return "openat$dri_card"
+    if re.fullmatch(r"/dev/dri/renderD\d+", path):
+        return "openat$dri_render"
     return None
 
 

@@ -97,7 +97,7 @@ Track K coverage has a measured denominator, so a reader can check it, and the
 report can equally overstate it in a way a reader can check. The claim the
 campaign supports is:
 
-> This campaign exercised N of the 828 kernel-driver commands reachable by an
+> This campaign exercised N of the 852 kernel-driver commands reachable by an
 > unprivileged `compute,utility` container tenant on driver <version>. The
 > remaining M are accounted for individually. The claim is over the driver's
 > own enumerated command surface and carries no claim about lines of driver
@@ -119,7 +119,7 @@ Four prohibitions:
 |---|---|
 | No coverage percentage without the exclusion list beside it | 347 commands sit outside the denominator, and a bare percentage reads as coverage of the driver |
 | No fraction built on the KCOV edge count | it measures an edge space of unknown size and has no denominator |
-| State `targetable` as an upper bound, citing the 16 in-handler capability checks | a tenant can call fewer than 828 |
+| State `targetable` as an upper bound, citing the 16 in-handler capability checks | a tenant can call fewer than 852 |
 | Track U carries no denominator | its coverage is described by `harnesses/TARGETS.md` and nothing else, and the Track K ratio must not read as covering both |
 
 Add a short methodology note naming the five excluded groups and why each is

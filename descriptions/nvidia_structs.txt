@@ -16319,3 +16319,166 @@ nvkms_params_unregister_vblank_intr_callback {
 	size   	const[20, int32]
 	address	ptr64[inout, NvKmsUnregisterVblankIntrCallbackParams]
 } [packed]
+
+drm_nvidia_get_crtc_crc32_params {
+	crtc_id	int32
+	crc32  	int32
+} [packed]
+
+drm_nvidia_gem_import_nvkms_memory_params {
+	mem_size         	int64
+	nvkms_params_ptr 	int64
+	nvkms_params_size	int64
+	handle           	int32
+	__pad            	int32
+} [packed]
+
+drm_nvidia_gem_import_userspace_memory_params {
+	size    	int64
+	address 	int64
+	handle  	int32
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+drm_nvidia_get_dev_info_params {
+	gpu_id              	int32
+	mig_device          	int32
+	primary_index       	int32
+	supports_alloc      	int32
+	generic_page_kind   	int32
+	page_kind_generation	int32
+	sector_layout       	int32
+	supports_sync_fd    	int32
+	supports_semsurf    	int32
+} [packed]
+
+drm_nvidia_prime_fence_context_create_params {
+	handle                      	int32
+	index                       	int32
+	size                        	int64
+	import_mem_nvkms_params_ptr 	int64
+	import_mem_nvkms_params_size	int64
+	event_nvkms_params_ptr      	int64
+	event_nvkms_params_size     	int64
+} [packed]
+
+drm_nvidia_gem_prime_fence_attach_params {
+	handle              	int32
+	fence_context_handle	int32
+	sem_thresh          	int32
+	__pad               	int32
+} [packed]
+
+drm_nvidia_get_client_capability_params {
+	capability	int64
+	value     	int64
+} [packed]
+
+drm_nvidia_gem_export_nvkms_memory_params {
+	handle           	int32
+	__pad            	int32
+	nvkms_params_ptr 	int64
+	nvkms_params_size	int64
+} [packed]
+
+drm_nvidia_gem_map_offset_params {
+	handle	int32
+	__pad 	int32
+	offset	int64
+} [packed]
+
+drm_nvidia_gem_alloc_nvkms_memory_params {
+	handle      	int32
+	block_linear	int8
+	compressible	int8
+	__pad0      	int16
+	memory_size 	int64
+	flags       	int32
+	__pad1      	int32
+} [packed]
+
+drm_nvidia_crtc_crc32 {
+	value    	int32
+	supported	int8
+	__pad0   	int8
+	__pad1   	int16
+} [packed]
+
+drm_nvidia_crtc_crc32_v2_out {
+	compositorCrc32     	drm_nvidia_crtc_crc32
+	rasterGeneratorCrc32	drm_nvidia_crtc_crc32
+	outputCrc32         	drm_nvidia_crtc_crc32
+} [packed]
+
+drm_nvidia_get_crtc_crc32_v2_params {
+	crtc_id	int32
+	crc32  	drm_nvidia_crtc_crc32_v2_out
+} [packed]
+
+drm_nvidia_gem_export_dmabuf_memory_params {
+	handle           	int32
+	__pad            	int32
+	nvkms_params_ptr 	int64
+	nvkms_params_size	int64
+} [packed]
+
+drm_nvidia_gem_identify_object_params {
+	handle     	int32
+	object_type	int32
+} [packed]
+
+drm_nvidia_get_dpy_id_for_connector_id_params {
+	connectorId	int32
+	dpyId      	int32
+} [packed]
+
+drm_nvidia_get_connector_id_for_dpy_id_params {
+	dpyId      	int32
+	connectorId	int32
+} [packed]
+
+drm_nvidia_grant_permissions_params {
+	fd   	int32
+	dpyId	int32
+	type 	int32
+} [packed]
+
+drm_nvidia_revoke_permissions_params {
+	dpyId	int32
+	type 	int32
+} [packed]
+
+drm_nvidia_semsurf_fence_ctx_create_params {
+	index            	int64
+	nvkms_params_ptr 	int64
+	nvkms_params_size	int64
+	handle           	int32
+	__pad            	int32
+} [packed]
+
+drm_nvidia_semsurf_fence_create_params {
+	fence_context_handle	int32
+	timeout_value_ms    	int32
+	wait_value          	int64
+	fd                  	int32
+	__pad               	int32
+} [packed]
+
+drm_nvidia_semsurf_fence_wait_params {
+	fence_context_handle	int32
+	fd                  	int32
+	pre_wait_value      	int64
+	post_wait_value     	int64
+} [packed]
+
+drm_nvidia_semsurf_fence_attach_params {
+	handle              	int32
+	fence_context_handle	int32
+	timeout_value_ms    	int32
+	shared              	int32
+	wait_value          	int64
+} [packed]
+
+drm_nvidia_get_drm_file_unique_id_params {
+	id  	int64
+} [packed]

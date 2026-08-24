@@ -272,7 +272,8 @@ PRIMITIVE_NEEDS_EVIDENCE = tuple(p for p in PRIMITIVE
 # sequence number with the total it names, so the total is recoverable from
 # the label alone and a round measured on one surface is never re-read
 # against another.
-DENOMINATOR_VERSIONS = (("v1-764", 764), ("v2-828", 828))
+DENOMINATOR_VERSIONS = (("v1-764", 764), ("v2-828", 828),
+                        ("v3-852", 852))
 # The version a round record carrying no denominator_version was measured on.
 # end_round writes the field from the release that introduced it onward, so an
 # absent field dates the record to the five-family surface. The absence is

@@ -107,7 +107,7 @@ series` and `coverage_ctl.py plateau` print both on every invocation.
 | No total-coverage claim | The aggregate edge counter supports a fitted discovery curve and an extrapolation from it. A fraction-of-driver-covered figure needs per-edge frequency counts that syz-manager does not report |
 
 A second curve carries a denominator the edge curve cannot. `surface_cov.py`
-counts the distinct targets of the 828 the run's corpus has a program for, so
+counts the distinct targets of the 852 the run's corpus has a program for, so
 its reading is a fraction and its ceiling is known. That answers whether the
 round is still reaching new targets, and the edge curve answers whether it is
 still reaching new code inside the targets it already has. See

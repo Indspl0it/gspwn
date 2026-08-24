@@ -23,7 +23,7 @@ configurations. Report what happened, including when it is uninteresting.
 
    | Stage | Population | Diagnosis of a loss |
    |---|---|---|
-   | targetable | commands a default tenant may call, 828 in total | the scope of the claim |
+   | targetable | commands a default tenant may call, 852 in total | the scope of the claim |
    | modelled | targets a syzlang variant declares | the describe phase is incomplete |
    | exercised | targets a program in the corpus names | the fuzzer builds programs too invalid to emit the call, usually a wrong resource chain |
 
@@ -54,7 +54,7 @@ configurations. Report what happened, including when it is uninteresting.
    chains are wrong, and a plateau at high surface coverage is the real
    stopping condition.
 2b. Completion: `python3 tools/coverage_ctl.py completion --run-id <id>` prints
-   whether every one of the 828 targets is either exercised or accounted for,
+   whether every one of the 852 targets is either exercised or accounted for,
    and lists the ones that are neither. Exit 0 is complete, 3 is incomplete and
    1 means the reading failed. This is the campaign's primary stopping rule, so
    record the three counts in `artifacts/eval/<run-id>/` alongside the coverage
@@ -67,9 +67,9 @@ configurations. Report what happened, including when it is uninteresting.
 
    The denominator entitles this phase to one claim it could not make before:
 
-   > On driver <version>, the campaign exercised N of the 828 commands a
+   > On driver <version>, the campaign exercised N of the 852 commands a
    > default `compute,utility` container tenant can reach. The remaining
-   > 828 minus N are accounted for, each with a recorded reason. The
+   > 852 minus N are accounted for, each with a recorded reason. The
    > accounted-for set excludes the 347 commands outside the denominator by
    > construction.
 

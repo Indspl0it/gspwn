@@ -1393,8 +1393,10 @@ ENTRY_POINTS_SCHEMA = "gspwn.entry-points/1"
 RE_FOPS_MEMBER = re.compile(r"^\s*\.\s*(\w+)\s*=\s*([A-Za-z_]\w*)\s*,?\s*$")
 
 # `.owner = THIS_MODULE` names the module holding a reference on the table and
-# dispatches no call, so it is not an entry point.
-FOPS_NON_ENTRY = frozenset(["owner"])
+# dispatches no call, so it is not an entry point. `.fop_flags` is an unsigned
+# bitmask the VFS reads, added in 6.12 and set to FOP_UNSIGNED_OFFSET by
+# nv_drm_fops, and it carries no function pointer either.
+FOPS_NON_ENTRY = frozenset(["owner", "fop_flags"])
 
 NVLINK_C = "kernel-open/nvidia/nvlink_linux.c"
 NVSWITCH_C = "kernel-open/nvidia/linux_nvswitch.c"
@@ -1463,9 +1465,11 @@ DRM_TENANT_SURFACE = (
     "and internal/edits/device.go:76 grants them rwm. The legacy path never "
     "injects them: libnvidia-container carries no reference to /dev/dri. "
     "nvidia-drm registers a device for every GPU nvidia-modeset enumerates "
-    "(kernel-open/nvidia-drm/nvidia-drm-drv.c:2176). The campaign does not "
-    "model the 24 driver ioctls at nvidia-drm-drv.c:1806, of which 21 carry "
-    "DRM_RENDER_ALLOW, so this is reachable surface outside the denominator"
+    "(kernel-open/nvidia-drm/nvidia-drm-drv.c:2176). The campaign models the "
+    "24 dispatched driver ioctls at nvidia-drm-drv.c:1806 as the drm family, "
+    "and they are inside the denominator. 21 carry DRM_RENDER_ALLOW and are "
+    "reachable on both node types; the other 3 are reachable on cardN alone, "
+    "2 of them only while the opening file is the current DRM master"
 )
 
 
@@ -1599,7 +1603,7 @@ FOPS_TABLES = (
         "source": NV_DRM_C,
         "module": "nvidia-drm",
         "paths": ["/dev/dri/cardN", "/dev/dri/renderDN"],
-        "modelled": False,
+        "modelled": True,
         "tenant_surface": True,
         "reason": DRM_TENANT_SURFACE,
     },

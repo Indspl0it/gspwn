@@ -304,7 +304,7 @@ known absence.
 The eight checks read committed artefacts. `coverage` cannot compute a
 denominator without the four inventories under `surface/`, and it cannot
 compute a numerator without the description set, so a checkout missing
-either measures 0 of 828 and fails on every run. See
+either measures 0 of 852 and fails on every run. See
 [Artifacts](/gspwn/reference/artifacts/) for the committed set.
 
 ## Current readings
@@ -315,7 +315,7 @@ Against the committed artefacts at driver 610.57.04.
 |---|---|
 | `names` | 78 map entries over 78 distinct names, 909 declared calls, OK |
 | `pins` | 836 selector fields across 909 calls, control 531, alloc 207, xfer 31, modeset 64, outside every group 3. 531 control `cmd` values checked against the inventory over 521 distinct values and 64 modeset `cmd` values over 64, 0 the inventory does not carry. 2 calls whose `arg` resolves to no declared struct, 0 of them inside a reported group. OK, 4 unpinned by design |
-| `coverage` | 828 targetable, 828 modelled, 81 declared variants outside the denominator, denominator floor 828 across 6 families, OK |
+| `coverage` | 852 targetable, 852 modelled, 81 declared variants outside the denominator, denominator floor 852 across 7 families, OK |
 | `derived` | 531 targetable control commands. `rm-chains.json` 98 records implying 598 names and accounting for 531, `rm-control-rank.json` 531 records implying 531 and accounting for 531, 0 undeclared, 0 mismatched and 0 internal, OK |
 | `pages` | 6 generated pages. `allocation-classes.md` 253 records at 38706 bytes, `control-commands.md` 531 at 105433, `driver-cves.md` 61 at 59176, `escapes.md` 37 at 9350, `index.md` 5 at 8131, `modeset-commands.md` 66 at 14198, each equal to the committed copy, OK |
 | `stale` | 6 recorded inputs, 6 matching, driver 610.57.04 at commit `e4a5faa`, OK |

@@ -362,7 +362,7 @@ python3 tools/pipeline_ctl.py surface-unaccount --key KEY [--ledger PATH]
 | The key or variant named no row | Exit 1 |
 
 A wrong `no-param-model` or `chain-unbuildable` row closes a target as
-permanently as a wrong deferral, and 828 of them fire the same non-overridable
+permanently as a wrong deferral, and 852 of them fire the same non-overridable
 completion stop. This is the way back out.
 
 The recovery route from a wrong completion verdict:

@@ -5504,6 +5504,7 @@ ioctl$NV_ESC_RM_CONTROL_fooCtrlCmdBar(fd fd_nvidiactl, cmd const[0xc020462a], ar
 ioctl$NV_ESC_RM_ALLOC_FOO_A(fd fd_nv, cmd const[0xc030462b], arg ptr[inout, nvos64_alloc_foo_a])
 ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])
 ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, cmd const[0xc0106d00], arg ptr[inout, nvkms_params_alloc_device])
+ioctl$DRM_NVIDIA_GET_DEV_INFO(fd fd_dri, cmd const[0xc0246443], arg ptr[inout, drm_nvidia_get_dev_info_params])
 
 nvos54_ctrl_fooCtrlCmdBar {
 \thClient\tnvh_nv01_root
@@ -5525,6 +5526,11 @@ nv_xfer_rm_free {
 nvkms_params_alloc_device {
 \tcmd\tconst[0, int32]
 \tsize\tconst[1440, int32]
+} [packed]
+
+drm_nvidia_get_dev_info_params {
+\tgpu_id\tint32
+\tinterface_version\tint32
 } [packed]
 """
 
@@ -5783,7 +5789,7 @@ class TestDenominatorCoverage(Phase4Fixtures):
         code, out = _run_check("coverage")
         self.assertEqual(code, 0, out)
         self.assertIn("coverage: OK", out)
-        self.assertIn("828 targetable", out)
+        self.assertIn("852 targetable", out)
 
     def test_an_unmodified_copy_of_the_set_still_covers_every_target(self):
         old = _patched(DESC_DIR=self.desc_copy())
@@ -5798,7 +5804,7 @@ class TestDenominatorCoverage(Phase4Fixtures):
         code, out = self._without(victim)
         self.assertEqual(code, 1)
         self.assertIn(victim, out)
-        self.assertIn("827 modelled", out)
+        self.assertIn("851 modelled", out)
 
     def test_the_family_the_gap_falls_in_is_reported(self):
         victim = self._first_target_in("alloc")
@@ -7055,7 +7061,7 @@ class TestSurfaceTargetKeys(unittest.TestCase):
     def test_every_target_has_a_distinct_key(self):
         keys = [t["abi_key"] for t in self.targets.values()]
         self.assertEqual(len(keys), len(set(keys)))
-        self.assertEqual(len(keys), 828)
+        self.assertEqual(len(keys), 852)
 
     def test_the_composite_holds_531_distinct_control_targets(self):
         control = [t for t in self.targets.values()
@@ -9037,7 +9043,7 @@ static const RS_ENTRY g_resourceClassInfo[] =
 
     def test_every_reader_of_the_committed_artefact_still_loads_it(self):
         targets, _excluded, meta = surface_cov.load_targets()
-        self.assertEqual(len(targets), 828)
+        self.assertEqual(len(targets), 852)
         self.assertEqual(meta.get("driver_version"), "610.57.04")
 
 
@@ -12805,6 +12811,8 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
         "cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])\n"
         "ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, "
         "cmd const[0xc0106d00], arg ptr[inout, nvkms_params_foo])\n"
+        "ioctl$DRM_NVIDIA_FENCE_SUPPORTED(fd fd_dri, "
+        "cmd const[0x00006444])\n"
         "\n"
         "nvos54_ctrl_foo {\n\tcmd\tconst[0x00000102, int32]\n} [packed]\n"
         "\n"
@@ -12890,6 +12898,8 @@ class TestPinsChecksTheValueAndNotOnlyTheForm(unittest.TestCase):
            "const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])\n"
            "ioctl$NVKMS_IOCTL_THING(fd fd_nvidia_modeset, cmd "
            "const[0xc0106d00], arg ptr[inout, nvkms_params_thing])\n"
+           "ioctl$DRM_NVIDIA_FENCE_SUPPORTED(fd fd_dri, cmd "
+           "const[0x00006444])\n"
            "\n"
            "nvos54_ctrl_foo {\n\tcmd\tconst[%s, int32]\n} [packed]\n"
            "\n"
@@ -13017,7 +13027,7 @@ class TestCoverageNoticesAShrinkingDenominator(unittest.TestCase):
                          sorted(surface_cov.FAMILIES))
 
     def test_the_floor_sums_to_the_number_the_docstring_used_to_name(self):
-        self.assertEqual(sum(regression_check.TARGET_FLOOR.values()), 828)
+        self.assertEqual(sum(regression_check.TARGET_FLOOR.values()), 852)
 
     def test_the_function_docstring_no_longer_names_a_bare_count(self):
         self.assertNotIn("764", regression_check.check_coverage.__doc__)
@@ -14632,17 +14642,19 @@ class TestTheEntryPointArtefactShape(unittest.TestCase):
         self.assertEqual(self.artefact()["schema"],
                          ioctl_inventory.ENTRY_POINTS_SCHEMA)
 
-    def test_three_tables_are_modelled(self):
-        # nvidia_fops serves two nodes, so four modelled nodes sit on three
-        # tables.
+    def test_four_tables_are_modelled(self):
+        # nvidia_fops serves two nodes and nv_drm_fops serves two, so six
+        # modelled nodes sit on four tables.
         tables = [t for t in self.artefact()["tables"] if t["modelled"]]
         self.assertEqual(sorted(t["fops"] for t in tables),
-                         ["nvidia_fops", "uvm_fops", "uvm_tools_fops"])
+                         ["nv_drm_fops", "nvidia_fops", "uvm_fops",
+                          "uvm_tools_fops"])
 
-    def test_the_modelled_nodes_are_the_four_the_set_opens(self):
+    def test_the_modelled_nodes_are_the_six_the_set_opens(self):
         paths = sorted(p for t in self.artefact()["tables"] if t["modelled"]
                        for p in t["paths"])
-        self.assertEqual(paths, ["/dev/nvidia-uvm", "/dev/nvidia-uvm-tools",
+        self.assertEqual(paths, ["/dev/dri/cardN", "/dev/dri/renderDN",
+                                 "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools",
                                  "/dev/nvidiaN", "/dev/nvidiactl"])
 
     def test_every_unmodelled_table_states_a_reason(self):
@@ -14686,12 +14698,12 @@ class TestTheEntryPointArtefactShape(unittest.TestCase):
                       if t["modelled"])
         self.assertEqual(doc["counts"]["modelled_entry_points"], counted)
 
-    def test_the_three_modelled_tables_carry_sixteen_entry_points(self):
-        # nvidia_fops 6, uvm_fops 5, uvm_tools_fops 5. The figure is asserted
-        # so a driver release that adds or drops an entry point fails here
-        # rather than moving a reported number silently.
+    def test_the_four_modelled_tables_carry_twentyfour_entry_points(self):
+        # nvidia_fops 6, uvm_fops 5, uvm_tools_fops 5, nv_drm_fops 8. The
+        # figure is asserted so a driver release that adds or drops an entry
+        # point fails here and never moves a reported number silently.
         self.assertEqual(self.artefact()["counts"]["modelled_entry_points"],
-                         16)
+                         24)
 
     def test_uvm_fops_registers_mmap_and_no_poll(self):
         ops = {e["operation"] for e in self.table("uvm_fops")["entry_points"]}
@@ -14947,9 +14959,10 @@ class TestTheEntryPointCalls(unittest.TestCase):
         declared = [l.split("(")[0] for l in self.read().splitlines()
                     if l.startswith(("mmap$", "poll$"))]
         self.assertEqual(sorted(declared),
-                         ["mmap$nvidia", "mmap$nvidia_uvm", "mmap$nvidiactl",
-                          "poll$nvidia", "poll$nvidia_uvm_tools",
-                          "poll$nvidiactl"])
+                         ["mmap$dri_card", "mmap$dri_render", "mmap$nvidia",
+                          "mmap$nvidia_uvm", "mmap$nvidiactl",
+                          "poll$dri_card", "poll$dri_render", "poll$nvidia",
+                          "poll$nvidia_uvm_tools", "poll$nvidiactl"])
 
     def test_each_mmap_takes_the_resource_its_node_declares(self):
         self.assertIn("fd fd_nvidia,", self.call("mmap$nvidia"))
@@ -14995,20 +15008,20 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
 
     def test_the_loader_reports_the_artefact_counts(self):
         modelled, registered, tables = surface_cov.load_entry_points()
-        self.assertEqual(modelled, 16)
-        self.assertEqual(registered, 43)
-        self.assertEqual(len(tables), 3)
+        self.assertEqual(modelled, 24)
+        self.assertEqual(registered, 42)
+        self.assertEqual(len(tables), 4)
 
     def test_the_denominator_is_unchanged_by_the_counter(self):
         targets, _excluded, _meta = surface_cov.load_targets()
-        self.assertEqual(len(targets), 828)
+        self.assertEqual(len(targets), 852)
 
-    def test_the_six_families_still_carry_the_whole_denominator(self):
+    def test_the_seven_families_still_carry_the_whole_denominator(self):
         targets, _excluded, _meta = surface_cov.load_targets()
         self.assertEqual(
             sum(1 for t in targets.values()
-                if t["family"] in surface_cov.FAMILIES), 828)
-        self.assertEqual(len(surface_cov.FAMILIES), 6)
+                if t["family"] in surface_cov.FAMILIES), 852)
+        self.assertEqual(len(surface_cov.FAMILIES), 7)
 
     def test_an_entry_point_inside_the_denominator_is_refused(self):
         with self.assertRaises(surface_cov.SurfaceError) as caught:
@@ -15035,7 +15048,7 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
             code = _surface_cov_modelled()
         self.assertEqual(code, 0)
         text = out.getvalue()
-        self.assertIn("828", text)
+        self.assertIn("852", text)
         self.assertIn("entry points", text)
         # The two totals sit on different lines, so neither reading can be
         # taken for the other.
@@ -15050,12 +15063,12 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
         self.assertIn("not part of the", out.getvalue())
 
     def test_the_sum_of_the_two_is_never_printed(self):
-        # 828 + 16 is 844 and names nothing. A reader who found it on this
+        # 852 + 24 is 876 and names nothing. A reader who found it on this
         # page would take it for a denominator.
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             _surface_cov_modelled()
-        self.assertNotIn("844", out.getvalue())
+        self.assertNotIn("876", out.getvalue())
 
 
 class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
@@ -15066,9 +15079,10 @@ class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
     def test_the_expected_calls_are_derived_from_the_artefact(self):
         _m, _r, tables = surface_cov.load_entry_points()
         self.assertEqual(sorted(surface_cov.entry_point_calls(tables)),
-                         ["mmap$nvidia", "mmap$nvidia_uvm", "mmap$nvidiactl",
-                          "poll$nvidia", "poll$nvidia_uvm_tools",
-                          "poll$nvidiactl"])
+                         ["mmap$dri_card", "mmap$dri_render", "mmap$nvidia",
+                          "mmap$nvidia_uvm", "mmap$nvidiactl",
+                          "poll$dri_card", "poll$dri_render", "poll$nvidia",
+                          "poll$nvidia_uvm_tools", "poll$nvidiactl"])
 
     def test_a_node_with_no_suffix_is_refused(self):
         # A device node the mapping does not name cannot have its call name
@@ -15090,13 +15104,13 @@ class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             regression_check.check_coverage()
-        self.assertIn("16", out.getvalue())
+        self.assertIn("24", out.getvalue())
 
     def test_the_check_still_reports_the_command_denominator(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             regression_check.check_coverage()
-        self.assertIn("828 targetable across 6 families", out.getvalue())
+        self.assertIn("852 targetable across 7 families", out.getvalue())
 
 
 def _surface_cov_modelled():
@@ -16678,53 +16692,58 @@ class TestEveryCallDevDescReturnsIsDeclared(unittest.TestCase):
         self.assertEqual(overlap, [])
 
 
-class TestDriNodesAreRefusedAndNotNamed(unittest.TestCase):
-    """/dev/dri/* is refused, and the refusal states what is known.
+class TestDriNodesConvertToTheirOwnCalls(unittest.TestCase):
+    """/dev/dri/* converts, and the two node types convert apart.
 
-    dev_desc() returned `openat$dri` for these paths, a call the description
-    set has never declared, so a trace touching a render node converted into
-    a seed bank that failed the parse gate. The threat model excludes these
-    nodes, so the fix is a refusal carrying a reason and not a new call.
+    dev_desc() once returned `openat$dri` for these paths, a call the
+    description set has never declared, so a trace touching a render node
+    converted into a seed bank that failed the parse gate. The nodes are
+    inside the model now and each type has a call of its own, so the fix
+    holds in the other direction: the names are real and they are two.
 
-    The path is a prefix over a directory whose members carry a card or
-    render-node index, so the exact-match table cannot hold it.
+    The paths are regex branches over a directory whose members carry a card
+    or render-node index, so the exact-match table cannot hold them.
     """
 
-    def test_the_undeclared_call_is_gone_from_dev_desc(self):
+    def test_the_undeclared_singular_call_is_gone_from_dev_desc(self):
         # Named pin for the defect itself, beside the general check that
-        # every name dev_desc() spells is declared. Scoped to the function,
-        # because out_of_scope()'s docstring cites the name on purpose.
-        self.assertNotIn("openat$dri",
-                         inspect.getsource(trace2seed.dev_desc))
+        # every name dev_desc() spells is declared. The two real names both
+        # carry a node-type suffix, so the bare name appears nowhere.
+        source = inspect.getsource(trace2seed.dev_desc)
+        self.assertNotIn('"openat$dri"', source)
 
-    def test_dev_desc_names_no_call_for_a_dri_node(self):
+    def test_dev_desc_names_a_call_for_each_node_type(self):
+        self.assertEqual(trace2seed.dev_desc("/dev/dri/card0"),
+                         "openat$dri_card")
+        self.assertEqual(trace2seed.dev_desc("/dev/dri/renderD128"),
+                         "openat$dri_render")
+
+    def test_the_two_node_types_never_share_a_call(self):
+        """One call name would model the union on both nodes, and a render
+        node refuses 3 of the 24 before any handler runs."""
+        self.assertNotEqual(trace2seed.dev_desc("/dev/dri/card0"),
+                            trace2seed.dev_desc("/dev/dri/renderD128"))
+
+    def test_a_dri_node_is_no_longer_refused(self):
         for path in ("/dev/dri/card0", "/dev/dri/renderD128"):
-            self.assertIsNone(trace2seed.dev_desc(path), path)
-
-    def test_a_dri_node_is_refused_with_a_reason(self):
-        for path in ("/dev/dri/card0", "/dev/dri/renderD128"):
-            self.assertIn("/dev/dri/*", trace2seed.out_of_scope(path) or "")
-
-    def test_the_reason_leaves_tenant_reachability_open(self):
-        # Recorded as an open question. Asserting these nodes are unreachable
-        # would be a claim this tool has no source for.
-        reason = trace2seed.out_of_scope("/dev/dri/card0")
-        self.assertIn("open question", reason)
-        self.assertIn("outside the modelled surface", reason)
+            self.assertIsNone(trace2seed.out_of_scope(path), path)
 
     def test_a_modelled_node_is_not_refused(self):
         for path in trace2seed.DEV_TO_DESC:
             self.assertIsNone(trace2seed.out_of_scope(path), path)
         self.assertIsNone(trace2seed.out_of_scope("/dev/nvidia0"))
 
-    def test_a_traced_dri_open_becomes_a_skip_and_opens_nothing(self):
+    def test_a_traced_dri_open_becomes_the_render_call(self):
         prog = trace2seed.convert(
-            'openat(AT_FDCWD, "/dev/dri/renderD128", O_RDWR) = 3\n'
-            'ioctl(3, 0xc0106d00, 0x7ffd) = 0\n', {}, {})
-        self.assertIn("# skipped:", prog)
-        self.assertNotIn("openat$", prog)
-        # The fd was never tracked, so its ioctl is dropped with it.
-        self.assertNotIn("0xc0106d00", prog)
+            'openat(AT_FDCWD, "/dev/dri/renderD128", O_RDWR) = 3\n', {}, {})
+        self.assertIn("openat$dri_render", prog)
+        self.assertNotIn("# skipped:", prog)
+
+    def test_a_traced_card_open_becomes_the_card_call(self):
+        prog = trace2seed.convert(
+            'openat(AT_FDCWD, "/dev/dri/card0", O_RDWR) = 3\n', {}, {})
+        self.assertIn("openat$dri_card", prog)
+        self.assertNotIn("# skipped:", prog)
 # The struct that motivated the bitfield fix, reproduced from
 # src/nvidia-modeset/interface/nvkms-api-types.h:499 with the two nested
 # aggregates reduced to their measured sizes. gcc on x86-64 gives the real
@@ -17033,7 +17052,7 @@ class TestTheModesetFamilyEntersTheDenominator(ModesetDenominator):
 
     def test_modeset_is_a_reported_family(self):
         self.assertIn("modeset", surface_cov.FAMILIES)
-        self.assertEqual(len(surface_cov.FAMILIES), 6)
+        self.assertEqual(len(surface_cov.FAMILIES), 7)
 
     def test_a_dispatched_command_is_a_target_under_its_own_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -17101,17 +17120,17 @@ class TestTheCommittedModesetDenominator(unittest.TestCase):
             raise unittest.SkipTest("committed inventories not present")
         cls.targets, cls.excluded, _meta = surface_cov.load_targets()
 
-    def test_the_denominator_reads_828_across_six_families(self):
-        self.assertEqual(len(self.targets), 828)
+    def test_the_denominator_reads_852_across_seven_families(self):
+        self.assertEqual(len(self.targets), 852)
         self.assertEqual(
-            len({t["family"] for t in self.targets.values()}), 6)
+            len({t["family"] for t in self.targets.values()}), 7)
 
     def test_the_modeset_family_carries_64_targets(self):
         modeset = [t for t in self.targets.values()
                    if t["family"] == "modeset"]
         self.assertEqual(len(modeset), 64)
 
-    def test_the_other_five_families_are_unmoved(self):
+    def test_the_other_six_families_are_unmoved(self):
         counted = {}
         for target in self.targets.values():
             counted[target["family"]] = counted.get(target["family"], 0) + 1
@@ -17120,6 +17139,7 @@ class TestTheCommittedModesetDenominator(unittest.TestCase):
         self.assertEqual(counted["uvm_tools"], 7)
         self.assertEqual(counted["control"], 531)
         self.assertEqual(counted["alloc"], 155)
+        self.assertEqual(counted["modeset"], 64)
 
     def test_both_undispatched_ordinals_are_excluded_by_name(self):
         undispatched = sorted(
@@ -17138,7 +17158,9 @@ class TestTheCommittedModesetDenominator(unittest.TestCase):
 class TestTheValueCheckReadsAsAList(unittest.TestCase):
     """The pin check's value comparison was one hardcoded tuple naming the
     control prefix, so no second family could ever be compared against an
-    authority. The list form is the fix, and modeset is the second entry."""
+    authority. The list form is the fix, modeset is the second entry and drm
+    the third. drm keeps its selector somewhere else, the row says so, and
+    the check never branches on the family name."""
 
     def test_the_groups_carry_a_lookup_beside_the_prefix(self):
         for entry in regression_check.GROUPS:
@@ -17146,31 +17168,63 @@ class TestTheValueCheckReadsAsAList(unittest.TestCase):
 
     def test_both_checked_families_are_reporting_groups(self):
         groups = {name for name, _prefix, _lookup in regression_check.GROUPS}
-        for family, _field, _lookup in regression_check.VALUE_CHECKED:
+        for family, _f, _loc, _lookup in regression_check.VALUE_CHECKED:
             self.assertIn(family, groups)
 
-    def test_control_and_modeset_are_both_value_checked(self):
-        checked = {family for family, _f, _l in regression_check.VALUE_CHECKED}
-        self.assertEqual(checked, {"control", "modeset"})
+    def test_control_modeset_and_drm_are_all_value_checked(self):
+        checked = {family
+                   for family, _f, _loc, _l in regression_check.VALUE_CHECKED}
+        self.assertEqual(checked, {"control", "modeset", "drm"})
 
     def test_each_checked_family_names_the_field_it_compares(self):
-        fields = {family: field
-                  for family, field, _l in regression_check.VALUE_CHECKED}
+        fields = {family: field for family, field, _loc, _l
+                  in regression_check.VALUE_CHECKED}
         self.assertEqual(fields["control"], "cmd")
         self.assertEqual(fields["modeset"], "cmd")
+        self.assertEqual(fields["drm"], "request")
 
-    def test_every_checked_field_is_a_selector_the_check_examines(self):
+    def test_each_checked_family_names_where_its_selector_lives(self):
+        """A family whose selector is not a struct field is the case the
+        hardcoded form could not express. The row carries the location so a
+        fourth family joins by adding a row."""
+        located = {family: location for family, _f, location, _l
+                   in regression_check.VALUE_CHECKED}
+        self.assertEqual(located["control"],
+                         regression_check.SELECTOR_IN_STRUCT)
+        self.assertEqual(located["modeset"],
+                         regression_check.SELECTOR_IN_STRUCT)
+        self.assertEqual(located["drm"],
+                         regression_check.SELECTOR_IN_REQUEST)
+
+    def test_every_struct_located_field_is_a_selector_the_check_examines(self):
         # A family compared on a field SELECTORS never reaches is a check
-        # that reports a clean run over nothing.
-        for _family, field, _lookup in regression_check.VALUE_CHECKED:
-            self.assertIn(field, regression_check.SELECTORS)
+        # that reports a clean run over nothing. A request-located family is
+        # read from the call line and never from SELECTORS.
+        for _family, field, location, _lookup in \
+                regression_check.VALUE_CHECKED:
+            if location == regression_check.SELECTOR_IN_STRUCT:
+                self.assertIn(field, regression_check.SELECTORS)
 
     def test_the_lookups_are_callables_taking_no_argument(self):
-        for _family, _field, lookup in regression_check.VALUE_CHECKED:
+        for _f, _fl, _loc, lookup in regression_check.VALUE_CHECKED:
             self.assertTrue(callable(lookup))
 
+    def test_the_drm_lookup_is_the_request_number_without_the_size(self):
+        """drm_ioctl dispatches on _IOC_NR, so the size field selects no
+        leaf and is left out of the value the check compares."""
+        if not os.path.isfile(surface_cov.DRM_INV):
+            self.skipTest("committed inventory not present")
+        numbers = regression_check.drm_request_numbers()
+        self.assertEqual(len(numbers), 24)
+        # GET_DEV_INFO is DRM_IOWR at command number 0x03, so the value is
+        # direction 3, type 'd' and 0x40 + 3, with no size.
+        self.assertEqual(numbers["DRM_NVIDIA_GET_DEV_INFO"],
+                         (3 << 30) | (ord("d") << 8) | 0x43)
+        for value in numbers.values():
+            self.assertEqual(value & regression_check.IOC_SIZE_MASK, 0)
+
     def test_the_modeset_lookup_is_the_dispatch_ordinal(self):
-        lookup = dict((f, l) for f, _fl, l in
+        lookup = dict((f, l) for f, _fl, _loc, l in
                       regression_check.VALUE_CHECKED)["modeset"]
         if not os.path.isfile(surface_cov.NVKMS_INV):
             self.skipTest("committed inventory not present")
@@ -17184,9 +17238,10 @@ class TestTheValueCheckReadsAsAList(unittest.TestCase):
         self.assertEqual(
             ordinals["NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS"], 36)
 
-    def test_the_modeset_floor_is_recorded_beside_the_other_five(self):
+    def test_the_modeset_and_drm_floors_are_recorded_beside_the_rest(self):
         self.assertEqual(regression_check.TARGET_FLOOR["modeset"], 64)
-        self.assertEqual(len(regression_check.TARGET_FLOOR), 6)
+        self.assertEqual(regression_check.TARGET_FLOOR["drm"], 24)
+        self.assertEqual(len(regression_check.TARGET_FLOOR), 7)
 
 
 class TestTheModesetPinsAreCheckedAgainstTheOrdinal(unittest.TestCase):
@@ -17210,7 +17265,7 @@ class TestTheModesetPinsAreCheckedAgainstTheOrdinal(unittest.TestCase):
 
 class TestTheModesetReferencePage(unittest.TestCase):
     """The sixth family gets a page of its own and the index counts it, so a
-    reader browsing the enumerated surface sees 828 and not 764."""
+    reader browsing the enumerated surface sees 852 and not 764."""
 
     @classmethod
     def setUpClass(cls):
@@ -17239,7 +17294,7 @@ class TestTheModesetReferencePage(unittest.TestCase):
 
     def test_the_index_states_the_new_total_and_family_count(self):
         index = self.pages["index.md"]
-        self.assertIn("Total targets: 828.", index)
+        self.assertIn("Total targets: 852.", index)
         self.assertIn("`modeset`", index)
         self.assertIn("`modeset_undispatched`", index)
 
@@ -17468,6 +17523,299 @@ class TestTenantSurfaceArtefactErrors(unittest.TestCase):
         inside, outside = vts.expected_surface(vts.load_tables())
         self.assertTrue(inside)
         self.assertTrue(outside)
+
+
+class TestTheDrmInventoryScrape(unittest.TestCase):
+    """The scrape reconciles two sources, and the counts it asserts are the
+    ones the denominator is built from. A table read that silently lost an
+    entry would shrink the surface and inflate every later ratio."""
+
+    @classmethod
+    def setUpClass(cls):
+        import drm_inventory
+        cls.mod = drm_inventory
+        if not os.path.isfile(surface_cov.DRM_INV):
+            raise unittest.SkipTest("committed inventory not present")
+        with open(surface_cov.DRM_INV, encoding="utf-8") as fh:
+            cls.doc = json.load(fh)
+        cls.commands = cls.doc["commands"]
+        cls.summary = cls.doc["summary"]
+
+    def test_24_dispatched_of_28_declared(self):
+        self.assertEqual(self.summary["declared"], 28)
+        self.assertEqual(self.summary["dispatched"], 24)
+        self.assertEqual(self.summary["undispatched"], 4)
+        self.assertEqual(len(self.commands), 28)
+
+    def test_the_flag_split_is_21_render_allow_2_master_1_flagless(self):
+        self.assertEqual(self.summary["render_allow"], 21)
+        self.assertEqual(self.summary["master"], 2)
+        self.assertEqual(self.summary["flagless"], 1)
+
+    def test_the_four_roi_commands_are_excluded_by_name(self):
+        self.assertEqual(
+            sorted(c["command"]
+                   for c in self.summary["undispatched_commands"]),
+            ["NVIDIA_GET_CRTC_ROI_CRCS", "NVIDIA_GET_ROI_CAPABILITIES",
+             "NVIDIA_REGISTER_ROI", "NVIDIA_UNREGISTER_ROI"])
+        for item in self.summary["undispatched_commands"]:
+            self.assertEqual(item["reason"], "no entry in nv_drm_ioctls[]")
+
+    def test_the_declared_range_records_its_own_hole(self):
+        """0x07 is claimed by no define, so 28 is not the highest number
+        plus one and a reader needs the gap named to close the arithmetic."""
+        self.assertEqual([u["nr"] for u in self.summary["unused_numbers"]],
+                         [0x07])
+
+    def test_the_encoding_bases_are_recorded_for_a_consumer(self):
+        scan = self.doc["scan"]
+        self.assertEqual(scan["ioctl_base"], ord("d"))
+        self.assertEqual(scan["command_base"], 0x40)
+
+    def test_a_changed_dispatched_count_is_a_hard_failure(self):
+        """The count feeds a published figure, so drift stops the run and
+        never rewrites the artefact."""
+        src = os.path.join(os.path.dirname(os.path.dirname(HERE)),
+                           "artifacts", "src", "open-gpu-kernel-modules")
+        if not os.path.isdir(src):
+            self.skipTest("driver source tree not present")
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.collect(src, expect_declared=28, expect_dispatched=23)
+        self.assertIn("expected 23", str(caught.exception))
+
+    def test_a_command_setting_both_permission_flags_is_refused(self):
+        """The per-node denominator reads DRM_RENDER_ALLOW and DRM_MASTER as
+        exclusive, so an entry carrying both would be counted twice."""
+        entries = [{"command": "NVIDIA_X", "handler": "h",
+                    "flags": ["DRM_RENDER_ALLOW", "DRM_MASTER"], "line": 1}]
+        declared = [{"command": "NVIDIA_X", "nr": 0, "line": 1}]
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.cross_check(declared, entries, 1, 1)
+        self.assertIn("set both", str(caught.exception))
+
+
+class TestDrmPerNodeReachability(unittest.TestCase):
+    """renderDN and cardN do not grant the same set, so the artefact carries
+    both figures. Collapsing them would state one number for two things."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.DRM_INV):
+            raise unittest.SkipTest("committed inventory not present")
+        with open(surface_cov.DRM_INV, encoding="utf-8") as fh:
+            cls.doc = json.load(fh)
+        cls.summary = cls.doc["summary"]
+
+    def test_a_render_node_reaches_21_and_a_card_node_reaches_24(self):
+        self.assertEqual(self.summary["reachable_render"], 21)
+        self.assertEqual(self.summary["reachable_card"], 24)
+
+    def test_the_card_node_carries_2_conditional_on_master(self):
+        self.assertEqual(self.summary["reachable_card_conditional"], 2)
+        self.assertEqual(self.summary["reachable_card_unconditional"], 22)
+        self.assertEqual(
+            sorted(c["command"] for c in self.summary["conditional_on_card"]),
+            ["NVIDIA_GRANT_PERMISSIONS", "NVIDIA_REVOKE_PERMISSIONS"])
+
+    def test_the_three_a_render_node_refuses_are_named_with_the_reason(self):
+        refused = self.summary["unreachable_on_render"]
+        self.assertEqual(
+            sorted(c["command"] for c in refused),
+            ["NVIDIA_GET_CLIENT_CAPABILITY", "NVIDIA_GRANT_PERMISSIONS",
+             "NVIDIA_REVOKE_PERMISSIONS"])
+        for item in refused:
+            self.assertIn("DRM_RENDER_ALLOW", item["reason"])
+
+    def test_a_conditional_command_is_never_recorded_as_plainly_reachable(self):
+        """Claiming the master commands are simply reachable would overstate
+        what drm_master_open guarantees."""
+        for command in self.doc["commands"]:
+            if not command["dispatched"] or not command["master"]:
+                continue
+            card = command["reachable_on"]["card"]
+            self.assertTrue(card["reachable"])
+            self.assertIn("master", card["condition"])
+
+
+class TestTheCommittedDrmDenominator(unittest.TestCase):
+    """The seventh family enters the denominator from the DRM inventory, and
+    only the dispatched commands do."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.DRM_INV):
+            raise unittest.SkipTest("committed inventories not present")
+        cls.targets, cls.excluded, _meta = surface_cov.load_targets()
+
+    def test_the_drm_family_carries_24_targets(self):
+        drm = [t for t in self.targets.values() if t["family"] == "drm"]
+        self.assertEqual(len(drm), 24)
+
+    def test_the_four_undispatched_are_excluded_by_name(self):
+        self.assertEqual(
+            sorted(name for name, r in self.excluded.items()
+                   if r["family"] == "drm_undispatched"),
+            ["DRM_NVIDIA_GET_CRTC_ROI_CRCS",
+             "DRM_NVIDIA_GET_ROI_CAPABILITIES",
+             "DRM_NVIDIA_REGISTER_ROI",
+             "DRM_NVIDIA_UNREGISTER_ROI"])
+
+    def test_every_drm_target_carries_a_distinct_abi_key(self):
+        keys = [t["abi_key"] for t in self.targets.values()
+                if t["family"] == "drm"]
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_the_abi_key_is_the_command_number_and_not_the_handler(self):
+        """drm_ioctl indexes the driver table by the number, and a driver
+        refactor renames a handler freely."""
+        drm = [t for t in self.targets.values() if t["family"] == "drm"]
+        for target in drm:
+            self.assertEqual(target["abi_key"], "drm/%s" % target["nr"])
+
+    def test_the_denominator_reason_names_the_dispatch_table(self):
+        self.assertIn("nv_drm_ioctls[]",
+                      surface_cov.EXCLUSION_REASON["drm_undispatched"])
+
+
+class TestTheDrmEmission(unittest.TestCase):
+    """The description set carries the 21-of-24 split as separate resources,
+    so a program calling a card-only command on a render node does not
+    compile. Modelling the union on both nodes would spend executions on a
+    guaranteed EACCES and count them as surface reached."""
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia_drm.txt")
+        if not os.path.isfile(path):
+            raise unittest.SkipTest("description set not present")
+        with open(path, encoding="utf-8") as fh:
+            cls.text = fh.read()
+        cls.calls = dict(re.findall(
+            r"^ioctl\$(DRM_NVIDIA_[A-Z0-9_]+)\(fd (fd_dri[a-z_]*),",
+            cls.text, re.M))
+
+    def test_24_variants_are_declared(self):
+        self.assertEqual(len(self.calls), 24)
+
+    def test_the_three_card_only_commands_take_the_card_resource(self):
+        card_only = sorted(n for n, r in self.calls.items()
+                           if r == "fd_dri_card")
+        self.assertEqual(card_only,
+                         ["DRM_NVIDIA_GET_CLIENT_CAPABILITY",
+                          "DRM_NVIDIA_GRANT_PERMISSIONS",
+                          "DRM_NVIDIA_REVOKE_PERMISSIONS"])
+
+    def test_the_other_21_take_the_resource_both_nodes_satisfy(self):
+        shared = [n for n, r in self.calls.items() if r == "fd_dri"]
+        self.assertEqual(len(shared), 21)
+
+    def test_both_nodes_are_opened_by_calls_of_their_own(self):
+        core = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia.txt")
+        with open(core, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("openat$dri_card", text)
+        self.assertIn("openat$dri_render", text)
+        self.assertIn("resource fd_dri_card[fd_dri]", text)
+        self.assertIn("resource fd_dri_render[fd_dri]", text)
+
+    def test_every_request_number_matches_the_inventory(self):
+        """The emitted constant decides which handler a call reaches, so it
+        is checked against the artefact and never against itself."""
+        if not os.path.isfile(surface_cov.DRM_INV):
+            self.skipTest("committed inventory not present")
+        expected = regression_check.drm_request_numbers()
+        rendered = dict(re.findall(
+            r"^ioctl\$(DRM_NVIDIA_[A-Z0-9_]+)\([^)]*cmd const\[(0x[0-9a-f]+)\]",
+            self.text, re.M))
+        self.assertEqual(len(rendered), 24)
+        for name, value in rendered.items():
+            self.assertEqual(int(value, 16) & ~regression_check.IOC_SIZE_MASK,
+                             expected[name], name)
+
+    def test_the_two_parameterless_commands_take_no_arg(self):
+        """DRM_IO names no struct, so the call carries a request number and
+        nothing else."""
+        for name in ("DRM_NVIDIA_FENCE_SUPPORTED",
+                     "DRM_NVIDIA_DMABUF_SUPPORTED"):
+            line = [l for l in self.text.splitlines()
+                    if l.startswith("ioctl$%s(" % name)]
+            self.assertEqual(len(line), 1, name)
+            self.assertNotIn("arg ptr", line[0])
+
+    def test_no_undispatched_command_is_emitted(self):
+        for name in ("REGISTER_ROI", "UNREGISTER_ROI", "GET_CRTC_ROI_CRCS",
+                     "GET_ROI_CAPABILITIES"):
+            self.assertNotIn("ioctl$DRM_NVIDIA_%s(" % name, self.text)
+
+
+class TestTheDrmEntryPointsAndTrace(unittest.TestCase):
+    """nv_drm_fops registers mmap and poll on both nodes, so both carry both
+    calls, and a traced open on either converts to the right one."""
+
+    def test_dev_desc_maps_both_node_types_apart(self):
+        self.assertEqual(trace2seed.dev_desc("/dev/dri/card0"),
+                         "openat$dri_card")
+        self.assertEqual(trace2seed.dev_desc("/dev/dri/renderD128"),
+                         "openat$dri_render")
+
+    def test_the_dri_prefix_is_no_longer_refused(self):
+        self.assertIsNone(trace2seed.out_of_scope("/dev/dri/card0"))
+        self.assertIsNone(trace2seed.out_of_scope("/dev/dri/renderD128"))
+
+    def test_a_path_neither_branch_claims_is_still_unmapped(self):
+        self.assertIsNone(trace2seed.dev_desc("/dev/dri/controlD64"))
+
+    def test_the_entry_point_calls_are_required_and_declared(self):
+        if not os.path.isfile(surface_cov.ENTRY_POINTS):
+            self.skipTest("entry-point census not present")
+        _modelled, _registered, tables = surface_cov.load_entry_points()
+        required = surface_cov.entry_point_calls(tables)
+        for name in ("mmap$dri_card", "mmap$dri_render",
+                     "poll$dri_card", "poll$dri_render"):
+            self.assertIn(name, required)
+
+    def test_the_fops_record_no_longer_claims_the_family_is_unmodelled(self):
+        """The reason string closed by stating the surface sat outside the
+        denominator. Both halves became false when the family landed."""
+        import ioctl_inventory
+        record = [t for t in ioctl_inventory.FOPS_TABLES
+                  if t["fops"] == "nv_drm_fops"][0]
+        self.assertTrue(record["modelled"])
+        self.assertTrue(record["tenant_surface"])
+        self.assertNotIn("outside the denominator", record["reason"])
+        self.assertNotIn("does not model", record["reason"])
+
+
+class TestTheDrmReferencePage(unittest.TestCase):
+    """The seventh family gets a page of its own and the index counts it."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.DRM_INV):
+            raise unittest.SkipTest("committed inventories not present")
+        cls.pages, cls.rows = refgen.render()
+
+    def test_a_drm_page_is_generated(self):
+        self.assertIn("drm-commands.md", self.pages)
+        self.assertEqual(self.rows["drm-commands.md"], 28)
+
+    def test_the_page_names_all_four_undispatched_commands(self):
+        page = self.pages["drm-commands.md"]
+        for name in ("REGISTER_ROI", "UNREGISTER_ROI", "GET_CRTC_ROI_CRCS",
+                     "GET_ROI_CAPABILITIES"):
+            self.assertIn("DRM_NVIDIA_%s" % name, page)
+
+    def test_the_page_states_both_per_node_figures(self):
+        page = self.pages["drm-commands.md"]
+        self.assertIn("`/dev/dri/cardN`", page)
+        self.assertIn("`/dev/dri/renderDN`", page)
+
+    def test_the_index_counts_the_seventh_family(self):
+        index = self.pages["index.md"]
+        self.assertIn("`drm`", index)
+        self.assertIn("`drm_undispatched`", index)
 
 
 def pipeline_ctl_cmd_round_end(args):

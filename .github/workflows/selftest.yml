@@ -58,7 +58,7 @@ jobs:
         run: python3 tools/regression_check.py pins
 
       - name: Descriptions cover the whole denominator
-        # The inventories under surface enumerate 828 targets and
+        # The inventories under surface enumerate 852 targets and
         # descriptions declares the variants. A target losing its
         # description shrinks the numerator silently, because every later
         # measurement joins on the variant name.
