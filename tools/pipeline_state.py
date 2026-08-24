@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -663,9 +664,36 @@ def spend_for_budget():
     machine-global, so its fallback must be too. Reading the redirected file
     would let a run with a fresh GSPWN_STATE reopen the very
     bypass the ledger closes.
+
+    Reconciles the two records rather than trusting the ledger alone. A ledger
+    that exists is not the same as a ledger that received every write:
+    campaign_ctl.bill_run catches OSError, warns and returns without billing,
+    and in an unattended loop nothing reads that warning. pipeline_ctl's
+    round-end leaves the same divergence by a different route: end_round saves
+    the round's hours first and the ledger writes follow, so a write that
+    raises there leaves the hours on record and out of the ledger. Either way
+    the ledger sits below the hours the state file recorded, the cap reads
+    headroom that was already spent, and the loop keeps admitting campaigns.
+
+    The ledger is machine-global and the state file is one pipeline, so the
+    ledger standing above the state file is the ordinary case and says
+    nothing. The reverse cannot happen while every billed run reaches the
+    ledger, so it is read as lost writes and the larger figure stands.
     """
     if os.path.exists(SPEND_PATH):
-        return total_spend_hours()
+        billed = total_spend_hours()
+        recorded = total_run_hours(load(DEFAULT_STATE_PATH))
+        if recorded > billed:
+            sys.stderr.write(
+                ("WARNING: spend ledger %s holds %.1f run-hours while "
+                 "the state file records %.1f. %.1f h of spend never "
+                 "reached the ledger, most likely a write that failed "
+                 "on permissions. Using the larger figure so the cap "
+                 "counts what actually ran. Fix the ledger's ownership "
+                 "and re-run: python3 tools/pipeline_ctl.py spend-init\n")
+                % (SPEND_PATH, billed, recorded, recorded - billed))
+            return recorded
+        return billed
     return spent_hours(load(DEFAULT_STATE_PATH))
 
 
