@@ -111,14 +111,20 @@ combines `_IOC_READ` and `_IOC_WRITE` or is numeric. The reassembled request is
 | `/dev/nvidia-uvm` | `openat$nvidia_uvm` |
 | `/dev/nvidia-uvm-tools` | `openat$nvidia_uvm_tools` |
 | `/dev/nvidiaN` | `openat$nvidia` |
-| `/dev/dri/*` | `openat$dri` |
+| `/dev/dri/cardN` | `openat$dri_card` |
+| `/dev/dri/renderDN` | `openat$dri_render` |
 | `/dev/nvidia-modeset` | `openat$nvidia_modeset` |
 
 Any other path is skipped silently.
 
-`openat$dri` is emitted for `/dev/dri/*`, and the committed description set
-declares no such call, so a trace touching those nodes yields a seed the
-syzkaller parse gate refuses.
+The two DRM node types map to two calls because they do not grant the same
+command set. A card node reaches all 24 dispatched commands and a render node
+reaches the 21 carrying `DRM_RENDER_ALLOW`, so a trace on one converts to a
+different program than a trace on the other.
+
+Every name this table can return is declared by the committed description set.
+`selftest.py` drives `dev_desc` to check that, so a branch added to it is
+covered on the day it is added.
 
 ## The converted program
 

@@ -156,7 +156,7 @@ the failure to converge and points at the completion ledger.
 
 The completion ledger is its own artefact. `state/pipeline.json` is 1177 bytes
 and `save()` rewrites it whole under a lock on every phase transition and every
-crash registration, so 828 rows do not belong in it. The round carries a
+crash registration, so 852 rows do not belong in it. The round carries a
 repo-relative path to the ledger under `surface_ledger`, and
 `surface_ledger_path` resolves a relative one against the repository root,
 because a caller with a different working directory would otherwise create a

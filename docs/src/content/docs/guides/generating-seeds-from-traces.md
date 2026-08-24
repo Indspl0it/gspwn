@@ -245,8 +245,9 @@ starts with fewer programs than the bank holds and nothing says so.
 modeset call carries one kernel request number, and the selector sits in the
 parameter struct, which the trace format does not record.
 
-`/dev/dri/*` stays outside the model. See
-[Scope and targets](/gspwn/guides/scope-and-targets/) for the reason.
+A DRM call carries its own request number, so a traced `/dev/dri` call does
+name its command and converts to a seed. See
+[Scope and targets](/gspwn/guides/scope-and-targets/).
 
 ## Preconditions that cannot be reached
 

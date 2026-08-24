@@ -8,10 +8,15 @@
 # the same numbers as _IOWR macros for syz-extract to consume on the SUT.
 
 
-# Device nodes. nvidia-drm and /dev/dri/* are out of scope in the
-# threat model, so nothing here opens them. /dev/nvidia-modeset is
-# in scope: libnvidia-container creates it by default
-# (src/nvc.c:317) and withholds it only under OPT_NO_MODESET.
+# Device nodes. /dev/nvidia-modeset is in scope:
+# libnvidia-container creates it by default (src/nvc.c:317) and
+# withholds it only under OPT_NO_MODESET. Both DRM nodes are in
+# scope on the CDI path, which adds every /dev/dri node found for
+# the GPU's PCI bus id with no capability check
+# (nvidia-container-toolkit internal/platform-support/dgpu/
+# nvml.go:48-55). The card node and the render node are separate
+# resources because drm_ioctl_permit refuses a render client any
+# command whose flag word omits DRM_RENDER_ALLOW.
 resource fd_nv[fd]
 resource fd_nvidiactl[fd_nv]
 resource fd_nvidia[fd_nv]
@@ -19,12 +24,17 @@ resource fd_nvidia_uvm[fd]
 resource fd_nvidia_uvm_tools[fd]
 resource fd_nvidia_modeset[fd]
 resource fd_nvidia_uvm_vaspace[fd_nvidia_uvm]
+resource fd_dri[fd]
+resource fd_dri_card[fd_dri]
+resource fd_dri_render[fd_dri]
 
 openat$nvidiactl(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidiactl"]], flags const[0x2], mode const[0]) fd_nvidiactl
 openat$nvidia(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia#"]], flags const[0x2], mode const[0]) fd_nvidia
 openat$nvidia_uvm(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-uvm"]], flags const[0x2], mode const[0]) fd_nvidia_uvm
 openat$nvidia_uvm_tools(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-uvm-tools"]], flags const[0x2], mode const[0]) fd_nvidia_uvm_tools
 openat$nvidia_modeset(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-modeset"]], flags const[0x2], mode const[0]) fd_nvidia_modeset
+openat$dri_card(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/dri/card#"]], flags const[0x2], mode const[0]) fd_dri_card
+openat$dri_render(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/dri/renderD#"]], flags const[0x2], mode const[0]) fd_dri_render
 
 # The initialised UVM descriptor. 36 of the 39 uvm commands and
 # uvm_mmap refuse a descriptor that has not been through
@@ -531,6 +541,18 @@ nv_pollfd_uvm_tools {
 	revents	const[0, int16]
 }
 
+nv_pollfd_dri_card {
+	fd	fd_dri_card
+	events	flags[nv_poll_events, int16]
+	revents	const[0, int16]
+}
+
+nv_pollfd_dri_render {
+	fd	fd_dri_render
+	events	flags[nv_poll_events, int16]
+	revents	const[0, int16]
+}
+
 # nvidia_mmap at kernel-open/nvidia/nv-mmap.c:770 reaches
 # nvidia_mmap_helper, which consumes a mapping context a prior ioctl
 # established. That helper abandons the mapping for any non-zero
@@ -560,3 +582,15 @@ mmap$nvidia_uvm(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[n
 poll$nvidiactl(fds ptr[in, array[nv_pollfd_nvidiactl]], nfds len[fds], timeout int32)
 poll$nvidia(fds ptr[in, array[nv_pollfd_nvidia]], nfds len[fds], timeout int32)
 poll$nvidia_uvm_tools(fds ptr[in, array[nv_pollfd_uvm_tools]], nfds len[fds], timeout int32)
+
+# nv_drm_fops registers mmap and poll on both DRM nodes, so each
+# node carries both calls. nv_drm_mmap at
+# kernel-open/nvidia-drm/nvidia-drm-gem.c:250 looks the GEM object up
+# by vm_pgoff through drm_vma_offset_exact_lookup_locked, so the only
+# offset that reaches an object is the fake one a prior
+# DRM_NVIDIA_GEM_MAP_OFFSET returned and no fixed value satisfies it.
+# The poll side is the DRM core's own drm_poll.
+mmap$dri_card(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[nv_mmap_flags], fd fd_dri_card, offset intptr[0:0xffffffff, 0x1000])
+mmap$dri_render(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[nv_mmap_flags], fd fd_dri_render, offset intptr[0:0xffffffff, 0x1000])
+poll$dri_card(fds ptr[in, array[nv_pollfd_dri_card]], nfds len[fds], timeout int32)
+poll$dri_render(fds ptr[in, array[nv_pollfd_dri_render]], nfds len[fds], timeout int32)

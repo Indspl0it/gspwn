@@ -191,10 +191,35 @@ CONST_VALUE_RE = re.compile(r"^const\[\s*(0[xX][0-9a-fA-F]+|\d+)\s*[,\]]")
 # Declared as a list so a third family joins by adding a row. This was one
 # hardcoded tuple naming the control prefix, and a second hardcoded branch
 # beside it would have left the same gap for the fourth.
+# Where a family keeps the selector this check reads. A control or modeset
+# selector is a field inside the call's parameter struct. A DRM selector is
+# the ioctl request number itself: nvidia-drm gives every command its own
+# number, its parameter structs carry no selector field, and two of its
+# commands take no parameter at all. A family names which of the two it uses
+# so a fourth joins by adding a row, and never by a branch on its name.
+SELECTOR_IN_STRUCT = "struct"
+SELECTOR_IN_REQUEST = "request"
+
 VALUE_CHECKED = [
-    ("control", "cmd", lambda: control_method_ids()),
-    ("modeset", "cmd", lambda: modeset_ordinals()),
+    ("control", "cmd", SELECTOR_IN_STRUCT, lambda: control_method_ids()),
+    ("modeset", "cmd", SELECTOR_IN_STRUCT, lambda: modeset_ordinals()),
+    ("drm", "request", SELECTOR_IN_REQUEST, lambda: drm_request_numbers()),
 ]
+
+# The _IOC_SIZE field of a request number. drm_ioctl() indexes the driver
+# table with _IOC_NR alone and reads _IOC_SIZE only to bound the copy, so the
+# size selects no leaf and is masked off both sides of the comparison below.
+# The struct sizes themselves are measured by the size probe in
+# tools/syzlang_gen.py and checked by the compile gate.
+IOC_SIZE_SHIFT = 16
+IOC_SIZE_BITS = 14
+IOC_SIZE_MASK = ((1 << IOC_SIZE_BITS) - 1) << IOC_SIZE_SHIFT
+IOC_DIRECTION_SHIFT = 30
+
+# The DRM direction macros and the _IOC direction bits each expands to.
+DRM_DIRECTION_BITS = {
+    "DRM_IO": 0, "DRM_IOW": 1, "DRM_IOR": 2, "DRM_IOWR": 3,
+}
 
 # The denominator the committed inventories carry, per family, measured on
 # driver 610.57.04. `coverage` compares the description set against whatever
@@ -210,6 +235,7 @@ TARGET_FLOOR = {
     "control": 531,
     "alloc": 155,
     "modeset": 64,
+    "drm": 24,
 }
 
 # Variant name prefix -> reporting group. A group with no members at all means
@@ -223,6 +249,7 @@ GROUPS = [
     ("alloc", "NV_ESC_RM_ALLOC_", "alloc"),
     ("xfer", "NV_ESC_IOCTL_XFER_CMD_", None),
     ("modeset", surface_cov.MODESET_PREFIX, "modeset"),
+    ("drm", surface_cov.DRM_PREFIX, "drm"),
 ]
 
 # Calls whose selector field is free on purpose, keyed by (variant, struct,
@@ -347,6 +374,32 @@ def read_descriptions():
     return calls, structs
 
 
+REQUEST_ARG_RE = re.compile(r"\bcmd\s+(const\[[^\]]*\])")
+
+
+def parse_call_requests(text):
+    """-> {variant name: the rendering of its ioctl request argument}."""
+    requests = {}
+    for match in CALL_RE.finditer(text):
+        rendered = REQUEST_ARG_RE.search(match.group("args"))
+        if rendered:
+            requests[match.group(1)] = rendered.group(1)
+    return requests
+
+
+def read_call_requests():
+    """-> the request argument of every call, over the committed set.
+
+    Read apart from read_descriptions so that adding a request-selector
+    family changes neither its shape nor any of its callers.
+    """
+    requests = {}
+    for path in _description_files():
+        with open(path, encoding="utf-8") as handle:
+            requests.update(parse_call_requests(handle.read()))
+    return requests
+
+
 def read_ioctl_map():
     """-> [(request number, variant name)] from the committed map."""
     try:
@@ -460,6 +513,42 @@ def modeset_ordinals():
     return ordinals
 
 
+def drm_request_numbers():
+    """-> {drm variant name: the request number its inventory row implies}.
+
+    Built from the command number and the direction macro the inventory
+    carries, over the ioctl and command bases the same artefact records, so
+    the bases are read once and never restated here. The _IOC_SIZE field is
+    left out, because drm_ioctl() dispatches on _IOC_NR and the size selects
+    no leaf.
+    """
+    try:
+        with open(surface_cov.DRM_INV, encoding="utf-8") as handle:
+            inventory = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise CheckInput("%s: %s" % (surface_cov.DRM_INV, exc))
+    scan = inventory.get("scan") or {}
+    ioctl_base = scan.get("ioctl_base")
+    command_base = scan.get("command_base")
+    if not isinstance(ioctl_base, int) or not isinstance(command_base, int):
+        raise CheckInput(
+            "%s records no integer ioctl_base and command_base, so the "
+            "request number a DRM variant should carry cannot be derived."
+            % surface_cov.DRM_INV)
+    numbers = {}
+    for command in inventory.get("commands") or []:
+        if not command.get("dispatched"):
+            continue
+        direction = DRM_DIRECTION_BITS.get(command.get("direction"))
+        name = command.get("number_macro")
+        if direction is None or not name:
+            continue
+        numbers[name] = ((direction << IOC_DIRECTION_SHIFT)
+                         | (ioctl_base << 8)
+                         | (command_base + command["nr"]))
+    return numbers
+
+
 def check_pins():
     """Every emitted leaf selector renders as a const, and a checked family's
     cmd renders as the value its own inventory carries for that variant."""
@@ -467,14 +556,20 @@ def check_pins():
     # (group, field) -> {variant: expected}. Read once, so a family whose
     # authority is unreadable fails the check and never passes it silently.
     expected_by = {(group, field): lookup()
-                   for group, field, lookup in VALUE_CHECKED}
+                   for group, field, _location, lookup in VALUE_CHECKED}
+    # Families whose selector is the request number. The struct loop below
+    # cannot see them and the request loop after it examines them instead.
+    request_groups = {group for group, _f, location, _l in VALUE_CHECKED
+                      if location == SELECTOR_IN_REQUEST}
+    request_field = {group: field for group, field, location, _l
+                     in VALUE_CHECKED if location == SELECTOR_IN_REQUEST}
 
     examined, free = 0, []
     group_counts = {name: 0 for name, _p, _f in GROUPS}
     used_allowlist = set()
     unresolved, wrong = [], []
-    unmatched = {group: 0 for group, _f, _l in VALUE_CHECKED}
-    values = {group: {} for group, _f, _l in VALUE_CHECKED}
+    unmatched = {group: 0 for group, _f, _loc, _l in VALUE_CHECKED}
+    values = {group: {} for group, _f, _loc, _l in VALUE_CHECKED}
     for variant in sorted(calls):
         struct = calls[variant]
         fields = structs.get(struct)
@@ -486,7 +581,11 @@ def check_pins():
             # zero. A change to the emitted `arg ptr[...]` form does exactly
             # this, which is why the count is reported and a group member is
             # an offender.
-            unresolved.append((variant, struct, _group_of(variant)))
+            # A request-selector family keeps nothing in the struct, and
+            # two DRM commands take no parameter at all, so an absent struct
+            # is the shape those calls are meant to have.
+            if _group_of(variant) not in request_groups:
+                unresolved.append((variant, struct, _group_of(variant)))
             continue
         for field in SELECTORS:
             if field not in fields:
@@ -515,6 +614,31 @@ def check_pins():
                 continue
             free.append((variant, struct, field, rendered))
 
+    # The request-number selector, for the families that keep it there. The
+    # value is compared with _IOC_SIZE masked off on both sides, because
+    # drm_ioctl() reads _IOC_NR to pick a handler and the size only bounds the
+    # copy that follows.
+    for variant, rendered in sorted(read_call_requests().items()):
+        group = _group_of(variant)
+        if group not in request_groups:
+            continue
+        field = request_field[group]
+        examined += 1
+        group_counts[group] += 1
+        authority = expected_by.get((group, field))
+        if authority is None:
+            continue
+        value = const_value(rendered)
+        if value is not None:
+            value &= ~IOC_SIZE_MASK
+        values[group].setdefault(value, []).append(variant)
+        expected = authority.get(variant)
+        if expected is None:
+            unmatched[group] += 1
+        elif value is None or value != expected:
+            wrong.append((variant, "(request)", rendered,
+                          "0x%08x" % expected))
+
     # An allowlist entry whose call is present and now renders const has been
     # fixed and the entry has to go, or it would mask a later regression on the
     # same field. An entry whose call is absent says nothing: the check also
@@ -533,7 +657,7 @@ def check_pins():
           % (examined, len(calls),
              ", ".join("%s %d" % (name, group_counts[name])
                        for name, _p, _f in GROUPS), examined - grouped))
-    for group, field, _lookup in VALUE_CHECKED:
+    for group, field, _location, _lookup in VALUE_CHECKED:
         seen = values[group]
         print("pins: %d %s %s(s) checked against the inventory over %d "
               "distinct value(s), %d call(s) the inventory does not carry"

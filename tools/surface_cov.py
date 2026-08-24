@@ -99,6 +99,7 @@ IOCTL_INV = os.path.join(SURFACE_DIR, "ioctl-inventory.json")
 CTRL_INV = os.path.join(SURFACE_DIR, "rm-control-inventory.json")
 OBJ_GRAPH = os.path.join(SURFACE_DIR, "rm-object-graph.json")
 NVKMS_INV = os.path.join(SURFACE_DIR, "nvkms-command-inventory.json")
+DRM_INV = os.path.join(SURFACE_DIR, "drm-command-inventory.json")
 
 # A syzlang call line, and a call site inside a program. Both spell the variant
 # the same way, so one pattern reads a description file and a corpus program.
@@ -113,6 +114,11 @@ ALLOC_PREFIX = "NV_ESC_RM_ALLOC_"
 # variant name and in a corpus program alike.
 MODESET_PREFIX = "NVKMS_IOCTL_"
 
+# The nvidia-drm command number macro, DRM_NVIDIA_<NAME>. The dispatch table
+# spells the same command NVIDIA_<NAME>, which would collide with nothing but
+# reads as an RM escape at a glance, so the number macro names the variant.
+DRM_PREFIX = "DRM_NVIDIA_"
+
 # Families in report order. The first five are the denominator; the rest are
 # counted and excluded, each for a reason `report` prints.
 # The escape name prefix, and the prefix syzlang_gen gives the typed wrapper
@@ -120,9 +126,10 @@ MODESET_PREFIX = "NVKMS_IOCTL_"
 ESCAPE_PREFIX = "NV_ESC_"
 XFER_VARIANT_PREFIX = "NV_ESC_IOCTL_XFER_CMD_"
 
-FAMILIES = ["escape", "uvm", "uvm_tools", "control", "alloc", "modeset"]
+FAMILIES = ["escape", "uvm", "uvm_tools", "control", "alloc", "modeset",
+            "drm"]
 EXCLUDED = ["control_gsp", "uvm_test", "escape_dead", "escape_mux",
-            "modeset_undispatched"]
+            "modeset_undispatched", "drm_undispatched"]
 
 EXCLUSION_REASON = {
     "control_gsp": "handler compiled out; runs on GSP where KCOV cannot follow",
@@ -131,6 +138,8 @@ EXCLUSION_REASON = {
     "escape_mux": "a multiplexer whose leaves are already counted in another family",
     "modeset_undispatched": "declared in NvKmsIoctlCommand with a NULL "
                             "dispatch entry",
+    "drm_undispatched": "declared in nv_drm_common_ioctl.h with no entry in "
+                        "nv_drm_ioctls[]",
 }
 
 # Two escapes select the real target from a field in their own parameter
@@ -224,12 +233,14 @@ def load_targets():
     ctrl = _load(CTRL_INV, "the RM control inventory")
     graph = _load(OBJ_GRAPH, "the RM object graph")
     nvkms = _load(NVKMS_INV, "the modeset command inventory")
+    drm = _load(DRM_INV, "the DRM command inventory")
 
     versions = {p: _driver_version(o) for p, o in
                 (("ioctl-inventory.json", inv),
                  ("rm-control-inventory.json", ctrl),
                  ("rm-object-graph.json", graph),
-                 ("nvkms-command-inventory.json", nvkms))}
+                 ("nvkms-command-inventory.json", nvkms),
+                 ("drm-command-inventory.json", drm))}
     distinct = {v for v in versions.values() if v}
     if len(distinct) > 1:
         raise SurfaceError(
@@ -395,6 +406,52 @@ def load_targets():
             "a summary claiming %d. The denominator would be wrong either "
             "way; regenerate %s with tools/nvkms_inventory.py."
             % (dispatched, claimed, NVKMS_INV))
+
+    # /dev/dri. Unlike the modeset family, every nvidia-drm command carries
+    # its own request number, and the identity is the driver-relative command
+    # number the DRM core recovers with _IOC_NR minus DRM_COMMAND_BASE. The
+    # four commands the header declares and nv_drm_ioctls[] leaves out are
+    # counted apart: drm_ioctl finds no handler in the slot and the call
+    # reaches no driver code.
+    #
+    # The denominator counts a command the modelled tenant can reach on
+    # either node it holds, and the CDI path injects both. renderDN reaches
+    # 21 of the 24, because drm_ioctl_permit refuses a render client any
+    # command whose flag word omits DRM_RENDER_ALLOW. cardN reaches all 24,
+    # two of them only while the opening file is the current DRM master. Both
+    # figures are carried on the record so a consumer reads either without
+    # re-deriving the flags, and neither shrinks the family total.
+    drm_dispatched = 0
+    for command in drm.get("commands", []):
+        name = command.get("number_macro")
+        if not name:
+            continue
+        is_dispatched = bool(command.get("dispatched"))
+        drm_dispatched += is_dispatched
+        reach = command.get("reachable_on") or {}
+        record = {
+            "variant": name,
+            "family": "drm" if is_dispatched else "drm_undispatched",
+            "label": "%s %s" % (command.get("nr"),
+                                command.get("handler") or "(no handler)"),
+            "detail": command.get("param_struct") or "",
+            "nr": command.get("nr"),
+            "source": command.get("source") or "",
+            "render_allow": command.get("render_allow"),
+            "master": command.get("master"),
+            "reachable_card": bool((reach.get("card") or {}).get("reachable")),
+            "reachable_render": bool(
+                (reach.get("render") or {}).get("reachable")),
+            "card_condition": (reach.get("card") or {}).get("condition"),
+        }
+        (targets if is_dispatched else excluded)[name] = record
+    drm_claimed = (drm.get("summary") or {}).get("dispatched")
+    if drm_claimed is not None and drm_claimed != drm_dispatched:
+        raise SurfaceError(
+            "the DRM inventory records %d dispatched command(s) against a "
+            "summary claiming %d. The denominator would be wrong either way; "
+            "regenerate %s with tools/drm_inventory.py."
+            % (drm_dispatched, drm_claimed, DRM_INV))
 
     for record in list(targets.values()) + list(excluded.values()):
         record["abi_key"] = abi_key(record)
@@ -720,6 +777,8 @@ ENTRY_POINT_NODE_SUFFIX = {
     "/dev/nvidiaN": "nvidia",
     "/dev/nvidia-uvm": "nvidia_uvm",
     "/dev/nvidia-uvm-tools": "nvidia_uvm_tools",
+    "/dev/dri/cardN": "dri_card",
+    "/dev/dri/renderDN": "dri_render",
 }
 
 # Call-name prefixes that are not commands. A denominator carrying one of

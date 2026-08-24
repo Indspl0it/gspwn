@@ -1,0 +1,900 @@
+{
+  "schema": "gspwn.drm-command-inventory/1",
+  "source": {
+    "src_root": "artifacts/src/open-gpu-kernel-modules",
+    "driver_version": "610.57.04",
+    "ioctl_header": "kernel-open/nvidia-drm/nv_drm_common_ioctl.h",
+    "dispatch_source": "kernel-open/nvidia-drm/nvidia-drm-drv.c"
+  },
+  "scan": {
+    "table_line": 1806,
+    "ioctl_base": 100,
+    "ioctl_base_char": "d",
+    "command_base": 64,
+    "command_end": 160,
+    "encoding": "request = dir<<30 | sizeof(param_struct)<<16 | ioctl_base<<8 | (command_base + nr)",
+    "encoding_source": "include/uapi/drm/drm.h:1076 and :1363 in the kernel tree, which this repository does not vendor"
+  },
+  "summary": {
+    "declared": 28,
+    "dispatched": 24,
+    "undispatched": 4,
+    "render_allow": 21,
+    "master": 2,
+    "flagless": 1,
+    "reachable_card": 24,
+    "reachable_card_unconditional": 22,
+    "reachable_card_conditional": 2,
+    "reachable_render": 21,
+    "undispatched_commands": [
+      {
+        "command": "NVIDIA_REGISTER_ROI",
+        "nr": 25,
+        "reason": "no entry in nv_drm_ioctls[]"
+      },
+      {
+        "command": "NVIDIA_UNREGISTER_ROI",
+        "nr": 26,
+        "reason": "no entry in nv_drm_ioctls[]"
+      },
+      {
+        "command": "NVIDIA_GET_CRTC_ROI_CRCS",
+        "nr": 27,
+        "reason": "no entry in nv_drm_ioctls[]"
+      },
+      {
+        "command": "NVIDIA_GET_ROI_CAPABILITIES",
+        "nr": 28,
+        "reason": "no entry in nv_drm_ioctls[]"
+      }
+    ],
+    "unreachable_on_render": [
+      {
+        "command": "NVIDIA_GET_CLIENT_CAPABILITY",
+        "nr": 8,
+        "reason": "drm_ioctl_permit refuses a render client any command whose flag word omits DRM_RENDER_ALLOW"
+      },
+      {
+        "command": "NVIDIA_GRANT_PERMISSIONS",
+        "nr": 18,
+        "reason": "drm_ioctl_permit refuses a render client any command whose flag word omits DRM_RENDER_ALLOW"
+      },
+      {
+        "command": "NVIDIA_REVOKE_PERMISSIONS",
+        "nr": 19,
+        "reason": "drm_ioctl_permit refuses a render client any command whose flag word omits DRM_RENDER_ALLOW"
+      }
+    ],
+    "conditional_on_card": [
+      {
+        "command": "NVIDIA_GRANT_PERMISSIONS",
+        "nr": 18,
+        "condition": "the opening file must be the current DRM master, which drm_master_open grants only when the device has none"
+      },
+      {
+        "command": "NVIDIA_REVOKE_PERMISSIONS",
+        "nr": 19,
+        "condition": "the opening file must be the current DRM master, which drm_master_open grants only when the device has none"
+      }
+    ],
+    "unused_numbers": [
+      {
+        "nr": 7,
+        "reason": "no DRM_NVIDIA_ define declares this number"
+      }
+    ]
+  },
+  "commands": [
+    {
+      "command": "NVIDIA_GET_CRTC_CRC32",
+      "number_macro": "DRM_NVIDIA_GET_CRTC_CRC32",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_CRTC_CRC32",
+      "nr": 0,
+      "command_nr": 64,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_get_crtc_crc32_params",
+      "dispatched": true,
+      "handler": "nv_drm_get_crtc_crc32_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1860"
+    },
+    {
+      "command": "NVIDIA_GEM_IMPORT_NVKMS_MEMORY",
+      "number_macro": "DRM_NVIDIA_GEM_IMPORT_NVKMS_MEMORY",
+      "request_macro": "DRM_IOCTL_NVIDIA_GEM_IMPORT_NVKMS_MEMORY",
+      "nr": 1,
+      "command_nr": 65,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_gem_import_nvkms_memory_params",
+      "dispatched": true,
+      "handler": "nv_drm_gem_import_nvkms_memory_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1807"
+    },
+    {
+      "command": "NVIDIA_GEM_IMPORT_USERSPACE_MEMORY",
+      "number_macro": "DRM_NVIDIA_GEM_IMPORT_USERSPACE_MEMORY",
+      "request_macro": "DRM_IOCTL_NVIDIA_GEM_IMPORT_USERSPACE_MEMORY",
+      "nr": 2,
+      "command_nr": 66,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_gem_import_userspace_memory_params",
+      "dispatched": true,
+      "handler": "nv_drm_gem_import_userspace_memory_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1810"
+    },
+    {
+      "command": "NVIDIA_GET_DEV_INFO",
+      "number_macro": "DRM_NVIDIA_GET_DEV_INFO",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_DEV_INFO",
+      "nr": 3,
+      "command_nr": 67,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_get_dev_info_params",
+      "dispatched": true,
+      "handler": "nv_drm_get_dev_info_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1816"
+    },
+    {
+      "command": "NVIDIA_FENCE_SUPPORTED",
+      "number_macro": "DRM_NVIDIA_FENCE_SUPPORTED",
+      "request_macro": "DRM_IOCTL_NVIDIA_FENCE_SUPPORTED",
+      "nr": 4,
+      "command_nr": 68,
+      "direction": "DRM_IO",
+      "param_struct": null,
+      "dispatched": true,
+      "handler": "nv_drm_fence_supported_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1823"
+    },
+    {
+      "command": "NVIDIA_PRIME_FENCE_CONTEXT_CREATE",
+      "number_macro": "DRM_NVIDIA_PRIME_FENCE_CONTEXT_CREATE",
+      "request_macro": "DRM_IOCTL_NVIDIA_PRIME_FENCE_CONTEXT_CREATE",
+      "nr": 5,
+      "command_nr": 69,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_prime_fence_context_create_params",
+      "dispatched": true,
+      "handler": "nv_drm_prime_fence_context_create_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1826"
+    },
+    {
+      "command": "NVIDIA_GEM_PRIME_FENCE_ATTACH",
+      "number_macro": "DRM_NVIDIA_GEM_PRIME_FENCE_ATTACH",
+      "request_macro": "DRM_IOCTL_NVIDIA_GEM_PRIME_FENCE_ATTACH",
+      "nr": 6,
+      "command_nr": 70,
+      "direction": "DRM_IOW",
+      "param_struct": "drm_nvidia_gem_prime_fence_attach_params",
+      "dispatched": true,
+      "handler": "nv_drm_gem_prime_fence_attach_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1829"
+    },
+    {
+      "command": "NVIDIA_GET_CLIENT_CAPABILITY",
+      "number_macro": "DRM_NVIDIA_GET_CLIENT_CAPABILITY",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_CLIENT_CAPABILITY",
+      "nr": 8,
+      "command_nr": 72,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_get_client_capability_params",
+      "dispatched": true,
+      "handler": "nv_drm_get_client_capability_ioctl",
+      "flags": [
+        "0"
+      ],
+      "render_allow": false,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": false,
+          "condition": null,
+          "reason": "drm_ioctl_permit refuses a render client any command whose flag word omits DRM_RENDER_ALLOW"
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1856"
+    },
+    {
+      "command": "NVIDIA_GEM_EXPORT_NVKMS_MEMORY",
+      "number_macro": "DRM_NVIDIA_GEM_EXPORT_NVKMS_MEMORY",
+      "request_macro": "DRM_IOCTL_NVIDIA_GEM_EXPORT_NVKMS_MEMORY",
+      "nr": 9,
+      "command_nr": 73,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_gem_export_nvkms_memory_params",
+      "dispatched": true,
+      "handler": "nv_drm_gem_export_nvkms_memory_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1866"
+    },
+    {
+      "command": "NVIDIA_GEM_MAP_OFFSET",
+      "number_macro": "DRM_NVIDIA_GEM_MAP_OFFSET",
+      "request_macro": "DRM_IOCTL_NVIDIA_GEM_MAP_OFFSET",
+      "nr": 10,
+      "command_nr": 74,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_gem_map_offset_params",
+      "dispatched": true,
+      "handler": "nv_drm_gem_map_offset_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1813"
+    },
+    {
+      "command": "NVIDIA_GEM_ALLOC_NVKMS_MEMORY",
+      "number_macro": "DRM_NVIDIA_GEM_ALLOC_NVKMS_MEMORY",
+      "request_macro": "DRM_IOCTL_NVIDIA_GEM_ALLOC_NVKMS_MEMORY",
+      "nr": 11,
+      "command_nr": 75,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_gem_alloc_nvkms_memory_params",
+      "dispatched": true,
+      "handler": "nv_drm_gem_alloc_nvkms_memory_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1869"
+    },
+    {
+      "command": "NVIDIA_GET_CRTC_CRC32_V2",
+      "number_macro": "DRM_NVIDIA_GET_CRTC_CRC32_V2",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_CRTC_CRC32_V2",
+      "nr": 12,
+      "command_nr": 76,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_get_crtc_crc32_v2_params",
+      "dispatched": true,
+      "handler": "nv_drm_get_crtc_crc32_v2_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1863"
+    },
+    {
+      "command": "NVIDIA_GEM_EXPORT_DMABUF_MEMORY",
+      "number_macro": "DRM_NVIDIA_GEM_EXPORT_DMABUF_MEMORY",
+      "request_macro": "DRM_IOCTL_NVIDIA_GEM_EXPORT_DMABUF_MEMORY",
+      "nr": 13,
+      "command_nr": 77,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_gem_export_dmabuf_memory_params",
+      "dispatched": true,
+      "handler": "nv_drm_gem_export_dmabuf_memory_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1872"
+    },
+    {
+      "command": "NVIDIA_GEM_IDENTIFY_OBJECT",
+      "number_macro": "DRM_NVIDIA_GEM_IDENTIFY_OBJECT",
+      "request_macro": "DRM_IOCTL_NVIDIA_GEM_IDENTIFY_OBJECT",
+      "nr": 14,
+      "command_nr": 78,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_gem_identify_object_params",
+      "dispatched": true,
+      "handler": "nv_drm_gem_identify_object_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1875"
+    },
+    {
+      "command": "NVIDIA_DMABUF_SUPPORTED",
+      "number_macro": "DRM_NVIDIA_DMABUF_SUPPORTED",
+      "request_macro": "DRM_IOCTL_NVIDIA_DMABUF_SUPPORTED",
+      "nr": 15,
+      "command_nr": 79,
+      "direction": "DRM_IO",
+      "param_struct": null,
+      "dispatched": true,
+      "handler": "nv_drm_dmabuf_supported_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1878"
+    },
+    {
+      "command": "NVIDIA_GET_DPY_ID_FOR_CONNECTOR_ID",
+      "number_macro": "DRM_NVIDIA_GET_DPY_ID_FOR_CONNECTOR_ID",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_DPY_ID_FOR_CONNECTOR_ID",
+      "nr": 16,
+      "command_nr": 80,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_get_dpy_id_for_connector_id_params",
+      "dispatched": true,
+      "handler": "nv_drm_get_dpy_id_for_connector_id_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1881"
+    },
+    {
+      "command": "NVIDIA_GET_CONNECTOR_ID_FOR_DPY_ID",
+      "number_macro": "DRM_NVIDIA_GET_CONNECTOR_ID_FOR_DPY_ID",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_CONNECTOR_ID_FOR_DPY_ID",
+      "nr": 17,
+      "command_nr": 81,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_get_connector_id_for_dpy_id_params",
+      "dispatched": true,
+      "handler": "nv_drm_get_connector_id_for_dpy_id_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1884"
+    },
+    {
+      "command": "NVIDIA_GRANT_PERMISSIONS",
+      "number_macro": "DRM_NVIDIA_GRANT_PERMISSIONS",
+      "request_macro": "DRM_IOCTL_NVIDIA_GRANT_PERMISSIONS",
+      "nr": 18,
+      "command_nr": 82,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_grant_permissions_params",
+      "dispatched": true,
+      "handler": "nv_drm_grant_permission_ioctl",
+      "flags": [
+        "DRM_UNLOCKED",
+        "DRM_MASTER"
+      ],
+      "render_allow": false,
+      "master": true,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": "the opening file must be the current DRM master, which drm_master_open grants only when the device has none",
+          "reason": null
+        },
+        "render": {
+          "reachable": false,
+          "condition": null,
+          "reason": "drm_ioctl_permit refuses a render client any command whose flag word omits DRM_RENDER_ALLOW"
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1887"
+    },
+    {
+      "command": "NVIDIA_REVOKE_PERMISSIONS",
+      "number_macro": "DRM_NVIDIA_REVOKE_PERMISSIONS",
+      "request_macro": "DRM_IOCTL_NVIDIA_REVOKE_PERMISSIONS",
+      "nr": 19,
+      "command_nr": 83,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_revoke_permissions_params",
+      "dispatched": true,
+      "handler": "nv_drm_revoke_permission_ioctl",
+      "flags": [
+        "DRM_UNLOCKED",
+        "DRM_MASTER"
+      ],
+      "render_allow": false,
+      "master": true,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": "the opening file must be the current DRM master, which drm_master_open grants only when the device has none",
+          "reason": null
+        },
+        "render": {
+          "reachable": false,
+          "condition": null,
+          "reason": "drm_ioctl_permit refuses a render client any command whose flag word omits DRM_RENDER_ALLOW"
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1890"
+    },
+    {
+      "command": "NVIDIA_SEMSURF_FENCE_CTX_CREATE",
+      "number_macro": "DRM_NVIDIA_SEMSURF_FENCE_CTX_CREATE",
+      "request_macro": "DRM_IOCTL_NVIDIA_SEMSURF_FENCE_CTX_CREATE",
+      "nr": 20,
+      "command_nr": 84,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_semsurf_fence_ctx_create_params",
+      "dispatched": true,
+      "handler": "nv_drm_semsurf_fence_ctx_create_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1832"
+    },
+    {
+      "command": "NVIDIA_SEMSURF_FENCE_CREATE",
+      "number_macro": "DRM_NVIDIA_SEMSURF_FENCE_CREATE",
+      "request_macro": "DRM_IOCTL_NVIDIA_SEMSURF_FENCE_CREATE",
+      "nr": 21,
+      "command_nr": 85,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_semsurf_fence_create_params",
+      "dispatched": true,
+      "handler": "nv_drm_semsurf_fence_create_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1835"
+    },
+    {
+      "command": "NVIDIA_SEMSURF_FENCE_WAIT",
+      "number_macro": "DRM_NVIDIA_SEMSURF_FENCE_WAIT",
+      "request_macro": "DRM_IOCTL_NVIDIA_SEMSURF_FENCE_WAIT",
+      "nr": 22,
+      "command_nr": 86,
+      "direction": "DRM_IOW",
+      "param_struct": "drm_nvidia_semsurf_fence_wait_params",
+      "dispatched": true,
+      "handler": "nv_drm_semsurf_fence_wait_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1838"
+    },
+    {
+      "command": "NVIDIA_SEMSURF_FENCE_ATTACH",
+      "number_macro": "DRM_NVIDIA_SEMSURF_FENCE_ATTACH",
+      "request_macro": "DRM_IOCTL_NVIDIA_SEMSURF_FENCE_ATTACH",
+      "nr": 23,
+      "command_nr": 87,
+      "direction": "DRM_IOW",
+      "param_struct": "drm_nvidia_semsurf_fence_attach_params",
+      "dispatched": true,
+      "handler": "nv_drm_semsurf_fence_attach_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1841"
+    },
+    {
+      "command": "NVIDIA_GET_DRM_FILE_UNIQUE_ID",
+      "number_macro": "DRM_NVIDIA_GET_DRM_FILE_UNIQUE_ID",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_DRM_FILE_UNIQUE_ID",
+      "nr": 24,
+      "command_nr": 88,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_get_drm_file_unique_id_params",
+      "dispatched": true,
+      "handler": "nv_drm_get_drm_file_unique_id_ioctl",
+      "flags": [
+        "DRM_RENDER_ALLOW",
+        "DRM_UNLOCKED"
+      ],
+      "render_allow": true,
+      "master": false,
+      "reachable_on": {
+        "card": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        },
+        "render": {
+          "reachable": true,
+          "condition": null,
+          "reason": null
+        }
+      },
+      "undispatched_reason": null,
+      "source": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1819"
+    },
+    {
+      "command": "NVIDIA_REGISTER_ROI",
+      "number_macro": "DRM_NVIDIA_REGISTER_ROI",
+      "request_macro": "DRM_IOCTL_NVIDIA_REGISTER_ROI",
+      "nr": 25,
+      "command_nr": 89,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_register_roi_params",
+      "dispatched": false,
+      "handler": null,
+      "flags": null,
+      "render_allow": null,
+      "master": null,
+      "reachable_on": null,
+      "undispatched_reason": "no entry in nv_drm_ioctls[]",
+      "source": "kernel-open/nvidia-drm/nv_drm_common_ioctl.h:56"
+    },
+    {
+      "command": "NVIDIA_UNREGISTER_ROI",
+      "number_macro": "DRM_NVIDIA_UNREGISTER_ROI",
+      "request_macro": "DRM_IOCTL_NVIDIA_UNREGISTER_ROI",
+      "nr": 26,
+      "command_nr": 90,
+      "direction": "DRM_IOW",
+      "param_struct": "drm_nvidia_unregister_roi_params",
+      "dispatched": false,
+      "handler": null,
+      "flags": null,
+      "render_allow": null,
+      "master": null,
+      "reachable_on": null,
+      "undispatched_reason": "no entry in nv_drm_ioctls[]",
+      "source": "kernel-open/nvidia-drm/nv_drm_common_ioctl.h:57"
+    },
+    {
+      "command": "NVIDIA_GET_CRTC_ROI_CRCS",
+      "number_macro": "DRM_NVIDIA_GET_CRTC_ROI_CRCS",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_CRTC_ROI_CRCS",
+      "nr": 27,
+      "command_nr": 91,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_read_crc_params",
+      "dispatched": false,
+      "handler": null,
+      "flags": null,
+      "render_allow": null,
+      "master": null,
+      "reachable_on": null,
+      "undispatched_reason": "no entry in nv_drm_ioctls[]",
+      "source": "kernel-open/nvidia-drm/nv_drm_common_ioctl.h:58"
+    },
+    {
+      "command": "NVIDIA_GET_ROI_CAPABILITIES",
+      "number_macro": "DRM_NVIDIA_GET_ROI_CAPABILITIES",
+      "request_macro": "DRM_IOCTL_NVIDIA_GET_ROI_CAPABILITIES",
+      "nr": 28,
+      "command_nr": 92,
+      "direction": "DRM_IOWR",
+      "param_struct": "drm_nvidia_get_roi_capabilities_params",
+      "dispatched": false,
+      "handler": null,
+      "flags": null,
+      "render_allow": null,
+      "master": null,
+      "reachable_on": null,
+      "undispatched_reason": "no entry in nv_drm_ioctls[]",
+      "source": "kernel-open/nvidia-drm/nv_drm_common_ioctl.h:59"
+    }
+  ]
+}

@@ -129,7 +129,7 @@ compile and contribute sizes for structs the current set no longer names.
 |---|---|
 | Never emit a struct whose derived layout disagrees with its measured `sizeof` | The ioctl request number encodes the size the driver expects. A wrong layout compiles, runs, and lands on a different field or on none |
 | Never model `NV_ESC_RM_CONTROL` as one escape carrying an opaque buffer | `agents/describe.md` step 4b. One opaque ioctl gives the fuzzer no command number to mutate and no parameter structure, and it puts the command number out of reach of any corpus-text measurement |
-| Never emit a description for `nvidia-drm` or `/dev/dri/*` | Those nodes sit outside the threat model on the legacy path, and the CDI path for DRM nodes is untraced, so a seed naming them claims reach the campaign has not established. `/dev/nvidia-modeset` is inside the model and is the sixth family |
+| Never emit one call covering both `/dev/dri` node types | `drm_ioctl_permit` refuses a render client any command whose flag word omits `DRM_RENDER_ALLOW`, so one call name would model the union on both nodes and emit programs that reach no handler. `openat$dri_card` and `openat$dri_render` carry separate `fd` resources, which makes the 21-of-24 split a compile-time type error |
 | Never classify a record carrying no `RS_FLAGS_ALLOC_*` flag with the privileged ones | The three such records are the root client classes. Filtering them drops the client allocation and every description that consumes its handle |
 | Never widen a variant's file descriptor argument past its node restriction | `NV_ESC_RM_CONTROL` carries `NV_CTL_DEVICE_ONLY`, so all 531 control variants take `fd_nvidiactl` |
 | Never leave padding to syzkaller | Whether its alignment rules agree with the compiler's is an assumption no compile gate checks |
@@ -153,7 +153,7 @@ measures which commands a corpus reaches with no KCOV, no syz-manager and no
 GPU. Variants are named after the handler and not the command number, so the 5
 duplicate method ids in the export table still produce distinct descriptions.
 
-`surface_cov.py` measures the generated baseline at 828 of 828 targets
+`surface_cov.py` measures the generated baseline at 852 of 852 targets
 modelled, 100.0%. The denominator decomposes as 32 escapes, 39 UVM commands, 7
 UVM tools commands, 531 control commands, 155 allocation classes and 64 modeset
 commands. The set declares 909 `ioctl$` variants, split 268 in `nvidia.txt`,

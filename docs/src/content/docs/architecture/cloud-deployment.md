@@ -80,7 +80,7 @@ first path again.
 The toolkit packages write `mode = auto` at install time and resolve it to
 jit-cdi from 1.18.0 onward, so a stock instance lands on the first path. The
 recorded tenant surface assumes it. An instance on the legacy path holds a
-smaller device set than the 828-target denominator covers, and the campaign
+smaller device set than the 852-target denominator covers, and the campaign
 would report coverage against surface no tenant on that instance can reach.
 
 ## Region and quota
