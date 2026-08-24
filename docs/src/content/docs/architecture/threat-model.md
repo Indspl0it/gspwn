@@ -15,9 +15,9 @@ The campaign models one attacker per track.
 | Confinement in force | Linux capabilities dropped to the container runtime's default set, the runtime's seccomp profile, the device cgroup allowlist | None at the time the code runs |
 | Capability request | `NVIDIA_DRIVER_CAPABILITIES=compute,utility`, which CUDA images request | Not applicable |
 | Device nodes received | `/dev/nvidiactl`, `/dev/nvidiaX`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` | Not applicable |
-| Device nodes received on the CDI path | `/dev/nvidia-modeset`, injected with no capability check | Not applicable |
+| Device nodes received on the CDI path | `/dev/nvidia-modeset`, `/dev/dri/card*` and `/dev/dri/renderD*`, all injected with no capability check | Not applicable |
 | Device nodes received conditionally | `/dev/nvidia-nvswitchctl` and `/dev/nvidia-nvswitch*`, when the image sets `NVIDIA_NVSWITCH=enabled` | Not applicable |
-| Device nodes withheld | `/dev/dri/*`, `/dev/nvidia-nvlink` | Not applicable |
+| Device nodes withheld | `/dev/nvidia-nvlink` on both paths. `/dev/nvidia-modeset` and `/dev/dri/*` on the legacy path alone | Not applicable |
 | Primary target | The NVIDIA GPU kernel driver ioctl surface | `libnvidia-container`, written in C. The memory-safety surface |
 | Secondary target | None | `nvidia-container-toolkit`, written in Go. Panic and denial-of-service surface only |
 | Trust boundary crossed | Container to host kernel | Untrusted image input to a host root process |
@@ -30,13 +30,13 @@ prompt forbids one.
 ## Device node injection paths
 
 Two mechanisms inject NVIDIA device nodes into a container. They differ on
-`/dev/nvidia-modeset`, and the path in force decides whether that node lies
-inside the Track K attacker's reach.
+`/dev/nvidia-modeset` and on the `/dev/dri` nodes, and the path in force decides
+whether those lie inside the Track K attacker's reach.
 
-| Path | Modeset injected under `compute,utility` | Mechanism |
-|---|---|---|
-| CDI, including `jit-cdi` | Yes | `pkg/nvcdi/common-nvml.go:52` lists `/dev/nvidia-modeset` beside the three unconditional control nodes, and `:28` calls that discoverer with no capability check. `NVIDIA_DRIVER_CAPABILITIES` appears nowhere in `pkg/nvcdi` |
-| Legacy `libnvidia-container` | No | `src/nvc_mount.c:786` skips the modeset minor unless `OPT_DISPLAY` is set. `src/options.h:92` sets that flag from the `display` value alone, `:91` shows `graphics` does not set it, and `:100` omits it from the container defaults |
+| Path | Modeset under `compute,utility` | `/dev/dri` under `compute,utility` | Mechanism |
+|---|---|---|---|
+| CDI, including `jit-cdi` | Yes | Yes | `pkg/nvcdi/common-nvml.go:52` lists `/dev/nvidia-modeset` beside the three unconditional control nodes, and `:28` calls that discoverer with no capability check. `internal/platform-support/dgpu/nvml.go:48-55` adds every `/dev/dri` node found for the GPU's PCI bus id, and `internal/edits/device.go:76` grants them `rwm`. `NVIDIA_DRIVER_CAPABILITIES` appears nowhere in `pkg/nvcdi` |
+| Legacy `libnvidia-container` | No | No | `src/nvc_mount.c:786` skips the modeset minor unless `OPT_DISPLAY` is set. `src/options.h:92` sets that flag from the `display` value alone, `:91` shows `graphics` does not set it, and `:100` omits it from the container defaults. No source file in `libnvidia-container` references `/dev/dri` at all |
 
 `internal/info/auto.go:89` resolves the default runtime mode to `jit-cdi`, and
 `internal/modifier/mode.go:17` routes both CDI modes through the CDI generator.
@@ -47,15 +47,30 @@ attacker's reach and its 64 dispatched commands are counted in the denominator.
 yields the modeset node. A deployment pinned to `legacy` mode withholds it, and
 a modeset crash is claimable against a CDI deployment only.
 
-`/dev/dri/*` and the `nvidia-drm` nodes stay outside the model in this branch,
-on an argument that has not been re-verified under CDI. The legacy argument
-rests on the capability set, which a default tenant leaves at
-`compute,utility`. `internal/discover/graphics.go:39` declares
-`NewDRMNodesDiscoverer`, and the comment above it at `:37` restricts that
-function to legacy mode. No capability check has been traced on the CDI path
-for DRM nodes, and that trace is open work. If those nodes prove reachable they
-form a new family with its own denominator, and this page changes before any
-phase models them.
+`/dev/dri/card*` and `/dev/dri/renderD*` are inside the model. The CDI trace
+that this page previously recorded as open work has been completed:
+`internal/platform-support/dgpu/nvml.go:48-55` adds the nodes and
+`internal/edits/device.go:76` grants read, write and mknod on them, and neither
+call site tests `NVIDIA_DRIVER_CAPABILITIES`. `nvidia-drm` registers a device
+for every GPU `nvidia-modeset` enumerates, at
+`kernel-open/nvidia-drm/nvidia-drm-drv.c:2176`, so a tenant holding the GPU
+holds the nodes.
+
+`internal/discover/graphics.go:39` declares `NewDRMNodesDiscoverer` and the
+comment at `:37` restricts that function to legacy mode. The earlier exclusion
+rested on that restriction, which governs the legacy path alone.
+
+The two node types differ in what they reach. `nv_drm_fops` dispatches 24 of
+the 28 declared `DRM_NVIDIA_*` commands; the four at 0x19 to 0x1c are declared
+and unreachable. Of the 24, 21 carry `DRM_RENDER_ALLOW` and are reachable on
+either node, 2 require `DRM_MASTER`, and 1 carries no flag. `drm_ioctl_permit`
+refuses a render client any command lacking `DRM_RENDER_ALLOW`, so a tenant
+holding only `renderD*` reaches 21. A default CDI tenant holds both node types.
+
+The `DRM_MASTER` pair is conditional. The opening file descriptor becomes
+master when `dev->master` is NULL, which is likely on a headless host and is
+not guaranteed, so those two are recorded with their condition and are not
+claimed unconditionally.
 
 Device nodes are one gate of two, and the second is the allocation privilege
 flag the driver attaches to each object class. A class carrying
@@ -91,8 +106,8 @@ it, and it appears there only inside `blockedPrefixes`.
 
 | Excluded | Reason |
 |---|---|
-| `/dev/dri/*` and the `nvidia-drm` nodes | A default tenant receives neither on the legacy path. The CDI path is untraced for DRM nodes, so this exclusion is provisional. See [Device node injection paths](/gspwn/architecture/threat-model/#device-node-injection-paths) |
 | `/dev/nvidia-nvlink` | The container toolkit never injects it. It appears there only inside `blockedPrefixes` |
+| `/dev/dri/*` on a deployment pinned to `legacy` mode | `libnvidia-container` never injects those nodes. The exclusion applies to that deployment alone, and a default instance resolves to the CDI path. See [Device node injection paths](/gspwn/architecture/threat-model/#device-node-injection-paths) |
 | The display channel class tree below `NVC570_DISPLAY` | All 38 classes carry `RS_FLAGS_ALLOC_PRIVILEGED`, so the tenant cannot allocate them |
 | Symlink TOCTOU and mount-escape logic bugs on Track U | Fuzzing finds them poorly. Recorded in the report as future work |
 | Memory-corruption claims against the Go toolkit | Go is memory-safe |
@@ -138,19 +153,29 @@ a container matching the model, as a non-root user, with the default capability
 set:
 
 ```
-docker run --rm --gpus all \
+docker run --rm --runtime=nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
   --user 1000:1000 \
   -v $PWD/artifacts/pocs/crash-0001:/poc:ro \
   <cuda-runtime-image> /poc/repro
 ```
 
-1. Confirm what that container received. Run `ls /dev/nvidia*` inside it. If
-   `/dev/dri` is present, the capability set is wider than the model and the run
-   does not establish tenant reachability. If `/dev/nvidia-nvswitch*` is
-   present, record it: those nodes are conditional on `NVIDIA_NVSWITCH`, and a
-   finding reached through them carries that condition in its impact
-   statement.
+`--runtime=nvidia` is required here. Docker 29.1.x and older inject the
+prestart hook for `--gpus`, and the hook defaults to legacy, which hands the
+container a narrower device set than the deployment the model describes. A
+reproducer needing the modeset node or a DRM node fails in such a container and
+would be recorded `not-tenant-reachable`, understating the finding.
+
+1. Confirm what that container received. Run `ls /dev/nvidia* /dev/dri` inside
+   it and compare against the model, which
+   `python3 tools/verify_tenant_surface.py expected` prints. A node the model
+   places outside the tenant surface makes the run wider than the model, and
+   that run does not establish tenant reachability. A node the model places
+   inside that is absent makes the run narrower, and a failure in it says
+   nothing. If `/dev/nvidia-nvswitch*` is present, record it: those nodes are
+   conditional on `NVIDIA_NVSWITCH`, and a finding reached through them carries
+   that condition in its impact statement.
 2. Record one of the three outcomes below in the PoC README.
 
 | Outcome | Condition | Permitted report statement |
