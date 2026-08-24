@@ -92,8 +92,10 @@ python3-yaml docker.io kdump-tools pstore-tools mokutil
 ## Go toolchain
 
 syzkaller builds on the host, and its pinned revision declares `go 1.26.0` in
-`go.mod`. No `apt` package meets that floor, because Ubuntu 24.04 ships Go
-1.22, so the toolchain comes from the upstream tarball.
+`go.mod`. Go 1.21 and later download that toolchain on demand under the default
+`GOTOOLCHAIN=auto`, so an `apt` package at 1.21 or later works where the module
+proxy is reachable. The upstream tarball installs the declared version directly
+and carries neither condition.
 
 | Consumer | Requirement |
 |---|---|

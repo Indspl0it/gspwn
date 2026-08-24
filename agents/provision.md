@@ -99,11 +99,16 @@ instrumented kernel fuzzing.
    in config/machine.yaml as `container_toolkit_version`, beside
    `driver_branch`. The injection path depends on the toolkit version, so a
    campaign that does not record it cannot defend its own denominator later.
-4b. Install the Go toolchain. Step 6 builds syzkaller, which is written in
-   Go and builds on the host, and the pinned revision declares `go 1.26.0` in
-   go.mod. No apt package meets that floor, because Ubuntu 24.04 ships Go
-   1.22. The describe phase also runs `syzlang_gen.py compile`, which invokes
-   go and exits 3 when it is absent.
+4b. Install the Go toolchain. Step 6 builds syzkaller, which is written in Go
+   and builds on the host, and nothing installs a toolchain before this step.
+   The describe phase also runs `syzlang_gen.py compile`, which invokes go and
+   exits 3 when it is absent.
+
+   The pinned revision declares `go 1.26.0` in go.mod. Go 1.21 and later fetch
+   that toolchain on demand under the default GOTOOLCHAIN=auto, so an apt
+   package would also serve where proxy.golang.org is reachable. Use the
+   tarball: it installs the declared version directly, keeps a multi-minute
+   download off the build's critical path, and does not assume proxy access.
 
    ```
    GO_VERSION=1.26.2
