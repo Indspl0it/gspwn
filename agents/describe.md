@@ -8,8 +8,12 @@ is downstream of this phase.
 
 ## Inputs
 - artifacts/src/open-gpu-kernel-modules (headers + ioctl handlers)
-- artifacts/src/syzkaller (toolchain: syz-extract, syz-compile)
-- artifacts/src/linux (syz-extract needs the kernel tree it was built against)
+- A Go toolchain, for `syzlang_gen.py compile`. It builds
+  `tools/gspwn-check` against a pinned syzkaller checkout, and clones that
+  checkout itself when `--syzkaller` names none. syzkaller ships no
+  `syz-compile` binary: compiling a description set is `ast.ParseGlob`
+  followed by `compiler.Compile`, and the driver calls those two
+  functions directly
 - The modeling approach below: nv_handle / client_nv_handle resources,
   root-client allocation, the RM object hierarchy, flags and constraints
 
@@ -192,7 +196,7 @@ coverage alone.
    against what is committed, so a commit that carries the artefacts and not
    the pages fails.
 
-   `python3 tools/regression_check.py all` runs the five checks CI runs, and
+   `python3 tools/regression_check.py all` runs the seven checks CI runs, and
    each one reads a different pair of artefacts that have to agree:
 
    | Check | Artefact pair compared |
@@ -202,6 +206,8 @@ coverage alone.
    | `pins` | every emitted leaf selector renders as a const, including the `NV_ESC_IOCTL_XFER_CMD` inner `cmd` |
    | `derived` | the chain and ranking artefacts still match the control inventory |
    | `pages` | the generated reference pages still match the surface artefacts |
+   | `stale` | every surface artefact `descriptions/generation.json` records still hashes to the recorded digest |
+   | `harnesses` | the four Track U target lists still name the same harnesses |
 
    `derived` fails when the regeneration stopped before `object_graph.py
    chains` or `ctrl_rank.py rank`, and `pages` fails when it stopped before
@@ -209,11 +215,28 @@ coverage alone.
    above and commit its output. Run `all` before the commit, not after.
 
    `syzlang_gen.py` emits a first-cut description set into
-   descriptions/. It is generated and unverified: it has never been
-   through syz-compile, and any struct whose derived layout did not match the
-   measured size is marked in its output. Compiling it is the first gate, and
-   correcting it is the work. Record which descriptions were corrected and
-   which were authored, because the eval phase reports that split.
+   descriptions/. Any struct whose derived layout did not match its
+   measured size is marked in its output. Compiling it is the first gate:
+
+   ```
+   python3 tools/syzlang_gen.py compile
+   ```
+
+   It builds `tools/gspwn-check` against a pinned syzkaller checkout and
+   runs syzkaller's own compiler over `descriptions/*.txt` together with
+   `tools/syz-stub/*`. Exit 0 prints the verdict line, of the form
+   `compile: OK, 2 const(s) loaded, 855 syscall(s), ...`. 855 is the 849
+   the description set declares plus the 6 `syz_builtinN` pseudo-syscalls
+   `pkg/compiler` prepends to every compile. Exit 1 reproduces the
+   compiler's own diagnostics, each naming a file and a line. Exit 3 means
+   no verdict was reached at all, because Go is absent or the checkout
+   could not be obtained, and it is no evidence that the set compiles.
+   Quote the command's own output in the gate. A hand-produced result is
+   not evidence.
+
+   Correcting the set is the work. Record which descriptions were
+   corrected and which were authored, because the eval phase reports that
+   split.
 
    `surface_cov.py` measures how much of the enumerated command surface the
    descriptions now declare:
@@ -301,8 +324,10 @@ coverage alone.
    before modelling them.
 
 3. Create a header defining the NV_* ioctl command numbers via _IOWR
-   macros, extract constants with syz-extract, then compile with
-   syz-compile.
+   macros, then run `python3 tools/syzlang_gen.py compile`. The two
+   syscall numbers the set needs are committed in
+   `tools/syz-stub/gspwn_stub.txt.const`, so no constant extraction and
+   no kernel tree are involved.
 4. Correct and exercise in this priority order. The baseline is generated and
    already declares every target, so this phase's work is correction and
    constraint. From round 2 on, the worklist's `[finding ...]` items come ahead
@@ -413,7 +438,8 @@ coverage alone.
 Descriptions are agent-authored, so they are treated as untrusted until
 measured. All four checks are required, and their evidence goes in the gate:
 
-1. Every description compiles under syz-compile.
+1. `python3 tools/syzlang_gen.py compile` exits 0, with its verdict line
+   quoted.
 2. Smoke campaign (5 min minimum). Confirm via dmesg that programs reach the
    driver, and that they do more than execute. Record the excerpt.
 3. Reachability check. If the smoke run shows ioctls returning immediately
@@ -441,13 +467,13 @@ Record progress with the state tool, never by editing pipeline.json:
  --notes "<one line>"`
 
 ## Gate evidence
-- syz-compile success output.
+- `syzlang_gen.py compile` output, quoted verbatim. Exit 3 is not a pass.
 - Smoke-run dmesg excerpt showing driver contact.
 - The two `surface_cov.py gaps --stage corpus` counts: the before reading over
   `artifacts/seeds`, and the after reading with `--run-id <smoke run id>`
   against the smoke run's own corpus, with the smoke run id named. That delta
   is this round's measured output.
-- Where a regeneration ran, `regression_check.py all` output with all five
+- Where a regeneration ran, `regression_check.py all` output with all seven
   checks passing, and the reference pages under
   `docs/src/content/docs/reference/surface/` regenerated and committed with the
   artefacts.

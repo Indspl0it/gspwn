@@ -1,0 +1,8 @@
+# The syscall numbers assignSyscallNumbers needs to compile gspwn's four
+# description files in isolation. Copied from syzkaller's own committed
+# sys/linux/sys.txt.const: standard x86-64 ABI numbers, not extracted from any
+# target-specific header, so reproducing them needs no syz-extract run and no
+# kernel tree.
+arches = amd64
+__NR_ioctl = amd64:16
+__NR_openat = amd64:257

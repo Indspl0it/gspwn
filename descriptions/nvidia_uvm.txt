@@ -48,7 +48,7 @@ ioctl$UVM_CLEAR_ALL_ACCESS_COUNTERS(fd fd_nvidia_uvm, cmd const[0x4f], arg ptr[i
 ioctl$UVM_DISCARD(fd fd_nvidia_uvm, cmd const[0x50], arg ptr[inout, UVM_DISCARD_PARAMS])
 ioctl$UVM_QUERY_RESIDENCY(fd fd_nvidia_uvm, cmd const[0x51], arg ptr[inout, UVM_QUERY_RESIDENCY_PARAMS])
 ioctl$UVM_INITIALIZE(fd fd_nvidia_uvm, cmd const[0x30000001], arg ptr[inout, UVM_INITIALIZE_PARAMS])
-ioctl$UVM_DEINITIALIZE(fd fd_nvidia_uvm, cmd const[0x30000002], arg const[0, intptr])
+ioctl$UVM_DEINITIALIZE(fd fd_nvidia_uvm, cmd const[0x30000002], arg const[0])
 ioctl$UVM_TOOLS_INIT_EVENT_TRACKER(fd fd_nvidia_uvm_tools, cmd const[0x38], arg ptr[inout, UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS])
 ioctl$UVM_TOOLS_SET_NOTIFICATION_THRESHOLD(fd fd_nvidia_uvm_tools, cmd const[0x39], arg ptr[inout, UVM_TOOLS_SET_NOTIFICATION_THRESHOLD_PARAMS])
 ioctl$UVM_TOOLS_EVENT_QUEUE_ENABLE_EVENTS(fd fd_nvidia_uvm_tools, cmd const[0x3a], arg ptr[inout, UVM_TOOLS_EVENT_QUEUE_ENABLE_EVENTS_PARAMS])

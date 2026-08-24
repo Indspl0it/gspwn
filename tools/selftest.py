@@ -35,6 +35,7 @@ The git-mining classes skip themselves when git is absent from PATH.
 
 Usage: python3 tools/selftest.py [-v]      exit 0 = all passed
 """
+import ast
 import csv
 import fcntl
 import hashlib
@@ -13201,7 +13202,8 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
 
     def test_all_runs_the_checks_in_the_documented_order(self):
         self.assertEqual(regression_check.check_order(),
-                         ["names", "pins", "coverage", "derived", "pages"])
+                         ["names", "pins", "coverage", "derived", "pages",
+                          "stale", "harnesses"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -13502,6 +13504,701 @@ class TestThePromptCheckSeesAFlagOnlyInvocation(unittest.TestCase):
         # where a subcommand's flags never appear.
         self.assertIn("if sub:\n                      argv.append(sub)",
                       self.workflow())
+
+
+# ---------------------------------------------------------------------------
+# Phase 0: the two artefact and seam guards, tools/regression_check.py stale
+# and harnesses.
+#
+# Both compare committed sets that agree today and that nothing else compares.
+# The passing cases read the real artefacts, so a checkout missing them fails
+# here for the same reason the CI step fails. The failing cases build a scratch
+# tree and point the module constants at it, which is the only way to see the
+# offender reported without editing a committed file.
+# ---------------------------------------------------------------------------
+
+
+class Phase0Fixtures(unittest.TestCase):
+    """Scratch trees the two guards read through their module constants."""
+
+    def tempdir(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return holder.name
+
+    def check(self, name):
+        """-> (exit code, stdout and stderr) for one subcommand."""
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = regression_check.main([name])
+        return code, out.getvalue() + err.getvalue()
+
+    def use(self, **attrs):
+        self.addCleanup(_restore, _patched(**attrs))
+
+    def artefact(self, root, relative, payload):
+        """Write one recorded input into the scratch tree, returning its
+        digest."""
+        path = os.path.join(root, *relative.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(payload)
+        return hashlib.sha256(payload).hexdigest()
+
+    def generation(self, root, record):
+        """Write descriptions/generation.json and point `stale` at it."""
+        directory = os.path.join(root, "descriptions")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, "generation.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"generated_from": record}, fh)
+        self.use(GENERATION=path)
+        return path
+
+
+class TestRecordedInputsStillMatch(Phase0Fixtures):
+    """regression_check stale: every input generation.json records still
+    hashes to the digest the record carries.
+
+    Five sha256 values sat in descriptions/generation.json with no reader. A
+    surface artefact regenerated without regenerating the description set
+    leaves the record pointing at bytes that no longer exist, and every tool
+    that reads either one still reports success.
+    """
+
+    def scratch(self, root):
+        """A two-input record whose digests match, one of them a list member."""
+        rank = self.artefact(root, "surface/rm-control-rank.json",
+                             b'{"commands": []}\n')
+        sizes = self.artefact(root, "surface/ctrl-param-sizes.json",
+                              b'{"entries": []}\n')
+        return {
+            "ctrl_rank": {"path": "surface/rm-control-rank.json",
+                          "commands": 1, "sha256": rank},
+            "ctrl_sizes": [{"path": "surface/ctrl-param-sizes.json",
+                            "entries": 1, "sha256": sizes}],
+            "driver_version": "610.57.04",
+            "driver_commit": "e4a5faa",
+        }
+
+    def test_every_committed_input_matches_its_recorded_digest(self):
+        code, out = self.check("stale")
+        self.assertEqual(code, 0, out)
+        self.assertIn("stale: OK", out)
+
+    def test_all_five_recorded_inputs_are_reported(self):
+        code, out = self.check("stale")
+        self.assertEqual(code, 0, out)
+        for path in ("surface/rm-control-inventory.json",
+                     "surface/rm-control-rank.json",
+                     "surface/ctrl-param-sizes.json",
+                     "surface/ioctl-inventory.json",
+                     "surface/rm-object-graph.json"):
+            self.assertIn(path, out)
+
+    def test_the_recorded_checkout_is_reported_beside_the_inputs(self):
+        code, out = self.check("stale")
+        self.assertEqual(code, 0, out)
+        self.assertIn("610.57.04", out)
+        self.assertIn("e4a5faa", out)
+
+    def test_a_digest_that_moved_names_the_file(self):
+        root = self.tempdir()
+        record = self.scratch(root)
+        self.artefact(root, "surface/rm-control-rank.json", b'{"moved": 1}\n')
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("surface/rm-control-rank.json", out)
+        self.assertIn(record["ctrl_rank"]["sha256"][:16], out)
+
+    def test_a_list_member_that_moved_names_the_file(self):
+        root = self.tempdir()
+        record = self.scratch(root)
+        self.artefact(root, "surface/ctrl-param-sizes.json", b'{"moved": 1}\n')
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("surface/ctrl-param-sizes.json", out)
+
+    def test_an_absent_input_names_the_file(self):
+        root = self.tempdir()
+        record = self.scratch(root)
+        os.remove(os.path.join(root, "surface", "rm-control-rank.json"))
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("surface/rm-control-rank.json", out)
+        self.assertIn("absent", out)
+
+    def test_a_record_with_no_provenance_block_cannot_run(self):
+        root = self.tempdir()
+        directory = os.path.join(root, "descriptions")
+        os.makedirs(directory)
+        path = os.path.join(directory, "generation.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"schema": "gspwn.descriptions/1"}, fh)
+        self.use(GENERATION=path)
+        code, out = self.check("stale")
+        self.assertEqual(code, 2, out)
+        self.assertIn("generated_from", out)
+
+    def test_an_entry_shaped_in_an_unanticipated_way_cannot_run(self):
+        root = self.tempdir()
+        self.generation(root, {"ctrl_rank": {"records": 1}})
+        code, out = self.check("stale")
+        self.assertEqual(code, 2, out)
+        self.assertIn("ctrl_rank", out)
+
+
+class TestHarnessTargetListsAgree(Phase0Fixtures):
+    """regression_check harnesses: the four Track U target lists still agree.
+
+    config/campaign.yaml drives the fuzz phase, harnesses/run_all.sh runs the
+    binaries, harnesses/TARGETS.md carries the entry points and the replay
+    commands, and the directories on disk hold the sources. A target added to
+    one and not the others is skipped at run time with no signal.
+    """
+
+    NAMES = ["fuzz_alpha", "fuzz_beta"]
+
+    def scratch(self, config=None, run_all=None, doc=None, directories=None):
+        """A four-source scratch tree, each source overridable on its own."""
+        root = self.tempdir()
+        config = self.NAMES if config is None else config
+        run_all = self.NAMES if run_all is None else run_all
+        doc = self.NAMES if doc is None else doc
+        directories = ([(name, True) for name in self.NAMES]
+                       if directories is None else directories)
+
+        conf_dir = os.path.join(root, "config")
+        os.makedirs(conf_dir)
+        conf = os.path.join(conf_dir, "campaign.yaml")
+        with open(conf, "w", encoding="utf-8") as fh:
+            fh.write("track_u:\n  targets:\n")
+            for name in config:
+                fh.write("    - %s\n" % name)
+
+        harness_dir = os.path.join(root, "harnesses")
+        os.makedirs(harness_dir)
+        run = os.path.join(harness_dir, "run_all.sh")
+        with open(run, "w", encoding="utf-8") as fh:
+            fh.write("C_TARGETS=(\n")
+            for name in run_all:
+                fh.write("    %s\n" % name)
+            fh.write(")\n")
+        targets_doc = os.path.join(harness_dir, "TARGETS.md")
+        with open(targets_doc, "w", encoding="utf-8") as fh:
+            fh.write("| Harness | Replay command |\n| --- | --- |\n")
+            for name in doc:
+                fh.write("| `%s` | `harnesses/%s/build/%s` |\n"
+                         % (name, name, name))
+        for name, has_build in directories:
+            os.makedirs(os.path.join(harness_dir, name))
+            if has_build:
+                with open(os.path.join(harness_dir, name, "build.sh"),
+                          "w", encoding="utf-8") as fh:
+                    fh.write("#!/usr/bin/env bash\n")
+
+        self.use(CAMPAIGN_CONFIG=conf, RUN_ALL=run, TARGETS_DOC=targets_doc,
+                 HARNESS_DIR=harness_dir)
+        return root
+
+    def test_the_committed_sources_agree(self):
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 0, out)
+        self.assertIn("harnesses: OK", out)
+
+    def test_all_six_committed_targets_are_reported(self):
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 0, out)
+        for name in ("fuzz_ldcache", "fuzz_path_resolve", "fuzz_dsl_evaluate",
+                     "fuzz_options_parse", "fuzz_imex_channels",
+                     "fuzz_path_join"):
+            self.assertIn(name, out)
+
+    def test_both_declared_exclusions_are_reported(self):
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 0, out)
+        self.assertIn("common", out)
+        self.assertIn("go_cudacompat_elf", out)
+
+    def test_a_target_absent_from_the_config_names_that_source(self):
+        self.scratch(config=["fuzz_alpha"])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_beta", out)
+        self.assertIn("config/campaign.yaml", out)
+
+    def test_a_target_absent_from_one_source_names_the_ones_that_carry_it(self):
+        self.scratch(config=["fuzz_alpha"])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("harnesses/run_all.sh", out)
+        self.assertIn("harnesses/TARGETS.md", out)
+
+    def test_a_target_absent_from_the_run_script_names_that_source(self):
+        self.scratch(run_all=["fuzz_alpha"])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_beta", out)
+        self.assertIn("harnesses/run_all.sh", out)
+
+    def test_a_target_absent_from_the_target_table_names_that_source(self):
+        self.scratch(doc=["fuzz_alpha"])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_beta", out)
+        self.assertIn("harnesses/TARGETS.md", out)
+
+    def test_a_target_with_no_source_directory_names_that_source(self):
+        self.scratch(directories=[("fuzz_alpha", True)])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_beta", out)
+        self.assertIn("build.sh", out)
+
+    def test_a_directory_with_no_build_script_and_no_exclusion_is_reported(self):
+        self.scratch(directories=[("fuzz_alpha", True), ("fuzz_beta", True),
+                                  ("fuzz_gamma", False)])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_gamma", out)
+
+    def test_a_declared_exclusion_is_not_reported_as_a_disagreement(self):
+        self.scratch(doc=self.NAMES + ["go_cudacompat_elf"],
+                     directories=[("fuzz_alpha", True), ("fuzz_beta", True),
+                                  ("go_cudacompat_elf", True),
+                                  ("common", False)])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 0, out)
+
+    def test_the_go_exclusion_reason_matches_what_campaign_yaml_states(self):
+        # The reason is the one config/campaign.yaml already records against
+        # track_u.targets. Comment markers and line wrapping are removed
+        # before the comparison, so the two texts are compared as prose.
+        with open(os.path.join(os.path.dirname(HERE), "config",
+                               "campaign.yaml"), encoding="utf-8") as fh:
+            text = re.sub(r"\s+", " ", re.sub(r"\s*#\s*", " ", fh.read()))
+        self.assertIn(
+            regression_check.HARNESS_EXCLUSIONS["go_cudacompat_elf"], text)
+
+    def test_every_declared_exclusion_carries_a_reason(self):
+        for name, reason in regression_check.HARNESS_EXCLUSIONS.items():
+            self.assertTrue(reason.strip(), name)
+
+
+class TestTheTwoGuardsAreRegistered(unittest.TestCase):
+    """Both guards run under `regression_check.py all`."""
+
+    def test_the_registry_holds_seven_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 7)
+
+    def test_both_guards_are_registered_and_ordered(self):
+        for name in ("stale", "harnesses"):
+            self.assertIn(name, regression_check.CHECKS, name)
+            self.assertIn(name, regression_check.CHECK_ORDER, name)
+
+    def test_the_module_docstring_names_seven_checks(self):
+        self.assertIn("Seven CI checks", regression_check.__doc__)
+
+    def test_the_workflow_runs_both_guards(self):
+        with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
+                               "selftest.yml"), encoding="utf-8") as fh:
+            workflow = fh.read()
+        # Asserted as a membership test and not with assertIn, because the
+        # workflow is one long string and a failure would print all of it.
+        for name in ("stale", "harnesses"):
+            self.assertTrue("regression_check.py %s" % name in workflow,
+                            "the workflow runs no %s step" % name)
+
+# A syzlang `const` argument, as this generator writes one: a decimal or hex
+# literal, or the format placeholder that will carry one. The filter keeps
+# prose out of the arity scan, where "const[...]" appears inside a
+# SystemExit message and carries no syzlang argument at all.
+CONST_ARGUMENT = re.compile(r"^(?:0x)?(?:[0-9A-Fa-f]+|%[#0-9]*[a-z])$")
+
+# A string literal that opens a syscall signature: a name, then an open
+# parenthesis. Every `const` inside one sits at a parameter position.
+SIGNATURE_LITERAL = re.compile(r"^[A-Za-z_%$][A-Za-z0-9_$%]*\(")
+
+
+def const_spans(text):
+    """Every `const[...]` in one string literal, as (offset, arguments).
+
+    Brackets nest, so `array[const[0, int8], 4]` has to be read with a depth
+    counter and split on top-level commas only.
+    """
+    spans = []
+    for match in re.finditer(r"const\[", text):
+        depth = 0
+        arguments = [""]
+        index = match.end()
+        closed = False
+        while index < len(text):
+            char = text[index]
+            if char == "]" and depth == 0:
+                closed = True
+                break
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+            elif char == "," and depth == 0:
+                arguments.append("")
+                index += 1
+                continue
+            arguments[-1] += char
+            index += 1
+        if not closed:
+            continue
+        arguments = [part.strip() for part in arguments]
+        if not CONST_ARGUMENT.match(arguments[0]):
+            continue
+        spans.append((match.start(), arguments))
+    return spans
+
+
+def const_emission_sites(source):
+    """Every `const[...]` the generator emits, with its syzlang position.
+
+    A syzlang `const` takes one argument at a syscall parameter position and
+    two at a struct field position, where the second names the field's base
+    type. `pkg/compiler/check.go`'s `checkTypeArgs` enforces that split, and
+    F23 was one emission site carrying the struct form at a parameter
+    position: `ioctl$UVM_DEINITIALIZE(... arg const[0, intptr])`, which
+    syzkaller rejects with "wrong number of arguments for type const, expect
+    value".
+
+    Position is read in two steps. A literal that opens a call signature is a
+    syscall line, and every `const` in it is at a parameter position. Any
+    other literal is at a struct field position, unless it is assigned to a
+    name that a signature literal later interpolates into an argument slot,
+    which is the route F23's site took to reach a syscall line.
+    """
+    tree = ast.parse(source)
+    fed = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Mod):
+            continue
+        left = node.left
+        if not isinstance(left, ast.Constant) or not isinstance(left.value,
+                                                                str):
+            continue
+        if not SIGNATURE_LITERAL.match(left.value):
+            continue
+        for inner in ast.walk(node.right):
+            if isinstance(inner, ast.Name):
+                fed.add(inner.id)
+    parameter_literals = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Constant) or not isinstance(value.value,
+                                                                 str):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id in fed
+                   for t in node.targets):
+            continue
+        parameter_literals.add(id(value))
+    sites = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value,
+                                                                str):
+            continue
+        spans = const_spans(node.value)
+        if not spans:
+            continue
+        signature = SIGNATURE_LITERAL.match(node.value) is not None
+        position = ("parameter"
+                    if signature or id(node) in parameter_literals
+                    else "field")
+        for offset, arguments in spans:
+            sites.append({
+                "line": node.lineno,
+                "position": position,
+                "arguments": len(arguments),
+                "text": node.value[offset:offset + 40],
+            })
+    return sites
+
+
+class TestTheConstEmissionArity(unittest.TestCase):
+    """F23: `tools/syzlang_gen.py` emitted `arg const[0, intptr]` on
+    `ioctl$UVM_DEINITIALIZE`, the struct field form of `const` at a syscall
+    parameter position. Nothing caught it, because no description in this
+    repository had ever been compiled. The scan reads the generator's own
+    source so the error class cannot reappear silently."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(HERE, "syzlang_gen.py"),
+                  encoding="utf-8") as handle:
+            cls.sites = const_emission_sites(handle.read())
+
+    def test_the_scan_finds_every_emission_site(self):
+        # 27 sites at the revision this scan was written against. The floor
+        # catches a scan that silently stops seeing the generator's output,
+        # which would pass every arity assertion below it.
+        self.assertGreaterEqual(len(self.sites), 25)
+
+    def test_every_const_at_a_parameter_position_takes_one_argument(self):
+        for site in self.sites:
+            if site["position"] == "parameter":
+                self.assertEqual(1, site["arguments"], site)
+
+    def test_every_const_at_a_field_position_takes_two_arguments(self):
+        for site in self.sites:
+            if site["position"] == "field":
+                self.assertEqual(2, site["arguments"], site)
+
+    def test_both_positions_are_actually_present(self):
+        found = {site["position"] for site in self.sites}
+        self.assertEqual({"parameter", "field"}, found)
+
+    def test_prose_naming_const_is_not_read_as_an_emission(self):
+        source = 'raise SystemExit("%s must render as const[...]: free" % x)\n'
+        self.assertEqual([], const_emission_sites(source))
+
+    def test_a_signature_literal_puts_its_const_at_a_parameter_position(self):
+        source = 'blocks.append("ioctl$%s(fd %s, cmd const[%s])" % (a, b, c))\n'
+        sites = const_emission_sites(source)
+        self.assertEqual(1, len(sites))
+        self.assertEqual("parameter", sites[0]["position"])
+        self.assertEqual(1, sites[0]["arguments"])
+
+    def test_a_bare_literal_is_at_a_field_position(self):
+        source = 'overrides = {"cmd": "const[%d, int32]" % nr}\n'
+        sites = const_emission_sites(source)
+        self.assertEqual(1, len(sites))
+        self.assertEqual("field", sites[0]["position"])
+        self.assertEqual(2, sites[0]["arguments"])
+
+    def test_a_literal_reaching_a_signature_slot_is_at_a_parameter_position(
+            self):
+        # F23's shape, planted: the two-argument form assigned to a name that
+        # a signature literal then interpolates into an argument slot. The
+        # scan has to flag this, or it would have passed over F23 itself.
+        source = ('def f():\n'
+                  '    arg = "const[0, intptr]"\n'
+                  '    return "ioctl$%s(fd %s, arg %s)" % (n, d, arg)\n')
+        sites = const_emission_sites(source)
+        self.assertEqual(1, len(sites))
+        self.assertEqual("parameter", sites[0]["position"])
+        self.assertEqual(2, sites[0]["arguments"])
+
+    def test_the_nested_padding_array_is_read_as_one_field_const(self):
+        source = 'return "array[const[0, int8], %d]" % size\n'
+        sites = const_emission_sites(source)
+        self.assertEqual(1, len(sites))
+        self.assertEqual("field", sites[0]["position"])
+        self.assertEqual(2, sites[0]["arguments"])
+
+    def test_the_deinitialize_variant_carries_the_one_argument_form(self):
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia_uvm.txt")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("ioctl$UVM_DEINITIALIZE(fd fd_nvidia_uvm, "
+                      "cmd const[0x30000002], arg const[0])", text)
+        self.assertNotIn("const[0, intptr]", text)
+
+
+class TestTheSyzStubIsMinimal(unittest.TestCase):
+    """The stub supplies the one declaration gspwn's description files take
+    from syzkaller's own sys/linux/sys.txt. Compiling it alone is an error, so
+    it only ever runs bundled with those files."""
+
+    def read(self, name):
+        with open(os.path.join(syzlang_gen.SYZ_STUB_DIR, name),
+                  encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_stub_declares_the_file_descriptor_resource(self):
+        declarations = [line for line in self.read("gspwn_stub.txt").split("\n")
+                        if line.strip() and not line.startswith("#")]
+        self.assertEqual(["resource fd[int32]: -1"], declarations)
+
+    def test_the_stub_states_why_it_never_compiles_alone(self):
+        self.assertIn("unused resource fd", self.read("gspwn_stub.txt"))
+
+    def test_the_const_sidecar_carries_the_two_syscall_numbers(self):
+        text = self.read("gspwn_stub.txt.const")
+        self.assertIn("arches = amd64", text)
+        self.assertIn("__NR_ioctl = amd64:16", text)
+        self.assertIn("__NR_openat = amd64:257", text)
+
+    def test_the_const_sidecar_names_where_the_numbers_came_from(self):
+        self.assertIn("sys/linux/sys.txt.const",
+                      self.read("gspwn_stub.txt.const"))
+
+    def test_the_driver_calls_the_two_compiler_entry_points(self):
+        with open(syzlang_gen.GSPWN_CHECK_SRC, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("ast.ParseGlob", source)
+        self.assertIn("compiler.Compile", source)
+        # A nil consts map makes Compile return after the type-check pass
+        # alone, which reports a clean compile over an empty program.
+        self.assertIn("compiler.NewConstFile", source)
+
+
+class TestTheCompileSubcommand(unittest.TestCase):
+    """Phase 1: `syzlang_gen.py compile` runs syzkaller's own compiler over
+    the description set."""
+
+    def parse(self, argv):
+        return syzlang_gen.build_parser().parse_args(argv)
+
+    def test_the_subcommand_is_registered(self):
+        args = self.parse(["compile"])
+        self.assertEqual("compile", args.cmd)
+        self.assertIs(syzlang_gen.cmd_compile, args.func)
+
+    def test_the_checkout_path_is_a_flag(self):
+        args = self.parse(["compile", "--syzkaller", "/tmp/syzkaller"])
+        self.assertEqual("/tmp/syzkaller", args.syzkaller)
+
+    def test_the_checkout_path_defaults_to_none(self):
+        self.assertIsNone(self.parse(["compile"]).syzkaller)
+
+    def test_the_pinned_revision_is_a_commit_hash(self):
+        self.assertRegex(syzlang_gen.SYZKALLER_REV, r"^[0-9a-f]{40}$")
+        self.assertEqual("1e72964b0111319984575e60f266d1fa0a98abb5",
+                         syzlang_gen.SYZKALLER_REV)
+
+    def test_a_missing_go_toolchain_exits_three(self):
+        args = self.parse(["compile"])
+        path = os.environ.get("PATH", "")
+        os.environ["PATH"] = ""
+        self.addCleanup(os.environ.__setitem__, "PATH", path)
+        with self.assertLogs(syzlang_gen.logger, "ERROR") as caught:
+            self.assertEqual(3, syzlang_gen.cmd_compile(args))
+        self.assertIn("go", "\n".join(caught.output).lower())
+
+    def test_the_toolchain_code_is_not_the_compile_failure_code(self):
+        self.assertEqual(3, syzlang_gen.EXIT_NO_TOOLCHAIN)
+
+
+class TestTheCompileVerdictParse(unittest.TestCase):
+    """The driver's verdict line, read from the output it really prints.
+    Both samples are captured from `tools/gspwn-check` runs."""
+
+    OK = ("compile: OK, 2 const(s) loaded, 855 syscall(s), 166 resource(s), "
+          "4183 type(s), 0 unsupported\n")
+    FAILED = "compile: failed, 1 error(s)\n"
+    DIAGNOSTIC = ("nvidia_uvm.txt:51: wrong number of arguments for type "
+                  "const, expect value\n")
+
+    def test_the_success_line_yields_every_count(self):
+        verdict = syzlang_gen.parse_compile_verdict(self.OK)
+        self.assertEqual(2, verdict["consts"])
+        self.assertEqual(855, verdict["syscalls"])
+        self.assertEqual(166, verdict["resources"])
+        self.assertEqual(4183, verdict["types"])
+        self.assertEqual(0, verdict["unsupported"])
+
+    def test_the_builtin_pseudo_syscalls_are_subtracted(self):
+        # pkg/compiler/types.go prepends 6 syz_builtinN pseudo-syscalls to
+        # every compile, so 855 is 849 of gspwn's own plus those 6. 849 is
+        # 845 ioctl variants and 4 openat, which is F6.
+        verdict = syzlang_gen.parse_compile_verdict(self.OK)
+        self.assertEqual(6, verdict["builtin_syscalls"])
+        self.assertEqual(849, verdict["own_syscalls"])
+        self.assertEqual(verdict["syscalls"],
+                         verdict["own_syscalls"] + verdict["builtin_syscalls"])
+
+    def test_a_failure_line_has_no_verdict(self):
+        self.assertIsNone(syzlang_gen.parse_compile_verdict(self.FAILED))
+
+    def test_empty_output_has_no_verdict(self):
+        self.assertIsNone(syzlang_gen.parse_compile_verdict(""))
+
+    def test_the_builtin_count_is_named_once(self):
+        self.assertEqual(6, syzlang_gen.SYZ_BUILTIN_SYSCALLS)
+
+    def test_a_diagnostic_is_reproduced_unchanged(self):
+        reported = syzlang_gen.format_diagnostics(
+            self.DIAGNOSTIC + self.FAILED)
+        self.assertIn("nvidia_uvm.txt:51: wrong number of arguments for type "
+                      "const, expect value", reported)
+        self.assertIn("compile: failed, 1 error(s)", reported)
+
+    def test_no_diagnostics_reports_that_and_not_an_empty_block(self):
+        self.assertEqual("(the driver printed no diagnostics)",
+                         syzlang_gen.format_diagnostics("  \n \n"))
+
+
+class TestTheSyzlangWorkflow(unittest.TestCase):
+    """The compile gate runs in its own CI job. The offline selftest job stays
+    offline and pure Python."""
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(HERE), ".github", "workflows",
+                            "syzlang.yml")
+        with open(path, encoding="utf-8") as handle:
+            cls.text = handle.read()
+
+    def test_the_workflow_pins_the_same_revision_as_the_tool(self):
+        self.assertIn(syzlang_gen.SYZKALLER_REV, self.text)
+
+    def test_the_workflow_runs_on_a_push_to_main(self):
+        self.assertIn("branches: [main]", self.text)
+
+    def test_the_workflow_watches_every_input_the_gate_reads(self):
+        for path in ("descriptions/**", "tools/syzlang_gen.py",
+                     "tools/gspwn-check/**", "tools/syz-stub/**",
+                     ".github/workflows/syzlang.yml"):
+            self.assertIn(path, self.text)
+
+    def test_the_workflow_runs_the_subcommand(self):
+        self.assertIn("tools/syzlang_gen.py compile", self.text)
+
+    def test_the_workflow_never_compiles_the_stub_alone(self):
+        # The stub's one resource is unused without the gspwn files, which
+        # syzkaller reports as a hard error.
+        self.assertNotIn("-dir tools/syz-stub", self.text)
+
+
+class TestTheCompileGateIsDocumented(unittest.TestCase):
+    """The gate replaces a hand-produced result, so the prompts and the exit
+    code table have to name it."""
+
+    def read(self, *parts):
+        with open(os.path.join(os.path.dirname(HERE), *parts),
+                  encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_exit_code_table_carries_the_toolchain_code(self):
+        text = self.read("docs", "src", "content", "docs", "reference",
+                         "exit-codes.md")
+        self.assertIn("| `syzlang_gen.py` | `compile` | 3 |", text)
+
+    def test_the_exit_code_table_carries_the_compile_failure_code(self):
+        text = self.read("docs", "src", "content", "docs", "reference",
+                         "exit-codes.md")
+        self.assertIn("| `syzlang_gen.py` | `compile` | 1 |", text)
+
+    def test_the_describe_prompt_cites_the_command(self):
+        self.assertIn("python3 tools/syzlang_gen.py compile",
+                      self.read("agents", "describe.md"))
+
+    def test_the_describe_prompt_asks_for_no_hand_run(self):
+        # F14a: no `syz-compile` binary exists. The prompt asked for its
+        # output at three points, and produced that evidence by hand.
+        text = self.read("agents", "describe.md")
+        self.assertNotIn("compile with" + chr(10) + "   syz-compile",
+                         text)
+        self.assertNotIn("Every description compiles under syz-compile", text)
+        self.assertNotIn("syz-compile success output", text)
+
+    def test_the_describe_prompt_says_the_binary_does_not_exist(self):
+        self.assertIn("syzkaller ships no", self.read("agents", "describe.md"))
+
+    def test_the_command_table_carries_the_gate(self):
+        self.assertIn("python3 tools/syzlang_gen.py compile",
+                      self.read("AGENTS.md"))
 
 
 def pipeline_ctl_cmd_round_end(args):
