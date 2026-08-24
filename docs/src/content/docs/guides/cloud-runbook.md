@@ -63,7 +63,33 @@ aws ec2 get-console-output --instance-id "$(curl -s http://169.254.169.254/lates
 EC2 is the console output. Run the command once by hand to confirm the instance
 profile grants the call, before a hang depends on it.
 
-## 5. Provision
+## 5. Install and register the container runtime
+
+`docker.io` from the distribution provides no `nvidia` runtime. Install the
+toolkit from NVIDIA's repository, pinned, and register it, following
+[Installation](/gspwn/getting-started/installation/) step 5. Then confirm the
+path this instance resolved:
+
+```
+python3 tools/verify_tenant_surface.py runtime-mode
+```
+
+```
+injection path
+
+  mode      auto
+  evidence  /etc/nvidia-container-runtime/config.toml sets mode = 'auto'
+
+This host resolves auto to jit-cdi. The CDI path injects /dev/nvidia-modeset and every /dev/dri node found for the GPU's PCI bus id, with no capability check. That is the device set surface/entry-points.json records as the tenant surface.
+```
+
+No AWS GPU AMI pins the mode, and the toolkit packages write `mode = auto` at
+install time, so a stock instance resolves to jit-cdi. An instance reporting
+`legacy` hands a container a smaller device set than the denominator assumes,
+and the campaign would measure coverage against surface the tenant does not
+hold.
+
+## 6. Provision
 
 Follow [Installation](/gspwn/getting-started/installation/). On EC2 the crash
 capture path skips pstore:
@@ -85,7 +111,36 @@ READY. Now validate capture with a deliberate panic:
 
 Run the sysrq test. A capture path is confirmed only by a captured panic.
 
-## 6. Build the instrumented kernel
+## 7. Measure the tenant surface
+
+Run this before the campaign starts. It is the one gate whose failure is cheap
+here and expensive later.
+
+```
+python3 tools/verify_tenant_surface.py measure
+```
+
+The command starts a container, lists the device nodes inside it, and compares
+that list against `surface/entry-points.json`.
+
+| Exit | Meaning | Action |
+|---|---|---|
+| 0 | The measured node set matches the recorded tenant surface | Continue |
+| 1 | The two disagree | Stop. Read the two lists it prints |
+| 2 | The measurement could not be taken | Stop. An unmeasured tenant surface is not a passing one |
+
+The two disagreements are not symmetric:
+
+| Disagreement | Consequence |
+|---|---|
+| A node the container received, recorded outside the tenant surface | Reachable surface the campaign does not model. Every coverage figure is measured against the wrong denominator |
+| A node recorded inside, which the container never received | Budgeted effort no attacker can use |
+
+Paste the full output into the phase's gate evidence, including the injection
+path it detected and the node list it measured. A summary line stating agreement
+records no measurement.
+
+## 8. Build the instrumented kernel
 
 The kernel configuration starts from `/boot/config-$(uname -r)`, and that
 choice matters most on a cloud instance:
@@ -109,7 +164,7 @@ WARNING: /boot/config-6.1.0-21-amd64 not found, falling back to 'make defconfig'
 
 Stop there and set `BASE_CONFIG` before rebuilding. Do not reboot.
 
-## 7. Snapshot the provisioned machine
+## 9. Snapshot the provisioned machine
 
 Once `provision` and `build` have passed their gates, create an AMI. Those two
 phases run once per machine and cost hours; every later instance can start from
@@ -127,7 +182,7 @@ a later campaign's report cites them.
 An image taken with `--no-reboot` is crash-consistent. Stop the instance first
 when the state file matters.
 
-## 8. Relaunch from the image
+## 10. Relaunch from the image
 
 A fresh instance from that AMI starts at `describe`. Re-check three things,
 because none of them travel in an image:
@@ -146,7 +201,7 @@ hours the ledger does not:
 python3 tools/pipeline_ctl.py spend-init
 ```
 
-## 9. Recover a wedged GPU
+## 11. Recover a wedged GPU
 
 A card that has fallen off the bus leaves the fuzzer running against nothing,
 and the coverage curve flattens exactly as a real plateau would.
@@ -170,7 +225,7 @@ A guest reboot does not power-cycle a passthrough GPU, so a card that survives
 all three needs an instance stop and start from the AWS console, which moves
 the instance to different hardware. Nothing in the repository can do that.
 
-## 10. Monetary cost
+## 12. Monetary cost
 
 The caps in `config/campaign.yaml` bound the search itself. The repository has
 no view of what the instance costs and produces no estimate. Monetary spend is

@@ -16980,6 +16980,192 @@ class TestTheEnumMemberLayout(BitfieldFixture):
         self.assertEqual(layout.size, 32)
 
 
+class TenantSurfaceFixture(unittest.TestCase):
+    """Shared entry-point artefact for the verifier classes below."""
+
+    TABLES = [
+        {"fops": "nv_frontend_fops",
+         "paths": ["/dev/nvidiactl", "/dev/nvidiaN"],
+         "tenant_surface": True},
+        {"fops": "nv_drm_fops",
+         "paths": ["/dev/dri/cardN", "/dev/dri/renderDN"],
+         "tenant_surface": True},
+        {"fops": "nv_caps_fops",
+         "paths": ["/dev/nvidia-caps/nvidia-cap1"],
+         "tenant_surface": False},
+    ]
+
+    def surface(self):
+        import verify_tenant_surface as vts
+        return vts.expected_surface(self.TABLES)
+
+
+class TestTenantSurfaceComparison(TenantSurfaceFixture):
+    """What the verifier calls a disagreement, and which way round."""
+
+    def compare(self, measured):
+        import verify_tenant_surface as vts
+        inside, outside = self.surface()
+        return vts.compare(measured, inside, outside)
+
+    def test_a_node_recorded_outside_the_surface_reads_as_unmodelled(self):
+        # The finding that invalidates a threat model: the tenant holds a
+        # node the campaign assumed it could not reach.
+        unmodelled, unreachable, _ = self.compare(
+            ["/dev/nvidiactl", "/dev/nvidia0", "/dev/dri/card0",
+             "/dev/dri/renderD128", "/dev/nvidia-caps/nvidia-cap1"])
+        self.assertEqual(len(unmodelled), 1)
+        self.assertIn("/dev/nvidia-caps/nvidia-cap1", unmodelled[0])
+        self.assertIn("outside the tenant surface", unmodelled[0])
+        self.assertEqual(unreachable, [])
+
+    def test_a_node_no_table_covers_reads_as_unmodelled(self):
+        unmodelled, _, _ = self.compare(["/dev/nvidia-uvm"])
+        self.assertEqual(len(unmodelled), 1)
+        self.assertIn("no fops table", unmodelled[0])
+
+    def test_a_recorded_node_the_container_never_received_reads_as_unreachable(self):
+        # Budgeted effort no attacker can use. It must not be reported as the
+        # same condition as the case above.
+        unmodelled, unreachable, _ = self.compare(
+            ["/dev/nvidiactl", "/dev/nvidia0"])
+        self.assertEqual(unmodelled, [])
+        self.assertEqual(len(unreachable), 2)
+        self.assertTrue(all("inside the tenant surface" in line
+                            for line in unreachable))
+
+    def test_the_full_tenant_set_agrees_with_the_artefact(self):
+        unmodelled, unreachable, matched = self.compare(
+            ["/dev/nvidiactl", "/dev/nvidia0", "/dev/dri/card0",
+             "/dev/dri/renderD128"])
+        self.assertEqual((unmodelled, unreachable), ([], []))
+        self.assertEqual(len(matched), 4)
+
+    def test_a_numbered_path_matches_every_device_index(self):
+        import verify_tenant_surface as vts
+        pattern = vts.path_to_pattern("/dev/nvidiaN")
+        for node in ("/dev/nvidia0", "/dev/nvidia7", "/dev/nvidia11"):
+            self.assertTrue(pattern.match(node), node)
+        for node in ("/dev/nvidia", "/dev/nvidiactl", "/dev/nvidia0x"):
+            self.assertIsNone(pattern.match(node), node)
+
+    def test_an_unnumbered_path_matches_itself_alone(self):
+        import verify_tenant_surface as vts
+        pattern = vts.path_to_pattern("/dev/nvidiactl")
+        self.assertTrue(pattern.match("/dev/nvidiactl"))
+        self.assertIsNone(pattern.match("/dev/nvidiactl0"))
+
+
+class TestTenantSurfaceInjectionPath(unittest.TestCase):
+    """The verdict `runtime-mode` reaches for each mode the toolkit writes."""
+
+    def verdict(self, mode):
+        import verify_tenant_surface as vts
+        args = types.SimpleNamespace()
+        buf = io.StringIO()
+        original = vts.detect_runtime_mode
+        vts.detect_runtime_mode = lambda: (mode, "fixture")
+        try:
+            with redirect_stdout(buf):
+                code = vts.cmd_runtime_mode(args)
+        finally:
+            vts.detect_runtime_mode = original
+        self.assertEqual(code, 0)
+        return buf.getvalue()
+
+    def test_auto_names_the_path_it_resolves_to(self):
+        # `mode = "auto"` is what the toolkit packages write at install time,
+        # so this is the reading a stock instance produces. A verdict that
+        # said nothing here would leave the most common case unanswered.
+        out = self.verdict("auto")
+        self.assertIn("auto", out)
+        self.assertIn("jit-cdi", out)
+        self.assertIn("/dev/nvidia-modeset", out)
+
+    def test_legacy_names_what_it_withholds(self):
+        out = self.verdict("legacy")
+        self.assertIn("/dev/nvidia-modeset", out)
+        self.assertIn("display", out)
+
+    def test_cdi_names_the_absent_capability_check(self):
+        for mode in ("cdi", "jit-cdi"):
+            out = self.verdict(mode)
+            self.assertIn("capability", out, mode)
+
+    def test_an_unreadable_mode_still_reaches_a_verdict(self):
+        out = self.verdict(None)
+        self.assertIn("not stated", out)
+        self.assertIn("/dev/nvidia-modeset", out)
+
+    def test_every_mode_reaches_a_verdict(self):
+        # The guard over the four cases above: a mode string the toolkit adds
+        # later must not fall through to silence.
+        for mode in ("auto", "legacy", "cdi", "jit-cdi", "csv", None):
+            out = self.verdict(mode)
+            body = out.split("evidence")[-1]
+            self.assertTrue(len(body.strip().splitlines()) > 1,
+                            "mode %r reached no verdict" % (mode,))
+
+
+class TestDockerGpusFlagBoundary(unittest.TestCase):
+    """Which injection path `--gpus` reaches, by Docker server version."""
+
+    def path(self, version):
+        import verify_tenant_surface as vts
+        return vts.gpus_flag_path(version)
+
+    def test_below_the_boundary_the_hook_and_legacy_are_named(self):
+        self.assertIn("legacy", self.path((29, 1, 9)))
+        self.assertIn("/dev/nvidia-modeset", self.path((29, 1, 9)))
+
+    def test_at_the_boundary_the_cdi_specification_is_named(self):
+        self.assertIn("CDI", self.path((29, 2, 0)))
+
+    def test_above_the_boundary_the_cdi_specification_is_named(self):
+        self.assertIn("CDI", self.path((30, 0, 0)))
+
+    def test_an_unreadable_version_states_the_uncertainty(self):
+        self.assertIn("unknown", self.path(None))
+
+
+class TestTenantSurfaceArtefactErrors(unittest.TestCase):
+    """What the verifier tells an operator when the artefact cannot be read."""
+
+    def load(self, contents):
+        import verify_tenant_surface as vts
+        with tempfile.TemporaryDirectory() as root:
+            if contents is not None:
+                os.makedirs(os.path.join(root, "surface"))
+                with open(os.path.join(root, "surface", "entry-points.json"),
+                          "w", encoding="utf-8") as fh:
+                    fh.write(contents)
+            with self.assertRaises(vts.VerifyError) as caught:
+                vts.load_tables(root)
+        return str(caught.exception)
+
+    def test_an_absent_artefact_names_the_command_that_writes_it(self):
+        message = self.load(None)
+        self.assertIn("entry-points.json", message)
+        self.assertIn("--emit-entry-points", message)
+
+    def test_unparseable_json_names_the_file(self):
+        message = self.load("{not json")
+        self.assertIn("entry-points.json", message)
+        self.assertIn("valid JSON", message)
+
+    def test_a_record_without_tables_is_refused(self):
+        message = self.load('{"schema": "something.else/1"}')
+        self.assertIn("tables", message)
+
+    def test_the_committed_artefact_records_a_tenant_surface(self):
+        # The comparison is vacuous if nothing is recorded inside, and it
+        # would pass on any measurement at all.
+        import verify_tenant_surface as vts
+        inside, outside = vts.expected_surface(vts.load_tables())
+        self.assertTrue(inside)
+        self.assertTrue(outside)
+
+
 def pipeline_ctl_cmd_round_end(args):
     """Import lazily: pipeline_ctl reads config at parser-build time only."""
     import pipeline_ctl

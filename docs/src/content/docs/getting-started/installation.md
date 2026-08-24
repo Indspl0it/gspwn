@@ -86,7 +86,68 @@ come back empty and the harvest reads no crash data. `harvest` refuses to run
 without root.
 :::
 
-## 5. Clone the source trees
+## 5. Install the NVIDIA container runtime
+
+The `provision` phase measures the device nodes a container receives, and that
+measurement needs the `nvidia` runtime registered with Docker. Skip this and the
+measurement reports exit 2, which is a blocked gate.
+
+Add NVIDIA's repository:
+
+```
+sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+   ca-certificates curl gnupg2
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+```
+
+Install the four packages at one pinned version:
+
+```
+export NVIDIA_CONTAINER_TOOLKIT_VERSION=1.20.0-1
+sudo apt-get install -y \
+    nvidia-container-toolkit=${NVIDIA_CONTAINER_TOOLKIT_VERSION} \
+    nvidia-container-toolkit-base=${NVIDIA_CONTAINER_TOOLKIT_VERSION} \
+    libnvidia-container-tools=${NVIDIA_CONTAINER_TOOLKIT_VERSION} \
+    libnvidia-container1=${NVIDIA_CONTAINER_TOOLKIT_VERSION}
+```
+
+Record the version. The injection path depends on it, and the `report` phase
+cites the toolkit version beside the driver branch.
+
+Register the runtime with Docker and restart the daemon:
+
+```
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+`nvidia-ctk` writes `/etc/docker/daemon.json`. Confirm the path the machine
+resolved:
+
+```
+python3 tools/verify_tenant_surface.py runtime-mode
+```
+
+```
+injection path
+
+  mode      auto
+  evidence  /etc/nvidia-container-runtime/config.toml sets mode = 'auto'
+
+This host resolves auto to jit-cdi. The CDI path injects /dev/nvidia-modeset and every /dev/dri node found for the GPU's PCI bus id, with no capability check. That is the device set surface/entry-points.json records as the tenant surface.
+```
+
+`runtime-mode` reads files and needs no GPU, so it answers before the gate
+does. A `legacy` verdict means the container will receive a smaller device
+set than the threat model records, and
+[Threat model](/gspwn/architecture/threat-model/) covers what changes.
+
+## 6. Clone the source trees
 
 ```
 mkdir -p artifacts/src
@@ -105,7 +166,7 @@ production branch. Record every commit and the `gcc` version in
 `artifacts/builds/manifest.json`, because the `report` phase reads affected
 versions from there.
 
-## 6. Build syzkaller
+## 7. Build syzkaller
 
 ```
 cd artifacts/src/syzkaller
@@ -123,7 +184,7 @@ Three binaries must exist afterwards, because other tools invoke them by path:
 
 A missing binary blocks the `fuzz` phase. Re-run `make` and read its error.
 
-## 7. Create the state file
+## 8. Create the state file
 
 ```
 python3 tools/pipeline_ctl.py init
