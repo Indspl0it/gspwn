@@ -172,6 +172,8 @@ release.
 | `ctrl-param-sizes.json` | `syzlang_gen.py emit-probe` and its runner | `syzlang_gen.py emit` as the `--ctrl-sizes` default, `ctrl_rank.py` |
 | `rm-chains.json` | `object_graph.py chains` | `trace2seed.py chains`, `ctrl_rank.py`, `refgen.py` |
 | `rm-control-rank.json` | `ctrl_rank.py rank` | `syzlang_gen.py emit` as the `--ctrl-rank` default, `trace2seed.py chains`, `refgen.py` |
+| `value-families.json` | `value_families.py` | `syzlang_gen.py emit` as the `--value-families` default, `regression_check.py families`. 72 derived families, one per parameter field a sound rule binds to a set of constants |
+| `value-families-audit.json` | `value_families.py` | `syzlang_gen.py emit` as the `--value-audit` default, `regression_check.py families`. 73 entries, 53 accepted and 20 rejected. Nothing reaches the emitter that this file does not accept |
 | `cve-hotspots.json`, `prior-cves.json` | `cve_patch_map.py` | `ctrl_rank.py` reads the hot spots. `refgen.py` joins both |
 | `completion-ledger.json` | `pipeline_ctl.py surface-account` | `coverage_ctl.py completion`, `pipeline_ctl.py surface-ledger` |
 | `worklist-round1.md` | `cve_patch_map.py worklist` | The round-1 `describe` and `seeds` phases |

@@ -13335,8 +13335,9 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
 
     def test_all_runs_the_checks_in_the_documented_order(self):
         self.assertEqual(regression_check.check_order(),
-                         ["names", "pins", "coverage", "derived", "pages",
-                          "stale", "harnesses", "agents"])
+                         ["names", "pins", "coverage", "derived",
+                          "families", "pages", "stale", "harnesses",
+                          "agents"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -13948,16 +13949,16 @@ class TestHarnessTargetListsAgree(Phase0Fixtures):
 class TestTheTwoGuardsAreRegistered(unittest.TestCase):
     """Both guards run under `regression_check.py all`."""
 
-    def test_the_registry_holds_eight_checks(self):
-        self.assertEqual(len(regression_check.check_order()), 8)
+    def test_the_registry_holds_nine_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 9)
 
     def test_both_guards_are_registered_and_ordered(self):
         for name in ("stale", "harnesses", "agents"):
             self.assertIn(name, regression_check.CHECKS, name)
             self.assertIn(name, regression_check.CHECK_ORDER, name)
 
-    def test_the_module_docstring_names_eight_checks(self):
-        self.assertIn("Eight CI checks", regression_check.__doc__)
+    def test_the_module_docstring_names_nine_checks(self):
+        self.assertIn("Nine CI checks", regression_check.__doc__)
 
     def test_the_workflow_runs_both_guards(self):
         with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
@@ -18333,6 +18334,774 @@ class TestValueFamilyArtefacts(unittest.TestCase):
         for record in value_families.accepted_families(self.derivation,
                                                        self.audit):
             self.assertIn(record["field"], bare.get(record["struct"], []))
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 part 2: the accepted value families reaching the emitter, the check
+# that reads both directions, and the host binary preflight.
+#
+# The emitter tests build layouts and family records directly, so they need
+# neither a driver checkout nor the committed artefacts. The committed-set
+# tests read the real description set, and fail on a checkout missing it for
+# the same reason the CI step fails.
+# ---------------------------------------------------------------------------
+
+
+def _field(name, size, syz):
+    return syzlang_gen.Field(name=name, offset=0, size=size, syz=syz)
+
+
+def _layout(*fields):
+    return syzlang_gen.Layout(size=sum(f.size for f in fields), align=4,
+                              fields=list(fields))
+
+
+def _record(struct, field, set_name, values, rule="struct-or-stem-anchored",
+            source_file="ctrl/ctrl0000/ctrl0000system.h"):
+    """One derived family record, in the shape value_families writes."""
+    return {
+        "struct": struct, "field": field, "rule": rule,
+        "set_name": set_name,
+        "defines": ["D%d" % index for index in range(len(values))],
+        "values": list(values),
+        "source_file": source_file, "source_files": [source_file],
+        "struct_header": source_file,
+        "define_sites": [{"define": "D%d" % index, "value": value,
+                          "header": source_file, "line": 10 + index,
+                          "bitfield_stem": None}
+                         for index, value in enumerate(values)],
+        "excluded": {"sibling_owned": 0, "message_id": 0, "bit_range": 0,
+                     "unresolved": []},
+    }
+
+
+class _StubIndex:
+    """The two TypeIndex methods the emitter reaches on this path."""
+
+    def __init__(self, layouts, aliases=None):
+        self.layouts = dict(layouts)
+        self.structs = set(self.layouts)
+        self.aliases = dict(aliases or {})
+
+    def canonical_struct(self, name):
+        return self.aliases.get(name, name)
+
+    def layout(self, name):
+        return self.layouts[name]
+
+
+class ValueFamilyEmissionFixtures(unittest.TestCase):
+    """An emitter over stub layouts, with the accepted families supplied."""
+
+    def emitter(self, layouts, families, aliases=None, sizes=None):
+        return syzlang_gen.Emitter(_StubIndex(layouts, aliases), sizes or {},
+                                   families)
+
+
+class TestTheValueOverrideMap(ValueFamilyEmissionFixtures):
+    """syzlang_gen.value_overrides: the width comes from the layout and the
+    identifier from the record."""
+
+    LAYOUT = _layout(_field("cacheOps", 4, "int32"),
+                     _field("cpuClkId", 1, "int8"),
+                     _field("pad", 3, None))
+
+    FAMILIES = {"P": [_record("P", "cacheOps", "p_cache_ops", [1, 2]),
+                      _record("P", "cpuClkId", "p_cpu_clk_id", [0, 1, 2])]}
+
+    def test_a_four_byte_field_binds_at_int32(self):
+        bound, _unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                      self.FAMILIES)
+        self.assertEqual(bound["cacheOps"], "flags[p_cache_ops, int32]")
+
+    def test_a_one_byte_field_binds_at_int8(self):
+        """A field the driver declares as NvU8 renders as int8 today, and
+        flags[..., int32] in its place would move three bytes of the struct."""
+        bound, _unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                      self.FAMILIES)
+        self.assertEqual(bound["cpuClkId"], "flags[p_cpu_clk_id, int8]")
+
+    def test_the_identifier_is_the_records_own_set_name(self):
+        """Two sources for one identifier let the emitted name and the
+        checked name drift apart, so the record carries it."""
+        families = {"P": [_record("P", "cacheOps", "a_name_of_its_own",
+                                  [1, 2])]}
+        bound, _unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                      families)
+        self.assertEqual(bound["cacheOps"], "flags[a_name_of_its_own, int32]")
+
+    def test_a_field_the_layout_does_not_carry_is_reported_unbound(self):
+        families = {"P": [_record("P", "renamed", "p_renamed", [1, 2])]}
+        bound, unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                     families)
+        self.assertEqual(bound, {})
+        self.assertEqual([r["field"] for r, _w in unbound], ["renamed"])
+
+    def test_a_padding_field_is_reported_unbound(self):
+        """Padding renders as const[0, int8] and carries no value of its own,
+        so a family naming it binds nothing."""
+        families = {"P": [_record("P", "pad", "p_pad", [1, 2])]}
+        bound, unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                     families)
+        self.assertEqual(bound, {})
+        self.assertEqual(unbound[0][1], None)
+
+    def test_a_width_with_no_syzlang_integer_is_reported_unbound(self):
+        layout = _layout(_field("odd", 3, "int32"))
+        families = {"P": [_record("P", "odd", "p_odd", [1, 2])]}
+        bound, unbound = syzlang_gen.value_overrides("P", layout, families)
+        self.assertEqual(bound, {})
+        self.assertEqual(unbound[0][1], 3)
+
+    def test_a_struct_with_no_accepted_family_binds_nothing(self):
+        bound, unbound = syzlang_gen.value_overrides("Q", self.LAYOUT,
+                                                     self.FAMILIES)
+        self.assertEqual((bound, unbound), ({}, []))
+
+
+class TestTheValueOverrideMerge(ValueFamilyEmissionFixtures):
+    """Emitter.merge_value_overrides: the existing override wins, and the
+    collision is reported for a reader to settle."""
+
+    LAYOUT = _layout(_field("mode", 4, "int32"), _field("hClient", 4, "int32"))
+
+    def test_the_family_binds_where_no_existing_override_names_the_field(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", [0, 1])]})
+        merged = emitter.merge_value_overrides("P", self.LAYOUT,
+                                               {"hClient": "nv_handle"})
+        self.assertEqual(merged, {"mode": "flags[p_mode, int32]",
+                                  "hClient": "nv_handle"})
+        self.assertEqual(emitter.value_collisions, [])
+        self.assertEqual([r["field"] for _s, r in emitter.value_bound],
+                         ["mode"])
+
+    def test_an_existing_override_wins_a_collision(self):
+        """The existing overrides carry the handle resources, the pinned
+        selectors and the typed descriptors, none of which this rule has
+        examined."""
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "hClient", "p_h_client", [0, 1])]})
+        merged = emitter.merge_value_overrides("P", self.LAYOUT,
+                                               {"hClient": "nv_handle"})
+        self.assertEqual(merged["hClient"], "nv_handle")
+
+    def test_a_collision_is_recorded_with_both_renderings(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "hClient", "p_h_client", [0, 1])]})
+        emitter.merge_value_overrides("P", self.LAYOUT,
+                                      {"hClient": "nv_handle"})
+        self.assertEqual(emitter.value_collisions,
+                         [("P", "hClient", "flags[p_h_client, int32]",
+                           "nv_handle")])
+
+    def test_a_collision_leaves_the_family_unbound(self):
+        """The set is not emitted for a field the existing override kept, so
+        the families check reports the accepted family as unbound."""
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "hClient", "p_h_client", [0, 1])]})
+        emitter.merge_value_overrides("P", self.LAYOUT,
+                                      {"hClient": "nv_handle"})
+        self.assertEqual(emitter.value_bound, [])
+
+    def test_an_unbound_record_is_recorded_on_the_emitter(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "renamed", "p_renamed", [0, 1])]})
+        emitter.merge_value_overrides("P", self.LAYOUT, {})
+        self.assertEqual(emitter.value_unbound, [("P", "renamed", None)])
+
+    def test_a_family_naming_an_alias_reaches_the_canonical_struct(self):
+        """ensure canonicalises before it looks anything up, so a family
+        keyed on a typedef would otherwise bind nothing."""
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P_ALIAS": [_record("P_ALIAS", "mode", "p_mode", [0, 1])]},
+            aliases={"P_ALIAS": "P"})
+        merged = emitter.merge_value_overrides("P", self.LAYOUT, {})
+        self.assertEqual(merged, {"mode": "flags[p_mode, int32]"})
+
+
+class TestTheEmitterBindsThroughEnsure(ValueFamilyEmissionFixtures):
+    """The override reaches every call site that renders a parameter struct,
+    because the merge happens inside ensure."""
+
+    LAYOUT = _layout(_field("mode", 4, "int32"), _field("count", 4, "int32"))
+
+    def test_ensure_renders_an_accepted_family_as_a_flags_field(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", [0, 1])]})
+        emitter.ensure("P")
+        self.assertIn("flags[p_mode, int32]", emitter.rendered["P"])
+
+    def test_ensure_leaves_a_field_with_no_family_a_bare_integer(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", [0, 1])]})
+        emitter.ensure("P")
+        self.assertRegex(emitter.rendered["P"], r"count\s+int32")
+
+    def test_ensure_keeps_the_callers_override_on_a_collision(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", [0, 1])]})
+        emitter.ensure("P", {"mode": "const[7, int32]"})
+        self.assertIn("const[7, int32]", emitter.rendered["P"])
+        self.assertNotIn("flags[p_mode", emitter.rendered["P"])
+
+
+class TestTheValueFlagsSetEmission(ValueFamilyEmissionFixtures):
+    """syzlang_gen.emit_value_flags_sets: one set per bound family."""
+
+    LAYOUT = _layout(_field("mode", 4, "int32"))
+
+    def bound(self, values):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", values)]})
+        emitter.ensure("P")
+        return emitter
+
+    def test_one_definition_is_emitted_per_bound_family(self):
+        text = syzlang_gen.emit_value_flags_sets(self.bound([0, 1, 5]))
+        self.assertIn("p_mode = 0x0, 0x1, 0x5", text)
+
+    def test_the_definition_carries_the_records_own_set_name(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "a_name_of_its_own", [0, 1])]})
+        emitter.ensure("P")
+        text = syzlang_gen.emit_value_flags_sets(emitter)
+        self.assertIn("a_name_of_its_own = 0x0, 0x1", text)
+
+    def test_the_provenance_of_each_set_is_stated_beside_it(self):
+        text = syzlang_gen.emit_value_flags_sets(self.bound([0, 1]))
+        self.assertIn("# P.mode, struct-or-stem-anchored, 2 value(s) from",
+                      text)
+
+    def test_a_run_that_bound_nothing_defines_no_set(self):
+        emitter = self.emitter({"P": self.LAYOUT}, {})
+        emitter.ensure("P")
+        text = syzlang_gen.emit_value_flags_sets(emitter)
+        self.assertNotIn(" = ", text)
+        self.assertTrue(text.startswith("#"))
+
+
+class TestTheValueFamilyLoader(unittest.TestCase):
+    """syzlang_gen.load_value_families: accepted_families is the only door."""
+
+    def tempdir(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return holder.name
+
+    def artefacts(self, families, audit):
+        root = self.tempdir()
+        one = os.path.join(root, "families.json")
+        two = os.path.join(root, "audit.json")
+        with open(one, "w", encoding="utf-8") as fh:
+            json.dump({"schema": value_families.SCHEMA,
+                       "families": families}, fh)
+        with open(two, "w", encoding="utf-8") as fh:
+            json.dump({"schema": value_families.AUDIT_SCHEMA,
+                       "audit": audit}, fh)
+        return one, two
+
+    def test_only_the_records_the_audit_accepted_are_returned(self):
+        one, two = self.artefacts(
+            [_record("P", "mode", "p_mode", [0, 1]),
+             _record("P", "other", "p_other", [2, 3])],
+            [{"struct": "P", "field": "mode", "verdict": "accepted"},
+             {"struct": "P", "field": "other", "verdict": "rejected"}])
+        loaded = syzlang_gen.load_value_families(one, two)
+        self.assertEqual([r["field"] for r in loaded["P"]], ["mode"])
+
+    def test_a_struct_with_no_accepted_family_is_absent_from_the_map(self):
+        one, two = self.artefacts(
+            [_record("Q", "mode", "q_mode", [0, 1])],
+            [{"struct": "Q", "field": "mode", "verdict": "rejected"}])
+        self.assertEqual(syzlang_gen.load_value_families(one, two), {})
+
+    def test_an_absent_artefact_stops_the_run(self):
+        """A run that emitted no family in silence would lose every
+        constraint the audit accepted and still report success."""
+        one, two = self.artefacts([], [])
+        with self.assertRaises(SystemExit) as caught:
+            syzlang_gen.load_value_families(os.path.join(one, "gone"), two)
+        self.assertIn("value families could not be read", str(caught.exception))
+
+    def test_the_default_paths_match_the_value_families_module(self):
+        """syzlang_gen spells them out because value_families imports it, so
+        the two spellings are held together here."""
+        self.assertEqual(syzlang_gen.DEFAULT_VALUE_FAMILIES,
+                         value_families.DEFAULT_OUT)
+        self.assertEqual(syzlang_gen.DEFAULT_VALUE_AUDIT,
+                         value_families.DEFAULT_AUDIT_OUT)
+
+
+class TestTheCommittedValueFamilyEmission(unittest.TestCase):
+    """The committed description set against the committed audit."""
+
+    @classmethod
+    def setUpClass(cls):
+        for path in (value_families.DEFAULT_OUT,
+                     value_families.DEFAULT_AUDIT_OUT):
+            if not os.path.isfile(path):
+                raise unittest.SkipTest("committed artefacts not present")
+        with open(value_families.DEFAULT_OUT, encoding="utf-8") as fh:
+            cls.derivation = json.load(fh)
+        with open(value_families.DEFAULT_AUDIT_OUT, encoding="utf-8") as fh:
+            cls.audit = json.load(fh)
+        cls.accepted = value_families.accepted_families(cls.derivation,
+                                                        cls.audit)
+        cls.structs = {}
+        cls.defined = collections.Counter()
+        for name in sorted(os.listdir(value_families.DEFAULT_DESCRIPTIONS)):
+            if not name.endswith(".txt"):
+                continue
+            path = os.path.join(value_families.DEFAULT_DESCRIPTIONS, name)
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            cls.structs.update(regression_check.parse_structs(text))
+            for match in regression_check.FLAGS_DEFINE_RE.finditer(text):
+                cls.defined[match.group(1)] += 1
+
+    def test_every_accepted_family_renders_as_its_own_flags_set(self):
+        for record in self.accepted:
+            rendered = self.structs[record["struct"]][record["field"]]
+            match = regression_check.FLAGS_FIELD_RE.match(rendered)
+            self.assertIsNotNone(match, "%s.%s renders as %s"
+                                 % (record["struct"], record["field"],
+                                    rendered))
+            self.assertEqual(match.group(1), record["set_name"])
+
+    def test_every_emitted_set_is_defined_exactly_once(self):
+        for record in self.accepted:
+            self.assertEqual(self.defined[record["set_name"]], 1,
+                             record["set_name"])
+
+    def test_every_value_fits_the_width_the_field_binds_at(self):
+        """A set holding a value wider than its field would not compile."""
+        for record in self.accepted:
+            rendered = self.structs[record["struct"]][record["field"]]
+            width = int(regression_check.FLAGS_FIELD_RE.match(rendered)
+                        .group(2)[3:])
+            self.assertLess(max(record["values"]), 1 << width,
+                            "%s.%s" % (record["struct"], record["field"]))
+
+    def test_no_family_the_audit_rejected_reaches_a_field(self):
+        accepted = {(r["struct"], r["field"]) for r in self.accepted}
+        for record in self.derivation["families"]:
+            key = (record["struct"], record["field"])
+            if key in accepted:
+                continue
+            self.assertEqual(self.defined[record["set_name"]], 0, key)
+
+    def test_generation_records_both_value_family_artefacts(self):
+        path = os.path.join(value_families.DEFAULT_DESCRIPTIONS,
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("generation.json not present")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)["generated_from"]
+        for key, artefact in (("value_families", value_families.DEFAULT_OUT),
+                              ("value_families_audit",
+                               value_families.DEFAULT_AUDIT_OUT)):
+            self.assertIn(key, record)
+            with open(artefact, "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+            self.assertEqual(record[key]["sha256"], digest, key)
+
+    def test_generation_counts_the_families_the_run_bound(self):
+        path = os.path.join(value_families.DEFAULT_DESCRIPTIONS,
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("generation.json not present")
+        with open(path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(manifest["counts"]["value_families_bound"],
+                         len(self.accepted))
+        self.assertEqual(manifest["counts"]["value_family_collisions"], 0)
+        self.assertEqual(manifest["counts"]["value_families_unbound"], 0)
+
+
+class TestTheValueFamilyUniverseIsAFixedPoint(unittest.TestCase):
+    """value_families.in_scope_field: a field the emitter already bound is
+    still in the universe the next derivation reads.
+
+    Reading a bare integer alone made each emission shrink the universe: the
+    committed derivation fell from 72 families to 19, and from 53 accepted to
+    0, on the first run after the emitter bound them.
+    """
+
+    def test_a_bare_integer_is_in_scope(self):
+        self.assertTrue(value_families.in_scope_field("P", "mode", "int32"))
+
+    def test_a_field_bound_to_its_own_set_is_in_scope(self):
+        name = value_families.set_name("NV0000_CTRL_X_PARAMS", "cacheOps")
+        self.assertTrue(value_families.in_scope_field(
+            "NV0000_CTRL_X_PARAMS", "cacheOps",
+            "flags[%s, int32]" % name))
+
+    def test_a_field_bound_to_a_set_written_by_hand_is_out_of_scope(self):
+        """NVOS64_PARAMETERS.flags carries nvos64_alloc_flags, which this rule
+        did not derive and must not claim."""
+        self.assertFalse(value_families.in_scope_field(
+            "NVOS64_PARAMETERS", "flags", "flags[nvos64_alloc_flags, int32]"))
+
+    def test_a_handle_a_const_and_an_array_stay_out_of_scope(self):
+        for rendered in ("nv_handle", "const[0, int32]",
+                         "array[int8, 32]", "ptr64[inout, P]"):
+            self.assertFalse(value_families.in_scope_field("P", "mode",
+                                                           rendered),
+                             rendered)
+
+    def test_the_universe_reader_carries_a_bound_field(self):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        name = value_families.set_name("ALPHA_PARAMS", "mode")
+        body = ("ALPHA_PARAMS {\n"
+                "\tmode\tflags[%s, int32]\n"
+                "\tcount\tint32\n"
+                "\thClient\tnv_handle\n"
+                "} [packed]\n" % name)
+        for member in value_families.DESCRIPTION_FILES:
+            with open(os.path.join(root.name, member), "w",
+                      encoding="utf-8") as fh:
+                fh.write(body if member == "nvidia_structs.txt" else "")
+        fields = value_families.load_bare_int_fields(root.name)
+        self.assertEqual(fields["ALPHA_PARAMS"], ["mode", "count"])
+
+
+class ValueFamilyCheckFixtures(Phase0Fixtures):
+    """A scratch description set and a scratch pair of value-family artefacts,
+    read through the module constants."""
+
+    STRUCT = ("ALPHA_PARAMS {\n"
+              "\tmode\tflags[alpha_params_mode, int32]\n"
+              "\tother\tint32\n"
+              "\thClient\tnv_handle\n"
+              "} [packed]\n")
+    DEFINE = "alpha_params_mode = 0x0, 0x1\n"
+
+    FAMILIES = [_record("ALPHA_PARAMS", "mode", "alpha_params_mode", [0, 1]),
+                _record("ALPHA_PARAMS", "other", "alpha_params_other",
+                        [2, 3])]
+    AUDIT = [{"struct": "ALPHA_PARAMS", "field": "mode",
+              "verdict": "accepted", "reason": "the values of this field"},
+             {"struct": "ALPHA_PARAMS", "field": "other",
+              "verdict": "rejected",
+              "reason": "the defines belong to a sibling field"}]
+
+    def scratch(self, description=None, families=None, audit=None):
+        """Point DESC_DIR and the two artefact paths at a scratch tree."""
+        root = self.tempdir()
+        descriptions = os.path.join(root, "descriptions")
+        os.makedirs(descriptions)
+        with open(os.path.join(descriptions, "nvidia.txt"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(self.STRUCT + "\n" + self.DEFINE
+                     if description is None else description)
+        one = os.path.join(root, "value-families.json")
+        two = os.path.join(root, "value-families-audit.json")
+        with open(one, "w", encoding="utf-8") as fh:
+            json.dump({"schema": value_families.SCHEMA,
+                       "families": self.FAMILIES if families is None
+                       else families}, fh)
+        with open(two, "w", encoding="utf-8") as fh:
+            json.dump({"schema": value_families.AUDIT_SCHEMA,
+                       "audit": self.AUDIT if audit is None else audit}, fh)
+        self.use(DESC_DIR=descriptions, VALUE_FAMILIES=one,
+                 VALUE_FAMILIES_AUDIT=two)
+        return root
+
+
+class TestTheAcceptedFamilyCheckPasses(ValueFamilyCheckFixtures):
+    """regression_check families, on a set that agrees with its audit."""
+
+    def test_the_committed_set_passes(self):
+        code, text = self.check("families")
+        self.assertEqual(code, 0, text)
+        self.assertIn("families: OK", text)
+
+    def test_the_committed_set_reports_what_it_read(self):
+        _code, text = self.check("families")
+        self.assertRegex(text, r"families: \d+ derived, \d+ accepted by the "
+                               r"audit, \d+ bound to a field")
+
+    def test_a_scratch_set_that_agrees_passes(self):
+        self.scratch()
+        code, text = self.check("families")
+        self.assertEqual(code, 0, text)
+
+
+class TestTheAcceptedFamilyCheckFails(ValueFamilyCheckFixtures):
+    """Each direction reported separately. One direction alone leaves the
+    other failure invisible."""
+
+    def test_an_accepted_family_that_lost_its_binding_is_reported(self):
+        self.scratch(description="ALPHA_PARAMS {\n\tmode\tint32\n"
+                                 "\tother\tint32\n} [packed]\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("ALPHA_PARAMS.mode was accepted and is not bound", text)
+        self.assertIn("renders as int32", text)
+
+    def test_an_accepted_family_whose_struct_is_absent_is_reported(self):
+        self.scratch(description="BETA_PARAMS {\n\tmode\tint32\n} [packed]\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("no field of that name in the emitted struct", text)
+
+    def test_a_field_bound_to_another_familys_set_is_reported(self):
+        self.scratch(description="ALPHA_PARAMS {\n"
+                                 "\tmode\tflags[other_set, int32]\n"
+                                 "\tother\tint32\n} [packed]\n"
+                                 "other_set = 0x0, 0x1\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("is bound to other_set and the audit accepted "
+                      "alpha_params_mode", text)
+
+    def test_a_family_the_audit_rejected_reaching_a_field_is_reported(self):
+        """The case the whole phase exists to prevent. A field bound to the
+        wrong family never reaches its real values, where a bare integer
+        still reaches them by mutation."""
+        self.scratch(description="ALPHA_PARAMS {\n"
+                                 "\tmode\tflags[alpha_params_mode, int32]\n"
+                                 "\tother\tflags[alpha_params_other, int32]\n"
+                                 "} [packed]\n"
+                                 "alpha_params_mode = 0x0, 0x1\n"
+                                 "alpha_params_other = 0x2, 0x3\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("ALPHA_PARAMS.other reaches the description set and "
+                      "the audit did not accept it", text)
+        self.assertIn("the field is bound to it", text)
+
+    def test_a_rejected_family_defining_a_set_is_reported(self):
+        self.scratch(description=self.STRUCT + "\n" + self.DEFINE
+                     + "alpha_params_other = 0x2, 0x3\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("nvidia.txt defines the set", text)
+
+    def test_a_set_referenced_with_no_definition_is_reported(self):
+        self.scratch(description=self.STRUCT)
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("no file defines it", text)
+
+    def test_a_set_defined_with_no_reference_is_reported(self):
+        self.scratch(description="ALPHA_PARAMS {\n"
+                                 "\tmode\tflags[alpha_params_mode, int32]\n"
+                                 "} [packed]\n"
+                                 + self.DEFINE + "orphan_set = 0x1, 0x2\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("orphan_set is defined in nvidia.txt and no field "
+                      "references it", text)
+
+    def test_an_accepted_entry_with_no_derived_record_is_reported(self):
+        """accepted_families joins on (struct, field) and returns derived
+        records alone, so such an entry binds nothing and reports nothing."""
+        self.scratch(audit=self.AUDIT + [{"struct": "GAMMA_PARAMS",
+                                          "field": "id",
+                                          "verdict": "accepted",
+                                          "reason": "recorded in error"}])
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("the audit accepts GAMMA_PARAMS.id and no derived "
+                      "record carries it", text)
+
+    def test_the_remedy_names_both_regenerating_commands(self):
+        self.scratch(description=self.STRUCT)
+        _code, text = self.check("families")
+        self.assertIn("tools/value_families.py", text)
+        self.assertIn("tools/syzlang_gen.py emit", text)
+
+
+class TestTheAcceptedFamilyCheckInputs(ValueFamilyCheckFixtures):
+    """An artefact the check cannot read is exit 2 and never exit 1."""
+
+    def test_an_absent_derivation_exits_two(self):
+        root = self.scratch()
+        os.unlink(os.path.join(root, "value-families.json"))
+        code, text = self.check("families")
+        self.assertEqual(code, 2)
+        self.assertIn("cannot run:", text)
+
+    def test_an_absent_audit_exits_two(self):
+        root = self.scratch()
+        os.unlink(os.path.join(root, "value-families-audit.json"))
+        code, text = self.check("families")
+        self.assertEqual(code, 2)
+
+    def test_a_derivation_with_no_families_array_exits_two(self):
+        root = self.scratch()
+        with open(os.path.join(root, "value-families.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"schema": value_families.SCHEMA}, fh)
+        code, text = self.check("families")
+        self.assertEqual(code, 2)
+        self.assertIn("carries no families array", text)
+
+    def test_an_unparseable_audit_exits_two(self):
+        root = self.scratch()
+        with open(os.path.join(root, "value-families-audit.json"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("{not json")
+        code, text = self.check("families")
+        self.assertEqual(code, 2)
+
+
+class TestTheFamiliesCheckIsRegistered(unittest.TestCase):
+    """The check runs under `all` and under its own CI step."""
+
+    def test_it_is_in_the_registry_and_the_order(self):
+        self.assertIn("families", regression_check.CHECKS)
+        self.assertIn("families", regression_check.CHECK_ORDER)
+
+    def test_the_docstring_describes_it(self):
+        self.assertIn("\n    families    ", regression_check.__doc__)
+
+    def test_the_parser_accepts_it_as_a_subcommand(self):
+        args = regression_check.build_parser().parse_args(["families"])
+        self.assertEqual(args.check, "families")
+
+    def test_the_workflow_runs_it(self):
+        with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
+                               "selftest.yml"), encoding="utf-8") as fh:
+            workflow = fh.read()
+        self.assertTrue("regression_check.py families" in workflow,
+                        "the workflow runs no families step")
+
+
+class TestTheHostBinaryPreflight(unittest.TestCase):
+    """orchestrator_ctl.HOST_BINARIES and missing_binaries.
+
+    Resolution is by PATH alone, so the tests patch shutil.which. A binary
+    installed outside the PATH the unattended session runs under is absent for
+    this purpose, which is the condition worth reporting.
+    """
+
+    CONFIG = {"orchestrator": {"command": "agent --drive",
+                               "resume_command": "",
+                               "session_transcript_glob": ""}}
+
+    def resolving(self, present):
+        """Patch shutil.which so only the named binaries resolve."""
+        original = shutil.which
+        self.addCleanup(setattr, shutil, "which", original)
+        shutil.which = lambda name, *a, **k: ("/usr/bin/" + name
+                                              if name in present else None)
+
+    def preflight(self, present):
+        """-> (exit code, output) with the environment made deterministic."""
+        import coverage_ctl
+        self.resolving(present)
+        for module, name, value in (
+                (orchestrator_ctl, "sudo_ok",
+                 lambda user=None: (True, "sudo -n succeeds")),
+                (orchestrator_ctl.gspwn_config, "load",
+                 lambda *a, **k: self.CONFIG),
+                (coverage_ctl, "disk_free_mb", lambda *a, **k: 400000.0)):
+            self.addCleanup(setattr, module, name, getattr(module, name))
+            setattr(module, name, value)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = orchestrator_ctl.cmd_preflight(
+                types.SimpleNamespace(user=None))
+        return code, out.getvalue() + err.getvalue()
+
+    def all_names(self):
+        return [name for name, _required, _why in orchestrator_ctl.HOST_BINARIES]
+
+    def required_names(self):
+        return [name for name, required, _why
+                in orchestrator_ctl.HOST_BINARIES if required]
+
+    def optional_names(self):
+        return [name for name, required, _why
+                in orchestrator_ctl.HOST_BINARIES if not required]
+
+    def test_the_table_declares_both_kinds(self):
+        self.assertTrue(self.required_names())
+        self.assertTrue(self.optional_names())
+
+    def test_every_entry_carries_a_written_reason(self):
+        for name, _required, why in orchestrator_ctl.HOST_BINARIES:
+            self.assertTrue(why.strip(), name)
+
+    def test_nothing_is_missing_when_every_binary_resolves(self):
+        self.resolving(set(self.all_names()))
+        self.assertEqual(orchestrator_ctl.missing_binaries(), ([], []))
+
+    def test_every_binary_is_missing_when_nothing_resolves(self):
+        self.resolving(set())
+        required, optional = orchestrator_ctl.missing_binaries()
+        self.assertEqual([b for b, _w in required], self.required_names())
+        self.assertEqual([b for b, _w in optional], self.optional_names())
+
+    def test_a_required_absence_lands_in_the_required_list_alone(self):
+        self.resolving(set(self.all_names()) - {"nvidia-smi"})
+        required, optional = orchestrator_ctl.missing_binaries()
+        self.assertEqual([b for b, _w in required], ["nvidia-smi"])
+        self.assertEqual(optional, [])
+
+    def test_an_optional_absence_lands_in_the_optional_list_alone(self):
+        self.resolving(set(self.all_names()) - {"aws"})
+        required, optional = orchestrator_ctl.missing_binaries()
+        self.assertEqual(required, [])
+        self.assertEqual([b for b, _w in optional], ["aws"])
+
+    def test_each_missing_entry_carries_its_reason(self):
+        self.resolving(set(self.all_names()) - {"nvidia-smi"})
+        required, _optional = orchestrator_ctl.missing_binaries()
+        self.assertEqual(required[0][1],
+                         dict((n, w) for n, _r, w
+                              in orchestrator_ctl.HOST_BINARIES)["nvidia-smi"])
+
+    def test_resolution_is_through_shutil_which(self):
+        """A binary present on the real PATH is absent here, because the
+        resolver and nothing else decides."""
+        self.resolving(set())
+        required, _optional = orchestrator_ctl.missing_binaries()
+        self.assertIn("git", [b for b, _w in required])
+
+    def test_a_clean_host_passes_the_gate(self):
+        code, text = self.preflight(set(self.all_names()))
+        self.assertEqual(code, 0, text)
+        self.assertIn("preflight clean", text)
+
+    def test_a_required_absence_becomes_a_preflight_problem(self):
+        code, text = self.preflight(set(self.all_names()) - {"nvidia-smi"})
+        self.assertEqual(code, 1)
+        self.assertIn("MISSING nvidia-smi", text)
+        self.assertIn("nvidia-smi is not on PATH, and", text)
+
+    def test_a_required_absence_states_what_it_costs(self):
+        _code, text = self.preflight(set(self.all_names()) - {"go"})
+        self.assertIn("exits 3 when go is absent", text)
+
+    def test_an_optional_absence_is_reported(self):
+        _code, text = self.preflight(set(self.all_names()) - {"aws"})
+        self.assertIn("not needed by every deployment: aws", text)
+
+    def test_an_optional_absence_does_not_fail_the_gate(self):
+        code, text = self.preflight(set(self.all_names()) - {"aws"})
+        self.assertEqual(code, 0, text)
+        self.assertNotIn("aws is not on PATH", text)
+
+    def test_the_count_line_reads_what_resolved(self):
+        total = len(orchestrator_ctl.HOST_BINARIES)
+        _code, text = self.preflight(set(self.all_names()) - {"aws"})
+        self.assertIn("binaries:  %d of %d on PATH" % (total - 1, total), text)
 
 
 def pipeline_ctl_cmd_round_end(args):

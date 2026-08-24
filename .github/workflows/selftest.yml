@@ -37,7 +37,7 @@ jobs:
       - name: Shipped config is valid
         run: python3 tools/gspwn_config.py
 
-      # The seven steps below compare committed artefacts that have to agree
+      # The nine steps below compare committed artefacts that have to agree
       # and that nothing else compares. Each reads files only, so they run in
       # the same offline job as everything above.
 
@@ -73,6 +73,17 @@ jobs:
         # notice, at run time, on the system under test.
         run: python3 tools/regression_check.py derived
 
+      - name: Emitted value families were accepted by the audit
+        # 53 parameter fields are bound to a flags set holding the constants
+        # the driver's own headers define for them. A field bound to the
+        # wrong family is worse than a bare integer: the bare integer still
+        # reaches its real values by mutation and a wrong family never does.
+        # surface/value-families-audit.json is the only route from a derived
+        # family to an emitted set, and this step reads both directions, so
+        # neither a rejected family reaching the emitter nor an accepted one
+        # losing its binding is invisible.
+        run: python3 tools/regression_check.py families
+
       - name: Generated reference pages still match the artefacts
         # docs/src/content/docs/reference/surface/ renders the enumerated
         # surface: 34 escapes, 531 control commands, 155 allocation classes
@@ -84,7 +95,7 @@ jobs:
         run: python3 tools/regression_check.py pages
 
       - name: Recorded inputs still match the artefacts
-        # descriptions/generation.json records the sha256 of the five surface
+        # descriptions/generation.json records the sha256 of the nine surface
         # artefacts the description set was generated from, and nothing read
         # them. A surface artefact regenerated without regenerating the
         # description set leaves the record naming bytes that no longer
