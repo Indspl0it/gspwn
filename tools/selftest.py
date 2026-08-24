@@ -36,6 +36,7 @@ The git-mining classes skip themselves when git is absent from PATH.
 Usage: python3 tools/selftest.py [-v]      exit 0 = all passed
 """
 import ast
+import contextlib
 import csv
 import fcntl
 import hashlib
@@ -5715,12 +5716,17 @@ class TestSelectorPinsInTheEmittedSet(Phase4Fixtures):
 
     def test_the_struct_parser_reads_the_committed_set_completely(self):
         # generation.json records how many structs the emitter wrote. A parser
-        # that silently dropped blocks would let a free selector through.
+        # that silently dropped blocks would let a free selector through. Two
+        # counts are summed: the parameter structs the struct emitter wrote,
+        # and the pollfd structs the entry-point block carries, which take no
+        # parameter struct and so never pass through that emitter.
         with open(os.path.join(regression_check.DESC_DIR, "generation.json"),
                   encoding="utf-8") as f:
             manifest = json.load(f)
         _calls, structs = regression_check.read_descriptions()
-        self.assertEqual(len(structs), manifest["counts"]["structs_emitted"])
+        self.assertEqual(len(structs),
+                         manifest["counts"]["structs_emitted"]
+                         + manifest["counts"]["entry_point_structs"])
 
 
 class TestDenominatorCoverage(Phase4Fixtures):
@@ -14199,6 +14205,824 @@ class TestTheCompileGateIsDocumented(unittest.TestCase):
     def test_the_command_table_carries_the_gate(self):
         self.assertIn("python3 tools/syzlang_gen.py compile",
                       self.read("AGENTS.md"))
+
+
+class TestTheFopsTableParse(unittest.TestCase):
+    """Every entry point the driver registers is read from the file_operations
+    initialiser itself, so a table gaining or losing a member moves the
+    artefact and not a hand-kept list."""
+
+    TABLE = """
+static struct file_operations sample_fops = {
+    .owner     = THIS_MODULE,
+    .poll      = sample_poll,
+    .unlocked_ioctl = sample_ioctl,
+#if NVCPU_IS_X86_64 || NVCPU_IS_AARCH64
+    .compat_ioctl = sample_ioctl,
+#endif
+    .mmap      = sample_mmap,
+    .open      = sample_open,
+    .release   = sample_close,
+};
+"""
+
+    def test_every_member_but_owner_is_an_entry_point(self):
+        found = ioctl_inventory.parse_fops_table(self.TABLE, "sample_fops")
+        self.assertEqual([e["operation"] for e in found],
+                         ["poll", "unlocked_ioctl", "compat_ioctl", "mmap",
+                          "open", "release"])
+
+    def test_the_handler_symbol_is_recorded(self):
+        found = ioctl_inventory.parse_fops_table(self.TABLE, "sample_fops")
+        by_op = {e["operation"]: e["handler"] for e in found}
+        self.assertEqual(by_op["mmap"], "sample_mmap")
+        self.assertEqual(by_op["release"], "sample_close")
+
+    def test_a_member_behind_a_preprocessor_guard_names_it(self):
+        # compat_ioctl exists only on two architectures. An artefact that
+        # counted it unconditionally would overstate the entry points a given
+        # build registers.
+        found = ioctl_inventory.parse_fops_table(self.TABLE, "sample_fops")
+        by_op = {e["operation"]: e for e in found}
+        self.assertIsNone(by_op["mmap"]["conditional"])
+        self.assertIn("NVCPU_IS_X86_64", by_op["compat_ioctl"]["conditional"])
+
+    def test_the_line_number_is_recorded_for_each_member(self):
+        found = ioctl_inventory.parse_fops_table(self.TABLE, "sample_fops")
+        self.assertEqual([e["line"] for e in found], [4, 5, 7, 9, 10, 11])
+
+    def test_an_absent_table_raises(self):
+        with self.assertRaises(ioctl_inventory.InventoryError):
+            ioctl_inventory.parse_fops_table(self.TABLE, "no_such_fops")
+
+    def test_a_forward_declaration_is_not_a_table(self):
+        # uvm.c:47 forward-declares uvm_fops with no initialiser. Reading that
+        # as the table would produce a table with no entry points.
+        text = ("static const struct file_operations uvm_fops;\n"
+                + self.TABLE.replace("sample_fops", "uvm_fops"))
+        found = ioctl_inventory.parse_fops_table(text, "uvm_fops")
+        self.assertEqual(len(found), 6)
+
+
+class TestTheEntryPointArtefactShape(unittest.TestCase):
+    """The artefact records every file_operations table the driver defines on a
+    character device, and states for each whether the description set models
+    it."""
+
+    def artefact(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "entry-points.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed entry-point artefact not present")
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_the_schema_is_stamped(self):
+        self.assertEqual(self.artefact()["schema"],
+                         ioctl_inventory.ENTRY_POINTS_SCHEMA)
+
+    def test_three_tables_are_modelled(self):
+        # nvidia_fops serves two nodes, so four modelled nodes sit on three
+        # tables.
+        tables = [t for t in self.artefact()["tables"] if t["modelled"]]
+        self.assertEqual(sorted(t["fops"] for t in tables),
+                         ["nvidia_fops", "uvm_fops", "uvm_tools_fops"])
+
+    def test_the_modelled_nodes_are_the_four_the_set_opens(self):
+        paths = sorted(p for t in self.artefact()["tables"] if t["modelled"]
+                       for p in t["paths"])
+        self.assertEqual(paths, ["/dev/nvidia-uvm", "/dev/nvidia-uvm-tools",
+                                 "/dev/nvidiaN", "/dev/nvidiactl"])
+
+    def test_every_unmodelled_table_states_a_reason(self):
+        for table in self.artefact()["tables"]:
+            if table["modelled"]:
+                continue
+            self.assertTrue(table["reason"],
+                            "%s carries no reason" % table["fops"])
+
+    def test_the_unmodelled_reasons_name_the_tenant_surface(self):
+        # A node absent from the container's device set is outside the tenant
+        # surface. A node inside it and still unmodelled has to say so, so the
+        # artefact cannot be read as though the scope decision were uniform.
+        for table in self.artefact()["tables"]:
+            if table["modelled"]:
+                continue
+            self.assertIn("tenant_surface", table)
+            self.assertIsInstance(table["tenant_surface"], bool)
+
+    def test_modeset_is_recorded_inside_the_tenant_surface(self):
+        # F15: libnvidia-container creates the node by default. Recording it
+        # as outside would contradict the artefact Phase 3 acts on.
+        table = self.table("nvkms_fops")
+        self.assertFalse(table["modelled"])
+        self.assertTrue(table["tenant_surface"])
+
+    def test_nvlink_is_recorded_outside_the_tenant_surface(self):
+        table = self.table("nvlink_fops")
+        self.assertFalse(table["modelled"])
+        self.assertFalse(table["tenant_surface"])
+
+    def table(self, symbol):
+        for table in self.artefact()["tables"]:
+            if table["fops"] == symbol:
+                return table
+        self.fail("no table named %s" % symbol)
+
+    def test_the_modelled_entry_point_count_is_recorded(self):
+        doc = self.artefact()
+        counted = sum(len(t["entry_points"]) for t in doc["tables"]
+                      if t["modelled"])
+        self.assertEqual(doc["counts"]["modelled_entry_points"], counted)
+
+    def test_the_three_modelled_tables_carry_sixteen_entry_points(self):
+        # nvidia_fops 6, uvm_fops 5, uvm_tools_fops 5. The figure is asserted
+        # so a driver release that adds or drops an entry point fails here
+        # rather than moving a reported number silently.
+        self.assertEqual(self.artefact()["counts"]["modelled_entry_points"],
+                         16)
+
+    def test_uvm_fops_registers_mmap_and_no_poll(self):
+        ops = {e["operation"] for e in self.table("uvm_fops")["entry_points"]}
+        self.assertIn("mmap", ops)
+        self.assertNotIn("poll", ops)
+
+    def test_uvm_tools_fops_registers_poll_and_no_mmap(self):
+        ops = {e["operation"]
+               for e in self.table("uvm_tools_fops")["entry_points"]}
+        self.assertIn("poll", ops)
+        self.assertNotIn("mmap", ops)
+
+    def test_nvidia_fops_registers_both(self):
+        ops = {e["operation"] for e in self.table("nvidia_fops")["entry_points"]}
+        self.assertLessEqual({"mmap", "poll"}, ops)
+
+
+class TestTheUvmInitCensusIsConfirmedBeforeUse(unittest.TestCase):
+    """The retyping is derived from `requires_initialized_fd` in the committed
+    inventory. A regenerated inventory that lost the field, or a driver release
+    that moved the split, has to fail here rather than emit 36 variants taking
+    the uninitialised descriptor."""
+
+    def inventory(self, uvm, tools):
+        return {"nodes": [
+            {"paths": ["/dev/nvidia-uvm"],
+             "entry": "uvm_unlocked_ioctl_entry (kernel-open/nvidia-uvm/uvm.c)",
+             "scheme": "bare_command_number", "commands": uvm},
+            {"paths": ["/dev/nvidia-uvm-tools"],
+             "entry": "uvm_tools_unlocked_ioctl_entry "
+                      "(kernel-open/nvidia-uvm/uvm_tools.c)",
+             "scheme": "bare_command_number", "commands": tools},
+        ]}
+
+    def commands(self, requiring, free, prefix="UVM"):
+        out = [{"name": "%s_R%d" % (prefix, i),
+                "requires_initialized_fd": True} for i in range(requiring)]
+        out += [{"name": "%s_F%d" % (prefix, i),
+                 "requires_initialized_fd": False} for i in range(free)]
+        return out
+
+    def test_the_expected_split_is_accepted(self):
+        census = syzlang_gen.uvm_fd_census(
+            self.inventory(self.commands(36, 3), self.commands(0, 7, "TOOLS")))
+        self.assertEqual(sum(1 for v in census.values() if v), 36)
+        self.assertEqual(sum(1 for v in census.values() if not v), 10)
+
+    def test_a_moved_uvm_split_is_fatal(self):
+        with self.assertRaises(syzlang_gen.CensusError) as caught:
+            syzlang_gen.uvm_fd_census(
+                self.inventory(self.commands(35, 4), self.commands(0, 7, "TOOLS")))
+        self.assertIn("35", str(caught.exception))
+        self.assertIn("36", str(caught.exception))
+
+    def test_a_tools_node_requiring_initialisation_is_fatal(self):
+        # 0 true on the tools node is what makes uvmFd the only route the
+        # constraint takes into that family. A non-zero count means the
+        # driver moved and the uvm_tools typing has to be revisited.
+        with self.assertRaises(syzlang_gen.CensusError):
+            syzlang_gen.uvm_fd_census(
+                self.inventory(self.commands(36, 3), self.commands(1, 6, "TOOLS")))
+
+    def test_a_missing_field_is_fatal_and_not_read_as_false(self):
+        commands = self.commands(36, 3)
+        del commands[0]["requires_initialized_fd"]
+        with self.assertRaises(syzlang_gen.CensusError):
+            syzlang_gen.uvm_fd_census(
+                self.inventory(commands, self.commands(0, 7, "TOOLS")))
+
+    def test_the_committed_inventory_still_reads_the_expected_split(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "ioctl-inventory.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed inventory not present")
+        with open(path, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        census = syzlang_gen.uvm_fd_census(inventory)
+        self.assertEqual(sum(1 for v in census.values() if v), 36)
+        self.assertEqual(
+            sorted(n for n, v in census.items() if not v),
+            ["UVM_DEINITIALIZE", "UVM_INITIALIZE", "UVM_MM_INITIALIZE"]
+            + sorted(n for n, v in census.items()
+                     if not v and n.startswith("UVM_TOOLS")))
+
+
+class TestTheUvmVaSpaceResourceTyping(unittest.TestCase):
+    """F24 and F25. The 36 commands the driver marks INIT_CHECK take the
+    initialised descriptor, the producer is the pseudo-syscall, and
+    ioctl$UVM_INITIALIZE produces nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.desc = os.path.join(os.path.dirname(HERE), "descriptions")
+        cls.inv = os.path.join(os.path.dirname(HERE), "surface",
+                               "ioctl-inventory.json")
+
+    def read(self, name):
+        path = os.path.join(self.desc, name)
+        if not os.path.isfile(path):
+            self.skipTest("committed description set not present")
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def census(self):
+        if not os.path.isfile(self.inv):
+            self.skipTest("committed inventory not present")
+        with open(self.inv, encoding="utf-8") as fh:
+            return syzlang_gen.uvm_fd_census(json.load(fh))
+
+    def taken_by(self):
+        """-> {command name: the fd resource its emitted variant takes}."""
+        out = {}
+        for line in self.read("nvidia_uvm.txt").splitlines():
+            match = re.match(r"ioctl\$(\w+)\(fd (\w+),", line)
+            if match:
+                out[match.group(1)] = match.group(2)
+        return out
+
+    def test_the_subtype_is_declared_over_the_base(self):
+        self.assertIn("resource fd_nvidia_uvm_vaspace[fd_nvidia_uvm]",
+                      self.read("nvidia.txt"))
+
+    def test_every_command_requiring_initialisation_takes_the_subtype(self):
+        census, taken = self.census(), self.taken_by()
+        wrong = sorted(n for n, needs in census.items()
+                       if needs and n in taken
+                       and taken[n] != "fd_nvidia_uvm_vaspace")
+        self.assertEqual(wrong, [])
+        self.assertEqual(
+            sum(1 for n, needs in census.items()
+                if needs and taken.get(n) == "fd_nvidia_uvm_vaspace"), 36)
+
+    def test_every_command_not_requiring_it_keeps_the_base(self):
+        census, taken = self.census(), self.taken_by()
+        free = {n for n, needs in census.items() if not needs}
+        uvm_free = sorted(n for n in free
+                          if taken.get(n) == "fd_nvidia_uvm")
+        self.assertEqual(uvm_free, ["UVM_DEINITIALIZE", "UVM_INITIALIZE",
+                                    "UVM_MM_INITIALIZE"])
+
+    def test_the_tools_commands_keep_their_own_descriptor(self):
+        # Membership comes from the node and never from the name. Five
+        # commands named UVM_TOOLS_* are dispatched by uvm_ioctl on
+        # /dev/nvidia-uvm and carry the initialisation requirement; the seven
+        # on the tools node do not.
+        if not os.path.isfile(self.inv):
+            self.skipTest("committed inventory not present")
+        with open(self.inv, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        names = [c["name"] for node in inventory["nodes"]
+                 if syzlang_gen.uvm_node_group(node) == "uvm_tools"
+                 for c in node["commands"]]
+        taken = self.taken_by()
+        self.assertEqual(len(names), 7)
+        self.assertEqual({taken[n] for n in names}, {"fd_nvidia_uvm_tools"})
+
+    def test_the_initialise_ioctl_produces_nothing(self):
+        # F25: its return is 0 on success and on failure alike, so a resource
+        # taken from it would hold 0 and every consumer would receive stdin.
+        for line in self.read("nvidia_uvm.txt").splitlines():
+            if line.startswith("ioctl$UVM_INITIALIZE("):
+                self.assertTrue(line.rstrip().endswith(")"), line)
+                return
+        self.fail("ioctl$UVM_INITIALIZE is not declared")
+
+    def test_the_pseudo_syscall_is_the_only_producer(self):
+        text = self.read("nvidia.txt")
+        producers = [l for l in text.splitlines()
+                     if l.rstrip().endswith(" fd_nvidia_uvm_vaspace")]
+        self.assertEqual(len(producers), 1, producers)
+        self.assertTrue(producers[0].startswith("syz_nvidia_uvm_init("),
+                        producers[0])
+
+    def test_the_pseudo_syscall_is_declared_once(self):
+        whole = "".join(self.read(n) for n in
+                        ("nvidia.txt", "nvidia_uvm.txt", "nvidia_ctrl.txt",
+                         "nvidia_structs.txt"))
+        self.assertEqual(whole.count("syz_nvidia_uvm_init("), 1)
+
+    def test_both_uvm_fd_fields_take_the_initialised_subtype(self):
+        # F24a, and the second field it did not record. Both handlers fget the
+        # field and then require UVM_FD_VA_SPACE: uvm_tools.c:2023 and
+        # uvm.c:73. Two structs declare a uvmFd field, so each assertion is
+        # anchored to the block declaring it.
+        for struct in ("UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS",
+                       "UVM_MM_INITIALIZE_PARAMS"):
+            self.assertEqual(self.struct_field(struct, "uvmFd"),
+                             "fd_nvidia_uvm_vaspace", struct)
+
+    def test_no_uvm_fd_field_is_still_a_bare_integer(self):
+        text = self.read("nvidia_structs.txt")
+        self.assertEqual([l for l in text.splitlines()
+                          if l.startswith("\tuvmFd") and "int32" in l], [])
+
+    def test_the_mm_initialise_call_keeps_the_uninitialised_descriptor(self):
+        # uvm_fd_type_init at uvm_fd_type.c:92 returns NV_ERR_IN_USE unless
+        # the ioctl's own descriptor is still UVM_FD_UNINITIALIZED, so this
+        # one call takes two descriptors in opposite states.
+        self.assertEqual(self.taken_by()["UVM_MM_INITIALIZE"],
+                         "fd_nvidia_uvm")
+
+    def struct_field(self, struct, field):
+        """-> the emitted type of one field of one struct."""
+        text = self.read("nvidia_structs.txt")
+        block = re.search(r"^%s \{\n(.*?)^\}" % re.escape(struct), text,
+                          re.M | re.S)
+        self.assertIsNotNone(block, struct)
+        found = re.search(r"^\t%s\s+(\S+)$" % re.escape(field),
+                          block.group(1), re.M)
+        self.assertIsNotNone(found, "%s.%s" % (struct, field))
+        return found.group(1)
+
+    def test_no_cmd_value_moved_in_the_uvm_file(self):
+        # The retyping changes the resource each variant takes and nothing
+        # else. Every emitted request number is still the one the inventory
+        # records for that command.
+        if not os.path.isfile(self.inv):
+            self.skipTest("committed inventory not present")
+        with open(self.inv, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        expected = {c["name"]: c["requests"][0]
+                    for node in inventory["nodes"]
+                    if node["scheme"] == "bare_command_number"
+                    for c in node["commands"] if c.get("requests")}
+        seen = 0
+        for line in self.read("nvidia_uvm.txt").splitlines():
+            match = re.match(r"ioctl\$(\w+)\(fd \w+, cmd const\[(\w+)\]", line)
+            if match and match.group(1) in expected:
+                self.assertEqual(match.group(2), expected[match.group(1)],
+                                 match.group(1))
+                seen += 1
+        self.assertEqual(seen, 46)
+
+
+class TestTheEntryPointCalls(unittest.TestCase):
+    """F7, F9, F26. The description set declares the mmap and poll entry points
+    the driver registers on the nodes it already opens."""
+
+    def read(self, name="nvidia.txt"):
+        path = os.path.join(os.path.dirname(HERE), "descriptions", name)
+        if not os.path.isfile(path):
+            self.skipTest("committed description set not present")
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def call(self, name):
+        for line in self.read().splitlines():
+            if line.startswith(name + "("):
+                return line
+        self.fail("%s is not declared" % name)
+
+    def test_every_registered_entry_point_carries_a_call(self):
+        declared = [l.split("(")[0] for l in self.read().splitlines()
+                    if l.startswith(("mmap$", "poll$"))]
+        self.assertEqual(sorted(declared),
+                         ["mmap$nvidia", "mmap$nvidia_uvm", "mmap$nvidiactl",
+                          "poll$nvidia", "poll$nvidia_uvm_tools",
+                          "poll$nvidiactl"])
+
+    def test_each_mmap_takes_the_resource_its_node_declares(self):
+        self.assertIn("fd fd_nvidia,", self.call("mmap$nvidia"))
+        self.assertIn("fd fd_nvidiactl,", self.call("mmap$nvidiactl"))
+        self.assertIn("fd fd_nvidia_uvm_vaspace,", self.call("mmap$nvidia_uvm"))
+
+    def test_each_poll_takes_the_resource_its_node_declares(self):
+        self.assertIn("nv_pollfd_nvidia", self.call("poll$nvidia"))
+        self.assertIn("nv_pollfd_uvm_tools",
+                      self.call("poll$nvidia_uvm_tools"))
+
+    def test_the_rm_mmap_offsets_are_pinned_to_zero(self):
+        # nv-mmap.c:554 abandons the mapping for any non-zero vm_pgoff, so
+        # zero is the only offset that reaches the handler body.
+        for name in ("mmap$nvidia", "mmap$nvidiactl"):
+            self.assertIn("offset const[0]", self.call(name), name)
+
+    def test_the_uvm_mmap_offset_is_not_pinned(self):
+        # F26: uvm.c:793 requires the offset to equal the mapping address the
+        # kernel selects at run time, so no fixed value satisfies it.
+        self.assertNotIn("offset const[", self.call("mmap$nvidia_uvm"))
+
+    def test_the_uvm_offset_limitation_is_cited_in_the_emitter(self):
+        with open(os.path.join(HERE, "syzlang_gen.py"), encoding="utf-8") as fh:
+            source = fh.read()
+        self.assertIn("uvm.c:793", source)
+        self.assertIn("nv-mmap.c:554", source)
+
+    def test_no_entry_point_call_is_counted_as_an_ioctl_variant(self):
+        # surface_cov joins on ioctl$ names. An mmap or poll line that matched
+        # would enter the 764 denominator, which the phase forbids.
+        names = surface_cov.scan_variants(
+            [os.path.join(os.path.dirname(HERE), "descriptions",
+                          "nvidia.txt")], "descriptions")
+        self.assertFalse([n for n in names if "mmap" in n or "poll" in n])
+
+
+class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
+    """Entry points are counted beside the 764 and never inside it. A mmap or
+    poll entry point has no method id, no parameter struct and no inventory
+    row, so a total mixing the two counts two kinds of thing."""
+
+    def test_the_loader_reports_the_artefact_counts(self):
+        modelled, registered, tables = surface_cov.load_entry_points()
+        self.assertEqual(modelled, 16)
+        self.assertEqual(registered, 43)
+        self.assertEqual(len(tables), 3)
+
+    def test_the_denominator_is_unchanged_by_the_counter(self):
+        targets, _excluded, _meta = surface_cov.load_targets()
+        self.assertEqual(len(targets), 764)
+
+    def test_the_five_families_still_carry_the_whole_denominator(self):
+        targets, _excluded, _meta = surface_cov.load_targets()
+        self.assertEqual(
+            sum(1 for t in targets.values()
+                if t["family"] in surface_cov.FAMILIES), 764)
+        self.assertEqual(len(surface_cov.FAMILIES), 5)
+
+    def test_an_entry_point_inside_the_denominator_is_refused(self):
+        with self.assertRaises(surface_cov.SurfaceError) as caught:
+            surface_cov.assert_outside_denominator(
+                {"NV_ESC_RM_FREE": {}, "mmap$nvidia_uvm": {}})
+        self.assertIn("mmap$nvidia_uvm", str(caught.exception))
+
+    def test_the_pseudo_syscall_inside_the_denominator_is_refused(self):
+        with self.assertRaises(surface_cov.SurfaceError):
+            surface_cov.assert_outside_denominator(
+                {"syz_nvidia_uvm_init": {}})
+
+    def test_a_clean_denominator_passes(self):
+        self.assertIsNone(
+            surface_cov.assert_outside_denominator({"NV_ESC_RM_FREE": {}}))
+
+    def test_the_committed_denominator_carries_no_entry_point(self):
+        targets, _excluded, _meta = surface_cov.load_targets()
+        self.assertIsNone(surface_cov.assert_outside_denominator(targets))
+
+    def test_the_modelled_report_prints_both_counts_separately(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = _surface_cov_modelled()
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("764", text)
+        self.assertIn("entry points", text)
+        # The two totals sit on different lines, so neither reading can be
+        # taken for the other.
+        totals = [l for l in text.splitlines() if l.startswith("total")]
+        self.assertEqual(len(totals), 1)
+        self.assertNotIn("entry", totals[0])
+
+    def test_the_report_names_the_counter_as_outside_the_denominator(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            _surface_cov_modelled()
+        self.assertIn("not part of the", out.getvalue())
+
+    def test_the_sum_of_the_two_is_never_printed(self):
+        # 764 + 16 is 780 and names nothing. A reader who found it on this
+        # page would take it for a denominator.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            _surface_cov_modelled()
+        self.assertNotIn("780", out.getvalue())
+
+
+class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
+    """Every mmap and poll the driver registers on a modelled node has a
+    declared call, so a driver release that adds one fails the check rather
+    than leaving an undescribed entry point."""
+
+    def test_the_expected_calls_are_derived_from_the_artefact(self):
+        _m, _r, tables = surface_cov.load_entry_points()
+        self.assertEqual(sorted(surface_cov.entry_point_calls(tables)),
+                         ["mmap$nvidia", "mmap$nvidia_uvm", "mmap$nvidiactl",
+                          "poll$nvidia", "poll$nvidia_uvm_tools",
+                          "poll$nvidiactl"])
+
+    def test_a_node_with_no_suffix_is_refused(self):
+        # A device node the mapping does not name cannot have its call name
+        # derived, and guessing one would report a gap against a call that
+        # was never meant to exist.
+        with self.assertRaises(surface_cov.SurfaceError):
+            surface_cov.entry_point_calls(
+                [{"fops": "x_fops", "paths": ["/dev/nvidia-modeset"],
+                  "entry_points": [{"operation": "mmap"}]}])
+
+    def test_the_check_passes_over_the_committed_set(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = regression_check.check_coverage()
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("entry point", out.getvalue())
+
+    def test_the_check_reports_the_entry_point_count(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            regression_check.check_coverage()
+        self.assertIn("16", out.getvalue())
+
+    def test_the_check_still_reports_the_command_denominator(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            regression_check.check_coverage()
+        self.assertIn("764 targetable across 5 families", out.getvalue())
+
+
+def _surface_cov_modelled():
+    """Run `surface_cov.py modelled` through its own parser.
+
+    main() reads sys.argv and takes no argument, so the subcommand handler is
+    driven directly and the test never rewrites the process argv.
+    """
+    args = surface_cov.build_parser().parse_args(["modelled"])
+    return args.func(args)
+
+
+class TestTheExecutorPatch(unittest.TestCase):
+    """The executor half of syz_nvidia_uvm_init. Carried as a patch against
+    the pinned syzkaller checkout and never as a fork of it, so the pin keeps
+    naming an upstream revision and the delta stays one reviewable file."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.path = os.path.join(os.path.dirname(HERE), "tools", "syz-patches",
+                                "0001-syz_nvidia_uvm_init.patch")
+
+    def read(self):
+        if not os.path.isfile(self.path):
+            self.fail("the executor patch is not committed at %s" % self.path)
+        with open(self.path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def added(self):
+        """-> the lines the patch adds, without the diff marker."""
+        return "\n".join(l[1:] for l in self.read().splitlines()
+                         if l.startswith("+") and not l.startswith("+++"))
+
+    def test_the_emitter_names_the_patch_it_depends_on(self):
+        self.assertEqual(syzlang_gen.SYZ_PATCH_REL,
+                         "tools/syz-patches/0001-syz_nvidia_uvm_init.patch")
+
+    def test_the_patch_touches_only_the_executor_header(self):
+        touched = [l.split()[-1] for l in self.read().splitlines()
+                   if l.startswith("+++ ")]
+        self.assertEqual(touched, ["b/executor/common_linux.h"])
+
+    def test_the_guard_follows_the_pseudo_syscall_form(self):
+        self.assertIn("#if SYZ_EXECUTOR || __NR_syz_nvidia_uvm_init",
+                      self.added())
+
+    def test_the_implementation_is_declared_static_long(self):
+        self.assertIn("static long syz_nvidia_uvm_init(volatile long a0)",
+                      self.added())
+
+    def test_the_command_number_matches_the_generated_description(self):
+        # One number, in two places that no build step joins. A drift here
+        # would leave the pseudo-syscall issuing an ioctl the driver does not
+        # dispatch, and every consumer of the resource would still be typed.
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed generation record not present")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
+        request = [r["request"] for r in record["uvm"]
+                   if r["command"] == "UVM_INITIALIZE"][0]
+        found = re.search(r"#define GSPWN_UVM_INITIALIZE (0x[0-9a-fA-F]+)",
+                          self.added())
+        self.assertIsNotNone(found)
+        self.assertEqual(int(found.group(1), 16), int(request, 16))
+
+    def test_a_failed_initialisation_produces_no_resource(self):
+        # The ioctl returns 0 whether or not initialisation succeeded, so
+        # rmStatus is the only thing separating the two. A descriptor that did
+        # not reach UVM_FD_VA_SPACE must not become a resource.
+        added = self.added()
+        self.assertIn("if (params.rmStatus != 0) {", added)
+        self.assertRegex(
+            added, r"if \(params\.rmStatus != 0\) \{\s*\n\s*close\(fd\);"
+                   r"\s*\n\s*return -1;")
+
+    def test_a_failed_open_returns_the_open_result(self):
+        self.assertRegex(self.added(),
+                         r"int fd = open\(\"/dev/nvidia-uvm\", O_RDWR\);"
+                         r"\s*\n\s*if \(fd < 0\)\s*\n\s*return fd;")
+
+    def test_the_descriptor_is_returned_on_success(self):
+        self.assertTrue(self.added().rstrip().endswith("#endif"))
+        self.assertIn("return fd;", self.added())
+
+    def test_the_patch_uses_only_executor_integer_typedefs(self):
+        # executor.cc:60-63 defines uint64, uint32, uint16 and uint8 and no
+        # signed forms. int32 would not compile.
+        body = re.search(r"struct gspwn_uvm_initialize_params \{(.*?)\};",
+                         self.added(), re.S)
+        self.assertIsNotNone(body)
+        for declared in re.findall(r"^\t(\w+) ", body.group(1), re.M):
+            self.assertIn(declared, ("uint64", "uint32", "uint16", "uint8"))
+
+
+class TestThePseudoSyscallParameterLayout(unittest.TestCase):
+    """The patch reads rmStatus at a fixed offset. The offset is asserted
+    against the committed layout, so a struct that moves fails here rather
+    than leaving the executor reading the wrong word of a live parameter."""
+
+    # The emitted syzlang types this struct uses, and their widths.
+    WIDTH = {"int64": 8, "int32": 4, "int16": 2, "int8": 1}
+
+    def emitted_layout(self, struct):
+        """-> ([(field, offset)], total size) from descriptions."""
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia_structs.txt")
+        if not os.path.isfile(path):
+            self.skipTest("committed description set not present")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        block = re.search(r"^%s \{\n(.*?)^\}" % re.escape(struct), text,
+                          re.M | re.S)
+        self.assertIsNotNone(block, struct)
+        offset, fields = 0, []
+        for line in block.group(1).splitlines():
+            name, _, kind = line.strip().partition("\t")
+            kind = kind.strip()
+            array = re.match(r"array\[const\[0, (int\d+)\], (\d+)\]", kind)
+            if array:
+                width = self.WIDTH[array.group(1)] * int(array.group(2))
+            else:
+                width = self.WIDTH[kind]
+            fields.append((name.strip(), offset))
+            offset += width
+        return fields, offset
+
+    def recorded_layout(self):
+        """-> ({field: offset}, size) as generation.json records it.
+
+        The authority for the offset the executor half hardcodes. It is
+        derived from the header on every emit run, so a struct that moves
+        moves this record and fails the comparison below.
+        """
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed generation record not present")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
+        params = record["entry_points"]["pseudo_syscall"]["params"]
+        self.assertEqual(params["struct"], "UVM_INITIALIZE_PARAMS")
+        return ({f["name"]: f["offset"] for f in params["fields"]},
+                params["size"])
+
+    def test_the_recorded_layout_matches_the_emitted_one(self):
+        recorded, recorded_size = self.recorded_layout()
+        emitted, emitted_size = self.emitted_layout("UVM_INITIALIZE_PARAMS")
+        self.assertEqual(recorded, dict(emitted))
+        self.assertEqual(recorded_size, emitted_size)
+
+    def test_the_committed_layout_puts_rmstatus_at_offset_eight(self):
+        recorded, size = self.recorded_layout()
+        self.assertEqual(recorded["flags"], 0)
+        self.assertEqual(recorded["rmStatus"], 8)
+        self.assertEqual(size, 16)
+
+    def test_the_patch_struct_matches_that_layout(self):
+        path = os.path.join(os.path.dirname(HERE), "tools", "syz-patches",
+                            "0001-syz_nvidia_uvm_init.patch")
+        if not os.path.isfile(path):
+            self.fail("the executor patch is not committed")
+        with open(path, encoding="utf-8") as fh:
+            added = "\n".join(l[1:] for l in fh.read().splitlines()
+                              if l.startswith("+") and not l.startswith("+++"))
+        body = re.search(r"struct gspwn_uvm_initialize_params \{(.*?)\};",
+                         added, re.S).group(1)
+        widths = {"uint64": 8, "uint32": 4, "uint16": 2, "uint8": 1}
+        offset, patch_fields = 0, {}
+        for kind, name in re.findall(r"^\t(\w+) (\w+);", body, re.M):
+            patch_fields[name] = offset
+            offset += widths[kind]
+        recorded, size = self.recorded_layout()
+        # Named on both sides. A patch that builds, runs and reads a
+        # neighbouring word as the status would produce a resource on failed
+        # initialisations, and nothing else in the sweep would catch it.
+        for field in ("flags", "rmStatus"):
+            self.assertEqual(
+                patch_fields.get(field), recorded[field],
+                "%s: the executor patch reads offset %r and "
+                "descriptions/generation.json records offset %d"
+                % (field, patch_fields.get(field), recorded[field]))
+        self.assertEqual(
+            offset, size,
+            "the executor patch's struct is %d bytes and "
+            "descriptions/generation.json records %d" % (offset, size))
+
+    def test_the_struct_size_did_not_move_for_the_retyped_structs(self):
+        # Both uvmFd fields became a 32-bit resource where int32 stood, so
+        # neither struct's size changed. 595 structs still match their
+        # measured sizeof and none mismatches.
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed generation record not present")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
+        self.assertEqual(record["counts"]["size_mismatch"], 0)
+        self.assertEqual(record["size_mismatch"], [])
+        self.assertEqual(record["counts"]["size_match"], 595)
+
+
+class TestTheUvmOrderingMeasurement(unittest.TestCase):
+    """The pseudo-syscall's value is argued and not demonstrated. This is the
+    measurement that settles it on the next branch, and what it cannot measure
+    is stated rather than substituted."""
+
+    PRODUCED = """r0 = syz_nvidia_uvm_init(0x0)
+ioctl$UVM_REGISTER_GPU(r0, 0x19, &(0x7f0000000000)=nil)
+"""
+    OPENED = """r0 = openat$nvidia_uvm(0xffffffffffffff9c, &(0x7f0000000000), 0x2, 0x0)
+ioctl$UVM_REGISTER_GPU(r0, 0x19, &(0x7f0000000100)=nil)
+"""
+    BOTH = """r0 = openat$nvidia_uvm(0xffffffffffffff9c, &(0x7f0000000000), 0x2, 0x0)
+r1 = syz_nvidia_uvm_init(0x0)
+ioctl$UVM_INITIALIZE(r0, 0x30000001, &(0x7f0000000100)=nil)
+ioctl$UVM_REGISTER_GPU(r1, 0x19, &(0x7f0000000200)=nil)
+"""
+    UNRELATED = """r0 = openat$nvidiactl(0xffffffffffffff9c, &(0x7f0000000000), 0x2, 0x0)
+ioctl$NV_ESC_RM_FREE(r0, 0xc0184629, &(0x7f0000000100)=nil)
+"""
+
+    def requiring(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "ioctl-inventory.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed inventory not present")
+        with open(path, encoding="utf-8") as fh:
+            census = syzlang_gen.uvm_fd_census(json.load(fh))
+        return {n for n, needs in census.items() if needs}
+
+    def test_a_program_consuming_the_produced_resource_is_ordered(self):
+        named, ordered = surface_cov.uvm_ordering(
+            [self.PRODUCED], self.requiring())
+        self.assertEqual((named, ordered), (1, 1))
+
+    def test_a_program_taking_the_opened_descriptor_is_not_ordered(self):
+        named, ordered = surface_cov.uvm_ordering(
+            [self.OPENED], self.requiring())
+        self.assertEqual((named, ordered), (1, 0))
+
+    def test_holding_the_producer_is_not_enough(self):
+        # The program calls the producer and then hands the command the
+        # descriptor openat returned. Counting it as ordered would count the
+        # presence of a call rather than the dependency.
+        named, ordered = surface_cov.uvm_ordering(
+            [self.BOTH.replace("r1, 0x19", "r0, 0x19")], self.requiring())
+        self.assertEqual((named, ordered), (1, 0))
+
+    def test_the_dependency_is_what_counts(self):
+        named, ordered = surface_cov.uvm_ordering(
+            [self.BOTH], self.requiring())
+        self.assertEqual((named, ordered), (1, 1))
+
+    def test_a_program_naming_no_such_command_is_not_counted(self):
+        named, ordered = surface_cov.uvm_ordering(
+            [self.UNRELATED], self.requiring())
+        self.assertEqual((named, ordered), (0, 0))
+
+    def test_a_command_that_needs_no_initialisation_is_not_counted(self):
+        program = "r0 = openat$nvidia_uvm(0xffffffffffffff9c, " \
+                  "&(0x7f0000000000), 0x2, 0x0)\n" \
+                  "ioctl$UVM_DEINITIALIZE(r0, 0x30000002, 0x0)\n"
+        self.assertEqual(surface_cov.uvm_ordering([program], self.requiring()),
+                         (0, 0))
+
+    def test_the_reported_limit_names_what_it_cannot_measure(self):
+        text = surface_cov.uvm_ordering_note(3, 2)
+        self.assertIn("2 of 3", text)
+        # Reaching past the check is a kernel-side fact. Saying the corpus
+        # measured it would be the second unmeasured claim in the ledger.
+        self.assertIn("per-symbol coverage", text)
+
+    def test_the_note_does_not_claim_the_handler_was_reached(self):
+        text = surface_cov.uvm_ordering_note(3, 2).lower()
+        self.assertNotIn("reached the handler", text)
+        self.assertNotIn("proves", text)
 
 
 def pipeline_ctl_cmd_round_end(args):

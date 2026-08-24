@@ -1163,6 +1163,275 @@ def load_sizes(path):
     return sizes
 
 
+# ---------------------------------------------------------------------------
+# Entry points: the file_operations tables the driver registers
+# ---------------------------------------------------------------------------
+
+ENTRY_POINTS_SCHEMA = "gspwn.entry-points/1"
+
+# One `.member = symbol,` inside a file_operations initialiser.
+RE_FOPS_MEMBER = re.compile(r"^\s*\.\s*(\w+)\s*=\s*([A-Za-z_]\w*)\s*,?\s*$")
+
+# `.owner = THIS_MODULE` names the module holding a reference on the table and
+# dispatches no call, so it is not an entry point.
+FOPS_NON_ENTRY = frozenset(["owner"])
+
+NVLINK_C = "kernel-open/nvidia/nvlink_linux.c"
+NVSWITCH_C = "kernel-open/nvidia/linux_nvswitch.c"
+NV_CAPS_C = "kernel-open/nvidia/nv-caps.c"
+NV_CAPS_IMEX_C = "kernel-open/nvidia/nv-caps-imex.c"
+NVKMS_C = "kernel-open/nvidia-modeset/nvidia-modeset-linux.c"
+NV_DRM_C = "kernel-open/nvidia-drm/nvidia-drm-drv.c"
+
+# The container's own device set. lookup_devices creates exactly nvidiactl,
+# nvidia-uvm, nvidia-uvm-tools and nvidia-modeset, and the per-GPU
+# /dev/nvidiaN nodes alongside them. A node absent from that function is
+# absent from a default container and therefore outside the tenant surface.
+TENANT_DEVICE_SOURCE = "libnvidia-container/src/nvc_info.c:515"
+
+OUTSIDE_TENANT_SURFACE = (
+    "lookup_devices at %s creates /dev/nvidiactl, /dev/nvidia-uvm, "
+    "/dev/nvidia-uvm-tools and /dev/nvidia-modeset only, so a default "
+    "container carries no node served by this table." % TENANT_DEVICE_SOURCE)
+
+# Device node to file_operations table. The binding is declared here and every
+# table named is read from source: a table this list names and the checkout
+# does not define is fatal. The binding itself is not derivable statically,
+# because the driver joins a table to a node through cdev_init and
+# register_chrdev at module init and no node path appears in either call.
+#
+# `modelled` is true for the nodes descriptions/nvidia.txt opens.
+# `tenant_surface` records whether the node exists inside a default container.
+# The two are independent: /dev/nvidia-modeset is inside the tenant surface
+# and carries no description at this revision.
+FOPS_TABLES = (
+    {
+        "fops": "nvidia_fops",
+        "source": NV_C,
+        "module": "nvidia",
+        "paths": ["/dev/nvidiactl", "/dev/nvidiaN"],
+        "modelled": True,
+        "tenant_surface": True,
+        "reason": None,
+        # One table serves two nodes, and the two are not equally reachable
+        # through it. The control node clears both early exits in
+        # nvidia_poll that the actual device faces: nv.c:2292 skips the
+        # nv_is_open_complete POLLERR gate at nv.c:2294 for it, and
+        # nvidia_ctl_open sets nvlfp->nvptr unconditionally at nv.c:3141,
+        # where the actual device leaves it NULL at nv.c:1898 until
+        # nv_add_open_file fills it at nv.c:1733 and meets the POLLERR at
+        # nv.c:2298 in the meantime. Both nodes therefore carry a poll call.
+        "notes": {
+            "poll": "nv.c:2292 skips the nv_is_open_complete gate at "
+                    "nv.c:2294 for the control device, and nv.c:3141 sets "
+                    "nvlfp->nvptr on it unconditionally where nv.c:1898 "
+                    "leaves it NULL for the actual device until nv.c:1733. "
+                    "/dev/nvidiactl reaches the poll body directly after "
+                    "open; /dev/nvidiaN meets POLLERR at nv.c:2298 until "
+                    "the open completes.",
+        },
+    },
+    {
+        "fops": "uvm_fops",
+        "source": UVM_C,
+        "module": "nvidia-uvm",
+        "paths": ["/dev/nvidia-uvm"],
+        "modelled": True,
+        "tenant_surface": True,
+        "reason": None,
+    },
+    {
+        "fops": "uvm_tools_fops",
+        "source": UVM_TOOLS_C,
+        "module": "nvidia-uvm",
+        "paths": ["/dev/nvidia-uvm-tools"],
+        "modelled": True,
+        "tenant_surface": True,
+        "reason": None,
+    },
+    {
+        "fops": "nvkms_fops",
+        "source": NVKMS_C,
+        "module": "nvidia-modeset",
+        "paths": ["/dev/nvidia-modeset"],
+        "modelled": False,
+        "tenant_surface": True,
+        "reason": "lookup_devices at %s creates the node in a default "
+                  "container, so it is inside the tenant surface. The "
+                  "description set opens no descriptor on it at this "
+                  "revision, and its command family is not in the "
+                  "denominator." % TENANT_DEVICE_SOURCE,
+    },
+    {
+        "fops": "nvlink_fops",
+        "source": NVLINK_C,
+        "module": "nvidia",
+        "paths": ["/dev/nvidia-nvlink"],
+        "modelled": False,
+        "tenant_surface": False,
+        "reason": OUTSIDE_TENANT_SURFACE,
+    },
+    {
+        "fops": "device_fops",
+        "source": NVSWITCH_C,
+        "module": "nvidia",
+        "paths": ["/dev/nvidia-nvswitchN"],
+        "modelled": False,
+        "tenant_surface": False,
+        "reason": OUTSIDE_TENANT_SURFACE,
+    },
+    {
+        "fops": "ctl_fops",
+        "source": NVSWITCH_C,
+        "module": "nvidia",
+        "paths": ["/dev/nvidia-nvswitchctl"],
+        "modelled": False,
+        "tenant_surface": False,
+        "reason": OUTSIDE_TENANT_SURFACE,
+    },
+    {
+        "fops": "g_nv_cap_drv_fops",
+        "source": NV_CAPS_C,
+        "module": "nvidia",
+        "paths": ["/dev/nvidia-caps/nvidia-capN"],
+        "modelled": False,
+        "tenant_surface": False,
+        "reason": "libnvidia-container/src/nvc.c:218 creates a capability "
+                  "node only for a MIG-partitioned GPU, and only for the "
+                  "partitions the container was given. A default container "
+                  "on an unpartitioned GPU carries none.",
+    },
+    {
+        "fops": "g_nv_caps_imex_fops",
+        "source": NV_CAPS_IMEX_C,
+        "module": "nvidia",
+        "paths": ["/dev/nvidia-caps-imex-channels/channelN"],
+        "modelled": False,
+        "tenant_surface": False,
+        "reason": OUTSIDE_TENANT_SURFACE,
+    },
+    {
+        "fops": "nv_drm_fops",
+        "source": NV_DRM_C,
+        "module": "nvidia-drm",
+        "paths": ["/dev/dri/cardN", "/dev/dri/renderDN"],
+        "modelled": False,
+        "tenant_surface": False,
+        "reason": OUTSIDE_TENANT_SURFACE,
+    },
+)
+
+
+def _fops_initialiser(symbol):
+    """The opening of one file_operations initialiser.
+
+    The brace sits on the same line under kernel-open/nvidia and on the next
+    line under kernel-open/nvidia-uvm, so the newline between `=` and `{` is
+    optional. Requiring the `=` and the brace keeps a forward declaration such
+    as uvm.c:47, which ends at the semicolon, from matching.
+    """
+    return re.compile(r"struct\s+file_operations\s+" + re.escape(symbol)
+                      + r"\s*=\s*\{")
+
+
+def parse_fops_table(text, symbol):
+    """-> [{operation, handler, line, conditional}] for one fops initialiser.
+
+    Read from the initialiser and never from a kept list, so a driver release
+    that adds or drops an entry point moves the artefact. `conditional` names
+    the preprocessor condition a member sits under, because .compat_ioctl is
+    registered on two architectures only and counting it unconditionally
+    overstates what a given build serves.
+    """
+    match = _fops_initialiser(symbol).search(text)
+    if match is None:
+        raise InventoryError(
+            "no file_operations initialiser named %s was found. The entry "
+            "point census reads each table from its own initialiser, so a "
+            "table that was renamed or removed has to move this tool rather "
+            "than be skipped without a record." % symbol)
+    first_line = line_of(text, match.end())
+    entries, guards, depth = [], [], 1
+    for offset, line in enumerate(text[match.end():].splitlines()):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            head, _, rest = stripped[1:].strip().partition(" ")
+            if head in ("if", "ifdef", "ifndef"):
+                guards.append(rest.strip() or head)
+            elif head in ("elif", "elifdef", "elifndef"):
+                if guards:
+                    guards[-1] = rest.strip()
+                else:
+                    guards.append(rest.strip())
+            elif head == "endif" and guards:
+                guards.pop()
+            continue
+        depth += line.count("{") - line.count("}")
+        if depth <= 0:
+            break
+        member = RE_FOPS_MEMBER.match(line)
+        if member is None or member.group(1) in FOPS_NON_ENTRY:
+            continue
+        entries.append({
+            "operation": member.group(1),
+            "handler": member.group(2),
+            "line": first_line + offset,
+            "conditional": " && ".join(guards) if guards else None,
+        })
+    return entries
+
+
+def build_entry_points(src):
+    """-> the entry-point artefact for one checkout.
+
+    Every table FOPS_TABLES names is read from its own source file. The
+    modelled tables are the three serving the four device nodes the
+    description set opens; the rest are recorded with the reason each is not
+    modelled, so the artefact carries the whole registered surface and the
+    scope decision is visible in it rather than only in a plan.
+    """
+    tables = []
+    for record in FOPS_TABLES:
+        text = read_source(src, record["source"])
+        match = _fops_initialiser(record["fops"]).search(text)
+        entries = parse_fops_table(text, record["fops"])
+        tables.append({
+            "fops": record["fops"],
+            "declared_at": "%s:%d" % (record["source"],
+                                      line_of(text, match.start())),
+            "module": record["module"],
+            "paths": list(record["paths"]),
+            "modelled": record["modelled"],
+            "tenant_surface": record["tenant_surface"],
+            "reason": record["reason"],
+            "notes": record.get("notes") or {},
+            "entry_points": entries,
+        })
+    modelled = [t for t in tables if t["modelled"]]
+    payload = {
+        "schema": ENTRY_POINTS_SCHEMA,
+        "source": {
+            "driver_version": driver_version(src),
+            "commit": checkout_commit(src),
+        },
+        "tables": tables,
+        "counts": {
+            "tables": len(tables),
+            "modelled_tables": len(modelled),
+            "modelled_nodes": sum(len(t["paths"]) for t in modelled),
+            "entry_points": sum(len(t["entry_points"]) for t in tables),
+            "modelled_entry_points": sum(len(t["entry_points"])
+                                         for t in modelled),
+        },
+    }
+    logger.info("read %d file_operations table(s), %d modelled, %d entry "
+                "point(s) on the modelled ones",
+                payload["counts"]["tables"],
+                payload["counts"]["modelled_tables"],
+                payload["counts"]["modelled_entry_points"])
+    return payload
+
+
 def build_inventory(src, sizes):
     """Return the whole inventory as a JSON-serialisable dict."""
     magic, base, numbers, origin = parse_escape_numbers(src)
@@ -1328,6 +1597,11 @@ def build_parser():
     ap.add_argument("--emit-map", metavar="PATH",
                     help="also write the trace2seed request-number map here "
                          "(tools/ioctl_map.json)")
+    ap.add_argument("--emit-entry-points", metavar="PATH",
+                    help="also write the file_operations entry-point census "
+                         "here (surface/entry-points.json). Entry points are "
+                         "counted beside the command denominator and never "
+                         "inside it")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="log every parsing step")
     return ap
@@ -1373,6 +1647,16 @@ def main(argv=None):
             print("wrote %s (%d request numbers, %d multiplexer request "
                   "numbers carrying no call name, %d commands omitted)"
                   % (a.emit_map, requests, muxes, len(skipped)))
+        if a.emit_entry_points:
+            entry_points = build_entry_points(a.src)
+            write_json(a.emit_entry_points, entry_points)
+            counts = entry_points["counts"]
+            print("wrote %s (%d file_operations table(s), %d modelled over "
+                  "%d device node(s), %d entry point(s) on the modelled "
+                  "tables of %d registered in total)"
+                  % (a.emit_entry_points, counts["tables"],
+                     counts["modelled_tables"], counts["modelled_nodes"],
+                     counts["modelled_entry_points"], counts["entry_points"]))
         refuse_size_regression(a.out, inventory)
         write_json(a.out, inventory)
     except InventoryError as e:

@@ -13867,7 +13867,7 @@ UVM_MAP_EXTERNAL_SPARSE_PARAMS {
 } [packed]
 
 UVM_MM_INITIALIZE_PARAMS {
-	uvmFd   	int32
+	uvmFd   	fd_nvidia_uvm_vaspace
 	rmStatus	int32
 } [packed]
 
@@ -13920,7 +13920,7 @@ UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS {
 	controlBuffer  	int64
 	processor      	NvUuid
 	allProcessors  	int32
-	uvmFd          	int32
+	uvmFd          	fd_nvidia_uvm_vaspace
 	rmStatus       	int32
 	pad_tail       	array[const[0, int8], 4]
 } [packed]

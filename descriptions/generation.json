@@ -8298,9 +8298,12 @@
   "alloc_variants": 204,
   "control_reachable": 531,
   "control_variants": 531,
+  "entry_point_calls": 6,
+  "entry_point_structs": 3,
   "escapes_emitted": 32,
   "escapes_total": 32,
   "opaque": 0,
+  "pseudo_syscalls": 1,
   "size_match": 595,
   "size_mismatch": 0,
   "structs_emitted": 1540,
@@ -8309,6 +8312,88 @@
   "uvm_total": 46,
   "xfer_declined": 2,
   "xfer_variants": 31
+ },
+ "entry_points": {
+  "calls": [
+   {
+    "call": "mmap$nvidiactl",
+    "offset_authority": "kernel-open/nvidia/nv-mmap.c:554",
+    "offset_pinned": true,
+    "offset_value": 0,
+    "operation": "mmap",
+    "resource": "fd_nvidiactl"
+   },
+   {
+    "call": "mmap$nvidia",
+    "offset_authority": "kernel-open/nvidia/nv-mmap.c:554",
+    "offset_pinned": true,
+    "offset_value": 0,
+    "operation": "mmap",
+    "resource": "fd_nvidia"
+   },
+   {
+    "call": "mmap$nvidia_uvm",
+    "offset_authority": "kernel-open/nvidia-uvm/uvm.c:793",
+    "offset_pinned": false,
+    "offset_value": null,
+    "operation": "mmap",
+    "resource": "fd_nvidia_uvm_vaspace"
+   },
+   {
+    "call": "poll$nvidiactl",
+    "offset_authority": null,
+    "offset_pinned": null,
+    "offset_value": null,
+    "operation": "poll",
+    "resource": "fd_nvidiactl"
+   },
+   {
+    "call": "poll$nvidia",
+    "offset_authority": null,
+    "offset_pinned": null,
+    "offset_value": null,
+    "operation": "poll",
+    "resource": "fd_nvidia"
+   },
+   {
+    "call": "poll$nvidia_uvm_tools",
+    "offset_authority": null,
+    "offset_pinned": null,
+    "offset_value": null,
+    "operation": "poll",
+    "resource": "fd_nvidia_uvm_tools"
+   }
+  ],
+  "pseudo_syscall": {
+   "call": "syz_nvidia_uvm_init",
+   "implementation": "tools/syz-patches/0001-syz_nvidia_uvm_init.patch",
+   "params": {
+    "fields": [
+     {
+      "name": "flags",
+      "offset": 0,
+      "size": 8,
+      "syzlang": "int64"
+     },
+     {
+      "name": "rmStatus",
+      "offset": 8,
+      "size": 4,
+      "syzlang": "int32"
+     },
+     {
+      "name": "pad_tail",
+      "offset": 12,
+      "size": 4,
+      "syzlang": null
+     }
+    ],
+    "size": 16,
+    "struct": "UVM_INITIALIZE_PARAMS"
+   },
+   "produces": "fd_nvidia_uvm_vaspace",
+   "reason": "ioctl$UVM_INITIALIZE returns 0 on success and on failure alike (uvm_api.h:45), and syzkaller takes a resource's value from the raw syscall return (executor.cc:1355), so that ioctl cannot produce the initialised descriptor"
+  }
  },
  "escapes": [
   {

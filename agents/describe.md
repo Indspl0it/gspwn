@@ -125,7 +125,8 @@ coverage alone.
 
    ```
    python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules \
-     --emit-map tools/ioctl_map.json
+     --emit-map tools/ioctl_map.json \
+     --emit-entry-points surface/entry-points.json
    python3 tools/ctrl_surface.py    --src artifacts/src/open-gpu-kernel-modules
    python3 tools/object_graph.py extract --src artifacts/src/open-gpu-kernel-modules
    python3 tools/object_graph.py chains --src artifacts/src/open-gpu-kernel-modules
@@ -201,7 +202,7 @@ coverage alone.
 
    | Check | Artefact pair compared |
    |---|---|
-   | `coverage` | the description set declares a variant for every enumerated target, and no family has fallen below its floor |
+   | `coverage` | the description set declares a variant for every enumerated target, no family has fallen below its floor, and every `mmap` and `poll` the driver registers on a modelled node carries a call |
    | `names` | every name in `tools/ioctl_map.json` is declared by the descriptions |
    | `pins` | every emitted leaf selector renders as a const, including the `NV_ESC_IOCTL_XFER_CMD` inner `cmd` |
    | `derived` | the chain and ranking artefacts still match the control inventory |
@@ -225,14 +226,39 @@ coverage alone.
    It builds `tools/gspwn-check` against a pinned syzkaller checkout and
    runs syzkaller's own compiler over `descriptions/*.txt` together with
    `tools/syz-stub/*`. Exit 0 prints the verdict line, of the form
-   `compile: OK, 2 const(s) loaded, 855 syscall(s), ...`. 855 is the 849
+   `compile: OK, 4 const(s) loaded, 862 syscall(s), ...`. 862 is the 856
    the description set declares plus the 6 `syz_builtinN` pseudo-syscalls
-   `pkg/compiler` prepends to every compile. Exit 1 reproduces the
+   `pkg/compiler` prepends to every compile. The 856 is 845 `ioctl`
+   variants, 4 `openat`, 6 entry-point calls and `syz_nvidia_uvm_init`.
+   That last one needs no `__NR_` constant: `pkg/compiler/consts.go:250`
+   assigns no syscall number to a call whose name begins `syz_`, so the
+   set compiles against an unpatched checkout while the executor half
+   lives in `tools/syz-patches/`. Exit 1 reproduces the
    compiler's own diagnostics, each naming a file and a line. Exit 3 means
    no verdict was reached at all, because Go is absent or the checkout
    could not be obtained, and it is no evidence that the set compiles.
    Quote the command's own output in the gate. A hand-produced result is
    not evidence.
+
+   The set models four syscalls: `ioctl`, `openat`, `mmap` and `poll`. The
+   driver's `file_operations` tables are the authority for the last two,
+   and `surface/entry-points.json` records every table it defines with the
+   entry points each registers. Entry points are counted beside the command
+   denominator and never inside it: an `mmap` or a `poll` carries no method
+   id, no parameter struct and no inventory row, so the 764 counts commands
+   alone.
+
+   The set also declares one pseudo-syscall, `syz_nvidia_uvm_init`. The
+   campaign therefore runs the pinned syzkaller revision **plus**
+   `tools/syz-patches/0001-syz_nvidia_uvm_init.patch`, applied to the
+   checkout before syzkaller is built. Without that patch the descriptions
+   still compile and `syz-executor` does not build. The patch exists
+   because 36 of the 39 UVM commands and `uvm_mmap` refuse a descriptor
+   that has not been through `uvm_api_initialize`, and
+   `ioctl$UVM_INITIALIZE` cannot produce the initialised descriptor as a
+   resource: the driver returns 0 from it whether initialisation succeeded
+   or failed, carrying the real status in `params.rmStatus`, and syzkaller
+   takes a resource's value from the raw syscall return.
 
    Correcting the set is the work. Record which descriptions were
    corrected and which were authored, because the eval phase reports that
