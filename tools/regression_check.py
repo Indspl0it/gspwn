@@ -1580,6 +1580,31 @@ def recorded_inputs(record):
     return inputs
 
 
+def _digest_mismatch(content, digest):
+    """-> (state, why) for a file whose digest does not match its record.
+
+    Line endings are separated from content because they fail asymmetrically.
+    The repository normalises to LF through .gitattributes, so a committed
+    artefact is LF in the blob whatever platform it was written on, and git
+    reports a CRLF working copy as unmodified. A digest taken over that
+    working copy therefore passes on the machine that recorded it and fails on
+    every checkout of the same commit, which is the machine the pipeline
+    actually runs on. Reported as a content mismatch it reads as a
+    regeneration that was half applied, and the remedy printed for that
+    ("regenerate the description set") rewrites a set that was never wrong.
+    """
+    lf = content.replace(b"\r\n", b"\n")
+    if lf != content and hashlib.sha256(lf).hexdigest() == digest:
+        return "crlf", ("the file on disk holds the recorded content with "
+                        "CRLF line endings, so it hashes to another digest")
+    crlf_form = lf.replace(b"\n", b"\r\n")
+    if crlf_form != content and hashlib.sha256(crlf_form).hexdigest() == digest:
+        return "crlf-record", ("the recorded digest was taken over a CRLF "
+                               "copy of this file, and no checkout of this "
+                               "commit reproduces it")
+    return "differs", "the file on disk hashes to another digest"
+
+
 def check_stale():
     """Every input generation.json records still matches its digest."""
     record, root = read_generation()
@@ -1599,13 +1624,13 @@ def check_stale():
             offenders.append((path, "no file at this path", digest, None))
         else:
             with open(on_disk, "rb") as handle:
-                measured = hashlib.sha256(handle.read()).hexdigest()
+                content = handle.read()
+            measured = hashlib.sha256(content).hexdigest()
             if measured == digest:
                 state = "OK"
             else:
-                state = "differs"
-                offenders.append((path, "the file on disk hashes to another "
-                                        "digest", digest, measured))
+                state, why = _digest_mismatch(content, digest)
+                offenders.append((path, why, digest, measured))
         table.append((key, path, count, state))
 
     checkout = {name: record.get(name) for name in CHECKOUT_KEYS}
@@ -1634,6 +1659,13 @@ def check_stale():
         print("stale: %s: %s" % (path, problem))
         print("    recorded  %s" % recorded)
         print("    measured  %s" % (measured or "(no file to hash)"))
+        print()
+    if any(state in ("crlf", "crlf-record") for _k, _p, _c, state in table):
+        print("A crlf or crlf-record state is line endings and not content. "
+              "This repository normalises to LF, so convert the working copy "
+              "with `dos2unix` for crlf, and re-record the digest from an LF "
+              "checkout for crlf-record. Regenerating the description set "
+              "fixes neither.")
         print()
     print("The description set under %s was generated from these files and "
           "carries their digests. A digest that moved means one side was "

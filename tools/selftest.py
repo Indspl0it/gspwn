@@ -13789,6 +13789,63 @@ class TestRecordedInputsStillMatch(Phase0Fixtures):
         self.assertIn("surface/rm-control-rank.json", out)
         self.assertIn("absent", out)
 
+    def test_a_crlf_working_copy_is_named_as_line_endings(self):
+        """The failure that reached the branch tip.
+
+        .gitattributes normalises to LF, so the committed blob is LF whatever
+        platform wrote it and git reports a CRLF working copy as unmodified.
+        A digest taken over that working copy then passes on the machine that
+        recorded it and fails on every checkout, which is the machine the
+        campaign runs on. Reported as a content mismatch it reads as a
+        half-applied regeneration and the remedy rewrites a set that was
+        never wrong.
+        """
+        root = self.tempdir()
+        record = self.scratch(root)
+        path = os.path.join(root, "surface", "rm-control-rank.json")
+        with open(path, "rb") as fh:
+            body = fh.read()
+        with open(path, "wb") as fh:
+            fh.write(body.replace(b"\n", b"\r\n"))
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("crlf", out)
+        self.assertIn("CRLF line endings", out)
+        self.assertIn("dos2unix", out)
+
+    def test_a_digest_recorded_over_crlf_is_named_as_the_record(self):
+        """The other direction, and the one that breaks the deployment.
+
+        The working copy is LF and correct; the digest was taken on a machine
+        whose copy was CRLF. No checkout of the commit reproduces it, so the
+        artefact is not the thing to change.
+        """
+        root = self.tempdir()
+        record = self.scratch(root)
+        path = os.path.join(root, "surface", "rm-control-rank.json")
+        with open(path, "rb") as fh:
+            body = fh.read()
+        record["ctrl_rank"]["sha256"] = hashlib.sha256(
+            body.replace(b"\n", b"\r\n")).hexdigest()
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("crlf-record", out)
+        self.assertIn("no checkout of this commit reproduces it", out)
+
+    def test_a_content_change_is_still_reported_as_content(self):
+        """The line-ending diagnosis must not swallow a real mismatch."""
+        root = self.tempdir()
+        record = self.scratch(root)
+        self.artefact(root, "surface/rm-control-rank.json",
+                      b'{"commands": [1]}\n')
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("differs", out)
+        self.assertNotIn("crlf", out)
+
     def test_a_record_with_no_provenance_block_cannot_run(self):
         root = self.tempdir()
         directory = os.path.join(root, "descriptions")

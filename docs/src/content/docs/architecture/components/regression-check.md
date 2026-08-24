@@ -57,7 +57,7 @@ The module owns the nine comparisons and their exit codes. It writes nothing.
 | `derived` | The per-artefact records, implies, accounts, undeclared, mismatch and internal table, then each offending name and the command that regenerates the artefact |
 | `families` | The derived, accepted and bound counts, the per-state table of families and sets, then each accepted family that is not bound, each rejected family that reaches a set, each accepted audit entry with no derived record, and each set that is referenced without a definition or defined without a reference |
 | `pages` | The per-page records, generated size, committed size and state table, then the first differing line of each page that moved |
-| `stale` | The recorded checkout, then one row per recorded input with its path, record count and state, then each input whose file is absent or hashes to another digest, with both digests |
+| `stale` | The recorded checkout, then one row per recorded input with its path, record count and state, then each input whose file is absent or hashes to another digest, with both digests. A digest that moved on line endings alone is separated from one that moved on content, and carries its own remedy |
 | `harnesses` | The per-target table across the four sources, the declared exclusions and their reasons, then each target a source does not carry, naming that source and the ones that do |
 | `agents` | The per-brief command and exit-code counts, the declared exclusions and their reasons, then each command line that does not resolve, with the file, the line and what the tool declares instead |
 | `all` | The nine in `CHECK_ORDER`, each under its own header, reporting the worst verdict |
@@ -137,6 +137,7 @@ there as exit 2.
 | `families` finds either value-family document absent, unparseable, or carrying no array | `cannot run:` on stderr, naming the file and the command that writes it | 2 |
 | `pages` finds a page that differs, is absent, or is no longer produced | The per-page table, the first differing line, and the regenerating command | 1 |
 | `stale` finds a recorded input absent or hashing to another digest | The per-input table, then the path with the recorded and the measured digest, and the command that regenerates the set | 1 |
+| `stale` finds a digest that moved on line endings alone | The state `crlf` or `crlf-record` on that input's row, and the conversion or re-record instruction in place of the regeneration one | 1 |
 | `stale` finds a `generated_from` entry that is neither the driver checkout nor an input record | `cannot run:` on stderr, naming the key and how it rendered | 2 |
 | `harnesses` finds a target a source does not carry | The per-source table, then the target, the source that does not carry it and the ones that do | 1 |
 | `harnesses` finds a directory with no `build.sh` and no declared exclusion | The directory named, with the instruction to declare it | 1 |
@@ -270,6 +271,21 @@ read those digests before this check existed. A surface artefact regenerated
 without regenerating the description set leaves the record naming bytes that no
 longer exist, and both files still parse, so `coverage`, `derived` and `pages`
 all pass over a set whose provenance has gone.
+
+A digest that moved on line endings alone is reported apart from one that
+moved on content, because the two have different remedies and only one of
+them is a regeneration. `.gitattributes` normalises the tree to LF, so a
+committed artefact is LF in the blob whatever platform wrote it, and git
+reports a CRLF working copy of it as unmodified. A digest taken over that
+working copy passes on the machine that recorded it and fails on every
+checkout of the same commit, which is the machine a campaign runs on.
+
+| State | Condition | Remedy |
+|---|---|---|
+| `crlf` | The file holds the recorded content with CRLF line endings | Convert the working copy with `dos2unix` |
+| `crlf-record` | The file is LF and the recorded digest was taken over a CRLF copy | Re-record the digest from an LF checkout |
+| `differs` | The content itself moved | Regenerate the description set against the same driver checkout |
+
 
 The recorded paths are repository-relative, and the root they resolve against
 is the parent of the directory holding the record. Deriving it that way leaves
