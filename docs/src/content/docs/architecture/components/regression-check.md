@@ -1,6 +1,6 @@
 ---
 title: regression_check.py
-description: Eight CI checks that compare committed artefacts which have to agree, and the defect class each one closes.
+description: Nine CI checks that compare committed artefacts which have to agree, and the defect class each one closes.
 ---
 
 Compares the committed surface artefacts against each other, and the generated
@@ -14,7 +14,7 @@ offline self-test.
 
 ## Responsibility
 
-The module owns the eight comparisons and their exit codes. It writes nothing.
+The module owns the nine comparisons and their exit codes. It writes nothing.
 
 | Invariant | Enforced by |
 |---|---|
@@ -30,6 +30,12 @@ The module owns the eight comparisons and their exit codes. It writes nothing.
 | A derived artefact still agrees with its own record structure | `rank_consistency` reads the ranking's order against its scores and its scores against its components and weighting; `chains_consistency` reads each chain's length against its step count and its last step against the class it targets |
 | A pinned control selector carries the right value | `check_pins` compares each control variant's `cmd` against the method id `rm-control-inventory.json` holds for the handler the variant is named for, through `VALUE_CHECKED` and `control_method_ids` |
 | A family's denominator cannot shrink unnoticed | `TARGET_FLOOR` records the per-family target count of driver 610.57.04, and `coverage` exits 1 on a family below its floor |
+| Every field bound to a value family carries a family the audit accepted | `families` joins `surface/value-families.json` against `surface/value-families-audit.json` through `value_families.accepted_families`, and requires the rendered field to be `flags[<set_name>, intN]` for the record's own `set_name` |
+| A family the audit rejected reaches no field and no set | `families` reads every derived record the audit did not accept and reports a field bound to its set, or a file defining it |
+| An accepted family carries both a field binding and a set definition | `families` requires each, so a field referencing a set no file defines is reported as an unbound family |
+| The emitted identifier and the checked identifier have one source | Both read `record["set_name"]` off the derivation. `value_families.set_name` computes it once, at derivation time |
+| An accepted audit entry with no derived record is visible | `accepted_families` joins on `(struct, field)` and returns derived records alone, so `families` reports an accepted entry the derivation does not carry |
+| Every flags set the description set defines is referenced, and every one referenced is defined | `read_flags_sets` reads `name = ...` definitions against `flags[name, ...]` references across the whole set, which covers the five sets written by hand as well as the value families |
 | A generated reference page still follows from the artefacts | `pages` regenerates the six pages under `docs/src/content/docs/reference/surface/`, the five content pages and the index over them, into a temporary directory through `refgen.py` and diffs byte for byte |
 | Every artefact the description set was generated from still holds the recorded bytes | `stale` hashes each `path` under `generated_from` in `descriptions/generation.json` and compares it against the recorded `sha256` |
 | A measured-size file added to the record is covered from its first commit | `recorded_inputs` reads a list member the same way as a mapping, so the list under `ctrl_sizes` needs no second reader |
@@ -49,15 +55,16 @@ The module owns the eight comparisons and their exit codes. It writes nothing.
 | `pins` | Selector fields examined, the per-group counts, then each field that renders free, each stale allowlist entry and each empty group |
 | `coverage` | The per-family targetable, modelled and gap table, then each missing target by name |
 | `derived` | The per-artefact records, implies, accounts, undeclared, mismatch and internal table, then each offending name and the command that regenerates the artefact |
+| `families` | The derived, accepted and bound counts, the per-state table of families and sets, then each accepted family that is not bound, each rejected family that reaches a set, each accepted audit entry with no derived record, and each set that is referenced without a definition or defined without a reference |
 | `pages` | The per-page records, generated size, committed size and state table, then the first differing line of each page that moved |
 | `stale` | The recorded checkout, then one row per recorded input with its path, record count and state, then each input whose file is absent or hashes to another digest, with both digests |
 | `harnesses` | The per-target table across the four sources, the declared exclusions and their reasons, then each target a source does not carry, naming that source and the ones that do |
 | `agents` | The per-brief command and exit-code counts, the declared exclusions and their reasons, then each command line that does not resolve, with the file, the line and what the tool declares instead |
-| `all` | The eight in `CHECK_ORDER`, each under its own header, reporting the worst verdict |
+| `all` | The nine in `CHECK_ORDER`, each under its own header, reporting the worst verdict |
 
-`CHECK_ORDER` is `names`, `pins`, `coverage`, `derived`, `pages`, `stale`,
-`harnesses`, `agents`, which is the order the module docstring lists and the
-order the CI steps carry. A check
+`CHECK_ORDER` is `names`, `pins`, `coverage`, `derived`, `families`, `pages`,
+`stale`, `harnesses`, `agents`, which is the order the module docstring lists
+and the order the CI steps carry. A check
 registered in `CHECKS` and absent from `CHECK_ORDER` runs last.
 
 `-v` logs what each artefact read contributed, and is accepted on either side
@@ -71,9 +78,11 @@ of the subcommand: `regression_check.py -v derived` and
 | `parse_structs(text)` | Field renderings per struct block |
 | `parse_calls(text)` | The parameter struct each `ioctl$` line points at |
 | `control_method_ids()` | Handler symbol to the method id `rm-control-inventory.json` carries for it, over the targetable and the GSP-routed commands |
-| `check_names()`, `check_pins()`, `check_coverage()`, `check_derived()`, `check_pages()`, `check_stale()`, `check_harnesses()`, `check_agents()` | The exit code for that check |
+| `check_names()`, `check_pins()`, `check_coverage()`, `check_derived()`, `check_families()`, `check_pages()`, `check_stale()`, `check_harnesses()`, `check_agents()` | The exit code for that check |
 | `chains_implies(doc, path)`, `rank_implies(doc, path)` | The call names an artefact implies and the control commands it accounts for |
 | `rank_consistency(doc, path)`, `chains_consistency(doc, path)` | The places an artefact contradicts its own record structure |
+| `read_flags_sets()` | The file defining each flags set, and the files referencing each one, across the whole description set |
+| `read_value_families()` | The `value_families` module, the derivation and the audit, raising `CheckInput` when either document is absent or carries no array |
 | `read_generation()` | The `generated_from` record and the repository root its paths resolve against, which is the parent of the directory holding `GENERATION` |
 | `recorded_inputs(record)` | `(key, path, sha256, count)` per recorded input, list members included |
 | `harness_config_targets()`, `harness_run_targets()`, `harness_doc_targets()`, `harness_directories()` | The Track U names each source carries |
@@ -91,17 +100,19 @@ of the subcommand: `regression_check.py -v derived` and
 
 | Direction | Modules |
 |---|---|
-| Imports this module | `tools/selftest.py`. `.github/workflows/selftest.yml` invokes it as eight steps, at `:50`, `:58`, `:65`, `:74`, `:84`, `:93`, `:101` and `:110` |
-| This module imports | `tools/surface_cov.py`, for `load_targets`, `scan_variants`, `CONTROL_PREFIX` and the artefact paths. `tools/refgen.py`, for `render` and `write`, which `pages` regenerates through. `tools/gspwn_config.py`, for `load`, which `harnesses` reads `track_u.targets` through. Every tool a phase brief names, which `agents` imports one at a time inside the check |
+| Imports this module | `tools/selftest.py`. `.github/workflows/selftest.yml` invokes it as nine steps, at `:50`, `:58`, `:65`, `:74`, `:85`, `:95`, `:104`, `:112` and `:121` |
+| This module imports | `tools/surface_cov.py`, for `load_targets`, `scan_variants`, `CONTROL_PREFIX` and the artefact paths. `tools/refgen.py`, for `render` and `write`, which `pages` regenerates through. `tools/gspwn_config.py`, for `load`, which `harnesses` reads `track_u.targets` through. `tools/value_families.py`, for `accepted_families`, `load_json` and `SourceError`, which `families` imports inside the check. Every tool a phase brief names, which `agents` imports one at a time inside the check |
 
 `surface_cov.py`, `refgen.py` and `gspwn_config.py` are the whole set of
 top-level imports. `pipeline_state.py` is deliberately absent: it needs
 `fcntl`, which would stop all four modules running on a Windows workstation.
 
-`agents` is the one check that imports another tool, because a command line is
-verified against that tool's own parser. Those imports sit inside the check, so
-the other seven still run on a Windows workstation and `agents` reports the
-absent `fcntl` there as exit 2.
+`agents` and `families` are the two checks that import another tool. `agents`
+verifies a command line against that tool's own parser, and `families` joins
+the two value-family artefacts through `value_families.accepted_families` and
+never repeats the join. Those imports sit inside the checks, so the other seven
+still run on a Windows workstation and `agents` reports the absent `fcntl`
+there as exit 2.
 
 ## Failure modes
 
@@ -119,6 +130,11 @@ absent `fcntl` there as exit 2.
 | `derived` finds an implied call name no description declares | The names, then the command that regenerates the artefact | 1 |
 | `derived` finds a command the inventory no longer carries, or one the artefact never reaches | The names under either heading, then the regenerating command | 1 |
 | `derived` finds an artefact contradicting its own record structure | The record position, the two disagreeing values, then the regenerating command | 1 |
+| `families` finds an accepted family whose field is not bound to its set | The struct, the field, the set the audit accepted and what the field rendered as | 1 |
+| `families` finds a field bound to a set the audit did not accept | The struct, the field and whether the binding or a set definition carries it | 1 |
+| `families` finds an accepted audit entry no derived record carries | The struct and the field, stating that nothing binds it | 1 |
+| `families` finds a flags set referenced with no definition, or defined with no reference | The set name and the files on the other side | 1 |
+| `families` finds either value-family document absent, unparseable, or carrying no array | `cannot run:` on stderr, naming the file and the command that writes it | 2 |
 | `pages` finds a page that differs, is absent, or is no longer produced | The per-page table, the first differing line, and the regenerating command | 1 |
 | `stale` finds a recorded input absent or hashing to another digest | The per-input table, then the path with the recorded and the measured digest, and the command that regenerates the set | 1 |
 | `stale` finds a `generated_from` entry that is neither the driver checkout nor an input record | `cannot run:` on stderr, naming the key and how it rendered | 2 |
@@ -301,7 +317,7 @@ known absence.
 | `go_cudacompat_elf` | `go test -fuzz` writes no `fuzzer_stats`, so it produces no coverage output for the sampler to read. `config/campaign.yaml` records the same reason against `track_u.targets` |
 
 
-The eight checks read committed artefacts. `coverage` cannot compute a
+The nine checks read committed artefacts. `coverage` cannot compute a
 denominator without the four inventories under `surface/`, and it cannot
 compute a numerator without the description set, so a checkout missing
 either measures 0 of 852 and fails on every run. See
@@ -331,8 +347,16 @@ records the same 521 against 531.
 
 ## Stated limits
 
-None of the eight checks says whether a pinned selector reaches the handler it
+None of the nine checks says whether a pinned selector reaches the handler it
 names. That is settled by a call on the target.
+
+`families` reads the audit's verdict and never the reasoning behind it. A
+family accepted in error is bound and reported as correct, which is why the
+audit is committed and reviewed by hand.
+
+`families` reads the emitted field's width against the set it carries and never
+the values in it, so a set holding a value wider than the field it binds is
+left to the compile gate.
 
 `derived` compares the two artefacts against the inventory and not against the
 driver source, so a bump that moves the source without moving

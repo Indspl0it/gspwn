@@ -91,6 +91,8 @@ import sys
 import textwrap
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -106,6 +108,21 @@ DEFAULT_OUT = os.path.join(REPO_ROOT, "descriptions" )
 # generation.json.
 DEFAULT_CTRL_SIZES = os.path.join(DEFAULT_SURFACE, "ctrl-param-sizes.json")
 DEFAULT_CTRL_RANK = os.path.join(DEFAULT_SURFACE, "rm-control-rank.json")
+
+# The two halves of the value-family record: the derivation and the audit that
+# accepted or rejected each of its families. Both are read, because
+# value_families.accepted_families joins them and returns the accepted records
+# alone. Binding a field to a family the audit rejected is worse than leaving
+# it a bare integer, because the bare integer still reaches its real values by
+# mutation and a wrong family never does.
+#
+# Spelled out here and not read off value_families.DEFAULT_OUT, because that
+# module imports this one for scan_headers and strip_comments, so a top-level
+# import back would be circular and neither module would load. The two
+# spellings are held together by a self-test that compares them.
+DEFAULT_VALUE_FAMILIES = os.path.join(DEFAULT_SURFACE, "value-families.json")
+DEFAULT_VALUE_AUDIT = os.path.join(DEFAULT_SURFACE,
+                                   "value-families-audit.json")
 
 SCHEMA = "gspwn.syzlang-generation/1"
 
@@ -1139,6 +1156,63 @@ def render_opaque(name, size):
     return "%s {\n\topaque\tarray[int8, %d]\n} [packed]" % (name, size)
 
 
+def load_value_families(families_path, audit_path):
+    """-> {struct: [accepted record]} for the emitter to bind fields through.
+
+    value_families.accepted_families joins the derivation against the audit on
+    (struct, field) and returns the accepted records alone, so a family the
+    audit rejected has no route from here to a rendered field.
+
+    The import is deferred because value_families imports this module for
+    scan_headers and strip_comments.
+    """
+    import value_families
+    try:
+        derivation = value_families.load_json(families_path,
+                                              "the derived value families")
+        audit_doc = value_families.load_json(audit_path,
+                                             "the value-family audit")
+    except value_families.SourceError as exc:
+        raise SystemExit(
+            "the value families could not be read, so no field can be bound "
+            "to one and the emitted set would silently lose every constraint "
+            "the audit accepted: %s\nRegenerate both with "
+            "`python3 tools/value_families.py derive` and "
+            "`python3 tools/value_families.py audit`, or restore them." % exc)
+    by_struct = collections.OrderedDict()
+    for record in value_families.accepted_families(derivation, audit_doc):
+        by_struct.setdefault(record["struct"], []).append(record)
+    logger.info("%d accepted value family/families over %d struct(s)",
+                sum(len(v) for v in by_struct.values()), len(by_struct))
+    return by_struct
+
+
+def value_overrides(struct, layout, families):
+    """-> ({field: flags type}, [(record, width)]) for one struct.
+
+    The width comes from the layout and never from the record. A field the
+    driver declares as NvU8 renders as int8 today, and binding it to
+    flags[..., int32] would move three bytes of the struct and change its
+    size.
+
+    The second member holds the records the layout cannot carry: a field name
+    the struct no longer declares, a field that renders as padding, or a width
+    with no syzlang integer. Each is a family the audit accepted and the
+    emitter did not bind, which the caller reports.
+    """
+    sizes = {field.name: field.size for field in layout.fields
+             if field.syz is not None}
+    overrides, unbound = {}, []
+    for record in families.get(struct, ()):
+        size = sizes.get(record["field"])
+        if size not in SYZ_INT:
+            unbound.append((record, size))
+            continue
+        overrides[record["field"]] = "flags[%s, %s]" % (record["set_name"],
+                                                        SYZ_INT[size])
+    return overrides, unbound
+
+
 PINNED_PATTERNS = {}
 POINTER_PATTERNS = {}
 
@@ -1216,7 +1290,7 @@ def require_pinned(emitter, variant, field, what):
 class Emitter:
     """Accumulates syzlang struct definitions and reports what went opaque."""
 
-    def __init__(self, index, sizes):
+    def __init__(self, index, sizes, value_families_by_struct=None):
         self.index = index
         self.sizes = sizes
         self.rendered = {}
@@ -1225,6 +1299,17 @@ class Emitter:
         self.size_mismatch = []
         self.opaque = []
         self.unresolved = []
+        # Keyed on the canonical struct name, because ensure canonicalises
+        # before it looks anything up. A family naming a typedef and a family
+        # naming the struct behind it would otherwise reach different keys and
+        # one of the two would bind nothing.
+        self.value_families = collections.OrderedDict()
+        for struct, records in (value_families_by_struct or {}).items():
+            key = index.canonical_struct(struct)
+            self.value_families.setdefault(key, []).extend(records)
+        self.value_bound = []
+        self.value_collisions = []
+        self.value_unbound = []
 
     def measured(self, struct_name):
         size = self.sizes.get(struct_name)
@@ -1280,10 +1365,37 @@ class Emitter:
             for referenced in re.findall(r"[A-Za-z_]\w*", field.syz):
                 if referenced in self.index.structs and referenced != struct_name:
                     self.ensure(referenced)
-        self.rendered[struct_name] = render_struct(struct_name, layout,
-                                                   overrides)
+        self.rendered[struct_name] = render_struct(
+            struct_name, layout, self.merge_value_overrides(
+                struct_name, layout, overrides))
         self.order.append(struct_name)
         return struct_name
+
+    def merge_value_overrides(self, struct_name, layout, overrides):
+        """-> the caller's override map with the accepted value families in.
+
+        Where both name one field the caller's override wins and the
+        collision is recorded. The existing overrides carry the handle
+        resources, the pinned selectors and the typed descriptors, all derived
+        from the driver's own dispatch, and this phase has not examined any of
+        them. Resolving a collision in favour of the newer source would retype
+        one of those from a rule that never looked at it.
+        """
+        bound, unbound = value_overrides(struct_name, layout,
+                                         self.value_families)
+        for record, width in unbound:
+            self.value_unbound.append((struct_name, record["field"], width))
+        merged = dict(bound)
+        for field, syz in (overrides or {}).items():
+            if field in merged:
+                self.value_collisions.append(
+                    (struct_name, field, merged.pop(field), syz))
+            merged[field] = syz
+        for record in self.value_families.get(struct_name, ()):
+            field = record["field"]
+            if field in bound and merged.get(field) == bound[field]:
+                self.value_bound.append((struct_name, record))
+        return merged
 
     def add_raw(self, name, text):
         if name in self.rendered:
@@ -2833,6 +2945,41 @@ def emit_flags_sets(index):
     return "\n".join(sets)
 
 
+def emit_value_flags_sets(emitter):
+    """The flags sets for the value families the emitter bound to a field.
+
+    One set per bound family, in the order the structs rendered, each named by
+    the record's own set_name. Reading that name here and recomputing it in
+    the check would give the emitted identifier and the checked identifier two
+    sources, and the two then drift apart.
+
+    A family the emitter did not bind emits no set, so the compiler never sees
+    a definition no field references.
+    """
+    if not emitter.value_bound:
+        return ("# No value family was bound to a field in this run. "
+                "surface/value-families-audit.json\n"
+                "# accepted none, or every accepted one names a field the "
+                "rendered layouts do not carry.")
+    lines = [
+        "# Value families. Each set holds the constants the driver's own",
+        "# headers define for one field of one parameter struct, recovered by",
+        "# tools/value_families.py and accepted by the committed audit in",
+        "# surface/value-families-audit.json. A field bound to the wrong",
+        "# family is worse than a bare integer, so the audit is the only",
+        "# route from a derived family to a set below.",
+    ]
+    for struct, record in emitter.value_bound:
+        lines.append("# %s.%s, %s, %d value(s) from %s"
+                     % (struct, record["field"], record["rule"],
+                        len(record["values"]),
+                        record["source_file"] or "no recorded header"))
+        lines.append("%s = %s"
+                     % (record["set_name"],
+                        ", ".join("0x%x" % v for v in record["values"])))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # The _IOWR header
 # ---------------------------------------------------------------------------
@@ -3268,7 +3415,9 @@ def build(args):
     # census that moved has to stop the run here.
     uvm_fd_census(inventory)
 
-    emitter = Emitter(index, sizes)
+    emitter = Emitter(index, sizes,
+                      load_value_families(args.value_families,
+                                          args.value_audit))
     resources = emit_resources(graph, class_map, not args.all_classes)
     flags = emit_flags_sets(index)
     alloc_text, alloc_records, alloc_skipped = emit_alloc(
@@ -3288,7 +3437,25 @@ def build(args):
     drm_text, drm_records, drm_skipped = emit_drm(emitter, drm)
     entry_text, entry_records = emit_entry_points()
 
+    # After every emit_* call, so the sets emitted are the sets a rendered
+    # field references. Reading emitter.value_bound before the structs are
+    # rendered would emit nothing at all.
+    value_flags = emit_value_flags_sets(emitter)
+    for struct, field, rendered, existing in emitter.value_collisions:
+        logger.warning(
+            "%s.%s carries both an accepted value family and an existing "
+            "override; the existing %s is kept and %s is dropped. Part 1 "
+            "measured no collision across the whole set, so this one is a "
+            "finding and not a case to resolve here",
+            struct, field, existing, rendered)
+    for struct, field, width in emitter.value_unbound:
+        logger.warning(
+            "%s.%s was accepted by the value-family audit and the rendered "
+            "layout carries no integer field of that name (width %r), so "
+            "nothing was bound", struct, field, width)
+
     return {
+        "value_flags": value_flags,
         "nvkms": nvkms, "drm": drm,
         "drm_text": drm_text, "drm_records": drm_records,
         "drm_skipped": drm_skipped,
@@ -3350,6 +3517,7 @@ def cmd_emit(args):
         "# field typed to one class accepts only that class's handle.\n"
         + result["resources"],
         result["flags"],
+        result["value_flags"],
         "# Escapes other than the two multiplexers.\n"
         + result["escape_text"],
         "# The re-entrant NV_ESC_IOCTL_XFER_CMD path. nv.c:2499 unwraps the\n"
@@ -3489,6 +3657,15 @@ def cmd_emit(args):
             "object_graph": json_source_record(args.graph, "records"),
             "nvkms_inventory": json_source_record(args.nvkms, "commands"),
             "drm_inventory": json_source_record(args.drm, "commands"),
+            # Both halves of the value-family record, because the emitter
+            # reads both: the derivation carries the values and the audit
+            # decides which of them a field may be bound to. A derivation
+            # regenerated without this record moving would leave `stale`
+            # reporting success over an artefact it does not read.
+            "value_families": json_source_record(args.value_families,
+                                                 "families"),
+            "value_families_audit": json_source_record(args.value_audit,
+                                                       "audit"),
             "ctrl_sizes": [size_source_record(p)
                            for p in result["ctrl_sizes_paths"]],
             "ctrl_rank": (rank_source_record(result["ranking"])
@@ -3545,6 +3722,9 @@ def cmd_emit(args):
                 result["entry_text"]),
             "pseudo_syscalls": 1,
             "structs_emitted": len(emitter.order),
+            "value_families_bound": len(emitter.value_bound),
+            "value_family_collisions": len(emitter.value_collisions),
+            "value_families_unbound": len(emitter.value_unbound),
             "size_match": len(emitter.size_match),
             "size_mismatch": len(emitter.size_mismatch),
             "opaque": len(emitter.opaque),
@@ -3556,6 +3736,16 @@ def cmd_emit(args):
                    for n, s, r in sorted(emitter.opaque)],
         "unresolved": [{"struct": n, "reason": r}
                        for n, r in sorted(emitter.unresolved)],
+        "value_families": [{"struct": s, "field": r["field"],
+                            "set": r["set_name"], "rule": r["rule"],
+                            "values": len(r["values"])}
+                           for s, r in emitter.value_bound],
+        "value_family_collisions": [
+            {"struct": s, "field": f, "value_family": v, "kept": k}
+            for s, f, v, k in emitter.value_collisions],
+        "value_families_unbound": [
+            {"struct": s, "field": f, "width": w}
+            for s, f, w in emitter.value_unbound],
         "skipped": {"allocation": result["alloc_skipped"],
                     "control": result["ctrl_skipped"],
                     "modeset": result["modeset_skipped"],
@@ -3610,6 +3800,17 @@ def cmd_emit(args):
     print("  structs            %d emitted, %d size-matched, %d mismatched, "
           "%d opaque" % (counts["structs_emitted"], counts["size_match"],
                          counts["size_mismatch"], counts["opaque"]))
+    print("  value families     %d field(s) bound, %d collision(s), "
+          "%d accepted and unbound"
+          % (counts["value_families_bound"],
+             counts["value_family_collisions"],
+             counts["value_families_unbound"]))
+    for struct, field, rendered, existing in emitter.value_collisions:
+        print("  collision          %s.%s kept %s, dropped %s"
+              % (struct, field, existing, rendered))
+    for struct, field, width in emitter.value_unbound:
+        print("  unbound            %s.%s renders at width %r"
+              % (struct, field, width))
     if emitter.size_mismatch:
         print("size mismatches (parsed layout against measured sizeof):")
         for name, parsed, measured in sorted(emitter.size_mismatch):
@@ -3688,6 +3889,10 @@ def add_common(parser):
                         default=os.path.join(DEFAULT_SURFACE,
                                              "nvkms-command-inventory.json"),
                         help="output of tools/nvkms_inventory.py")
+    parser.add_argument("--value-families", default=DEFAULT_VALUE_FAMILIES,
+                        help="output of tools/value_families.py derive")
+    parser.add_argument("--value-audit", default=DEFAULT_VALUE_AUDIT,
+                        help="output of tools/value_families.py audit")
     parser.add_argument("--ctrl-sizes", action="append",
                         help="JSON of measured struct sizes from the probe "
                              "runner; may be given more than once. Defaults "

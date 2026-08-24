@@ -132,12 +132,29 @@ coverage alone.
    python3 tools/object_graph.py chains --src artifacts/src/open-gpu-kernel-modules
    python3 tools/ctrl_rank.py rank --src artifacts/src/open-gpu-kernel-modules
    python3 tools/syzlang_gen.py emit --src artifacts/src/open-gpu-kernel-modules
+   python3 tools/value_families.py --src artifacts/src/open-gpu-kernel-modules
+   python3 tools/syzlang_gen.py emit --src artifacts/src/open-gpu-kernel-modules
    python3 tools/surface_verify.py stamp --src artifacts/src/open-gpu-kernel-modules
    python3 tools/refgen.py
    ```
 
+   `syzlang_gen.py emit` appears twice on purpose. `value_families.py` reads
+   the emitted description set to find the fields a family may bind to, and
+   `syzlang_gen.py emit` reads the families to bind them, so the first emit
+   gives the derivation a set to read against the new driver and the second
+   binds what the audit accepted. A field the emitter already bound stays
+   inside the universe the derivation reads, so a third run changes nothing:
+   the derivation reproduces the same 72 families over its own output.
+
+   `value_families.py` rewrites `surface/value-families.json` and
+   `surface/value-families-audit.json`. The audit's verdicts are written by
+   hand and a regeneration recomputes the mechanical ones, so read the diff
+   on the audit before committing it. A family bound in error reaches none of
+   that field's real values, where a bare integer still reaches them by
+   mutation.
+
    Every command writes to its own default path and runs exactly as printed.
-   The first seven are the list `surface_verify.py check` prints on exit 3,
+   Seven of them are the list `surface_verify.py check` prints on exit 3,
    with `--emit-map` added: `tools/ioctl_map.json` has one writer,
    `ioctl_inventory.py --emit-map PATH`, and without the flag the seeds phase
    converts its trace through the previous release's request numbers.
@@ -197,7 +214,7 @@ coverage alone.
    against what is committed, so a commit that carries the artefacts and not
    the pages fails.
 
-   `python3 tools/regression_check.py all` runs the eight checks CI runs, and
+   `python3 tools/regression_check.py all` runs the nine checks CI runs, and
    each one reads a different pair of artefacts that have to agree:
 
    | Check | Artefact pair compared |
@@ -206,6 +223,7 @@ coverage alone.
    | `names` | every name in `tools/ioctl_map.json` is declared by the descriptions |
    | `pins` | every emitted leaf selector renders as a const, including the `NV_ESC_IOCTL_XFER_CMD` inner `cmd` |
    | `derived` | the chain and ranking artefacts still match the control inventory |
+   | `families` | every field bound to a value family carries one the committed audit accepted, and every accepted family is bound with its own set emitted |
    | `pages` | the generated reference pages still match the surface artefacts |
    | `stale` | every surface artefact `descriptions/generation.json` records still hashes to the recorded digest |
    | `harnesses` | the four Track U target lists still name the same harnesses |
@@ -513,7 +531,7 @@ Record progress with the state tool, never by editing pipeline.json:
   `artifacts/seeds`, and the after reading with `--run-id <smoke run id>`
   against the smoke run's own corpus, with the smoke run id named. That delta
   is this round's measured output.
-- Where a regeneration ran, `regression_check.py all` output with all eight
+- Where a regeneration ran, `regression_check.py all` output with all nine
   checks passing, and the reference pages under
   `docs/src/content/docs/reference/surface/` regenerated and committed with the
   artefacts.

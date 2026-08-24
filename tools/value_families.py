@@ -159,6 +159,13 @@ DEFINE_RE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+(\S.*?)"
 STRUCT_LINE_RE = re.compile(r"^(\w+)\s*\{$")
 FIELD_LINE_RE = re.compile(r"^\t(\w+)\s+(.+?)\s*$")
 BARE_INT_RE = re.compile(r"int\d+$")
+# A field this rule already owns, rendered by a previous emission. The set
+# name is checked against the one set_name computes for that struct and field,
+# so a field carrying one of the sets written by hand stays outside the
+# universe. Without this the universe would be a moving target: the emitter
+# retypes an accepted field, the next derivation no longer sees a bare integer
+# there, and the family the audit accepted disappears.
+OWN_FLAGS_RE = re.compile(r"^flags\[([A-Za-z_]\w*),\s*int\d+\]$")
 CASE_RE = re.compile(r"\bcase\s+([A-Za-z_]\w*|0[xX][0-9a-fA-F]+|\d+)\s*:")
 CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 # A control constant is sometimes an enumerator and not a macro:
@@ -374,12 +381,28 @@ def _line_index(text):
     return line_of
 
 
-def load_bare_int_fields(descriptions_dir):
-    """-> struct name -> [field name] for every bare intN field emitted.
+def in_scope_field(struct, field, rendered):
+    """Whether one emitted field is inside the universe this rule constrains.
 
-    The universe this phase constrains. A field already emitted as a handle, a
-    pinned const, a flags set or an array is absent, so an accepted family
-    never displaces one of those.
+    A bare intN is, and so is a field already bound to the set this rule names
+    for it. A handle, a pinned const, an array or one of the sets written by
+    hand is outside, so an accepted family never displaces one of those.
+
+    The second case makes the derivation a fixed point over its own output.
+    Reading a bare integer alone would make each emission shrink the universe
+    the next derivation sees, and every family the audit accepted would
+    disappear on the run after the one that bound it.
+    """
+    if BARE_INT_RE.match(rendered):
+        return True
+    match = OWN_FLAGS_RE.match(rendered)
+    return match is not None and match.group(1) == set_name(struct, field)
+
+
+def load_bare_int_fields(descriptions_dir):
+    """-> struct name -> [field name] for every in-scope field emitted.
+
+    The universe this phase constrains, as in_scope_field defines it.
     """
     return _load_fields(descriptions_dir, bare_only=True)
 
@@ -421,7 +444,8 @@ def _load_fields(descriptions_dir, bare_only):
                     f = FIELD_LINE_RE.match(line)
                     if not f:
                         continue
-                    if bare_only and not BARE_INT_RE.match(f.group(2)):
+                    if bare_only and not in_scope_field(current, f.group(1),
+                                                        f.group(2)):
                         continue
                     bare.setdefault(current, [])
                     if f.group(1) not in bare[current]:

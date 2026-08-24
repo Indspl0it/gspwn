@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eight CI checks over the committed surface artefacts.
+"""Nine CI checks over the committed surface artefacts.
 
 Each one catches a class of defect that reached the repository unnoticed
 because nothing compared two artefacts that have to agree:
@@ -28,6 +28,18 @@ because nothing compared two artefacts that have to agree:
                 produce them, so a driver bump that moves the inventories
                 leaves both stale, and the seeds phase is otherwise the first
                 thing to notice, at run time, on the target.
+    families    every field bound to a value family carries a family the
+                audit in surface/value-families-audit.json accepted, and
+                every accepted family is bound to its field with its own set
+                emitted. A field bound to the wrong family is worse than a
+                bare integer, because the bare integer still reaches its real
+                values by mutation and a wrong family never does. The check
+                joins the two artefacts through
+                value_families.accepted_families, the same door the emitter
+                binds through, so the emitted name and the checked name have
+                one source. It also reads every flags set the description set
+                defines against every one it references, which covers the
+                five sets written by hand.
     pages       the generated reference pages under
                 docs/src/content/docs/reference/surface/ still match what
                 tools/refgen.py produces from the artefacts. The check
@@ -63,12 +75,13 @@ because nothing compared two artefacts that have to agree:
                 metered instance, and a wrong flag stalls the campaign there
                 until a human notices, diagnoses and fixes it.
 
-Run one, or all eight:
+Run one, or all nine:
 
     python3 tools/regression_check.py names
     python3 tools/regression_check.py pins
     python3 tools/regression_check.py coverage
     python3 tools/regression_check.py derived
+    python3 tools/regression_check.py families
     python3 tools/regression_check.py pages
     python3 tools/regression_check.py stale
     python3 tools/regression_check.py harnesses
@@ -97,8 +110,10 @@ gives at its own import block: that module needs fcntl and would stop this
 running on a Windows workstation. Everything here reads committed files only,
 so it needs no GPU, no kernel and no network.
 
-`agents` is the one check that imports another tool, because a command line is
-verified against that tool's own parser. Those imports sit inside the check
+`agents` and `families` are the two checks that import another tool. `agents`
+verifies a command line against that tool's own parser, and `families` joins
+the two value-family artefacts through value_families.accepted_families and
+never repeats the join. Those imports sit inside the checks
 and not at the top of this file, so the other seven still run on a Windows
 workstation and `agents` reports the absent fcntl as exit 2 there.
 """
@@ -132,6 +147,10 @@ PAGES_DIR = refgen.DEFAULT_OUT
 PAGES_REMEDY = "python3 tools/refgen.py"
 GENERATION = os.path.join(DESC_DIR, "generation.json")
 GENERATION_REMEDY = "python3 tools/syzlang_gen.py emit"
+VALUE_FAMILIES = os.path.join(surface_cov.SURFACE_DIR, "value-families.json")
+VALUE_FAMILIES_AUDIT = os.path.join(surface_cov.SURFACE_DIR,
+                                    "value-families-audit.json")
+VALUE_FAMILIES_REMEDY = "python3 tools/value_families.py"
 CAMPAIGN_CONFIG = os.path.join(REPO_ROOT, "config", "campaign.yaml")
 HARNESS_DIR = os.path.join(REPO_ROOT, "harnesses")
 RUN_ALL = os.path.join(HARNESS_DIR, "run_all.sh")
@@ -314,6 +333,19 @@ C_TARGETS_RE = re.compile(r"^C_TARGETS=\(\s*$(?P<body>.*?)^\)\s*$",
 # harness name in a column headed Harness.
 HARNESS_COLUMN = "Harness"
 TABLE_RULE = set("-: ")
+
+
+# A flags set definition sits at column zero and its members follow an equals
+# sign. Anchored on the start of a line so a `name = ` inside a comment or
+# inside a struct body cannot read as one.
+FLAGS_DEFINE_RE = re.compile(r"^([a-z_][a-z0-9_]*)\s*=\s*\S", re.M)
+
+# A reference to a set, from a struct field or from a syscall argument.
+FLAGS_REFERENCE_RE = re.compile(r"flags\[([A-Za-z_]\w*)")
+
+# One rendered field, when that field is bound to a set. The width is captured
+# so a report can state it.
+FLAGS_FIELD_RE = re.compile(r"^flags\[([A-Za-z_]\w*),\s*(int\d+)\]$")
 
 
 class CheckInput(Exception):
@@ -1224,6 +1256,192 @@ def _first_difference(committed, generated):
     return None
 
 
+def read_flags_sets():
+    """-> ({set name: file}, {set name: [file]}) over the committed set.
+
+    The first mapping holds every `name = value, value` definition, the second
+    every `flags[name, ...]` reference. syzlang resolves a flags name across
+    the whole package, so a set defined in one file and referenced from
+    another is one pair here and not two.
+    """
+    defined, referenced = {}, {}
+    for path in _description_files():
+        name = os.path.basename(path)
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        for match in FLAGS_DEFINE_RE.finditer(text):
+            defined.setdefault(match.group(1), name)
+        for match in FLAGS_REFERENCE_RE.finditer(text):
+            referenced.setdefault(match.group(1), []).append(name)
+    logger.info("descriptions: %d flags set(s) defined, %d referenced",
+                len(defined), len(referenced))
+    return defined, referenced
+
+
+def read_value_families():
+    """-> (the value_families module, the derivation, the audit).
+
+    The module comes back with the documents because `accepted_families` is
+    the only sanctioned join between them, and a caller that read the two
+    files without it would be free to invent a second rule for which family
+    an emitted field may carry.
+
+    value_families is imported here and not at the top of the module, for the
+    reason `agents` gives for its own imports: that module imports
+    syzlang_gen, and the other checks read committed files alone.
+    """
+    try:
+        value_families = importlib.import_module("value_families")
+    except ImportError as exc:
+        raise CheckInput(
+            "tools/value_families.py could not be imported, so the accepted "
+            "families cannot be read through accepted_families(): %s" % exc)
+    try:
+        derivation = value_families.load_json(VALUE_FAMILIES,
+                                              "the derived value families")
+        audit_doc = value_families.load_json(VALUE_FAMILIES_AUDIT,
+                                             "the value-family audit")
+    except value_families.SourceError as exc:
+        raise CheckInput(str(exc))
+    for document, path, key in ((derivation, VALUE_FAMILIES, "families"),
+                                (audit_doc, VALUE_FAMILIES_AUDIT, "audit")):
+        if not isinstance(document.get(key), list):
+            raise CheckInput(
+                "%s carries no %s array. `%s` writes it, and without it "
+                "nothing records which families were derived and which the "
+                "audit accepted."
+                % (path, key, VALUE_FAMILIES_REMEDY))
+    return value_families, derivation, audit_doc
+
+
+def check_families():
+    """Every emitted value family was accepted, and every accepted one emitted."""
+    value_families, derivation, audit_doc = read_value_families()
+    accepted = value_families.accepted_families(derivation, audit_doc)
+    accepted_keys = {(r["struct"], r["field"]) for r in accepted}
+    _calls, structs = read_descriptions()
+    defined, referenced = read_flags_sets()
+
+    emitted, missing, wrong, leaked, dangling, unused, orphan = (
+        [], [], [], [], [], [], [])
+
+    # Direction one: the audit accepted it, so the description set carries it.
+    for record in accepted:
+        struct, field = record["struct"], record["field"]
+        set_name = record["set_name"]
+        rendered = structs.get(struct, {}).get(field)
+        if rendered is None:
+            missing.append((struct, field, set_name,
+                            "no field of that name in the emitted struct"))
+            continue
+        match = FLAGS_FIELD_RE.match(rendered)
+        if match is None:
+            missing.append((struct, field, set_name,
+                            "renders as %s" % rendered))
+            continue
+        if match.group(1) != set_name:
+            wrong.append((struct, field, set_name, match.group(1)))
+            continue
+        if set_name not in defined:
+            missing.append((struct, field, set_name,
+                            "the field references the set and no file "
+                            "defines it"))
+            continue
+        emitted.append((struct, field, set_name))
+
+    # Direction two: the description set carries it, so the audit accepted it.
+    # A derived family the audit rejected is the case this whole phase exists
+    # to prevent, because a field bound to the wrong family never reaches its
+    # real values and a bare integer still does by mutation.
+    for record in derivation["families"]:
+        struct, field = record["struct"], record["field"]
+        if (struct, field) in accepted_keys:
+            continue
+        set_name = record["set_name"]
+        rendered = structs.get(struct, {}).get(field)
+        match = FLAGS_FIELD_RE.match(rendered) if rendered else None
+        if match is not None and match.group(1) == set_name:
+            leaked.append((struct, field, set_name,
+                           "the field is bound to it"))
+        elif set_name in defined:
+            leaked.append((struct, field, set_name,
+                           "%s defines the set" % defined[set_name]))
+
+    # An accepted audit entry with no derived record binds nothing and reports
+    # nothing, because accepted_families joins on (struct, field) and returns
+    # derived records alone.
+    derived_keys = {(r["struct"], r["field"]) for r in derivation["families"]}
+    for entry in audit_doc["audit"]:
+        if entry.get("verdict") != "accepted":
+            continue
+        if (entry["struct"], entry["field"]) not in derived_keys:
+            orphan.append((entry["struct"], entry["field"],
+                           entry.get("set_name")))
+
+    # Both directions over the flags sets themselves, which also covers the
+    # five sets written by hand. A reference to an undefined set does not
+    # compile, and a definition nothing references is a set the emitter still
+    # writes after its field stopped using it.
+    for name, files in sorted(referenced.items()):
+        if name not in defined:
+            dangling.append((name, ", ".join(sorted(set(files)))))
+    for name, source in sorted(defined.items()):
+        if name not in referenced:
+            unused.append((name, source))
+
+    print("families: %d derived, %d accepted by the audit, %d bound to a "
+          "field" % (len(derivation["families"]), len(accepted),
+                     len(emitted)))
+    print()
+    print("  %-28s %8s %8s" % ("state", "families", "sets"))
+    print("  %-28s %8s %8s" % ("-" * 28, "-" * 8, "-" * 8))
+    print("  %-28s %8d %8d" % ("accepted and bound", len(emitted),
+                               len(emitted)))
+    print("  %-28s %8d %8d" % ("accepted and not bound", len(missing)
+                               + len(wrong), 0))
+    print("  %-28s %8d %8d"
+          % ("rejected and reaching a set", len(leaked), len(leaked)))
+    print("  %-28s %8d %8d" % ("defined by hand",
+                               0, len(defined) - len(emitted)))
+    print()
+
+    offenders = (len(missing) + len(wrong) + len(leaked) + len(dangling)
+                 + len(unused) + len(orphan))
+    if not offenders:
+        print("families: every accepted family is bound to its field and "
+              "every emitted set was accepted")
+        print("families: OK")
+        return 0
+
+    for struct, field, set_name, problem in missing:
+        print("families: %s.%s was accepted and is not bound: %s"
+              % (struct, field, problem))
+    for struct, field, set_name, found in wrong:
+        print("families: %s.%s is bound to %s and the audit accepted %s"
+              % (struct, field, found, set_name))
+    for struct, field, set_name, problem in leaked:
+        print("families: %s.%s reaches the description set and the audit did "
+              "not accept it: %s" % (struct, field, problem))
+    for struct, field, set_name in orphan:
+        print("families: the audit accepts %s.%s and no derived record "
+              "carries it, so nothing binds it" % (struct, field))
+    for name, files in dangling:
+        print("families: %s is referenced by %s and no file defines it"
+              % (name, files))
+    for name, source in unused:
+        print("families: %s is defined in %s and no field references it"
+              % (name, source))
+    print()
+    print("A field bound to a family the audit did not accept never reaches "
+          "that field's real values, where a bare integer still reaches them "
+          "by mutation, so the audit in %s is the only route from a derived "
+          "family to an emitted set. Regenerate the derivation and the audit "
+          "with `%s`, then the description set with `%s`."
+          % (os.path.relpath(VALUE_FAMILIES_AUDIT, REPO_ROOT)
+             .replace(os.sep, "/"), VALUE_FAMILIES_REMEDY, GENERATION_REMEDY))
+    return 1
+
+
 def check_pages():
     """The generated reference pages still match the surface artefacts."""
     try:
@@ -2121,6 +2339,7 @@ CHECKS = {
     "pins": check_pins,
     "coverage": check_coverage,
     "derived": check_derived,
+    "families": check_families,
     "pages": check_pages,
     "stale": check_stale,
     "harnesses": check_harnesses,
@@ -2129,14 +2348,14 @@ CHECKS = {
 
 # The order `all` runs them in, and the order the module docstring and the CI
 # steps present them in. It follows the dependency between them: names and
-# pins read the description set alone, coverage and derived join it against
-# the inventories, and pages renders the artefacts the other four compare.
-# stale and harnesses close the order because neither reads the description
-# set: stale reads the provenance record against the artefacts the first five
-# compare, and harnesses reads the Track U seam, which the first six never
-# touch.
-CHECK_ORDER = ("names", "pins", "coverage", "derived", "pages", "stale",
-               "harnesses", "agents")
+# pins read the description set alone, coverage, derived and families join it
+# against the artefacts it was generated from, and pages renders the artefacts
+# the other five compare. stale and harnesses close the order because neither
+# reads the description set: stale reads the provenance record against the
+# artefacts the first six compare, and harnesses reads the Track U seam, which
+# the first seven never touch.
+CHECK_ORDER = ("names", "pins", "coverage", "derived", "families", "pages",
+               "stale", "harnesses", "agents")
 
 
 def check_order():
