@@ -3,7 +3,8 @@ title: refgen.py
 description: Renders the committed surface artefacts as the five reference pages under reference/surface/, deterministically, so CI can regenerate and diff them.
 ---
 
-Turns the committed surface artefacts into the five pages under
+Turns the committed surface artefacts into the five content pages and the
+index over them, under
 `docs/src/content/docs/reference/surface/`. The site describes the tools that
 enumerate the attack surface; without these pages a reader asking which escapes
 exist, or where a given control command ranks, opens a 1.2 MB JSON file.

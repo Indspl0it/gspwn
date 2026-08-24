@@ -205,5 +205,5 @@ round history.
 
 - [Quickstart](/gspwn/getting-started/quickstart/) checks the configuration and
   the tools offline.
-- [Your first campaign](/gspwn/getting-started/first-campaign/) walks round 1
+- [First campaign](/gspwn/getting-started/first-campaign/) walks round 1
   end to end.
