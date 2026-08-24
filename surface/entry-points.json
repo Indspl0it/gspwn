@@ -1,0 +1,418 @@
+{
+  "schema": "gspwn.entry-points/1",
+  "source": {
+    "driver_version": "610.57.04",
+    "commit": "e4a5faa2"
+  },
+  "tables": [
+    {
+      "fops": "nvidia_fops",
+      "declared_at": "kernel-open/nvidia/nv.c:250",
+      "module": "nvidia",
+      "paths": [
+        "/dev/nvidiactl",
+        "/dev/nvidiaN"
+      ],
+      "modelled": true,
+      "tenant_surface": true,
+      "reason": null,
+      "notes": {
+        "poll": "nv.c:2292 skips the nv_is_open_complete gate at nv.c:2294 for the control device, and nv.c:3141 sets nvlfp->nvptr on it unconditionally where nv.c:1898 leaves it NULL for the actual device until nv.c:1733. /dev/nvidiactl reaches the poll body directly after open; /dev/nvidiaN meets POLLERR at nv.c:2298 until the open completes."
+      },
+      "entry_points": [
+        {
+          "operation": "poll",
+          "handler": "nvidia_poll",
+          "line": 252,
+          "conditional": null
+        },
+        {
+          "operation": "unlocked_ioctl",
+          "handler": "nvidia_unlocked_ioctl",
+          "line": 253,
+          "conditional": null
+        },
+        {
+          "operation": "compat_ioctl",
+          "handler": "nvidia_unlocked_ioctl",
+          "line": 255,
+          "conditional": "NVCPU_IS_X86_64 || NVCPU_IS_AARCH64"
+        },
+        {
+          "operation": "mmap",
+          "handler": "nvidia_mmap",
+          "line": 257,
+          "conditional": null
+        },
+        {
+          "operation": "open",
+          "handler": "nvidia_open",
+          "line": 258,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "nvidia_close",
+          "line": 259,
+          "conditional": null
+        }
+      ]
+    },
+    {
+      "fops": "uvm_fops",
+      "declared_at": "kernel-open/nvidia-uvm/uvm.c:1070",
+      "module": "nvidia-uvm",
+      "paths": [
+        "/dev/nvidia-uvm"
+      ],
+      "modelled": true,
+      "tenant_surface": true,
+      "reason": null,
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "open",
+          "handler": "uvm_open_entry",
+          "line": 1072,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "uvm_release_entry",
+          "line": 1073,
+          "conditional": null
+        },
+        {
+          "operation": "mmap",
+          "handler": "uvm_mmap_entry",
+          "line": 1074,
+          "conditional": null
+        },
+        {
+          "operation": "unlocked_ioctl",
+          "handler": "uvm_unlocked_ioctl_entry",
+          "line": 1075,
+          "conditional": null
+        },
+        {
+          "operation": "compat_ioctl",
+          "handler": "uvm_unlocked_ioctl_entry",
+          "line": 1077,
+          "conditional": "NVCPU_IS_X86_64"
+        }
+      ]
+    },
+    {
+      "fops": "uvm_tools_fops",
+      "declared_at": "kernel-open/nvidia-uvm/uvm_tools.c:2744",
+      "module": "nvidia-uvm",
+      "paths": [
+        "/dev/nvidia-uvm-tools"
+      ],
+      "modelled": true,
+      "tenant_surface": true,
+      "reason": null,
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "open",
+          "handler": "uvm_tools_open_entry",
+          "line": 2746,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "uvm_tools_release_entry",
+          "line": 2747,
+          "conditional": null
+        },
+        {
+          "operation": "unlocked_ioctl",
+          "handler": "uvm_tools_unlocked_ioctl_entry",
+          "line": 2748,
+          "conditional": null
+        },
+        {
+          "operation": "compat_ioctl",
+          "handler": "uvm_tools_unlocked_ioctl_entry",
+          "line": 2750,
+          "conditional": "NVCPU_IS_X86_64"
+        },
+        {
+          "operation": "poll",
+          "handler": "uvm_tools_poll_entry",
+          "line": 2752,
+          "conditional": null
+        }
+      ]
+    },
+    {
+      "fops": "nvkms_fops",
+      "declared_at": "kernel-open/nvidia-modeset/nvidia-modeset-linux.c:2042",
+      "module": "nvidia-modeset",
+      "paths": [
+        "/dev/nvidia-modeset"
+      ],
+      "modelled": false,
+      "tenant_surface": true,
+      "reason": "lookup_devices at libnvidia-container/src/nvc_info.c:515 creates the node in a default container, so it is inside the tenant surface. The description set opens no descriptor on it at this revision, and its command family is not in the denominator.",
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "poll",
+          "handler": "nvkms_poll",
+          "line": 2044,
+          "conditional": null
+        },
+        {
+          "operation": "unlocked_ioctl",
+          "handler": "nvkms_unlocked_ioctl",
+          "line": 2045,
+          "conditional": null
+        },
+        {
+          "operation": "compat_ioctl",
+          "handler": "nvkms_unlocked_ioctl",
+          "line": 2047,
+          "conditional": "NVCPU_IS_X86_64 || NVCPU_IS_AARCH64"
+        },
+        {
+          "operation": "mmap",
+          "handler": "nvkms_mmap",
+          "line": 2049,
+          "conditional": null
+        },
+        {
+          "operation": "open",
+          "handler": "nvkms_open",
+          "line": 2050,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "nvkms_close",
+          "line": 2051,
+          "conditional": null
+        }
+      ]
+    },
+    {
+      "fops": "nvlink_fops",
+      "declared_at": "kernel-open/nvidia/nvlink_linux.c:307",
+      "module": "nvidia",
+      "paths": [
+        "/dev/nvidia-nvlink"
+      ],
+      "modelled": false,
+      "tenant_surface": false,
+      "reason": "lookup_devices at libnvidia-container/src/nvc_info.c:515 creates /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools and /dev/nvidia-modeset only, so a default container carries no node served by this table.",
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "open",
+          "handler": "nvlink_fops_open",
+          "line": 309,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "nvlink_fops_release",
+          "line": 310,
+          "conditional": null
+        },
+        {
+          "operation": "unlocked_ioctl",
+          "handler": "nvlink_fops_unlocked_ioctl",
+          "line": 311,
+          "conditional": null
+        }
+      ]
+    },
+    {
+      "fops": "device_fops",
+      "declared_at": "kernel-open/nvidia/linux_nvswitch.c:244",
+      "module": "nvidia",
+      "paths": [
+        "/dev/nvidia-nvswitchN"
+      ],
+      "modelled": false,
+      "tenant_surface": false,
+      "reason": "lookup_devices at libnvidia-container/src/nvc_info.c:515 creates /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools and /dev/nvidia-modeset only, so a default container carries no node served by this table.",
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "unlocked_ioctl",
+          "handler": "nvswitch_device_unlocked_ioctl",
+          "line": 247,
+          "conditional": null
+        },
+        {
+          "operation": "open",
+          "handler": "nvswitch_device_open",
+          "line": 248,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "nvswitch_device_release",
+          "line": 249,
+          "conditional": null
+        },
+        {
+          "operation": "poll",
+          "handler": "nvswitch_device_poll",
+          "line": 250,
+          "conditional": null
+        }
+      ]
+    },
+    {
+      "fops": "ctl_fops",
+      "declared_at": "kernel-open/nvidia/linux_nvswitch.c:253",
+      "module": "nvidia",
+      "paths": [
+        "/dev/nvidia-nvswitchctl"
+      ],
+      "modelled": false,
+      "tenant_surface": false,
+      "reason": "lookup_devices at libnvidia-container/src/nvc_info.c:515 creates /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools and /dev/nvidia-modeset only, so a default container carries no node served by this table.",
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "unlocked_ioctl",
+          "handler": "nvswitch_ctl_unlocked_ioctl",
+          "line": 256,
+          "conditional": null
+        }
+      ]
+    },
+    {
+      "fops": "g_nv_cap_drv_fops",
+      "declared_at": "kernel-open/nvidia/nv-caps.c:808",
+      "module": "nvidia",
+      "paths": [
+        "/dev/nvidia-caps/nvidia-capN"
+      ],
+      "modelled": false,
+      "tenant_surface": false,
+      "reason": "libnvidia-container/src/nvc.c:218 creates a capability node only for a MIG-partitioned GPU, and only for the partitions the container was given. A default container on an unpartitioned GPU carries none.",
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "open",
+          "handler": "nv_cap_drv_open",
+          "line": 811,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "nv_cap_drv_release",
+          "line": 812,
+          "conditional": null
+        }
+      ]
+    },
+    {
+      "fops": "g_nv_caps_imex_fops",
+      "declared_at": "kernel-open/nvidia/nv-caps-imex.c:40",
+      "module": "nvidia",
+      "paths": [
+        "/dev/nvidia-caps-imex-channels/channelN"
+      ],
+      "modelled": false,
+      "tenant_surface": false,
+      "reason": "lookup_devices at libnvidia-container/src/nvc_info.c:515 creates /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools and /dev/nvidia-modeset only, so a default container carries no node served by this table.",
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "open",
+          "handler": "nv_caps_imex_open",
+          "line": 43,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "nv_caps_imex_release",
+          "line": 44,
+          "conditional": null
+        }
+      ]
+    },
+    {
+      "fops": "nv_drm_fops",
+      "declared_at": "kernel-open/nvidia-drm/nvidia-drm-drv.c:1784",
+      "module": "nvidia-drm",
+      "paths": [
+        "/dev/dri/cardN",
+        "/dev/dri/renderDN"
+      ],
+      "modelled": false,
+      "tenant_surface": false,
+      "reason": "lookup_devices at libnvidia-container/src/nvc_info.c:515 creates /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools and /dev/nvidia-modeset only, so a default container carries no node served by this table.",
+      "notes": {},
+      "entry_points": [
+        {
+          "operation": "open",
+          "handler": "drm_open",
+          "line": 1787,
+          "conditional": null
+        },
+        {
+          "operation": "release",
+          "handler": "drm_release",
+          "line": 1788,
+          "conditional": null
+        },
+        {
+          "operation": "unlocked_ioctl",
+          "handler": "nv_drm_ioctl",
+          "line": 1789,
+          "conditional": null
+        },
+        {
+          "operation": "compat_ioctl",
+          "handler": "drm_compat_ioctl",
+          "line": 1791,
+          "conditional": "defined(CONFIG_COMPAT)"
+        },
+        {
+          "operation": "mmap",
+          "handler": "nv_drm_mmap",
+          "line": 1794,
+          "conditional": null
+        },
+        {
+          "operation": "poll",
+          "handler": "drm_poll",
+          "line": 1796,
+          "conditional": null
+        },
+        {
+          "operation": "read",
+          "handler": "drm_read",
+          "line": 1797,
+          "conditional": null
+        },
+        {
+          "operation": "llseek",
+          "handler": "noop_llseek",
+          "line": 1799,
+          "conditional": null
+        },
+        {
+          "operation": "fop_flags",
+          "handler": "FOP_UNSIGNED_OFFSET",
+          "line": 1802,
+          "conditional": "defined(FOP_UNSIGNED_OFFSET)"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "tables": 10,
+    "modelled_tables": 3,
+    "modelled_nodes": 4,
+    "entry_points": 43,
+    "modelled_entry_points": 16
+  }
+}

@@ -113,6 +113,39 @@ SCHEMA = "gspwn.syzlang-generation/1"
 # tools/trace2seed.py documents the same failure on the seeds side.
 AT_FDCWD = "0xffffffffffffff9c"
 
+UVM_FD_RESOURCE = "fd_nvidia_uvm"
+UVM_TOOLS_FD_RESOURCE = "fd_nvidia_uvm_tools"
+# The initialised descriptor. `resource B[A]` makes a producer of B satisfy a
+# consumer of A, and makes a consumer of B satisfiable only by a producer of
+# B, which is the ordering constraint uvm.c:927 imposes.
+UVM_VASPACE_RESOURCE = "fd_nvidia_uvm_vaspace"
+
+# The producer. It is a pseudo-syscall and not ioctl$UVM_INITIALIZE because
+# __UVM_ROUTE_CMD_STACK at kernel-open/nvidia-uvm/uvm_api.h:45 returns 0 on
+# every path but a copy_from_user or copy_to_user failure, carrying the
+# handler's real status in params.rmStatus. syzkaller takes a resource's value
+# from the raw syscall return (executor/executor.cc:1355,
+# pkg/csource/csource.go:548), so a resource produced by that ioctl would hold
+# 0 on every execution and every consumer would receive file descriptor 0.
+UVM_INIT_CALL = "syz_nvidia_uvm_init"
+
+# The executor half of that call, carried as a patch against the pinned
+# syzkaller checkout and never as a fork of it, so the pin keeps naming an
+# upstream revision and this campaign's delta stays one reviewable file. The
+# description half needs none of it: pkg/compiler/consts.go:250 assigns no
+# syscall number to a call whose name starts with syz_, so the set compiles
+# against an unpatched checkout with the declaration alone.
+SYZ_PATCH_REL = "tools/syz-patches/0001-syz_nvidia_uvm_init.patch"
+
+# UVM_INIT_FLAGS_* from kernel-open/nvidia-uvm/uvm_types.h. DISABLE_HMM and
+# DISABLE_PAGEABLE_MIGRATIONS are both 0x1, so the set holds three values.
+UVM_INIT_FLAG_MACROS = (
+    "UVM_INIT_FLAGS_DISABLE_HMM",
+    "UVM_INIT_FLAGS_DISABLE_PAGEABLE_MIGRATIONS",
+    "UVM_INIT_FLAGS_MULTI_PROCESS_SHARING_MODE",
+    "UVM_INIT_FLAGS_DISABLE_PAGEABLE_ACCESS",
+)
+
 # Header trees the struct parser reads, relative to --src, longest include
 # root first so a header's include path is computed against the right one.
 INCLUDE_ROOTS = [
@@ -1073,20 +1106,42 @@ def build_openat_block():
         "resource fd_nvidia[fd_nv]",
         "resource fd_nvidia_uvm[fd]",
         "resource fd_nvidia_uvm_tools[fd]",
+        "resource %s[%s]" % (UVM_VASPACE_RESOURCE, UVM_FD_RESOURCE),
         "",
     ]
     opens = [
         ("openat$nvidiactl", "/dev/nvidiactl", "fd_nvidiactl"),
         ("openat$nvidia", "/dev/nvidia#", "fd_nvidia"),
-        ("openat$nvidia_uvm", "/dev/nvidia-uvm", "fd_nvidia_uvm"),
+        ("openat$nvidia_uvm", "/dev/nvidia-uvm", UVM_FD_RESOURCE),
         ("openat$nvidia_uvm_tools", "/dev/nvidia-uvm-tools",
-         "fd_nvidia_uvm_tools"),
+         UVM_TOOLS_FD_RESOURCE),
     ]
     for name, path, res in opens:
         lines.append(
             '%s(fd const[%s], file ptr[in, string["%s"]], '
             "flags const[0x2], mode const[0]) %s"
             % (name, AT_FDCWD, path, res))
+    lines += [
+        "",
+        "# The initialised UVM descriptor. 36 of the 39 uvm commands and",
+        "# uvm_mmap refuse a descriptor that has not been through",
+        "# uvm_api_initialize (kernel-open/nvidia-uvm/uvm.c:927), which sets",
+        "# UVM_FD_VA_SPACE at uvm.c:959. The producer is a pseudo-syscall and",
+        "# not ioctl$UVM_INITIALIZE: __UVM_ROUTE_CMD_STACK at",
+        "# kernel-open/nvidia-uvm/uvm_api.h:45 returns 0 on success and on",
+        "# failure alike, carrying the real status in params.rmStatus, and",
+        "# syzkaller takes a resource's value from the raw syscall return.",
+        "# A resource produced by that ioctl would hold 0 on every execution",
+        "# and every consumer would receive file descriptor 0.",
+        "#",
+        "# The implementation opens /dev/nvidia-uvm, issues UVM_INITIALIZE,",
+        "# and returns the descriptor. It lives in a patch this repository",
+        "# carries against the pinned syzkaller checkout; the declaration",
+        "# alone compiles, because pkg/compiler/consts.go:250 assigns no",
+        "# syscall number to a call whose name starts with syz_.",
+        "%s(flags flags[uvm_init_flags]) %s"
+        % (UVM_INIT_CALL, UVM_VASPACE_RESOURCE),
+    ]
     return "\n".join(lines)
 
 
@@ -1340,8 +1395,47 @@ HANDLE_FIELDS = {
 }
 
 
+# File-descriptor-carrying fields, by the struct that declares them. A bare
+# integer here receives a mutated value and never a descriptor the program
+# holds; typed as a resource it receives one the program opened.
+# Two structs carry a descriptor of the same kind. Both handlers fget the
+# field, check it is a UVM descriptor, and then require UVM_FD_VA_SPACE, so
+# both take the initialised subtype:
+#
+#   UVM_TOOLS_INIT_EVENT_TRACKER   uvm_tools.c:2008 fget,
+#                                  uvm_tools.c:2023 UVM_FD_VA_SPACE
+#   UVM_MM_INITIALIZE              uvm.c:67 fget,
+#                                  uvm.c:73 UVM_FD_VA_SPACE
+#
+# UVM_MM_INITIALIZE is the clearest case: it is marked
+# requires_initialized_fd false because it runs on a second, fresh descriptor,
+# and uvm_fd_type_init at uvm_fd_type.c:92 returns NV_ERR_IN_USE unless that
+# descriptor is still UVM_FD_UNINITIALIZED. Its own fd must therefore be
+# uninitialised while its uvmFd field must be initialised, two descriptors in
+# opposite states in one call, which is what the two resources express.
+#
+# The subtype is satisfiable in both because syz_nvidia_uvm_init takes no
+# input descriptor, so syzkaller can always insert it. Both resources resolve
+# to 32 bits where int32 stood, so neither struct's size moves.
+#
+# Stated limit: resource fd_nvidia_uvm_vaspace[fd_nvidia_uvm] lets a producer
+# of the subtype satisfy a consumer of the base, so syzkaller may hand the
+# initialised descriptor to ioctl$UVM_MM_INITIALIZE's own fd argument, where
+# uvm_fd_type_init stops it with NV_ERR_IN_USE. syzlang has no way to say a
+# consumer must not take a subtype, so the grammar cannot exclude that shape.
+# openat$nvidia_uvm remains a producer of the base type, so generation
+# produces both shapes and the success path stays reachable.
+FD_FIELDS = {
+    "UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS": {"uvmFd": UVM_VASPACE_RESOURCE},
+    "UVM_MM_INITIALIZE_PARAMS": {"uvmFd": UVM_VASPACE_RESOURCE},
+}
+
+
 def handle_overrides(struct):
-    return dict(HANDLE_FIELDS.get(struct, {}))
+    """-> the per-field type overrides one parameter struct takes."""
+    overrides = dict(HANDLE_FIELDS.get(struct, {}))
+    overrides.update(FD_FIELDS.get(struct, {}))
+    return overrides
 
 
 def base_param_type(index, name):
@@ -1829,6 +1923,268 @@ def rank_commands(methods, graph, ranking, order):
     return sorted(methods, key=key)
 
 
+# ---------------------------------------------------------------------------
+# The UVM file descriptor state machine
+# ---------------------------------------------------------------------------
+
+
+
+class CensusError(Exception):
+    """A committed census this emitter derives typing from does not read what
+    the emitter was written against."""
+
+
+# The split surface/ioctl-inventory.json records for the two UVM nodes, from
+# the UVM_ROUTE_CMD_*_INIT_CHECK macro name (tools/ioctl_inventory.py:676).
+# Read as (requires an initialised descriptor, does not). The uvm figure is
+# 34 UVM_ROUTE_CMD_STACK_INIT_CHECK plus 2 UVM_ROUTE_CMD_ALLOC_INIT_CHECK
+# against 2 UVM_ROUTE_CMD_STACK_NO_INIT_CHECK, with UVM_DEINITIALIZE routed
+# by a bare case label at uvm.c:1001 making the third free command.
+#
+# The zero on the tools node is what makes UVM_TOOLS_INIT_EVENT_TRACKER's
+# uvmFd field the only route the constraint takes into that family. A non-zero
+# count means the driver moved and the uvm_tools typing has to be revisited,
+# so it is checked and not assumed.
+UVM_INIT_CENSUS = {"uvm": (36, 3), "uvm_tools": (0, 7)}
+
+
+def uvm_node_group(node):
+    """-> "uvm", "uvm_tools", "uvm_test", or None for a non-UVM node."""
+    if node.get("scheme") != "bare_command_number":
+        return None
+    paths = node.get("paths") or []
+    if "/dev/nvidia-uvm-tools" in paths:
+        return "uvm_tools"
+    if "/dev/nvidia-uvm" not in paths:
+        return None
+    return "uvm_test" if "uvm_test.c" in (node.get("entry") or "") else "uvm"
+
+
+def uvm_fd_census(inventory):
+    """-> {UVM command name: whether it requires an initialised descriptor}.
+
+    Covers the uvm and uvm_tools nodes. The test node is excluded: it is
+    compiled out unless the module is built for test, so its commands are not
+    in the denominator and are emitted only under --uvm-test.
+
+    The counts are checked against UVM_INIT_CENSUS before the mapping is
+    returned. Emitting the retyping from a census that moved would put the
+    wrong resource on a command with nothing to say so, and the compile gate
+    accepts both typings.
+    """
+    census, counts = {}, {}
+    for node in inventory.get("nodes", []):
+        group = uvm_node_group(node)
+        if group not in UVM_INIT_CENSUS:
+            continue
+        requiring = free = 0
+        for command in node.get("commands", []):
+            name = command.get("name")
+            needs = command.get("requires_initialized_fd")
+            if not isinstance(needs, bool):
+                raise CensusError(
+                    "%s carries no boolean requires_initialized_fd in the "
+                    "committed inventory, so whether it refuses an "
+                    "uninitialised descriptor cannot be read. "
+                    "tools/ioctl_inventory.py records the field from the "
+                    "UVM_ROUTE_CMD_* macro name; regenerate the inventory "
+                    "against the driver checkout." % name)
+            census[name] = needs
+            requiring += 1 if needs else 0
+            free += 0 if needs else 1
+        counts[group] = (requiring, free)
+    for group, expected in sorted(UVM_INIT_CENSUS.items()):
+        seen = counts.get(group)
+        if seen is None:
+            raise CensusError(
+                "the committed inventory carries no %s node, so the UVM "
+                "descriptor typing cannot be derived. Regenerate it with "
+                "tools/ioctl_inventory.py against the driver checkout."
+                % group)
+        if seen != expected:
+            raise CensusError(
+                "the %s node reads %d command(s) requiring an initialised "
+                "descriptor and %d not requiring one, against the %d and %d "
+                "this emitter was written against. The retyping of the UVM "
+                "family is derived from that split, so it is not emitted "
+                "from a census that moved. Either the driver release changed "
+                "which commands carry UVM_ROUTE_CMD_*_INIT_CHECK, in which "
+                "case UVM_INIT_CENSUS is the record to move, or the "
+                "inventory was regenerated from a partial checkout."
+                % (group, seen[0], seen[1], expected[0], expected[1]))
+    logger.info("UVM descriptor census confirmed: %s",
+                ", ".join("%s %d requiring, %d free" % (g, c[0], c[1])
+                          for g, c in sorted(counts.items())))
+    return census
+
+
+def uvm_fd_resource(group, command):
+    """-> the fd resource one UVM variant takes.
+
+    Driven by the artefact field and never by a name list: a hand-kept list of
+    36 names is the defect the committed census exists to avoid.
+    """
+    if group == "uvm_tools":
+        return UVM_TOOLS_FD_RESOURCE
+    return (UVM_VASPACE_RESOURCE if command.get("requires_initialized_fd")
+            else UVM_FD_RESOURCE)
+
+
+# ---------------------------------------------------------------------------
+# Entry points other than ioctl
+# ---------------------------------------------------------------------------
+
+# Linux UAPI values, fixed by the ABI, from asm-generic/mman-common.h and
+# asm-generic/poll.h. syzkaller's own sys/linux/sys.txt carries the same sets
+# under unprefixed names. These are prefixed because the compile gate stages
+# the description set without that corpus and the target build merges it with
+# it, and an unprefixed name would then be declared twice.
+NV_MMAP_PROT = (0x1, 0x2, 0x4)              # PROT_READ, PROT_WRITE, PROT_EXEC
+NV_MMAP_FLAGS = (0x1, 0x2, 0x10, 0x20)      # SHARED, PRIVATE, FIXED, ANON
+NV_POLL_EVENTS = (0x1, 0x2, 0x4, 0x8, 0x10, 0x20)
+
+# mmap's offset argument, where the handler leaves it free. Page-aligned
+# because a misaligned offset fails in do_mmap before the driver runs.
+NV_MMAP_OFFSET = "intptr[0:0xffffffff, 0x1000]"
+
+
+UVM_INIT_PARAMS_STRUCT = "UVM_INITIALIZE_PARAMS"
+
+
+def init_params_layout(emitter):
+    """-> the field layout syz_nvidia_uvm_init's executor half reads.
+
+    Recorded in generation.json so the offset the patch hardcodes is checked
+    against the layout derived from the header on this run, and not against a
+    number written once and never read again.
+    """
+    try:
+        layout = emitter.index.layout(UVM_INIT_PARAMS_STRUCT)
+    except LayoutError as exc:
+        raise SystemExit(
+            "the %s layout could not be derived, so the offset "
+            "%s reads rmStatus at cannot be recorded and the executor half "
+            "would be unchecked: %s"
+            % (UVM_INIT_PARAMS_STRUCT, UVM_INIT_CALL, exc))
+    return {
+        "struct": UVM_INIT_PARAMS_STRUCT,
+        "size": layout.size,
+        "fields": [{"name": f.name, "offset": f.offset, "size": f.size,
+                    "syzlang": f.syz}
+                   for f in layout.fields],
+    }
+
+
+def _flag_set(name, values):
+    return "%s = %s" % (name, ", ".join("0x%x" % v for v in values))
+
+
+def count_entry_point_structs(text):
+    """-> the struct blocks the entry-point text declares.
+
+    They carry no parameter struct and never pass through the struct emitter,
+    so generation.json records them separately and the two counts are summed
+    where the whole description set is compared against the manifest.
+    """
+    return len(re.findall(r"^\w+ \{$", text, re.M))
+
+
+def emit_entry_points():
+    """-> (the mmap and poll block, [record per emitted call]).
+
+    The five calls the driver's file_operations tables register on the four
+    device nodes the description set opens. surface/entry-points.json carries
+    the whole census, including the six tables no description opens.
+
+    An entry point is not a command: it carries no method id, no parameter
+    struct and no inventory row, so none of these calls enters the command
+    denominator. tools/surface_cov.py counts them on their own line.
+    """
+    lines = [
+        _flag_set("nv_mmap_prot", NV_MMAP_PROT),
+        _flag_set("nv_mmap_flags", NV_MMAP_FLAGS),
+        _flag_set("nv_poll_events", NV_POLL_EVENTS),
+        "",
+        "nv_pollfd_nvidiactl {",
+        "\tfd\tfd_nvidiactl",
+        "\tevents\tflags[nv_poll_events, int16]",
+        "\trevents\tconst[0, int16]",
+        "}",
+        "",
+        "nv_pollfd_nvidia {",
+        "\tfd\tfd_nvidia",
+        "\tevents\tflags[nv_poll_events, int16]",
+        "\trevents\tconst[0, int16]",
+        "}",
+        "",
+        "nv_pollfd_uvm_tools {",
+        "\tfd\tfd_nvidia_uvm_tools",
+        "\tevents\tflags[nv_poll_events, int16]",
+        "\trevents\tconst[0, int16]",
+        "}",
+        "",
+        "# nvidia_mmap at kernel-open/nvidia/nv-mmap.c:770 reaches",
+        "# nvidia_mmap_helper, which consumes a mapping context a prior ioctl",
+        "# established. That helper abandons the mapping for any non-zero",
+        "# vm_pgoff at nv-mmap.c:554, so zero is the only offset that reaches",
+        "# the body and the offset is pinned to it.",
+    ]
+    records = []
+    for name, resource in (("mmap$nvidiactl", "fd_nvidiactl"),
+                           ("mmap$nvidia", "fd_nvidia")):
+        lines.append(
+            "%s(addr vma, len len[addr], prot flags[nv_mmap_prot], "
+            "flags flags[nv_mmap_flags], fd %s, offset const[0])"
+            % (name, resource))
+        records.append({"call": name, "operation": "mmap",
+                        "resource": resource, "offset_pinned": True,
+                        "offset_value": 0,
+                        "offset_authority": "kernel-open/nvidia/nv-mmap.c:554"})
+    lines += [
+        "",
+        "# uvm_mmap at kernel-open/nvidia-uvm/uvm.c:759 returns -EBADFD at",
+        "# uvm.c:779 until a prior ioctl has made the descriptor a VA space,",
+        "# which is why this one takes the initialised subtype. Its offset is",
+        "# left free: uvm.c:793 requires vm_start == (vm_pgoff << PAGE_SHIFT),",
+        "# so the only legal offset is the mapping address the kernel selects",
+        "# at run time and no fixed value satisfies it. uvm.c:801 further",
+        "# requires VM_SHARED, VM_READ and VM_WRITE together, which one member",
+        "# of nv_mmap_flags and two of nv_mmap_prot give.",
+        "mmap$nvidia_uvm(addr vma, len len[addr], prot flags[nv_mmap_prot], "
+        "flags flags[nv_mmap_flags], fd %s, offset %s)"
+        % (UVM_VASPACE_RESOURCE, NV_MMAP_OFFSET),
+        "",
+        "# nvidia_poll at kernel-open/nvidia/nv.c:2280 and uvm_tools_poll at",
+        "# kernel-open/nvidia-uvm/uvm_tools.c:692. nvidia_fops serves both",
+        "# /dev/nvidiactl and /dev/nvidiaN, so both carry a poll call:",
+        "# nv.c:2292 branches on nv_is_control_device and skips the",
+        "# open-complete check that returns POLLERR for the actual device, so",
+        "# the control node is a reachable path of its own. uvm_fops",
+        "# registers no poll and uvm_tools_fops registers no mmap, so neither",
+        "# carries the other call.",
+        "poll$nvidiactl(fds ptr[in, array[nv_pollfd_nvidiactl]], "
+        "nfds len[fds], timeout int32)",
+        "poll$nvidia(fds ptr[in, array[nv_pollfd_nvidia]], nfds len[fds], "
+        "timeout int32)",
+        "poll$nvidia_uvm_tools(fds ptr[in, array[nv_pollfd_uvm_tools]], "
+        "nfds len[fds], timeout int32)",
+    ]
+    records.append({"call": "mmap$nvidia_uvm", "operation": "mmap",
+                    "resource": UVM_VASPACE_RESOURCE,
+                    "offset_pinned": False, "offset_value": None,
+                    "offset_authority": "kernel-open/nvidia-uvm/uvm.c:793"})
+    records.append({"call": "poll$nvidiactl", "operation": "poll",
+                    "resource": "fd_nvidiactl", "offset_pinned": None,
+                    "offset_value": None, "offset_authority": None})
+    records.append({"call": "poll$nvidia", "operation": "poll",
+                    "resource": "fd_nvidia", "offset_pinned": None,
+                    "offset_value": None, "offset_authority": None})
+    records.append({"call": "poll$nvidia_uvm_tools", "operation": "poll",
+                    "resource": UVM_TOOLS_FD_RESOURCE, "offset_pinned": None,
+                    "offset_value": None, "offset_authority": None})
+    return "\n".join(lines), records
+
+
 def emit_uvm(emitter, inventory, include_test):
     """UVM and UVM-tools descriptions.
 
@@ -1842,11 +2198,10 @@ def emit_uvm(emitter, inventory, include_test):
         if node["scheme"] != "bare_command_number":
             continue
         paths = node["paths"]
-        if "/dev/nvidia-uvm-tools" in paths:
-            fd_res = "fd_nvidia_uvm_tools"
+        node_group = uvm_node_group(node)
+        if node_group == "uvm_tools":
             group = "uvm_tools"
-        elif "/dev/nvidia-uvm" in paths:
-            fd_res = "fd_nvidia_uvm"
+        elif node_group in ("uvm", "uvm_test"):
             group = "uvm"
         else:
             logger.warning("UVM node with unexpected paths %s, skipped", paths)
@@ -1869,9 +2224,14 @@ def emit_uvm(emitter, inventory, include_test):
                 continue
             request = command["requests"][0]
             struct = command["param_struct"]
+            # The resource each variant takes comes from the artefact field
+            # and never from a name list. The uvm_test node is typed the same
+            # way: uvm_test_ioctl is reached by falling through uvm_ioctl, so
+            # its commands carry the same descriptor requirement.
+            fd_res = uvm_fd_resource(node_group, command)
             arg = "const[0]"
             if struct:
-                emitted = emitter.ensure(struct)
+                emitted = emitter.ensure(struct, handle_overrides(struct))
                 if emitted is not None:
                     arg = "ptr[inout, %s]" % emitted
                 elif command["param_size"]:
@@ -1916,7 +2276,20 @@ def emit_flags_sets(index):
             "NVOS64_FLAGS_* were not found in the headers, so the allocation "
             "flags set cannot be emitted from source. Check --src points at "
             "an open-gpu-kernel-modules checkout.")
-    return "nvos64_alloc_flags = %s" % ", ".join("0x%x" % v for v in values)
+    sets = ["nvos64_alloc_flags = %s" % ", ".join("0x%x" % v for v in values)]
+    # UVM_INIT_FLAGS_* from kernel-open/nvidia-uvm/uvm_types.h, the one
+    # argument syz_nvidia_uvm_init passes through to UVM_INITIALIZE_PARAMS.
+    # DISABLE_HMM and DISABLE_PAGEABLE_MIGRATIONS are both 0x1, so the set
+    # holds three values and not four.
+    init = sorted({index.const(index.defines.get(name, ""))
+                   for name in UVM_INIT_FLAG_MACROS} - {None})
+    if not init:
+        raise SystemExit(
+            "UVM_INIT_FLAGS_* were not found in the headers, so the UVM "
+            "initialisation flags set cannot be emitted from source. Check "
+            "--src points at an open-gpu-kernel-modules checkout.")
+    sets.append("uvm_init_flags = %s" % ", ".join("0x%x" % v for v in init))
+    return "\n".join(sets)
 
 
 # ---------------------------------------------------------------------------
@@ -2332,6 +2705,11 @@ def build(args):
                        "(%s%s)", len(missing), ", ".join(sorted(missing)[:6]),
                        ", ..." if len(missing) > 6 else "")
 
+    # Confirmed before any UVM variant is typed from it: the retyping is
+    # derived from this split and the compile gate accepts both typings, so a
+    # census that moved has to stop the run here.
+    uvm_fd_census(inventory)
+
     emitter = Emitter(index, sizes)
     resources = emit_resources(graph, class_map, not args.all_classes)
     flags = emit_flags_sets(index)
@@ -2344,8 +2722,10 @@ def build(args):
         emitter, inventory, class_map, graph, True, True)
     xfer_text, xfer_records = emit_xfer(emitter, inventory)
     uvm_text, uvm_records = emit_uvm(emitter, inventory, args.uvm_test)
+    entry_text, entry_records = emit_entry_points()
 
     return {
+        "entry_text": entry_text, "entry_records": entry_records,
         "inventory": inventory, "control": control, "graph": graph,
         "index": index, "emitter": emitter, "sizes": sizes,
         "ctrl_sizes_paths": ctrl_sizes_paths,
@@ -2410,6 +2790,17 @@ def cmd_emit(args):
         "# set is chip-gated carries one call taking nv_handle, because at\n"
         "# most one of those parents exists on any given GPU.\n"
         + result["alloc_text"],
+        "# Entry points other than ioctl, from the file_operations tables the\n"
+        "# driver registers on the four nodes opened above. nvidia_fops at\n"
+        "# kernel-open/nvidia/nv.c:250 registers poll and mmap, uvm_fops at\n"
+        "# kernel-open/nvidia-uvm/uvm.c:1070 registers mmap, and\n"
+        "# uvm_tools_fops at kernel-open/nvidia-uvm/uvm_tools.c:2744\n"
+        "# registers poll. surface/entry-points.json carries the whole\n"
+        "# census, including the six tables no description opens. An entry\n"
+        "# point carries no method id, no parameter struct and no inventory\n"
+        "# row, so none of these calls is a command and none enters the\n"
+        "# command denominator.\n"
+        + result["entry_text"],
     ]) + "\n"
 
     structs = "\n\n".join([
@@ -2482,6 +2873,15 @@ def cmd_emit(args):
             "uvm_emitted": sum(1 for r in result["uvm_records"]
                                if r["emitted"]),
             "uvm_total": len(result["uvm_records"]),
+            # Entry points and the initialisation pseudo-syscall are counted
+            # here and never joined into the command families above. An mmap
+            # or poll call has no method id and no inventory row, so folding
+            # it into the denominator would count two kinds of thing under
+            # one total.
+            "entry_point_calls": len(result["entry_records"]),
+            "entry_point_structs": count_entry_point_structs(
+                result["entry_text"]),
+            "pseudo_syscalls": 1,
             "structs_emitted": len(emitter.order),
             "size_match": len(emitter.size_match),
             "size_mismatch": len(emitter.size_mismatch),
@@ -2502,6 +2902,29 @@ def cmd_emit(args):
         "allocations": result["alloc_records"],
         "control": result["ctrl_records"],
         "uvm": result["uvm_records"],
+        # Their own key, separate from the five command families, because
+        # they are not commands and are not in the 764.
+        "entry_points": {
+            "calls": result["entry_records"],
+            "pseudo_syscall": {
+                "call": UVM_INIT_CALL,
+                "produces": UVM_VASPACE_RESOURCE,
+                "implementation": SYZ_PATCH_REL,
+                # The layout the executor half reads. It writes flags and
+                # then reads rmStatus at a fixed offset to decide whether
+                # initialisation succeeded, and a wrong offset there gives a
+                # patch that builds, runs, reads a neighbouring word as the
+                # status and produces a resource on failed initialisations.
+                # Recorded here so the offset the patch hardcodes is checked
+                # against the layout this run derived from the header.
+                "params": init_params_layout(emitter),
+                "reason": "ioctl$UVM_INITIALIZE returns 0 on success and on "
+                          "failure alike (uvm_api.h:45), and syzkaller takes "
+                          "a resource's value from the raw syscall return "
+                          "(executor.cc:1355), so that ioctl cannot produce "
+                          "the initialised descriptor",
+            },
+        },
     }
     write_file(os.path.join(out, "generation.json"),
                json.dumps(manifest, indent=1, sort_keys=True) + "\n")

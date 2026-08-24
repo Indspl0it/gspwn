@@ -557,6 +557,26 @@ def check_coverage():
         print("  %-12s %10d %10d %8d" % (family, targetable, covered, gap))
     print()
 
+    # The entry points the driver registers on the modelled nodes, counted
+    # apart from the command denominator above. A driver release that adds an
+    # mmap or a poll to one of those tables fails here rather than leaving an
+    # entry point with no description and nothing to say so.
+    try:
+        surface_cov.assert_outside_denominator(targets)
+        ep_modelled, ep_registered, ep_tables = surface_cov.load_entry_points()
+        ep_expected = surface_cov.entry_point_calls(ep_tables)
+    except surface_cov.SurfaceError as exc:
+        raise CheckInput(str(exc))
+    ep_declared = set(surface_cov.scan_call_names(_description_files()))
+    ep_missing = sorted(ep_expected - ep_declared)
+    print("coverage: %d entry point(s) on the %d modelled device node(s), of "
+          "%d the driver registers in total. Counted apart from the command "
+          "denominator above and never inside it."
+          % (ep_modelled, sum(len(t.get("paths") or []) for t in ep_tables),
+             ep_registered))
+    print("coverage: %d entry-point call(s) required, %d declared"
+          % (len(ep_expected), len(ep_expected) - len(ep_missing)))
+
     extra = sorted(n for n in modelled
                    if n not in targets and n not in excluded)
     print("coverage: %d declared variant(s) outside the denominator "
@@ -565,9 +585,17 @@ def check_coverage():
     print("coverage: denominator floor %d target(s) across %d family/families"
           % (sum(TARGET_FLOOR.values()), len(TARGET_FLOOR)))
 
-    if not missing and not shrunk:
+    if not missing and not shrunk and not ep_missing:
         print("coverage: OK")
         return 0
+
+    for name in ep_missing:
+        print("coverage: the driver registers an entry point the description "
+              "set does not declare: %s. Either a file_operations table "
+              "gained a member, or the emitter stopped writing the call."
+              % name)
+    if ep_missing:
+        print()
 
     for family, counted, floor in shrunk:
         print("coverage: the %s family enumerates %d target(s) against a "

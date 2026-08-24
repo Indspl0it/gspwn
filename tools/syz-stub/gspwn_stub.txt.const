@@ -6,3 +6,5 @@
 arches = amd64
 __NR_ioctl = amd64:16
 __NR_openat = amd64:257
+__NR_mmap = amd64:9
+__NR_poll = amd64:7

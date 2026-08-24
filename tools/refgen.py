@@ -145,8 +145,10 @@ def load_all():
         "cves": _load(PRIOR_CVES, "the classified CVE record"),
         "hotspots": _load(HOTSPOTS, "the patch-mining output"),
         "map": _load(IOCTL_MAP, "the ioctl name map"),
+        "entry": _load(surface_cov.ENTRY_POINTS, "the entry-point census"),
     }
     _need(docs["ioctl"], surface_cov.IOCTL_INV, "nodes")
+    _need(docs["entry"], surface_cov.ENTRY_POINTS, "tables")
     _need(docs["ctrl"], surface_cov.CTRL_INV, "methods")
     _need(docs["graph"], surface_cov.OBJ_GRAPH, "records")
     _need(docs["rank"], CTRL_RANK, "commands")
@@ -1100,6 +1102,10 @@ PAGE_SOURCES = {
                        "surface/cve-hotspots.json"],
 }
 
+# index.md renders the entry-point census beside the command totals, so its
+# provenance line names that artefact as well as the four pages' own sources.
+INDEX_EXTRA_SOURCES = ["surface/entry-points.json"]
+
 PAGE_TITLES = {
     "escapes.md": ("Escapes", "escapes",
                    "The dispatched RM escapes, the two multiplexers, and the "
@@ -1115,6 +1121,35 @@ PAGE_TITLES = {
                        "this project fuzzes, and where reading the fixing "
                        "diff placed each one"),
 }
+
+
+def entry_point_rows(entry):
+    """-> one row per file_operations table the driver defines.
+
+    Ordered modelled first and then by table name, so the four nodes the
+    description set opens read together and the rest state why they are out.
+    """
+    rows = []
+    for table in sorted(entry["tables"],
+                        key=lambda t: (not t["modelled"], t["fops"])):
+        operations = []
+        for point in table["entry_points"]:
+            name = code(point["operation"])
+            if point["conditional"]:
+                # The condition is rendered with `or` and never with the C
+                # `||`, because a pipe inside a table cell has to be escaped
+                # and a backslash in a generated page is otherwise a sign the
+                # tool leaked a path from the machine that ran it.
+                condition = " or ".join(
+                    part.strip()
+                    for part in point["conditional"].split("||"))
+                name += " (under %s)" % code(condition)
+            operations.append(name)
+        rows.append([", ".join(code(p) for p in table["paths"]),
+                     code(table["fops"]),
+                     ", ".join(operations),
+                     "yes" if table["modelled"] else table["reason"]])
+    return rows
 
 
 def page_index(docs, rows):
@@ -1134,7 +1169,7 @@ def page_index(docs, rows):
                     "artefacts."),
         "",
         provenance(sorted({s for sources in PAGE_SOURCES.values()
-                           for s in sources})),
+                           for s in sources} | set(INDEX_EXTRA_SOURCES))),
         "",
         "Four pages render the enumerated surface of driver %s. Every row is "
         "read from an artefact under `surface/`, and nothing on "
@@ -1179,6 +1214,26 @@ def page_index(docs, rows):
                if name in excluded]),
         "",
         "Total targets: %d." % len(targets),
+        "",
+        "## Entry points",
+        "",
+        "The command families above count `ioctl` targets. The driver also "
+        "registers `mmap` and `poll` on the device nodes it serves, and "
+        "those carry no method id, no parameter struct and no inventory row. "
+        "They are counted here and never inside the %d above."
+        % len(targets),
+        "",
+        table(["Device node", "fops table", "Entry points", "Modelled"],
+              entry_point_rows(docs["entry"])),
+        "",
+        "%d entry point(s) are registered on the %d modelled device node(s), "
+        "of %d across every `file_operations` table the driver defines. The "
+        "description set declares a call for each `mmap` and `poll` on a "
+        "modelled node; `open` and `release` are reached by `openat` and by "
+        "process exit, and `unlocked_ioctl` is the command families above."
+        % (docs["entry"]["counts"]["modelled_entry_points"],
+           docs["entry"]["counts"]["modelled_nodes"],
+           docs["entry"]["counts"]["entry_points"]),
         "",
         "## Staleness",
         "",
