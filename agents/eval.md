@@ -91,7 +91,7 @@ configurations. Report what happened, including when it is uninteresting.
    | 3 | `surface_cov.py report --run-id <run-id>`, all three stages, naming the corpus path and its modification time | the measurement, against the right corpus |
    | 4 | `regression_check.py pins` exit 0 | the denominator bounds the corpus, because no emitted selector including `NV_ESC_IOCTL_XFER_CMD`'s inner `cmd` is free |
    | 5 | the exclusion line verbatim: 236 control_gsp, 104 uvm_test, 4 drm_undispatched, 3 escape_dead, 2 escape_mux, 2 modeset_undispatched | the population the percentage is taken over |
-   | 6 | the 16 in-handler capability checks, stated as a floor | `targetable` is an upper bound on what a tenant can call |
+   | 6 | the 16 in-handler capability checks, stated as a floor, and the 2 drm commands carrying `DRM_MASTER` | `targetable` is an upper bound on what a tenant can call, and the two conditions are unrelated mechanisms |
 
    Missing any of the six, report the three stages and state no completion
    claim.
