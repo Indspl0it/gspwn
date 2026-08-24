@@ -31,7 +31,8 @@ billed 24.00 run-hours for run r2-1 (configured window (no usable coverage sampl
 A run with no samples at all bills nothing, and the tool reports that case
 explicitly:
 
-```  WARNING: run(s) r2-2 had no usable coverage samples and billed 0.0 h. Check the sampler, because unmeasured spend must not pass silently
+```
+  WARNING: run(s) r2-2 had no usable coverage samples and billed 0.0 h. Check the sampler, because unmeasured spend must not pass silently
 ```
 
 ## The write path
