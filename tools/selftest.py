@@ -69,6 +69,7 @@ import gitmine
 import gspwn_config
 import ioctl_inventory
 import knowledge_ctl
+import nvkms_inventory
 import object_graph
 import orchestrator_ctl
 import patch_mine
@@ -15023,6 +15024,869 @@ ioctl$NV_ESC_RM_FREE(r0, 0xc0184629, &(0x7f0000000100)=nil)
         text = surface_cov.uvm_ordering_note(3, 2).lower()
         self.assertNotIn("reached the handler", text)
         self.assertNotIn("proves", text)
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 3, the /dev/nvidia-modeset command inventory. nvkms_inventory.py reads
+# enum NvKmsIoctlCommand out of nvkms-api.h and the dispatch[] table out of
+# nvkms.c, and cross-checks one against the other. The count it settles, 64
+# dispatched of 66 declared, becomes part of the campaign denominator, so a
+# silent drift in it is the failure these classes exist to catch.
+# 5 classes, 26 tests.
+# ---------------------------------------------------------------------------
+
+# One command per tuple: enum name, proc symbol, macro. A proc of None
+# declares the command without dispatching it, which is the shape the two
+# 3DVISION commands take in the real header. The undispatched one sits before
+# a dispatched one so the array length still covers every declared ordinal,
+# matching the real table.
+NVKMS_FIXTURE_COMMANDS = (
+    ("NVKMS_IOCTL_ALLOC_DEVICE", "AllocDevice", "ENTRY"),
+    ("NVKMS_IOCTL_FREE_DEVICE", "FreeDevice", "ENTRY"),
+    ("NVKMS_IOCTL_QUERY_DISP", "QueryDisp", "ENTRY"),
+    ("NVKMS_IOCTL_SET_MODE", "SetMode", "ENTRY_CUSTOM_USER"),
+    ("NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES", None, None),
+    ("NVKMS_IOCTL_FLIP", "Flip", "ENTRY_CUSTOM_USER"),
+)
+
+# The macro block is copied from nvkms.c in shape, because its `#define` lines
+# name ENTRY and ENTRY_CUSTOM_USER inside the initialiser and a scrape that
+# counts them reads one use too many per macro. That is the defect the
+# fixture reproduces, so the definitions belong in it verbatim.
+NVKMS_C_HEAD = '''\
+#include "nvkms.h"
+
+static NvBool nvKmsIoctl(void *pOpaqueFd, NvU32 cmd, NvU64 paramsAddress,
+                         const size_t paramSize)
+{
+    static const struct {
+        NvBool (*proc)(struct NvKmsPerOpen *, void *);
+        NvBool (*prepUser)(void *, void *);
+        NvBool (*doneUser)(void *, void *);
+        const size_t paramSize;
+        const size_t extraSize;
+        const size_t requestSize;
+        const size_t requestOffset;
+        const size_t replySize;
+        const size_t replyOffset;
+    } dispatch[] = {
+
+#define _ENTRY_WITH_USER(_cmd, _func, _prepUser, _doneUser, _extraSize)      \\
+        [_cmd] = {                                                           \\
+            .proc          = _func,                                          \\
+            .prepUser      = _prepUser,                                      \\
+            .doneUser      = _doneUser,                                      \\
+            .paramSize     = sizeof(struct NvKms##_func##Params),            \\
+            .requestSize   = sizeof(struct NvKms##_func##Request),           \\
+            .requestOffset = offsetof(struct NvKms##_func##Params, request), \\
+            .replySize     = sizeof(struct NvKms##_func##Reply),             \\
+            .replyOffset   = offsetof(struct NvKms##_func##Params, reply),   \\
+            .extraSize     = _extraSize,                                     \\
+        }
+
+#define ENTRY(_cmd, _func)                                                   \\
+        _ENTRY_WITH_USER(_cmd, _func, NULL, NULL, 0)
+
+#define ENTRY_CUSTOM_USER(_cmd, _func)                                       \\
+        _ENTRY_WITH_USER(_cmd, _func,                                        \\
+                         _func##PrepUser, _func##DoneUser,                   \\
+                         sizeof(struct NvKms##_func##ExtraUserState))
+
+'''
+
+NVKMS_C_TAIL = '''
+    };
+
+#undef ENTRY
+
+    if (cmd >= ARRAY_LEN(dispatch)) {
+        return NV_FALSE;
+    }
+
+    if (dispatch[cmd].proc == NULL) {
+        return NV_FALSE;
+    }
+
+    return NV_TRUE;
+}
+'''
+
+
+def nvkms_header_text(commands=NVKMS_FIXTURE_COMMANDS, comment=False):
+    """A stand-in nvkms-api.h carrying one enum NvKmsIoctlCommand."""
+    lines = ["#ifndef NVKMS_API_H", "#define NVKMS_API_H", "",
+             "enum NvKmsIoctlCommand {"]
+    for index, (name, _proc, _macro) in enumerate(commands):
+        if comment and index == 1:
+            lines.append("    /* NVKMS_IOCTL_NOT_A_COMMAND, retired. */")
+        lines.append("    %s," % name)
+    lines += ["};", "", "#endif /* NVKMS_API_H */"]
+    return "\n".join(lines) + "\n"
+
+
+def nvkms_source_text(commands=NVKMS_FIXTURE_COMMANDS, drop=(), extra=()):
+    """A stand-in nvkms.c carrying one dispatch[] table.
+
+    drop names commands to leave out of the table while the header still
+    declares them, which is the scratch copy the cross-check has to reject.
+    extra appends further raw table lines for the malformed cases.
+    """
+    body = []
+    for name, proc, macro in commands:
+        if proc is None or name in drop:
+            continue
+        body.append("        %s(%s, %s)," % (macro, name, proc))
+    body.extend("        %s" % line for line in extra)
+    return NVKMS_C_HEAD + "\n".join(body) + NVKMS_C_TAIL
+
+
+def write_nvkms_tree(root, header=None, source=None, version="610.57.04"):
+    """Lay the two scraped files out the way the driver checkout does."""
+    interface = os.path.join(root, "src", "nvidia-modeset", "interface")
+    src = os.path.join(root, "src", "nvidia-modeset", "src")
+    os.makedirs(interface, exist_ok=True)
+    os.makedirs(src, exist_ok=True)
+    with open(os.path.join(interface, "nvkms-api.h"), "w") as f:
+        f.write(nvkms_header_text() if header is None else header)
+    with open(os.path.join(src, "nvkms.c"), "w") as f:
+        f.write(nvkms_source_text() if source is None else source)
+    if version is not None:
+        with open(os.path.join(root, "version.mk"), "w") as f:
+            f.write("NVIDIA_VERSION = %s\n" % version)
+    return root
+
+
+class NvkmsFixtureTree(unittest.TestCase):
+    """A driver tree holding only the two files nvkms_inventory.py reads."""
+
+    # The fixture declares six commands and dispatches five of them. Passing
+    # the pair through collect() keeps the real 66/64 constants out of the
+    # fixture while exercising the same check.
+    DECLARED = len(NVKMS_FIXTURE_COMMANDS)
+    DISPATCHED = sum(1 for _n, proc, _m in NVKMS_FIXTURE_COMMANDS if proc)
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        write_nvkms_tree(self.root)
+
+    def rewrite_source(self, text):
+        with open(os.path.join(self.root, "src", "nvidia-modeset", "src",
+                               "nvkms.c"), "w") as f:
+            f.write(text)
+
+    def rewrite_header(self, text):
+        with open(os.path.join(self.root, "src", "nvidia-modeset",
+                               "interface", "nvkms-api.h"), "w") as f:
+            f.write(text)
+
+    def collect(self, declared=None, dispatched=None):
+        return nvkms_inventory.collect(
+            self.root,
+            expect_declared=self.DECLARED if declared is None else declared,
+            expect_dispatched=(self.DISPATCHED if dispatched is None
+                               else dispatched))
+
+
+class TestNvkmsEnumScrape(NvkmsFixtureTree):
+    """parse_enum reads the declared command list in ordinal order."""
+
+    def declared(self):
+        with open(os.path.join(self.root, "src", "nvidia-modeset",
+                               "interface", "nvkms-api.h")) as f:
+            return nvkms_inventory.parse_enum(f.read())
+
+    def test_every_declared_command_is_read(self):
+        self.assertEqual([r["command"] for r in self.declared()],
+                         [n for n, _p, _m in NVKMS_FIXTURE_COMMANDS])
+
+    def test_the_ordinal_is_the_position_in_the_declaration(self):
+        self.assertEqual([r["ordinal"] for r in self.declared()],
+                         list(range(len(NVKMS_FIXTURE_COMMANDS))))
+
+    def test_a_comment_between_declarations_is_not_read_as_a_command(self):
+        # A commented-out command name inside the enum body reads as a
+        # declared value to a scrape that splits on commas without stripping
+        # comments, and shifts every ordinal after it by one.
+        self.rewrite_header(nvkms_header_text(comment=True))
+        self.assertEqual([r["command"] for r in self.declared()],
+                         [n for n, _p, _m in NVKMS_FIXTURE_COMMANDS])
+
+    def test_a_source_declaring_no_such_enum_is_rejected(self):
+        self.rewrite_header("#define NVKMS_API_H\n")
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        self.assertIn("NvKmsIoctlCommand", str(e.exception))
+
+
+class TestNvkmsDispatchScrape(NvkmsFixtureTree):
+    """parse_dispatch reads the table uses and not the macro definitions."""
+
+    def entries(self):
+        with open(os.path.join(self.root, "src", "nvidia-modeset", "src",
+                               "nvkms.c")) as f:
+            return nvkms_inventory.parse_dispatch(f.read())
+
+    def test_every_dispatched_command_is_read(self):
+        self.assertEqual([e["command"] for e in self.entries()],
+                         [n for n, p, _m in NVKMS_FIXTURE_COMMANDS if p])
+
+    def test_the_macro_definitions_are_not_counted_as_uses(self):
+        # `#define ENTRY_CUSTOM_USER(` and `#define ENTRY(` sit inside the
+        # initialiser. Counting them gives one use too many per macro, and a
+        # 59/5 split then reads as 58/6.
+        entries = self.entries()
+        self.assertEqual(len(entries), self.DISPATCHED)
+        self.assertNotIn("_cmd", [e["command"] for e in entries])
+
+    def test_the_two_macros_are_told_apart(self):
+        by_macro = {}
+        for entry in self.entries():
+            by_macro.setdefault(entry["macro"], []).append(entry["command"])
+        self.assertEqual(sorted(by_macro), ["ENTRY", "ENTRY_CUSTOM_USER"])
+        self.assertEqual(by_macro["ENTRY_CUSTOM_USER"],
+                         ["NVKMS_IOCTL_SET_MODE", "NVKMS_IOCTL_FLIP"])
+
+    def test_the_proc_symbol_is_read_from_the_second_macro_argument(self):
+        self.assertEqual(self.entries()[0]["proc"], "AllocDevice")
+
+    def test_an_entry_records_the_line_it_was_read_from(self):
+        line = self.entries()[0]["line"]
+        text = nvkms_source_text().splitlines()
+        self.assertIn("NVKMS_IOCTL_ALLOC_DEVICE", text[line - 1])
+
+    def test_a_use_wrapped_across_two_lines_is_read(self):
+        # Six of the 64 uses in the real table wrap after the command
+        # argument, because the command name and the proc symbol together run
+        # past the column limit. A per-line match reads 58 of 64 and the
+        # cross-check then rejects a table that is intact.
+        self.rewrite_source(nvkms_source_text().replace(
+            "ENTRY(NVKMS_IOCTL_QUERY_DISP, QueryDisp),",
+            "ENTRY(NVKMS_IOCTL_QUERY_DISP,\n              QueryDisp),"))
+        entries = {e["command"]: e["proc"] for e in self.entries()}
+        self.assertEqual(len(entries), self.DISPATCHED)
+        self.assertEqual(entries["NVKMS_IOCTL_QUERY_DISP"], "QueryDisp")
+
+    def test_a_wrapped_use_records_the_line_it_opens_on(self):
+        self.rewrite_source(nvkms_source_text().replace(
+            "ENTRY(NVKMS_IOCTL_QUERY_DISP, QueryDisp),",
+            "ENTRY(NVKMS_IOCTL_QUERY_DISP,\n              QueryDisp),"))
+        entry, = [e for e in self.entries()
+                  if e["command"] == "NVKMS_IOCTL_QUERY_DISP"]
+        with open(os.path.join(self.root, "src", "nvidia-modeset", "src",
+                               "nvkms.c")) as f:
+            lines = f.read().splitlines()
+        self.assertIn("NVKMS_IOCTL_QUERY_DISP", lines[entry["line"] - 1])
+
+    def test_a_source_carrying_no_dispatch_table_is_rejected(self):
+        self.rewrite_source("int nvKmsIoctl(void) { return 0; }\n")
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        self.assertIn("dispatch", str(e.exception))
+
+    def test_a_table_that_never_closes_is_rejected(self):
+        self.rewrite_source(NVKMS_C_HEAD + "        ENTRY(A, B),\n")
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        self.assertIn("dispatch", str(e.exception))
+
+
+class TestNvkmsCrossCheck(NvkmsFixtureTree):
+    """The enum and the table are read as two sources and reconciled."""
+
+    def test_the_fixture_tree_passes_its_own_counts(self):
+        summary = self.collect()["summary"]
+        self.assertEqual(summary["declared"], self.DECLARED)
+        self.assertEqual(summary["dispatched"], self.DISPATCHED)
+
+    def test_dropping_one_entry_fails_the_count_check(self):
+        # The scratch copy the plan asks for: the header still declares the
+        # command, the table no longer dispatches it.
+        self.rewrite_source(
+            nvkms_source_text(drop=("NVKMS_IOCTL_QUERY_DISP",)))
+        with self.assertRaises(nvkms_inventory.SourceError):
+            self.collect()
+
+    def test_the_count_failure_names_the_expected_and_the_found(self):
+        self.rewrite_source(
+            nvkms_source_text(drop=("NVKMS_IOCTL_QUERY_DISP",)))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        message = str(e.exception)
+        self.assertIn(str(self.DISPATCHED), message)
+        self.assertIn(str(self.DISPATCHED - 1), message)
+        self.assertIn("NVKMS_IOCTL_QUERY_DISP", message)
+
+    def test_a_declared_command_with_no_entry_is_recorded_undispatched(self):
+        record = self.collect()["commands"][4]
+        self.assertEqual(record["command"],
+                         "NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES")
+        self.assertFalse(record["dispatched"])
+        self.assertIsNone(record["proc"])
+
+    def test_the_undispatched_record_names_the_reason(self):
+        record = self.collect()["commands"][4]
+        self.assertEqual(record["undispatched_reason"],
+                         "no handler in the dispatch table")
+
+    def test_a_dispatched_record_carries_no_reason(self):
+        self.assertIsNone(self.collect()["commands"][0]["undispatched_reason"])
+
+    def test_an_entry_for_an_undeclared_command_is_rejected(self):
+        self.rewrite_source(nvkms_source_text(
+            extra=("ENTRY(NVKMS_IOCTL_NO_SUCH_COMMAND, NoSuch),",)))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect(dispatched=self.DISPATCHED + 1)
+        self.assertIn("NVKMS_IOCTL_NO_SUCH_COMMAND", str(e.exception))
+
+    def test_a_command_dispatched_twice_is_rejected(self):
+        self.rewrite_source(nvkms_source_text(
+            extra=("ENTRY(NVKMS_IOCTL_FREE_DEVICE, FreeDeviceAgain),",)))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect(dispatched=self.DISPATCHED + 1)
+        self.assertIn("NVKMS_IOCTL_FREE_DEVICE", str(e.exception))
+
+    def test_the_macro_split_must_reconcile_against_the_dispatched_total(self):
+        summary = self.collect()["summary"]
+        self.assertEqual(summary["entries_plain"] +
+                         summary["entries_custom_user"],
+                         summary["dispatched"])
+
+    def test_the_array_length_covers_every_declared_ordinal(self):
+        # ARRAY_LEN(dispatch) is the designated-initialiser array's length,
+        # which is the highest dispatched ordinal plus one. A command declared
+        # past that bound is rejected by nvKmsIoctl before the proc lookup.
+        self.assertEqual(self.collect()["scan"]["array_len"], self.DECLARED)
+
+    def test_a_command_declared_past_the_array_bound_is_rejected(self):
+        commands = NVKMS_FIXTURE_COMMANDS + (
+            ("NVKMS_IOCTL_PAST_THE_END", None, None),)
+        self.rewrite_header(nvkms_header_text(commands))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect(declared=self.DECLARED + 1)
+        self.assertIn("NVKMS_IOCTL_PAST_THE_END", str(e.exception))
+
+    def test_a_source_missing_the_array_bound_check_is_rejected(self):
+        self.rewrite_source(
+            nvkms_source_text().replace("cmd >= ARRAY_LEN(dispatch)",
+                                        "cmd > 0xffff"))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        self.assertIn("ARRAY_LEN", str(e.exception))
+
+
+class TestNvkmsRecordFields(NvkmsFixtureTree):
+    """Each record carries what the emitter slice needs without re-deriving."""
+
+    def record(self, name):
+        for r in self.collect()["commands"]:
+            if r["command"] == name:
+                return r
+        raise AssertionError("no record for %s" % name)
+
+    def test_a_dispatched_record_carries_the_param_size_expression(self):
+        self.assertEqual(self.record("NVKMS_IOCTL_ALLOC_DEVICE")["param_size"],
+                         "sizeof(struct NvKmsAllocDeviceParams)")
+
+    def test_a_dispatched_record_names_the_param_struct(self):
+        self.assertEqual(
+            self.record("NVKMS_IOCTL_ALLOC_DEVICE")["param_struct"],
+            "NvKmsAllocDeviceParams")
+
+    def test_a_dispatched_record_names_the_request_and_reply_structs(self):
+        record = self.record("NVKMS_IOCTL_ALLOC_DEVICE")
+        self.assertEqual(record["request_struct"], "NvKmsAllocDeviceRequest")
+        self.assertEqual(record["reply_struct"], "NvKmsAllocDeviceReply")
+
+    def test_a_custom_user_record_names_the_extra_user_state_struct(self):
+        record = self.record("NVKMS_IOCTL_FLIP")
+        self.assertTrue(record["custom_user"])
+        self.assertEqual(record["extra_user_state_struct"],
+                         "NvKmsFlipExtraUserState")
+
+    def test_a_plain_record_carries_no_extra_user_state_struct(self):
+        record = self.record("NVKMS_IOCTL_ALLOC_DEVICE")
+        self.assertFalse(record["custom_user"])
+        self.assertIsNone(record["extra_user_state_struct"])
+
+    def test_an_undispatched_record_carries_no_struct_names(self):
+        record = self.record("NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES")
+        for field in ("param_struct", "param_size", "request_struct",
+                      "reply_struct", "extra_user_state_struct"):
+            self.assertIsNone(record[field], field)
+
+    def test_the_summary_names_the_undispatched_commands_and_ordinals(self):
+        # Requirement 5: a reader confirms the count against the enum from
+        # the artefact alone, without re-running the scrape.
+        self.assertEqual(
+            self.collect()["summary"]["undispatched_commands"],
+            [{"command": "NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES",
+              "ordinal": 4}])
+
+    def test_the_written_artefact_reloads_as_the_collected_inventory(self):
+        out = os.path.join(self.root, "nvkms-command-inventory.json")
+        inventory = self.collect()
+        nvkms_inventory.write_json(inventory, out)
+        with open(out) as f:
+            self.assertEqual(json.load(f), inventory)
+
+
+class TestNvkmsCommittedInventory(unittest.TestCase):
+    """The committed artefact carries the count this phase claims.
+
+    The driver checkout under artifacts/ is not committed, so the scrape
+    cannot run here. The artefact it wrote is committed, and these read it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "nvkms-command-inventory.json")
+        with open(path) as f:
+            cls.inventory = json.load(f)
+
+    def test_the_schema_follows_the_control_inventory_shape_family(self):
+        self.assertEqual(self.inventory["schema"],
+                         "gspwn.nvkms-command-inventory/1")
+        for key in ("schema", "source", "scan", "summary", "commands"):
+            self.assertIn(key, self.inventory)
+
+    def test_64_commands_are_dispatched_of_66_declared(self):
+        summary = self.inventory["summary"]
+        self.assertEqual(summary["declared"],
+                         nvkms_inventory.EXPECTED_DECLARED)
+        self.assertEqual(summary["dispatched"],
+                         nvkms_inventory.EXPECTED_DISPATCHED)
+        self.assertEqual((summary["declared"], summary["dispatched"]),
+                         (66, 64))
+
+    def test_the_macro_split_reconciles_against_the_dispatched_total(self):
+        # 59 plain and 5 custom-user. A scrape that counts the two `#define`
+        # lines as uses reads 58 and 6, which sums to 64 and passes the total
+        # check on its own. The split catches it.
+        summary = self.inventory["summary"]
+        self.assertEqual(summary["entries_plain"], 59)
+        self.assertEqual(summary["entries_custom_user"], 5)
+        self.assertEqual(summary["entries_plain"] +
+                         summary["entries_custom_user"], 64)
+
+    def test_both_undispatched_commands_are_named(self):
+        self.assertEqual(
+            [c["command"]
+             for c in self.inventory["summary"]["undispatched_commands"]],
+            ["NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES",
+             "NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS"])
+
+    def test_the_named_undispatched_ordinals_match_their_records(self):
+        records = {r["command"]: r for r in self.inventory["commands"]}
+        for named in self.inventory["summary"]["undispatched_commands"]:
+            record = records[named["command"]]
+            self.assertEqual(record["ordinal"], named["ordinal"])
+            self.assertFalse(record["dispatched"])
+
+    def test_every_record_sits_at_its_own_ordinal(self):
+        self.assertEqual([r["ordinal"] for r in self.inventory["commands"]],
+                         list(range(66)))
+
+    def test_the_array_bound_covers_every_declared_ordinal(self):
+        self.assertEqual(self.inventory["scan"]["array_len"], 66)
+
+    def test_every_dispatched_record_carries_its_struct_names(self):
+        for record in self.inventory["commands"]:
+            if not record["dispatched"]:
+                continue
+            proc = record["proc"]
+            self.assertEqual(record["param_struct"], "NvKms%sParams" % proc)
+            self.assertEqual(record["request_struct"], "NvKms%sRequest" % proc)
+            self.assertEqual(record["reply_struct"], "NvKms%sReply" % proc)
+
+    def test_the_five_custom_user_commands_are_the_ones_named(self):
+        self.assertEqual(
+            [r["command"] for r in self.inventory["commands"]
+             if r["custom_user"]],
+            ["NVKMS_IOCTL_VALIDATE_MODE_INDEX", "NVKMS_IOCTL_VALIDATE_MODE",
+             "NVKMS_IOCTL_SET_MODE", "NVKMS_IOCTL_SET_LUT",
+             "NVKMS_IOCTL_FLIP"])
+
+    def test_the_artefact_records_no_absolute_source_path(self):
+        # An artefact that recorded the author's home directory differs
+        # between two checkouts of the same tree.
+        self.assertEqual(self.inventory["source"]["src_root"],
+                         "artifacts/src/open-gpu-kernel-modules")
+class DenominatorFixture(StateTempMixin):
+    """State files in the shape one written before denominator_version existed.
+
+    The machine-local state/pipeline.json this branch was developed against is
+    schema version 1 with no `rounds` key at all, so normalize() synthesises
+    round 1 for it. Both shapes appear below: the synthesised round, and a
+    round list whose records carry every completion count and no version
+    field.
+    """
+
+    PRE_FIELD_ROUND = {"round": 1, "status": "complete",
+                       "coverage_verdict": "plateaued", "new_crashes": 2,
+                       "run_hours": 10.0, "decision": "continue",
+                       "decision_reason": "targets remain",
+                       "run_ids": ["r1-k1"],
+                       "surface_verdict": "incomplete",
+                       "surface_exercised": 700, "surface_accounted": 20,
+                       "surface_closed": 715, "surface_total": 764,
+                       "surface_ledger": "state/completion-ledger.json"}
+
+    def write_v1_state(self, rounds=None):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        raw = {"version": 1,
+               "phases": {p: {"status": "pending", "updated": None,
+                              "notes": ""} for p in ps.PHASES},
+               "crashes": {}, "campaigns": [],
+               "manifest": "artifacts/builds/manifest.json"}
+        if rounds is not None:
+            raw["rounds"] = rounds
+        with open(self.state_path, "w") as f:
+            json.dump(raw, f)
+        # These rounds carry billed hours, and spent_hours() refuses to read a
+        # budget from a state file whose ledger is absent. The operator seeds
+        # it after that refusal.
+        ps.seed_spend_ledger()
+        return raw
+
+
+class TestTheDenominatorVersionVocabulary(unittest.TestCase):
+    """A round's completion counts were taken against the target total the
+    inventories enumerated when it closed. The label names that total so a
+    later, larger surface never restates a measurement nobody made."""
+
+    def test_a_label_carries_the_total_it_names(self):
+        self.assertEqual(ps.denominator_total("v1-764"), 764)
+        self.assertEqual(ps.denominator_total("v2-828"), 828)
+
+    def test_a_total_maps_to_the_label_for_it(self):
+        self.assertEqual(ps.denominator_version_for_total(764), "v1-764")
+        self.assertEqual(ps.denominator_version_for_total(828), "v2-828")
+
+    def test_a_total_with_no_table_entry_still_records_the_total(self):
+        """A denominator that moves before the table does still lands a label
+        a reader can take the total back out of."""
+        label = ps.denominator_version_for_total(900)
+        self.assertEqual(ps.denominator_total(label), 900)
+
+    def test_a_total_that_is_not_a_count_is_refused(self):
+        for bad in (0, -1, None, "764", 764.0):
+            with self.assertRaises(ValueError):
+                ps.denominator_version_for_total(bad)
+
+    def test_an_unreadable_label_is_refused_by_name(self):
+        with self.assertRaises(ValueError) as cm:
+            ps.denominator_total("latest")
+        self.assertIn("latest", str(cm.exception))
+
+    def test_the_default_is_the_first_denominator(self):
+        self.assertEqual(ps.DEFAULT_DENOMINATOR_VERSION, "v1-764")
+        self.assertEqual(ps.denominator_total(ps.DEFAULT_DENOMINATOR_VERSION),
+                         764)
+
+
+class TestARoundRecordPredatingTheField(DenominatorFixture,
+                                        unittest.TestCase):
+    """The read-default path. Absence dates a record to the five-family
+    surface, which is never an error and never read forward."""
+
+    def test_a_state_file_with_no_rounds_key_reads_as_the_first_denominator(
+            self):
+        self.write_v1_state()
+        r = ps.load()["rounds"][0]
+        self.assertEqual(r["denominator_version"], "v1-764")
+
+    def test_a_round_carrying_no_field_reads_as_the_first_denominator(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        r = ps.load()["rounds"][0]
+        self.assertNotIn("denominator_version", self.PRE_FIELD_ROUND)
+        self.assertEqual(ps.round_denominator_version(r), "v1-764")
+
+    def test_the_absence_is_never_read_forward_to_a_later_denominator(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        r = ps.load()["rounds"][0]
+        self.assertNotEqual(ps.round_denominator_version(r), "v2-828")
+        self.assertEqual(ps.denominator_total(
+            ps.round_denominator_version(r)), 764)
+
+    def test_a_recorded_field_survives_the_round_trip(self):
+        st = ps.default_state()
+        ps.current_round(st)["denominator_version"] = "v2-828"
+        ps.save(st)
+        self.assertEqual(ps.load()["rounds"][0]["denominator_version"],
+                         "v2-828")
+
+    def test_validate_names_a_round_carrying_an_unreadable_label(self):
+        st = ps.default_state()
+        ps.current_round(st)["denominator_version"] = "latest"
+        problems = ps.validate(st)
+        self.assertTrue(any("latest" in p for p in problems), problems)
+
+    def test_a_rollup_over_one_denominator_names_one(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertEqual(ps.denominator_rollup(ps.load()),
+                         [("v1-764", [1])])
+
+    def test_a_rollup_spanning_the_move_states_each_denominator_apart(self):
+        """The boundary case. Two rounds counted against two totals are two
+        series, and one figure over both would report a surface nobody
+        measured."""
+        second = dict(self.PRE_FIELD_ROUND, round=2, decision=None,
+                      denominator_version="v2-828", surface_total=828,
+                      surface_exercised=760, surface_closed=780)
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND), second])
+        self.assertEqual(ps.denominator_rollup(ps.load()),
+                         [("v1-764", [1]), ("v2-828", [2])])
+
+    def test_a_round_with_no_completion_reading_is_left_out_of_the_rollup(
+            self):
+        """A round that never measured the surface has no counts to attribute
+        to a denominator."""
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND, surface_total=None,
+                                  surface_exercised=None,
+                                  surface_verdict="unknown")])
+        self.assertEqual(ps.denominator_rollup(ps.load()), [])
+
+    def test_the_round_a_run_belongs_to_is_found_by_its_id(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        st = ps.load()
+        self.assertEqual(ps.round_of_run(st, "r1-k1")["round"], 1)
+        self.assertIsNone(ps.round_of_run(st, "never-registered"))
+
+
+class TestRoundShowReadsTheRecordedDenominator(DenominatorFixture,
+                                               unittest.TestCase):
+    """round-show reports each round against the denominator that round was
+    measured on. This is the regression case for the rounds already on a
+    machine when the surface grows."""
+
+    class Args:
+        def __init__(self, **kw):
+            self.json = kw.get("json", False)
+
+    def show(self, **kw):
+        import pipeline_ctl
+        with redirect_stdout(io.StringIO()) as out:
+            pipeline_ctl.cmd_round_show(self.Args(**kw))
+        return out.getvalue()
+
+    def test_a_round_predating_the_field_keeps_its_own_counts(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        out = self.show()
+        self.assertIn("700 exercised + 20 accounted of 764", out)
+        self.assertIn("v1-764", out)
+        self.assertNotIn("828", out)
+
+    def test_the_live_inventory_is_not_read_when_a_round_is_shown(self):
+        """An old round's counts stand as measured. Recounting the
+        inventories here would restate them against a denominator that round
+        never saw."""
+        self.addCleanup(setattr, surface_cov, "load_targets",
+                        surface_cov.load_targets)
+
+        def refuse():
+            raise AssertionError("round-show recounted an old round against "
+                                 "the current inventory")
+        surface_cov.load_targets = refuse
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertIn("of 764", self.show())
+
+    def test_a_history_spanning_the_move_states_both_denominators(self):
+        second = dict(self.PRE_FIELD_ROUND, round=2, decision=None,
+                      denominator_version="v2-828", surface_total=828,
+                      surface_exercised=760, surface_accounted=20,
+                      surface_closed=780)
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND), second])
+        out = self.show()
+        self.assertIn("700 exercised + 20 accounted of 764", out)
+        self.assertIn("760 exercised + 20 accounted of 828", out)
+        self.assertIn("v1-764", out)
+        self.assertIn("v2-828", out)
+        # 1592 is 764 + 828, and 1460 is 700 + 760. Either one in the output
+        # would be two scales summed into a number neither round measured.
+        self.assertNotIn("1592", out)
+        self.assertNotIn("1460", out)
+
+    def test_the_json_form_carries_the_field(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        rounds = json.loads(self.show(json=True))
+        self.assertEqual(rounds[0]["denominator_version"], "v1-764")
+
+    def test_the_brief_names_the_denominator_the_round_measured(self):
+        """A session recovering from a panic reads the brief. An unlabelled
+        surface line there invites the current inventory to be read into a
+        round that counted against another one."""
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        import pipeline_ctl
+        with redirect_stdout(io.StringIO()) as out:
+            pipeline_ctl.cmd_brief(types.SimpleNamespace(last=None))
+        text = out.getvalue()
+        self.assertIn("700 of 764 exercised", text)
+        self.assertIn("denominator v1-764", text)
+
+
+class TestRoundEndWritesTheDenominatorVersion(DenominatorFixture,
+                                              unittest.TestCase):
+    """The write path. From this point on round-end records the denominator
+    the round's completion counts were taken against, on every close."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_runs = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR",
+                                        self._orig_runs))
+        ps.save(ps.default_state())
+        d = os.path.join(coverage_ctl.RUNS_DIR, "r1")
+        os.makedirs(d, exist_ok=True)
+        base = 1_700_000_000
+        with open(os.path.join(d, "coverage.csv"), "w") as f:
+            f.write(",".join(coverage_ctl.FIELDS) + "\n")
+            for i in range(11):
+                f.write(csv_line(base + i * 3600, 1000 + i * 300,
+                                 source="json:/stats") + "\n")
+
+    class Args:
+        def __init__(self, **kw):
+            for k in ("from_run", "coverage_verdict", "new_crashes",
+                      "edges_start", "edges_end", "run_hours", "notes",
+                      "worklist", "ledger", "force"):
+                setattr(self, k, kw.get(k))
+
+    def stub_completion(self, **reading):
+        self.addCleanup(setattr, coverage_ctl, "completion_status",
+                        coverage_ctl.completion_status)
+        record = {"verdict": "incomplete", "exercised": 700, "accounted": 20,
+                  "deferred": 0, "closed": 715, "total": 764,
+                  "detail": "stubbed"}
+        record.update(reading)
+        coverage_ctl.completion_status = lambda **kw: record
+
+    def end_round(self):
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(self.Args(from_run=["r1"]))
+        return ps.load()["rounds"][-1]
+
+    def test_the_round_records_the_denominator_the_reading_counted(self):
+        self.stub_completion(total=764, denominator_version="v1-764")
+        self.assertEqual(self.end_round()["denominator_version"], "v1-764")
+
+    def test_a_moved_denominator_lands_as_the_later_version(self):
+        """The forward case. Nothing here introduces the larger surface, and
+        this confirms the record follows it when a later change does."""
+        self.stub_completion(total=828, denominator_version="v2-828",
+                             closed=780)
+        r = self.end_round()
+        self.assertEqual(r["denominator_version"], "v2-828")
+        self.assertEqual(r["surface_total"], 828)
+
+    def test_an_unmeasurable_reading_leaves_the_first_denominator_on_record(
+            self):
+        """The counts are None when the reading fails, so the label describes
+        nothing and the default is the honest one."""
+        self.stub_completion(verdict="unknown", exercised=None,
+                             accounted=None, closed=None, total=None,
+                             denominator_version=None)
+        r = self.end_round()
+        self.assertEqual(r["denominator_version"], "v1-764")
+        self.assertIsNone(r["surface_total"])
+
+    def test_a_reading_that_names_no_denominator_at_all_is_tolerated(self):
+        """completion_status grew the key in the same change. A caller
+        holding an older reading must not crash round-end."""
+        self.stub_completion()
+        self.end_round()
+
+    def test_the_label_and_the_recorded_total_agree(self):
+        self.stub_completion(total=828, denominator_version="v2-828",
+                             closed=780)
+        r = self.end_round()
+        self.assertEqual(ps.denominator_total(r["denominator_version"]),
+                         r["surface_total"])
+
+
+class TestCompletionReadsTheDenominatorPerRun(DenominatorFixture,
+                                              unittest.TestCase):
+    """coverage_ctl completion states the denominator it counted against, and
+    names any run whose round was measured on another one."""
+
+    class Args:
+        def __init__(self, **kw):
+            self.run_id = kw.get("run_id")
+            self.corpus = kw.get("corpus")
+            self.ledger = kw.get("ledger")
+            self.top = kw.get("top", 0)
+
+    def stub_status(self, **reading):
+        self.addCleanup(setattr, coverage_ctl, "completion_status",
+                        coverage_ctl.completion_status)
+        record = {"verdict": "incomplete", "exercised": 700, "accounted": 20,
+                  "deferred": 0, "closed": 715, "total": 764, "remaining": [],
+                  "detail": "715 of 764 target(s) closed",
+                  "driver_version": "610.57.04", "ledger": "l.json",
+                  "corpora": [], "denominator_version": "v1-764"}
+        record.update(reading)
+        coverage_ctl.completion_status = lambda **kw: record
+
+    def run_completion(self, **kw):
+        with redirect_stdout(io.StringIO()) as out:
+            coverage_ctl.cmd_completion(self.Args(**kw))
+        return out.getvalue()
+
+    def test_the_reading_names_the_denominator_it_counted_against(self):
+        self.stub_status()
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertIn("v1-764", self.run_completion(run_id=["r1-k1"]))
+
+    def test_a_run_on_the_current_denominator_adds_no_boundary_note(self):
+        self.stub_status()
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertNotIn("not comparable",
+                         self.run_completion(run_id=["r1-k1"]))
+
+    def test_a_run_from_a_round_on_an_earlier_denominator_is_stated_apart(
+            self):
+        """The rollup rule. The run's round counted against 764 and this
+        reading counts against 828, so both totals are stated and neither is
+        folded into the other."""
+        self.stub_status(total=828, closed=780, denominator_version="v2-828")
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        out = self.run_completion(run_id=["r1-k1"])
+        self.assertIn("v2-828", out)
+        self.assertIn("v1-764", out)
+        self.assertIn("764 target(s)", out)
+        self.assertIn("round 1", out)
+
+    def test_an_unregistered_run_carries_no_round_to_read(self):
+        self.stub_status(total=828, closed=780, denominator_version="v2-828")
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        out = self.run_completion(run_id=["never-registered"])
+        self.assertNotIn("never-registered belongs to", out)
+
+    def test_an_unmeasured_reading_says_so_where_the_denominator_goes(self):
+        self.stub_status(verdict="unknown", exercised=None, accounted=None,
+                         closed=None, total=None, denominator_version=None,
+                         detail="completion not measured: boom")
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertIn("unmeasured", self.run_completion(run_id=["r1-k1"]))
+
+
+class TestCompletionStatusCarriesTheDenominator(unittest.TestCase):
+    """The reading computes its own label from the target total it counted,
+    so the label and the counts come from one measurement."""
+
+    def test_the_reading_over_the_committed_inventories_names_its_total(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "ioctl-inventory.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed inventory not present")
+        st = coverage_ctl.completion_status()
+        if st["total"] is None:
+            self.skipTest("the completion reading could not be measured here")
+        self.assertEqual(st["denominator_version"],
+                         ps.denominator_version_for_total(st["total"]))
 
 
 def pipeline_ctl_cmd_round_end(args):

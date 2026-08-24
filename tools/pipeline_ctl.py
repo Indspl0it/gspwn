@@ -237,13 +237,17 @@ def cmd_round_show(a):
               % (r["round"], r["status"], r["coverage_verdict"],
                  r["new_crashes"], r["run_hours"] or 0.0, edges))
         if r.get("surface_total"):
+            # Every figure on this line comes off the round's own record. The
+            # inventories are not recounted here: a round measured against a
+            # smaller surface keeps the numbers it measured.
             print("            surface:  %s (%s exercised + %s accounted of "
-                  "%s)%s" % (r.get("surface_verdict"),
-                             r.get("surface_exercised"),
-                             r.get("surface_accounted"), r.get("surface_total"),
-                             ", %s deferred and still open"
-                             % r["surface_deferred"]
-                             if r.get("surface_deferred") else ""))
+                  "%s on denominator %s)%s"
+                  % (r.get("surface_verdict"), r.get("surface_exercised"),
+                     r.get("surface_accounted"), r.get("surface_total"),
+                     ps.round_denominator_version(r),
+                     ", %s deferred and still open"
+                     % r["surface_deferred"]
+                     if r.get("surface_deferred") else ""))
         if r["decision"]:
             print("            decision: %s (%s)"
                   % (r["decision"], r["decision_reason"]))
@@ -255,6 +259,14 @@ def cmd_round_show(a):
             print("            produced:  %s" % r["worklist"])
         if r.get("surface_ledger"):
             print("            ledger:    %s" % r["surface_ledger"])
+    rollup = ps.denominator_rollup(st)
+    if len(rollup) > 1:
+        print("denominators: this history spans %d of them, and the rounds "
+              "under each are separate series:" % len(rollup))
+        for version, rounds in rollup:
+            print("  %-8s %d target(s), %s"
+                  % (version, ps.denominator_total(version),
+                     ", ".join("round %s" % n for n in rounds)))
     return 0
 
 
@@ -419,6 +431,13 @@ def cmd_round_end(a):
                     max(0, d["edges_end"] - d["edges_start"]) for d in measured)
         if vals["new_crashes"] is None:
             vals["new_crashes"] = _derived_new_crashes(st)
+        # The generation of the surface the reading above counted against,
+        # stamped on the round beside the counts it produced. A reading that
+        # measured nothing leaves the counts None, so the label describes
+        # nothing and the round keeps the default. Absent from a reading taken
+        # by a caller predating this field, which is the same case.
+        denominator_version = (completion.get("denominator_version")
+                               or ps.DEFAULT_DENOMINATOR_VERSION)
         surface = {"verdict": completion["verdict"],
                    "exercised": completion["exercised"],
                    "accounted": completion["accounted"],
@@ -436,7 +455,8 @@ def cmd_round_end(a):
                              edges_end=vals["edges_end"],
                              run_hours=vals["run_hours"], notes=vals["notes"],
                              worklist=vals["worklist"], billed=billed,
-                             surface=surface)
+                             surface=surface,
+                             denominator_version=denominator_version)
         except ValueError as e:
             sys.exit("error: %s" % e)
         # Bill every derived run to the machine-global spend ledger — the
@@ -1091,9 +1111,11 @@ def cmd_brief(a):
     if r.get("surface_total"):
         # The primary stop rests on this line, so a resumed agent has to see
         # it in the same place it sees the round and the budget.
-        print("command surface: %s, %s of %s exercised, %s accounted for%s"
+        print("command surface: %s, %s of %s exercised, %s accounted for, on "
+              "denominator %s%s"
               % (r.get("surface_verdict"), r.get("surface_exercised"),
                  r.get("surface_total"), r.get("surface_accounted"),
+                 ps.round_denominator_version(r),
                  ", %s deferred and still open" % r["surface_deferred"]
                  if r.get("surface_deferred") else ""))
     if r.get("worklist_in"):

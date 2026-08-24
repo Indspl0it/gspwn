@@ -266,6 +266,20 @@ CONSEQUENCE_NEEDS_CONTROL = ("privilege-escalation", "container-escape")
 PRIMITIVE_NEEDS_EVIDENCE = tuple(p for p in PRIMITIVE
                                  if p not in ("none", "undetermined"))
 
+# Denominator versions, in the order the surface grew. A round's completion
+# counts are taken against the target total the inventories enumerated when
+# that round closed, and adding a family moves the total. The label pairs a
+# sequence number with the total it names, so the total is recoverable from
+# the label alone and a round measured on one surface is never re-read
+# against another.
+DENOMINATOR_VERSIONS = (("v1-764", 764), ("v2-828", 828))
+# The version a round record carrying no denominator_version was measured on.
+# end_round writes the field from the release that introduced it onward, so an
+# absent field dates the record to the five-family surface. The absence is
+# never an error and never reads forward to a later version.
+DEFAULT_DENOMINATOR_VERSION = DENOMINATOR_VERSIONS[0][0]
+DENOMINATOR_VERSION_RE = re.compile(r"^v(\d+)-(\d+)$")
+
 DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  "ended": None, "run_ids": [], "coverage_verdict": "unknown",
                  "edges_start": None, "edges_end": None, "new_crashes": 0,
@@ -305,6 +319,13 @@ DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  # file does not grow with the denominator, and it is the only
                  # place a report can see that a round put work aside.
                  "surface_deferred": None,
+                 # The denominator generation the surface_* counts above were
+                 # measured against, written by end_round when the round
+                 # closes. normalize() fills the default in for a record
+                 # written before the field existed, and for a round
+                 # still in progress, whose surface_* counts are all None and
+                 # so describe no denominator yet. See DENOMINATOR_VERSIONS.
+                 "denominator_version": DEFAULT_DENOMINATOR_VERSION,
                  "notes": ""}
 
 
@@ -885,6 +906,81 @@ def surface_completion(exercised_keys, accounted, targets_total,
     return verdict, counts, closed
 
 
+def denominator_version_for_total(total):
+    """-> the version label naming a surface target total.
+
+    A total with no entry in DENOMINATOR_VERSIONS still gets a label, built
+    from the next sequence number, so a denominator that moves before the
+    table does records a total a reader can take back out of the label.
+    """
+    if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
+        raise ValueError("denominator total must be a positive count, got %r"
+                         % (total,))
+    for label, count in DENOMINATOR_VERSIONS:
+        if count == total:
+            return label
+    return "v%d-%d" % (len(DENOMINATOR_VERSIONS) + 1, total)
+
+
+def denominator_total(version):
+    """-> the surface target total a version label names."""
+    for label, count in DENOMINATOR_VERSIONS:
+        if label == version:
+            return count
+    m = DENOMINATOR_VERSION_RE.match(version or "")
+    if not m:
+        raise ValueError(
+            "unknown denominator version %r (expected one of %s, or a "
+            "v<n>-<total> label)"
+            % (version, ", ".join(l for l, _ in DENOMINATOR_VERSIONS)))
+    return int(m.group(2))
+
+
+def round_denominator_version(r):
+    """-> the version label a round record was measured on.
+
+    Absence is a record predating the field, which dates it to
+    DEFAULT_DENOMINATOR_VERSION. It is never read forward to a later version:
+    the round's counts were taken against the smaller surface, and restating
+    them against a larger one would report a measurement nobody made.
+    """
+    return (r or {}).get("denominator_version") or DEFAULT_DENOMINATOR_VERSION
+
+
+def round_of_run(state, run_id):
+    """-> the round record that registered run_id, or None."""
+    for r in (state or {}).get("rounds") or []:
+        if run_id in (r.get("run_ids") or []):
+            return r
+    return None
+
+
+def denominator_rollup(state, current=None):
+    """-> [(version, [round numbers])] over the rounds that recorded a
+    completion reading, in first-seen order.
+
+    `current` is a reading taken now, and it joins the result under its own
+    version when no recorded round carries that one, with an empty round list.
+
+    A history spanning a denominator move holds two series and not one. Counts
+    taken against different totals are stated under the version each was taken
+    on, because one figure over both would report a surface nobody measured.
+    """
+    order, by_version = [], {}
+    for r in (state or {}).get("rounds") or []:
+        if not r.get("surface_total"):
+            continue
+        v = round_denominator_version(r)
+        if v not in by_version:
+            order.append(v)
+            by_version[v] = []
+        by_version[v].append(r.get("round"))
+    if current and current not in by_version:
+        order.append(current)
+        by_version[current] = []
+    return [(v, by_version[v]) for v in order]
+
+
 def update_phase(state, phase, status, notes=""):
     if phase not in PHASES:
         raise ValueError("unknown phase: %s (expected one of %s)"
@@ -958,7 +1054,7 @@ def next_action(state):
 
 def end_round(state, verdict=None, new_crashes=None, edges_start=None,
               edges_end=None, run_hours=None, notes=None, worklist=None,
-              billed=None, surface=None):
+              billed=None, surface=None, denominator_version=None):
     """Record the measured outcome of the current round.
 
     run_hours ACCUMULATES: a round routinely spans several campaigns, and
@@ -973,8 +1069,18 @@ def end_round(state, verdict=None, new_crashes=None, edges_start=None,
     "ledger"}. It decides the
     primary stop, so an unmeasurable one must arrive as verdict "unknown" and
     never be omitted into a stale "complete" from the previous call.
+
+    `denominator_version` is the surface generation that reading counted
+    against, and it is stamped on the round beside the counts themselves.
+    Omitting it leaves the round on whatever version it already carried, which
+    for a round closing for the first time is DEFAULT_DENOMINATOR_VERSION.
     """
     r = current_round(state)
+    if denominator_version is not None:
+        # Rejects a label no reader could take a total out of, at the moment
+        # it would go on record.
+        denominator_total(denominator_version)
+        r["denominator_version"] = denominator_version
     if verdict is not None:
         if verdict not in COVERAGE_VERDICT:
             raise ValueError("unknown coverage verdict: %s (expected one of "
@@ -1682,6 +1788,13 @@ def validate(state, triage_settings=None):
         if r.get("decision") is not None and r["decision"] not in ROUND_DECISION:
             problems.append("round %d has invalid decision %r"
                             % (i, r.get("decision")))
+        try:
+            denominator_total(round_denominator_version(r))
+        except ValueError as e:
+            # A hand-edited label. The round's counts would then name a
+            # surface size nothing can recover, and the history stops being
+            # comparable across a denominator move.
+            problems.append("round %d: %s" % (i, e))
     # Every round but the last must be closed out, or the history is unusable
     # for the eval write-up.
     for r in state.get("rounds", [])[:-1]:
