@@ -1426,6 +1426,49 @@ OUTSIDE_TENANT_SURFACE = (
 # /dev/nvidia-modeset is inside the tenant surface and its commands are
 # modelled, while the mmap and poll this table registers are not, so it is
 # recorded here as unmodelled and its `reason` says which half is which.
+# /dev/dri reaches a default tenant on the CDI injection path, and the
+# campaign does not model its command surface. Both halves are stated here
+# because the pair is the finding: reachable surface that no description
+# covers is surface every coverage figure is measured against wrongly.
+#
+# The CDI path adds every DRM node found for a GPU's PCI bus id to that
+# device's spec, with no capability argument anywhere on the call chain:
+# nvidia-container-toolkit/internal/platform-support/dgpu/nvml.go:48 calls
+# drm.GetDeviceNodesByBusID, :53 appends the result beside the nvidia node
+# and :55 makes char device discoverers of all of them. The only capability
+# check for DRM nodes, internal/modifier/graphics.go:71, sits behind the
+# "graphics" modifier, and internal/modifier/mode.go:26 omits that modifier
+# from both CDI modes, so internal/modifier/factory.go:117 is unreachable
+# there. internal/edits/device.go:76 grants the injected nodes rwm.
+#
+# The nodes exist whenever nvidia-drm registers a device, which it does for
+# every GPU nvidia-modeset enumerates
+# (kernel-open/nvidia-drm/nvidia-drm-drv.c:2176). The modeset module
+# parameter that upgrades the driver past PRIME-only defaults to true at
+# kernel-open/nvidia-drm/nvidia-drm-os-interface.c:45, and registration at
+# :2079 does not depend on it.
+#
+# 24 driver ioctls are declared in nv_drm_ioctls[] at
+# kernel-open/nvidia-drm/nvidia-drm-drv.c:1806. 21 carry DRM_RENDER_ALLOW
+# and are reachable on a render node by a client holding no master, 2 carry
+# DRM_MASTER, and NVIDIA_GET_CLIENT_CAPABILITY carries neither.
+#
+# Whether one host actually presents the nodes is a measurement, not a
+# reading: tools/verify_tenant_surface.py takes it, and agents/provision.md
+# runs it before a campaign spends anything.
+DRM_TENANT_SURFACE = (
+    "the CDI injection path adds every /dev/dri node found for the GPU's PCI "
+    "bus id to that device's spec with no capability check, at "
+    "nvidia-container-toolkit/internal/platform-support/dgpu/nvml.go:48-55, "
+    "and internal/edits/device.go:76 grants them rwm. The legacy path never "
+    "injects them: libnvidia-container carries no reference to /dev/dri. "
+    "nvidia-drm registers a device for every GPU nvidia-modeset enumerates "
+    "(kernel-open/nvidia-drm/nvidia-drm-drv.c:2176). The campaign does not "
+    "model the 24 driver ioctls at nvidia-drm-drv.c:1806, of which 21 carry "
+    "DRM_RENDER_ALLOW, so this is reachable surface outside the denominator"
+)
+
+
 FOPS_TABLES = (
     {
         "fops": "nvidia_fops",
@@ -1557,10 +1600,11 @@ FOPS_TABLES = (
         "module": "nvidia-drm",
         "paths": ["/dev/dri/cardN", "/dev/dri/renderDN"],
         "modelled": False,
-        "tenant_surface": False,
-        "reason": OUTSIDE_TENANT_SURFACE,
+        "tenant_surface": True,
+        "reason": DRM_TENANT_SURFACE,
     },
 )
+
 
 
 def _fops_initialiser(symbol):
