@@ -177,9 +177,8 @@ is now named there. The evidence for each is below.
 
 `NV04_DISPLAY_COMMON` (class 0x0073) carries `RS_FLAGS_ALLOC_NON_PRIVILEGED`
 and hangs off `NV01_DEVICE_0`, so it is allocated over `/dev/nvidiactl` with no
-display device node involved. The threat model excludes display by device node,
-naming `/dev/dri/*`, and that exclusion does not reach this class. The same
-holds under the privilege flag, which is the second gate.
+display device node involved. No device-node gate reaches this class. The
+privilege flag, which is the second gate, leaves it open as well.
 
 | `NV0073` commands | Count |
 |---|---|

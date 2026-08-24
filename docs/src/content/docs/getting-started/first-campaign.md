@@ -132,9 +132,10 @@ Authors syzlang descriptions for the ioctl surface of `/dev/nvidiactl`,
 `/dev/nvidiaX`, `/dev/nvidia-uvm[-tools]` and `/dev/nvidia-modeset`. Every
 number and struct layout comes from the driver source, because the ABI shifts
 between branches and a wrong direction bit produces descriptions that compile,
-run and never reach the driver. `nvidia-drm` and `/dev/dri/*` are out of scope:
-a default container tenant receives neither on the legacy injection path, and
-the CDI path for those nodes has not been traced.
+run and never reach the driver. `nvidia-drm` and `/dev/dri/*` sit inside the
+tenant surface on the CDI injection path, which a stock instance resolves to,
+and carry no descriptions in this branch. They are reachable surface outside
+the modelled denominator.
 
 Agent-authored descriptions are treated as untrusted until measured, so the
 gate needs four items:
