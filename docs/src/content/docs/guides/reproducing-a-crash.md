@@ -205,12 +205,23 @@ seccomp filter and a device cgroup allowlist. syzkaller therefore reaches paths
 the attacker cannot, and that gap produces over-claims.
 
 ```
-docker run --rm --gpus all \
+docker run --rm --runtime=nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
   --user 1000:1000 \
   -v $PWD/artifacts/pocs/crash-0001:/poc:ro \
   <cuda-runtime-image> /poc/repro
 ```
+
+`--runtime=nvidia` with `NVIDIA_VISIBLE_DEVICES` replaces `--gpus all` here.
+Docker Engine 29.1.x and older inject the `nvidia-container-runtime-hook`
+prestart hook for `--gpus`, and the hook pins its own default to legacy at
+`cmd/nvidia-container-runtime-hook/hook_config.go:120-123`. A legacy container
+receives neither the modeset node nor any DRM node, so a reproducer needing
+either fails there and is recorded `not-tenant-reachable`, understating the
+finding. Docker Engine 29.2.0 and later resolve `--gpus` through a CDI
+specification and reach the same device set, so the two forms are equivalent
+from that version onward.
 
 Record one of three outcomes in the PoC README:
 
@@ -223,11 +234,14 @@ Record one of three outcomes in the PoC README:
 Confirm what the container actually received before trusting the result:
 
 ```
-ls /dev/nvidia*
+ls /dev/nvidia* /dev/dri
 ```
 
-If `/dev/dri` is present, the capability set is wider than the model and the
-check does not establish tenant reachability.
+Compare that list against the model, which
+`python3 tools/verify_tenant_surface.py expected` prints. A node the model
+places outside the tenant surface makes the run wider than the model, and that
+run does not establish tenant reachability. A node the model places inside that
+is absent makes the run narrower, and a failure in it says nothing.
 
 ## Write the PoC README
 
