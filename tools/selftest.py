@@ -5491,12 +5491,19 @@ def _restore(old):
         setattr(regression_check, k, v)
 
 
-# A description set with one call in each of the three groups the pin check
+# A description set with one call in each of the four groups the pin check
 # reports, every selector pinned. The fixtures below edit one line of it.
+#
+# The modeset call names a real command, because the modeset ordinal lookup
+# reads the committed inventory and a made-up name would only ever report as
+# one the inventory does not carry. NVKMS_IOCTL_ALLOC_DEVICE sits at ordinal
+# 0, which is also the value a field that lost its pin would most plausibly
+# still render, so the wrong-value fixture below moves it off 0.
 PINNED_SET = """\
 ioctl$NV_ESC_RM_CONTROL_fooCtrlCmdBar(fd fd_nvidiactl, cmd const[0xc020462a], arg ptr[inout, nvos54_ctrl_fooCtrlCmdBar])
 ioctl$NV_ESC_RM_ALLOC_FOO_A(fd fd_nv, cmd const[0xc030462b], arg ptr[inout, nvos64_alloc_foo_a])
 ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])
+ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, cmd const[0xc0106d00], arg ptr[inout, nvkms_params_alloc_device])
 
 nvos54_ctrl_fooCtrlCmdBar {
 \thClient\tnvh_nv01_root
@@ -5513,6 +5520,11 @@ nvos64_alloc_foo_a {
 nv_xfer_rm_free {
 \tcmd\tconst[41, int32]
 \tsize\tconst[16, int32]
+} [packed]
+
+nvkms_params_alloc_device {
+\tcmd\tconst[0, int32]
+\tsize\tconst[1440, int32]
 } [packed]
 """
 
@@ -5771,7 +5783,7 @@ class TestDenominatorCoverage(Phase4Fixtures):
         code, out = _run_check("coverage")
         self.assertEqual(code, 0, out)
         self.assertIn("coverage: OK", out)
-        self.assertIn("764 targetable", out)
+        self.assertIn("828 targetable", out)
 
     def test_an_unmodified_copy_of_the_set_still_covers_every_target(self):
         old = _patched(DESC_DIR=self.desc_copy())
@@ -5786,7 +5798,7 @@ class TestDenominatorCoverage(Phase4Fixtures):
         code, out = self._without(victim)
         self.assertEqual(code, 1)
         self.assertIn(victim, out)
-        self.assertIn("763 modelled", out)
+        self.assertIn("827 modelled", out)
 
     def test_the_family_the_gap_falls_in_is_reported(self):
         victim = self._first_target_in("alloc")
@@ -7043,7 +7055,7 @@ class TestSurfaceTargetKeys(unittest.TestCase):
     def test_every_target_has_a_distinct_key(self):
         keys = [t["abi_key"] for t in self.targets.values()]
         self.assertEqual(len(keys), len(set(keys)))
-        self.assertEqual(len(keys), 764)
+        self.assertEqual(len(keys), 828)
 
     def test_the_composite_holds_531_distinct_control_targets(self):
         control = [t for t in self.targets.values()
@@ -9025,7 +9037,7 @@ static const RS_ENTRY g_resourceClassInfo[] =
 
     def test_every_reader_of_the_committed_artefact_still_loads_it(self):
         targets, _excluded, meta = surface_cov.load_targets()
-        self.assertEqual(len(targets), 764)
+        self.assertEqual(len(targets), 828)
         self.assertEqual(meta.get("driver_version"), "610.57.04")
 
 
@@ -10112,12 +10124,20 @@ class TestSinceLastResetIsAboutEdges(unittest.TestCase):
 class TestCompletionDenominatorFloor(unittest.TestCase):
     """I7. A truncated inventory is a smaller surface a corpus can close."""
 
-    FAMILIES = ("escape", "uvm", "uvm_tools", "control", "alloc")
+    # Read from the tool, so a family added to the denominator joins these
+    # fixtures instead of leaving them measuring a surface that no longer
+    # exists. PER_FAMILY targets each.
+    FAMILIES = tuple(surface_cov.FAMILIES)
+    PER_FAMILY = 3
+
+    @property
+    def total(self):
+        return len(self.FAMILIES) * self.PER_FAMILY
 
     def fake_measure(self, families):
         targets = {}
         for fam in families:
-            for i in range(3):
+            for i in range(self.PER_FAMILY):
                 v = "%s_%d" % (fam, i)
                 targets[v] = {"variant": v, "family": fam, "label": v,
                               "abi_key": "%s/%d" % (fam, i)}
@@ -10148,7 +10168,7 @@ class TestCompletionDenominatorFloor(unittest.TestCase):
         st = coverage_ctl.completion_status(
             ledger_path=os.path.join(tempfile.gettempdir(), "no-ledger.json"))
         self.assertEqual(st["verdict"], "complete")
-        self.assertEqual(st["total"], 15)
+        self.assertEqual(st["total"], self.total)
 
     def test_an_unmeasurable_union_does_not_raise_through_the_catch_all(self):
         # I8: `abi_key not in closed` against a closed of None raised
@@ -10159,13 +10179,13 @@ class TestCompletionDenominatorFloor(unittest.TestCase):
                         ps.surface_completion)
         ps.surface_completion = lambda *a, **kw: (
             "unknown", {"exercised": None, "accounted": 0, "deferred": 0,
-                        "closed": None, "total": 15}, None)
+                        "closed": None, "total": self.total}, None)
         st = coverage_ctl.completion_status(
             ledger_path=os.path.join(tempfile.gettempdir(), "no-ledger.json"))
         self.assertEqual(st["verdict"], "unknown")
         self.assertNotIn("TypeError", st["detail"])
         self.assertIn("could not be measured", st["detail"])
-        self.assertEqual(len(st["remaining"]), 15)
+        self.assertEqual(len(st["remaining"]), self.total)
 
 
 class TestCompletionStatusReadsDeferralsSeparately(unittest.TestCase):
@@ -10176,7 +10196,10 @@ class TestCompletionStatusReadsDeferralsSeparately(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.ledger = os.path.join(self.tmp.name, "ledger.json")
         targets = {}
-        for fam in ("escape", "uvm", "uvm_tools", "control", "alloc"):
+        # Every family the denominator carries, so a family added to it does
+        # not leave this fixture measuring a surface with a hole in it, which
+        # completion_status refuses before any deferral is read.
+        for fam in surface_cov.FAMILIES:
             for i in range(2):
                 v = "%s_%d" % (fam, i)
                 targets[v] = {"variant": v, "family": fam, "label": v,
@@ -10197,14 +10220,15 @@ class TestCompletionStatusReadsDeferralsSeparately(unittest.TestCase):
         if reason in ps.SURFACE_REASON_NEEDS_EVIDENCE:
             record["evidence"] = ["src/x.c:1"]
         ps.set_surface_account(record, path=self.ledger,
-                               driver_version="610.57.04", targets_total=10)
+                               driver_version="610.57.04",
+                               targets_total=len(self.targets))
 
     def test_deferring_the_last_two_targets_does_not_complete_the_ledger(self):
         self.account("control/0", "deliberately-deferred")
         self.account("control/1", "deliberately-deferred")
         st = coverage_ctl.completion_status(ledger_path=self.ledger)
         self.assertEqual(st["verdict"], "incomplete")
-        self.assertEqual(st["closed"], 8)
+        self.assertEqual(st["closed"], len(self.targets) - 2)
         self.assertEqual(st["accounted"], 0)
         self.assertEqual(st["deferred"], 2)
         self.assertIn("deliberately deferred", st["detail"])
@@ -12779,12 +12803,16 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
         "arg ptr[inout, nvos64_alloc_foo])\n"
         "ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, "
         "cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])\n"
+        "ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, "
+        "cmd const[0xc0106d00], arg ptr[inout, nvkms_params_foo])\n"
         "\n"
         "nvos54_ctrl_foo {\n\tcmd\tconst[0x00000102, int32]\n} [packed]\n"
         "\n"
         "nvos64_alloc_foo {\n\thClass\tconst[0xc997, int32]\n} [packed]\n"
         "\n"
-        "nv_xfer_rm_free {\n\tcmd\tconst[41, int32]\n} [packed]\n")
+        "nv_xfer_rm_free {\n\tcmd\tconst[41, int32]\n} [packed]\n"
+        "\n"
+        "nvkms_params_foo {\n\tcmd\tconst[0, int32]\n} [packed]\n")
 
     def pins(self, text):
         directory = tempfile.mkdtemp()
@@ -12834,10 +12862,18 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
         code, out = self.pins(self.PINNED)
         self.assertEqual(code, 0, out)
         line = next(l for l in out.splitlines() if "examined across" in l)
-        numbers = [int(n) for n in re.findall(r"\d+", line)]
-        examined, control, alloc, xfer, outside = (
-            numbers[0], numbers[2], numbers[3], numbers[4], numbers[5])
-        self.assertEqual(examined, control + alloc + xfer + outside)
+        # Read each count by the group's own name, so a family added to
+        # GROUPS does not silently shift a positional index onto another
+        # number and leave the identity reconciling against the wrong terms.
+        examined = int(re.search(r"^pins: (\d+) selector", line).group(1))
+        grouped = 0
+        for group, _prefix, _family in regression_check.GROUPS:
+            found = re.search(r"\b%s (\d+)" % re.escape(group), line)
+            self.assertIsNotNone(found, "%s absent from %r" % (group, line))
+            grouped += int(found.group(1))
+        outside = int(
+            re.search(r"outside every group (\d+)", line).group(1))
+        self.assertEqual(examined, grouped + outside)
 
 
 class TestPinsChecksTheValueAndNotOnlyTheForm(unittest.TestCase):
@@ -12852,17 +12888,27 @@ class TestPinsChecksTheValueAndNotOnlyTheForm(unittest.TestCase):
            "arg ptr[inout, nvos64_alloc_foo])\n"
            "ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, cmd "
            "const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])\n"
+           "ioctl$NVKMS_IOCTL_THING(fd fd_nvidia_modeset, cmd "
+           "const[0xc0106d00], arg ptr[inout, nvkms_params_thing])\n"
            "\n"
            "nvos54_ctrl_foo {\n\tcmd\tconst[%s, int32]\n} [packed]\n"
            "\n"
            "nvos64_alloc_foo {\n\thClass\tconst[0xc997, int32]\n} [packed]\n"
            "\n"
-           "nv_xfer_rm_free {\n\tcmd\tconst[41, int32]\n} [packed]\n")
+           "nv_xfer_rm_free {\n\tcmd\tconst[41, int32]\n} [packed]\n"
+           "\n"
+           "nvkms_params_thing {\n\tcmd\tconst[7, int32]\n} [packed]\n")
+
+    MODESET_VARIANT = "NVKMS_IOCTL_THING"
+    MODESET_ORDINAL = 7
 
     def fake_targets(self, method_id="0x00000102"):
         variant = surface_cov.CONTROL_PREFIX + self.HANDLER
         targets = {variant: {"variant": variant, "family": "control",
-                             "method_id": method_id}}
+                             "method_id": method_id},
+                   self.MODESET_VARIANT: {"variant": self.MODESET_VARIANT,
+                                          "family": "modeset",
+                                          "nr": self.MODESET_ORDINAL}}
         saved = surface_cov.load_targets
         surface_cov.load_targets = lambda: (
             targets, {}, {"driver_version": "610.57.04"})
@@ -12934,7 +12980,7 @@ class TestCoverageNoticesAShrinkingDenominator(unittest.TestCase):
     """regression_check M3 and I4: the check compared the description set
     against whatever load_targets returned, so a bump that dropped targets
     left both sides smaller and the run read clean. The function docstring
-    named 764 and no constant or assertion carried it."""
+    named a total and no constant or assertion carried it."""
 
     def coverage(self, targets):
         saved = surface_cov.load_targets
@@ -12971,7 +13017,7 @@ class TestCoverageNoticesAShrinkingDenominator(unittest.TestCase):
                          sorted(surface_cov.FAMILIES))
 
     def test_the_floor_sums_to_the_number_the_docstring_used_to_name(self):
-        self.assertEqual(sum(regression_check.TARGET_FLOOR.values()), 764)
+        self.assertEqual(sum(regression_check.TARGET_FLOOR.values()), 828)
 
     def test_the_function_docstring_no_longer_names_a_bare_count(self):
         self.assertNotIn("764", regression_check.check_coverage.__doc__)
@@ -14630,7 +14676,7 @@ class TestTheEntryPointCalls(unittest.TestCase):
 
     def test_no_entry_point_call_is_counted_as_an_ioctl_variant(self):
         # surface_cov joins on ioctl$ names. An mmap or poll line that matched
-        # would enter the 764 denominator, which the phase forbids.
+        # would enter the command denominator, which the phase forbids.
         names = surface_cov.scan_variants(
             [os.path.join(os.path.dirname(HERE), "descriptions",
                           "nvidia.txt")], "descriptions")
@@ -14638,9 +14684,10 @@ class TestTheEntryPointCalls(unittest.TestCase):
 
 
 class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
-    """Entry points are counted beside the 764 and never inside it. A mmap or
-    poll entry point has no method id, no parameter struct and no inventory
-    row, so a total mixing the two counts two kinds of thing."""
+    """Entry points are counted beside the command denominator and never
+    inside it. A mmap or poll entry point has no method id, no parameter
+    struct and no inventory row, so a total mixing the two counts two kinds
+    of thing."""
 
     def test_the_loader_reports_the_artefact_counts(self):
         modelled, registered, tables = surface_cov.load_entry_points()
@@ -14650,14 +14697,14 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
 
     def test_the_denominator_is_unchanged_by_the_counter(self):
         targets, _excluded, _meta = surface_cov.load_targets()
-        self.assertEqual(len(targets), 764)
+        self.assertEqual(len(targets), 828)
 
-    def test_the_five_families_still_carry_the_whole_denominator(self):
+    def test_the_six_families_still_carry_the_whole_denominator(self):
         targets, _excluded, _meta = surface_cov.load_targets()
         self.assertEqual(
             sum(1 for t in targets.values()
-                if t["family"] in surface_cov.FAMILIES), 764)
-        self.assertEqual(len(surface_cov.FAMILIES), 5)
+                if t["family"] in surface_cov.FAMILIES), 828)
+        self.assertEqual(len(surface_cov.FAMILIES), 6)
 
     def test_an_entry_point_inside_the_denominator_is_refused(self):
         with self.assertRaises(surface_cov.SurfaceError) as caught:
@@ -14684,7 +14731,7 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
             code = _surface_cov_modelled()
         self.assertEqual(code, 0)
         text = out.getvalue()
-        self.assertIn("764", text)
+        self.assertIn("828", text)
         self.assertIn("entry points", text)
         # The two totals sit on different lines, so neither reading can be
         # taken for the other.
@@ -14699,12 +14746,12 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
         self.assertIn("not part of the", out.getvalue())
 
     def test_the_sum_of_the_two_is_never_printed(self):
-        # 764 + 16 is 780 and names nothing. A reader who found it on this
+        # 828 + 16 is 844 and names nothing. A reader who found it on this
         # page would take it for a denominator.
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             _surface_cov_modelled()
-        self.assertNotIn("780", out.getvalue())
+        self.assertNotIn("844", out.getvalue())
 
 
 class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
@@ -14745,7 +14792,7 @@ class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             regression_check.check_coverage()
-        self.assertIn("764 targetable across 5 families", out.getvalue())
+        self.assertIn("828 targetable across 6 families", out.getvalue())
 
 
 def _surface_cov_modelled():
@@ -15887,6 +15934,1050 @@ class TestCompletionStatusCarriesTheDenominator(unittest.TestCase):
             self.skipTest("the completion reading could not be measured here")
         self.assertEqual(st["denominator_version"],
                          ps.denominator_version_for_total(st["total"]))
+
+
+# ---------------------------------------------------------------------------
+# /dev/nvidia-modeset: the one kernel request number its whole command set
+# multiplexes through, and the seed converter's tracking of the node.
+#
+# The number resolves the family and never the sub-command, which is F18. The
+# tests below pin the derivation against the header the kernel module compiles
+# with, and pin the map section it lands in to a key every name reader skips.
+# ---------------------------------------------------------------------------
+
+
+class ModesetHeaderFixture(unittest.TestCase):
+    """A scratch checkout carrying only the modeset interface header.
+
+    Both copies of nvkms-ioctl.h are written, because the derivation reads the
+    kernel-side copy and cross-checks the interface copy against it. A tree
+    where the two disagree is a tree where the request number the kernel
+    enforces and the one the interface publishes are different numbers.
+    """
+
+    HEADER = (
+        "#ifndef NVKMS_IOCTL_H\n"
+        "#define NVKMS_IOCTL_H\n"
+        "\n"
+        '#include "nvtypes.h"\n'
+        "\n"
+        "struct NvKmsIoctlParams {\n"
+        "    NvU32 cmd;\n"
+        "    NvU32 size;\n"
+        "    NvU64 address NV_ALIGN_BYTES(8);\n"
+        "};\n"
+        "\n"
+        "#define NVKMS_IOCTL_MAGIC 'm'\n"
+        "#define NVKMS_IOCTL_CMD 0\n"
+        "\n"
+        "#define NVKMS_IOCTL_IOWR \\\n"
+        "    _IOWR(NVKMS_IOCTL_MAGIC, NVKMS_IOCTL_CMD, struct NvKmsIoctlParams)\n"
+        "\n"
+        "#endif\n"
+    )
+
+    def setUp(self):
+        self.src = tempfile.mkdtemp(prefix="nvkms-src-")
+        self.addCleanup(shutil.rmtree, self.src, True)
+        self.write(ioctl_inventory.NVKMS_IOCTL_H, self.HEADER)
+        self.write(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, self.HEADER)
+
+    def write(self, relative, text):
+        path = os.path.join(self.src, *relative.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        return path
+
+    def request(self, sizes=None):
+        return ioctl_inventory.nvkms_request(self.src, sizes)
+
+    def only_record(self, section):
+        requests = section["requests"]
+        self.assertEqual(len(requests), 1, requests)
+        return list(requests.items())[0]
+
+
+class TestModesetRequestNumberIsDerivedFromTheHeader(ModesetHeaderFixture):
+    """The number is computed from the declarations, never transcribed.
+
+    The header expands to 0xc0106d00 on x86-64, confirmed by compiling it:
+    dir _IOWR is 3 and occupies bits 30 and 31, sizeof(struct
+    NvKmsIoctlParams) is 16 and occupies bits 16 to 29, NVKMS_IOCTL_MAGIC is
+    'm' at 0x6d and occupies bits 8 to 15, and NVKMS_IOCTL_CMD is 0. A driver
+    branch that adds a field to the envelope moves the size field and
+    therefore the whole number, which is why nothing here is a constant.
+    """
+
+    def test_the_request_number_matches_the_compiled_expansion(self):
+        request, record = self.only_record(self.request())
+        self.assertEqual(request, "0xc0106d00")
+        self.assertEqual(record["param_size"], 16)
+        self.assertEqual(record["magic"], "m")
+        self.assertEqual(record["nr"], 0)
+        self.assertEqual(record["param_struct"], "NvKmsIoctlParams")
+
+    def test_the_selector_field_is_recorded_and_the_node_is_named(self):
+        _request, record = self.only_record(self.request())
+        self.assertEqual(record["selector_field"], "cmd")
+        self.assertEqual(record["node"], "/dev/nvidia-modeset")
+
+    def test_an_added_envelope_field_moves_the_number(self):
+        # A driver change moves the size field, so a transcribed derivation
+        # would keep reporting 0xc0106d00 here.
+        grown = self.HEADER.replace(
+            "    NvU64 address NV_ALIGN_BYTES(8);\n",
+            "    NvU64 address NV_ALIGN_BYTES(8);\n    NvU32 flags;\n")
+        self.write(ioctl_inventory.NVKMS_IOCTL_H, grown)
+        self.write(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, grown)
+        request, record = self.only_record(self.request())
+        self.assertEqual(record["param_size"], 24)
+        self.assertEqual(request, "0xc0186d00")
+
+    def test_a_member_of_an_unknown_type_is_refused(self):
+        # Sizing a type the table does not carry is the guess this tool
+        # refuses everywhere else.
+        broken = self.HEADER.replace(
+            "    NvU32 size;\n", "    NvKmsSomeUnion size;\n")
+        self.write(ioctl_inventory.NVKMS_IOCTL_H, broken)
+        self.write(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, broken)
+        with self.assertRaises(ioctl_inventory.InventoryError) as caught:
+            self.request()
+        self.assertIn("NvKmsSomeUnion", str(caught.exception))
+
+    def test_the_two_header_copies_are_required_to_agree(self):
+        divergent = self.HEADER.replace("#define NVKMS_IOCTL_CMD 0",
+                                        "#define NVKMS_IOCTL_CMD 1")
+        self.write(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, divergent)
+        with self.assertRaises(ioctl_inventory.InventoryError) as caught:
+            self.request()
+        message = str(caught.exception)
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H, message)
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, message)
+
+    def test_a_measured_size_that_disagrees_is_refused(self):
+        with self.assertRaises(ioctl_inventory.InventoryError) as caught:
+            self.request({"NvKmsIoctlParams": 24})
+        message = str(caught.exception)
+        self.assertIn("24", message)
+        self.assertIn("16", message)
+
+    def test_a_measured_size_that_agrees_is_accepted(self):
+        request, _record = self.only_record(
+            self.request({"NvKmsIoctlParams": 16}))
+        self.assertEqual(request, "0xc0106d00")
+
+    def test_a_missing_header_names_the_path_it_looked_for(self):
+        os.remove(os.path.join(self.src,
+                               *ioctl_inventory.NVKMS_IOCTL_H.split("/")))
+        with self.assertRaises(ioctl_inventory.InventoryError) as caught:
+            self.request()
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H, str(caught.exception))
+
+    def test_the_header_is_required_of_a_checkout(self):
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H,
+                      ioctl_inventory.REQUIRED_FILES)
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE,
+                      ioctl_inventory.REQUIRED_FILES)
+
+
+class TestModesetRequestNumberReachesTheMap(ModesetHeaderFixture):
+    """build_map carries the section, and every name reader skips it.
+
+    A top-level entry naming a call would be read as an ioctl description
+    name by trace2seed and checked against the description set by
+    regression_check. No description declares a call for the request number,
+    because the number covers 64 commands at once, so the section hangs under
+    a comment key the way the RM multiplexers do.
+    """
+
+    ONE_COMMAND = {"nodes": [{"commands": [
+        {"name": "NV_ESC_RM_FREE", "requests": ["0xc0204629"],
+         "is_argument_array": False, "syzlang": "ioctl$NV_ESC_RM_FREE"},
+    ]}]}
+
+    def build(self):
+        mapping, _skipped = ioctl_inventory.build_map(
+            self.ONE_COMMAND, None, self.request())
+        return mapping
+
+    def test_the_section_key_is_a_comment_key(self):
+        self.assertTrue(
+            ioctl_inventory.MAP_MODESET_KEY.startswith("comment"))
+
+    def test_the_map_carries_the_request_number_under_the_section(self):
+        mapping = self.build()
+        section = mapping[ioctl_inventory.MAP_MODESET_KEY]
+        self.assertIn("0xc0106d00", section["requests"])
+
+    def test_the_section_states_that_the_sub_command_is_unresolved(self):
+        # F18 in the artefact itself. A reader who finds the number and
+        # concludes a command-level match has been told otherwise here.
+        section = self.build()[ioctl_inventory.MAP_MODESET_KEY]
+        self.assertIn("F18", section["doc"])
+        self.assertIn("sub-command", section["doc"])
+
+    def test_the_number_is_not_read_as_a_call_name(self):
+        mapping = self.build()
+        names = {k.lower(): v for k, v in mapping.items()
+                 if not k.startswith("comment")}
+        self.assertNotIn("0xc0106d00", names)
+        self.assertIn("0xc0204629", names)
+
+    def test_the_regression_check_name_reader_skips_the_section(self):
+        mapping = self.build()
+        path = os.path.join(tempfile.mkdtemp(prefix="nvkms-map-"), "map.json")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(mapping, handle)
+        old = _patched(IOCTL_MAP=path)
+        try:
+            entries = regression_check.read_ioctl_map()
+        finally:
+            _restore(old)
+        self.assertEqual([key for key, _name in entries], ["0xc0204629"])
+
+    def test_the_seed_converter_loader_skips_the_section(self):
+        mapping = self.build()
+        path = os.path.join(tempfile.mkdtemp(prefix="nvkms-map-"), "map.json")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(mapping, handle)
+        names, multiplexers = trace2seed.load_map(path)
+        self.assertNotIn("0xc0106d00", names)
+        self.assertNotIn("0xc0106d00", multiplexers)
+
+    def test_an_inventory_with_no_modeset_record_still_builds_a_map(self):
+        mapping, _skipped = ioctl_inventory.build_map(self.ONE_COMMAND)
+        self.assertNotIn(ioctl_inventory.MAP_MODESET_KEY, mapping)
+
+    def test_the_comment_sections_are_written_above_the_request_numbers(self):
+        # Both sections are known only after the request-number loop, so
+        # insertion order appends them below the numbers and a regeneration
+        # moves forty lines of a generated file for a one-line change.
+        mapping, _skipped = ioctl_inventory.build_map(
+            {"nodes": [{"commands": [
+                dict(TestIoctlInventoryParsing.MULTIPLEXER),
+                self.ONE_COMMAND["nodes"][0]["commands"][0],
+            ]}]}, None, self.request())
+        keys = list(mapping)
+        numbers = [i for i, k in enumerate(keys) if not k.startswith("comment")]
+        sections = [keys.index(ioctl_inventory.MAP_MULTIPLEXER_KEY),
+                    keys.index(ioctl_inventory.MAP_MODESET_KEY)]
+        self.assertTrue(numbers)
+        self.assertLess(max(sections), min(numbers))
+
+
+class TestModesetEntryPointRecordStatesReachability(unittest.TestCase):
+    """The nvkms_fops record ships its reason verbatim to a reader.
+
+    refgen renders it into the generated entry-point page, so a wrong
+    sentence there is a wrong sentence in the documentation. Two claims it
+    carried were wrong at once. It said lookup_devices puts the node in a
+    default container, which is the host-side driver info list and not the
+    mount decision, and on the legacy path nvc_mount.c refuses the node
+    without the display capability. It also said the command family sits
+    outside the denominator, which the modeset emitter makes false.
+
+    Both halves are pinned here. The reachability claim is checked against
+    the source lines it cites, and the denominator claim is checked in the
+    negative, because that is the direction it rots in: a later edit
+    restating the family as excluded is the regression, and no count in this
+    file would catch it.
+    """
+
+    def record(self):
+        found = [t for t in ioctl_inventory.FOPS_TABLES
+                 if t["fops"] == "nvkms_fops"]
+        self.assertEqual(len(found), 1, found)
+        return found[0]
+
+    def test_the_node_is_inside_the_tenant_surface(self):
+        self.assertTrue(self.record()["tenant_surface"])
+
+    def test_the_entry_points_of_this_table_stay_unmodelled(self):
+        # The commands are modelled and mmap/poll are not. This flag is the
+        # entry-point census, so it stays false and the reason says why.
+        self.assertFalse(self.record()["modelled"])
+
+    def test_the_reason_never_places_the_family_outside_the_denominator(self):
+        reason = self.record()["reason"].lower()
+        for claim in ("not in the denominator", "outside the denominator",
+                      "opens no descriptor", "no description"):
+            self.assertNotIn(claim, reason)
+
+    def test_the_reason_places_the_commands_inside_the_denominator(self):
+        self.assertIn("inside the denominator", self.record()["reason"])
+
+    def test_the_reason_cites_the_cdi_path_it_calls_default(self):
+        reason = self.record()["reason"]
+        self.assertIn("pkg/nvcdi/common-nvml.go", reason)
+        self.assertIn("internal/info/auto.go", reason)
+
+    def test_the_reason_cites_the_legacy_capability_gate(self):
+        reason = self.record()["reason"]
+        self.assertIn("nvc_mount.c", reason)
+        self.assertIn("options.h", reason)
+        self.assertIn("OPT_DISPLAY", reason)
+
+    def test_the_reason_does_not_rest_on_the_driver_info_list(self):
+        # lookup_devices populates the host-side list and does not decide
+        # what a container receives. Resting the claim on it is the error
+        # this record carried.
+        self.assertNotIn("lookup_devices", self.record()["reason"])
+
+    def test_the_shared_constant_still_serves_the_records_it_is_right_for(self):
+        # TENANT_DEVICE_SOURCE was left pointed at lookup_devices, because
+        # absence from that list does keep a node out of a container on
+        # either path. Repointing it would have broken the records below.
+        outside = [t["fops"] for t in ioctl_inventory.FOPS_TABLES
+                   if t["reason"] == ioctl_inventory.OUTSIDE_TENANT_SURFACE]
+        self.assertTrue(outside)
+        for table in ioctl_inventory.FOPS_TABLES:
+            if table["reason"] == ioctl_inventory.OUTSIDE_TENANT_SURFACE:
+                self.assertFalse(table["tenant_surface"], table["fops"])
+
+
+class TestTraceSeedTracksTheModesetNode(unittest.TestCase):
+    """The seed converter opens /dev/nvidia-modeset.
+
+    While the family was unmodelled the node sat in OUT_OF_SCOPE and every
+    trace touching it produced a skip comment. With the family modelled that
+    silently discards real coverage, so the node moves into DEV_TO_DESC and
+    the converter emits the openat the description set declares.
+    """
+
+    TRACE = ('openat(AT_FDCWD, "/dev/nvidia-modeset", O_RDWR) = 3\n'
+             'ioctl(3, 0xc0106d00, 0x7ffd) = 0\n')
+
+    def convert(self, trace, names=None, multiplexers=None):
+        return trace2seed.convert(trace, names or {}, multiplexers or {})
+
+    def test_the_node_is_no_longer_skipped(self):
+        prog = self.convert(self.TRACE)
+        self.assertNotIn("# skipped", prog)
+
+    def test_the_node_opens_the_call_the_descriptions_declare(self):
+        prog = self.convert(self.TRACE)
+        self.assertIn("openat$nvidia_modeset(", prog)
+        self.assertIn("/dev/nvidia-modeset", prog)
+
+    def test_the_node_resolves_through_the_shared_table(self):
+        self.assertEqual(trace2seed.dev_desc("/dev/nvidia-modeset"),
+                         "openat$nvidia_modeset")
+
+    def test_a_modeset_ioctl_is_reported_unmapped_and_never_named(self):
+        # F18 at the seed converter. The request number covers all 64
+        # commands, so no call name can be recovered from a trace that
+        # carries only the number. Saying so is the honest outcome.
+        prog = self.convert(self.TRACE)
+        self.assertIn("0xc0106d00", prog)
+        self.assertNotIn("ioctl$NVKMS", prog)
+
+    def test_a_node_outside_the_table_is_still_not_opened(self):
+        prog = self.convert(
+            'openat(AT_FDCWD, "/dev/nvidia-modeset-x", O_RDWR) = 3\n')
+        self.assertNotIn("openat$", prog)
+
+
+class TestEveryCallDevDescReturnsIsDeclared(unittest.TestCase):
+    """Every name dev_desc() can return, by any branch, has to be declared.
+
+    A name no description declares produces a seed bank syzkaller refuses at
+    the parse gate, and the failure surfaces phases later reading as a
+    description problem. Checking DEV_TO_DESC alone would not have caught
+    `openat$dri`, which was a hardcoded fallthrough inside the function and
+    never a value in that table. Both the dict and the branches beside it are
+    covered here, driven through dev_desc() and through its own source, so a
+    branch added tomorrow is covered on the day it is added.
+    """
+
+    OPENAT_RE = re.compile(r"^openat\$([A-Za-z0-9_]+)\(", re.M)
+
+    # Paths reaching every branch of dev_desc(): each table key, the per-GPU
+    # regex on both a single and a multi-digit minor, the refused prefix, and
+    # a path no branch claims.
+    PROBE_PATHS = ("/dev/nvidia0", "/dev/nvidia9", "/dev/nvidia12",
+                   "/dev/dri/card0", "/dev/dri/renderD128",
+                   "/dev/nvidia-drm", "/dev/null", "")
+
+    def declared_openats(self):
+        try:
+            files = regression_check._description_files()
+        except regression_check.CheckInput as exc:
+            self.skipTest(str(exc))
+        declared = set()
+        for path in files:
+            with open(path, encoding="utf-8") as handle:
+                declared.update(self.OPENAT_RE.findall(handle.read()))
+        self.assertTrue(declared,
+                        "the committed description set declares no openat")
+        return declared
+
+    def assert_declared(self, names, where):
+        """Fail on any name the description set does not declare.
+
+        Only the modeset call may be absent, and only while the emitter has
+        not landed in this tree. It is skipped by name, so the check still
+        fails for anything else missing alongside it.
+        """
+        declared = self.declared_openats()
+        missing = sorted(n for n in names
+                         if n[len("openat$"):] not in declared)
+        if missing == ["openat$nvidia_modeset"]:
+            self.skipTest(
+                "openat$nvidia_modeset is not in the committed description "
+                "set, because the modeset emitter has not landed in this tree")
+        self.assertEqual(missing, [], where)
+
+    def dev_desc_returns(self):
+        """Every name dev_desc() actually hands back for PROBE_PATHS."""
+        paths = list(trace2seed.DEV_TO_DESC) + list(self.PROBE_PATHS)
+        return {name for name in (trace2seed.dev_desc(p) for p in paths)
+                if name is not None}
+
+    def dev_desc_literals(self):
+        """Every openat$ name spelled inside dev_desc()'s own source.
+
+        Read from the function itself, because a hardcoded fallthrough is
+        invisible to any reading of the tables beside it and invisible to a
+        probe list that happens to miss its branch.
+        """
+        tree = ast.parse(inspect.getsource(trace2seed.dev_desc))
+        return {node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value.startswith("openat$")}
+
+    def test_every_name_dev_desc_returns_is_declared(self):
+        names = self.dev_desc_returns()
+        self.assertIn("openat$nvidiactl", names)
+        self.assertIn("openat$nvidia", names)
+        self.assert_declared(names, "returned by dev_desc()")
+
+    def test_every_name_spelled_inside_dev_desc_is_declared(self):
+        # The check that catches a fallthrough no probe path reaches.
+        self.assert_declared(self.dev_desc_literals(),
+                             "spelled inside dev_desc()")
+
+    def test_every_tracked_node_names_a_declared_call(self):
+        self.assert_declared(set(trace2seed.DEV_TO_DESC.values()),
+                             "named by DEV_TO_DESC")
+
+    def test_a_node_is_never_in_both_tables(self):
+        both = sorted(set(trace2seed.DEV_TO_DESC) & set(trace2seed.OUT_OF_SCOPE))
+        self.assertEqual(both, [])
+        overlap = sorted(
+            node for node in trace2seed.DEV_TO_DESC
+            for prefix in trace2seed.OUT_OF_SCOPE_PREFIXES
+            if node.startswith(prefix))
+        self.assertEqual(overlap, [])
+
+
+class TestDriNodesAreRefusedAndNotNamed(unittest.TestCase):
+    """/dev/dri/* is refused, and the refusal states what is known.
+
+    dev_desc() returned `openat$dri` for these paths, a call the description
+    set has never declared, so a trace touching a render node converted into
+    a seed bank that failed the parse gate. The threat model excludes these
+    nodes, so the fix is a refusal carrying a reason and not a new call.
+
+    The path is a prefix over a directory whose members carry a card or
+    render-node index, so the exact-match table cannot hold it.
+    """
+
+    def test_the_undeclared_call_is_gone_from_dev_desc(self):
+        # Named pin for the defect itself, beside the general check that
+        # every name dev_desc() spells is declared. Scoped to the function,
+        # because out_of_scope()'s docstring cites the name on purpose.
+        self.assertNotIn("openat$dri",
+                         inspect.getsource(trace2seed.dev_desc))
+
+    def test_dev_desc_names_no_call_for_a_dri_node(self):
+        for path in ("/dev/dri/card0", "/dev/dri/renderD128"):
+            self.assertIsNone(trace2seed.dev_desc(path), path)
+
+    def test_a_dri_node_is_refused_with_a_reason(self):
+        for path in ("/dev/dri/card0", "/dev/dri/renderD128"):
+            self.assertIn("/dev/dri/*", trace2seed.out_of_scope(path) or "")
+
+    def test_the_reason_leaves_tenant_reachability_open(self):
+        # Recorded as an open question. Asserting these nodes are unreachable
+        # would be a claim this tool has no source for.
+        reason = trace2seed.out_of_scope("/dev/dri/card0")
+        self.assertIn("open question", reason)
+        self.assertIn("outside the modelled surface", reason)
+
+    def test_a_modelled_node_is_not_refused(self):
+        for path in trace2seed.DEV_TO_DESC:
+            self.assertIsNone(trace2seed.out_of_scope(path), path)
+        self.assertIsNone(trace2seed.out_of_scope("/dev/nvidia0"))
+
+    def test_a_traced_dri_open_becomes_a_skip_and_opens_nothing(self):
+        prog = trace2seed.convert(
+            'openat(AT_FDCWD, "/dev/dri/renderD128", O_RDWR) = 3\n'
+            'ioctl(3, 0xc0106d00, 0x7ffd) = 0\n', {}, {})
+        self.assertIn("# skipped:", prog)
+        self.assertNotIn("openat$", prog)
+        # The fd was never tracked, so its ioctl is dropped with it.
+        self.assertNotIn("0xc0106d00", prog)
+# The struct that motivated the bitfield fix, reproduced from
+# src/nvidia-modeset/interface/nvkms-api-types.h:499 with the two nested
+# aggregates reduced to their measured sizes. gcc on x86-64 gives the real
+# struct sizeof 80, align 8, composition at offset 4, supportedSurfaceMemory
+# Formats at 32, ilut at 40 and tmo at 60. The two single-bit NvBool members
+# share one byte, so the run occupies byte 0 and composition's four-byte
+# alignment pads bytes 1 to 3.
+LAYER_CAPABILITIES_HEADER = """
+struct NvKmsCompositionCapabilities {
+    NvU32 a;
+    NvU32 b;
+    NvU32 c;
+    NvU32 d;
+    NvU32 e;
+    NvU32 f;
+    NvU32 g;
+};
+
+struct NvKmsLUTCaps {
+    NvU32 a;
+    NvU32 b;
+    NvU32 c;
+    NvU32 d;
+    NvU32 e;
+};
+
+struct NvKmsLayerCapabilities {
+    NvBool supportsWindowMode              :1;
+    NvBool supportsICtCp                   :1;
+    struct NvKmsCompositionCapabilities composition;
+    NvU64 supportedSurfaceMemoryFormats NV_ALIGN_BYTES(8);
+    struct NvKmsLUTCaps ilut;
+    struct NvKmsLUTCaps tmo;
+};
+"""
+
+
+class BitfieldFixture(unittest.TestCase):
+    """A TypeIndex over the NvKmsLayerCapabilities reproduction above."""
+
+    def index_over(self, text):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "caps.h")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        index = syzlang_gen.TypeIndex()
+        index.scan_file(path, "caps.h")
+        return index
+
+    def caps_index(self):
+        return self.index_over(LAYER_CAPABILITIES_HEADER)
+
+
+class TestTheBitfieldMemberParse(BitfieldFixture):
+    """parse_member_statement reads a single-bit member as a bitfield member
+    and still refuses a width the packing rule below does not cover."""
+
+    def test_a_single_bit_member_carries_its_width(self):
+        members = syzlang_gen.parse_member_statement(
+            "NvBool supportsWindowMode :1")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].name, "supportsWindowMode")
+        self.assertEqual(members[0].type, "NvBool")
+        self.assertEqual(members[0].bits, 1)
+
+    def test_a_plain_member_carries_no_width(self):
+        members = syzlang_gen.parse_member_statement("NvU32 cmd")
+        self.assertIsNone(members[0].bits)
+
+    def test_a_wider_bitfield_is_still_refused(self):
+        # 3 bits in an NvU32 is a packing this layout rule does not derive,
+        # and a guessed offset reaches the wrong field.
+        with self.assertRaises(syzlang_gen.LayoutError) as caught:
+            syzlang_gen.parse_member_statement("NvU32 mode :3")
+        self.assertIn("bitfield", str(caught.exception))
+
+    def test_an_unnamed_bitfield_is_still_refused(self):
+        with self.assertRaises(syzlang_gen.LayoutError):
+            syzlang_gen.parse_member_statement("NvU32 :1")
+
+    def test_a_scope_operator_is_not_read_as_a_bitfield(self):
+        with self.assertRaises(syzlang_gen.LayoutError):
+            syzlang_gen.parse_member_statement("Ns::Type field")
+
+
+class TestTheBitfieldLayout(BitfieldFixture):
+    """The derived layout matches what gcc gives for the real struct."""
+
+    def layout(self):
+        return self.caps_index().layout("NvKmsLayerCapabilities")
+
+    def test_the_struct_totals_the_measured_size_and_alignment(self):
+        layout = self.layout()
+        self.assertEqual(layout.size, 80)
+        self.assertEqual(layout.align, 8)
+
+    def test_every_member_sits_at_the_offset_gcc_gives(self):
+        offsets = {f.name: f.offset for f in self.layout().fields}
+        self.assertEqual(offsets["supportsWindowMode"], 0)
+        self.assertEqual(offsets["supportsICtCp"], 0)
+        self.assertEqual(offsets["composition"], 4)
+        self.assertEqual(offsets["supportedSurfaceMemoryFormats"], 32)
+        self.assertEqual(offsets["ilut"], 40)
+        self.assertEqual(offsets["tmo"], 60)
+
+    def test_the_two_bits_share_one_storage_unit(self):
+        fields = {f.name: f for f in self.layout().fields}
+        self.assertEqual(fields["supportsWindowMode"].size, 1)
+        self.assertEqual(fields["supportsICtCp"].size, 0)
+
+    def test_the_struct_no_longer_fails_the_member_parser(self):
+        index = self.caps_index()
+        self.assertIn("NvKmsLayerCapabilities", index.structs)
+        self.assertEqual(index.parse_failures["NvKmsLayerCapabilities"], 0)
+
+
+class TestTheBitfieldRendering(BitfieldFixture):
+    """render_struct emits a syzlang bitfield group whose widths sum inside
+    one storage unit, so the emitted struct keeps the C size."""
+
+    def rendered(self):
+        index = self.caps_index()
+        layout = index.layout("NvKmsLayerCapabilities")
+        return syzlang_gen.render_struct("NvKmsLayerCapabilities", layout)
+
+    def test_each_bit_renders_with_its_width(self):
+        text = self.rendered()
+        self.assertRegex(text, r"\n\tsupportsWindowMode\s+int8:1\n")
+        self.assertRegex(text, r"\n\tsupportsICtCp\s+int8:1\n")
+
+    def test_no_synthetic_bit_padding_closes_the_unit(self):
+        # pkg/compiler/gen.go:394 closes a bitfield group by growing the last
+        # member's TypeSize to the byte padding that follows it, so the
+        # explicit byte padding below already ends the unit. A synthetic
+        # int8:6 member would render as a fuzzable field named as padding.
+        self.assertNotRegex(self.rendered(), r"int8:[2-8]\n")
+
+    def test_the_padding_to_the_next_member_is_still_explicit(self):
+        self.assertIn("array[const[0, int8], 3]", self.rendered())
+
+
+# nvkms-api.h declares an enumeration member by tag, `enum NvKmsEventType
+# eventType;`, where every RM header reaches one through a typedef. 30 struct
+# definitions on the modeset ioctl path do it, NvKmsAllocDeviceReply among
+# them, and the member parser rejected the whole family. Three forms appear:
+# a plain tagged member, an array of them, and one definition written inline
+# with its declarator (NvKmsValidateModeIndexReply.source).
+ENUM_MEMBER_HEADER = """
+enum NvKmsEventType {
+    NvKmsEventTypeDpyChanged = 0,
+    NvKmsEventTypeFlipOccurred = 1,
+};
+
+struct NvKmsEventCarrier {
+    NvU32 head;
+    enum NvKmsEventType eventType;
+    enum NvKmsEventType history[4];
+    enum NvKmsModeSource {
+        NvKmsModeSourceUnknown = 0,
+        NvKmsModeSourceEdid = 1,
+    } source;
+    NvU32 tail;
+};
+"""
+
+
+class TestTheEnumMemberParse(BitfieldFixture):
+    """A member declared by enumeration tag lays out as the unsigned int gcc
+    gives it, and an inline definition carries its declarator."""
+
+    def caps_index(self):
+        return self.index_over(ENUM_MEMBER_HEADER)
+
+    def test_a_tagged_member_is_read(self):
+        members = syzlang_gen.parse_member_statement(
+            "enum NvKmsEventType eventType")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].type, "enum NvKmsEventType")
+        self.assertEqual(members[0].name, "eventType")
+
+    def test_a_definition_written_inline_keeps_its_declarator(self):
+        members = syzlang_gen.parse_member_statement(
+            "enum E { A = 0, B = 1, } source")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].name, "source")
+
+    def test_a_definition_with_no_declarator_contributes_no_member(self):
+        self.assertEqual(
+            syzlang_gen.parse_member_statement("enum E { A = 0, B = 1, }"), [])
+
+    def test_a_typedef_inside_a_struct_body_is_still_refused(self):
+        with self.assertRaises(syzlang_gen.LayoutError):
+            syzlang_gen.parse_member_statement("typedef NvU32 Thing")
+
+    def test_the_carrier_lays_out_at_four_bytes_an_enumeration(self):
+        layout = self.caps_index().layout("NvKmsEventCarrier")
+        offsets = {f.name: f.offset for f in layout.fields}
+        self.assertEqual(offsets["eventType"], 4)
+        self.assertEqual(offsets["history"], 8)
+        self.assertEqual(offsets["source"], 24)
+        self.assertEqual(offsets["tail"], 28)
+        self.assertEqual(layout.size, 32)
+
+
+# NvKmsRegisterVblankIntrCallbackRequest carries a function pointer through a
+# typedef, `NVRgInterruptCallbackProc pCallback`, declared at
+# kernel-open/common/inc/nvkms-api-types.h:806. The typedef scanner read only
+# `typedef <words> <name>;`, so the alias was absent and the member's type was
+# unknown. It is the last of the 64 dispatched modeset commands to model.
+FUNCTION_POINTER_HEADER = """
+typedef void (*NVRgInterruptCallbackProc)(NvU64 clientData,
+                                          NvU32 head);
+
+struct CallbackRequest {
+    NvU32 head;
+    NVRgInterruptCallbackProc pCallback NV_ALIGN_BYTES(8);
+    NvU64 param NV_ALIGN_BYTES(8);
+};
+"""
+
+
+class TestTheFunctionPointerTypedef(BitfieldFixture):
+    """A function-pointer typedef is an eight-byte pointer, and a member
+    declared through one lays out as one."""
+
+    def caps_index(self):
+        return self.index_over(FUNCTION_POINTER_HEADER)
+
+    def test_the_typedef_is_registered_as_a_pointer(self):
+        index = self.caps_index()
+        self.assertTrue(
+            index.resolve_alias("NVRgInterruptCallbackProc").endswith("*"))
+
+    def test_a_member_declared_through_it_is_eight_bytes(self):
+        layout = self.caps_index().layout("CallbackRequest")
+        fields = {f.name: f for f in layout.fields}
+        self.assertEqual(fields["pCallback"].offset, 8)
+        self.assertEqual(fields["pCallback"].size, 8)
+        self.assertEqual(fields["pCallback"].syz, "int64")
+        self.assertEqual(fields["param"].offset, 16)
+        self.assertEqual(layout.size, 24)
+
+
+class ModesetDenominator(unittest.TestCase):
+    """The sixth family enters the denominator from the modeset inventory,
+    and only the dispatched commands do. Counting the two the dispatch table
+    leaves NULL would put the surface at 830 and claim two targets nothing
+    can reach."""
+
+    COMMANDS = [
+        {"command": "NVKMS_IOCTL_ALLOC_DEVICE", "ordinal": 0,
+         "dispatched": True, "proc": "AllocDevice",
+         "param_struct": "NvKmsAllocDeviceParams", "custom_user": False,
+         "source": "src/nvidia-modeset/src/nvkms.c:5093"},
+        {"command": "NVKMS_IOCTL_FLIP", "ordinal": 1, "dispatched": True,
+         "proc": "Flip", "param_struct": "NvKmsFlipParams",
+         "custom_user": True,
+         "source": "src/nvidia-modeset/src/nvkms.c:5094"},
+        {"command": "NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES",
+         "ordinal": 2, "dispatched": False, "proc": None,
+         "param_struct": None, "custom_user": False,
+         "undispatched_reason": "no handler in the dispatch table",
+         "source": "src/nvidia-modeset/interface/nvkms-api.h:246"},
+    ]
+
+    def artefacts(self, tmp, commands=None, version="610.57.04"):
+        source = {"path": tmp, "driver_version": version}
+        ioctl = {"source": source, "nodes": [
+            {"paths": ["/dev/nvidiactl"], "module": "nvidia",
+             "commands": [{"name": "NV_ESC_CARD_INFO"}]}]}
+        records = commands if commands is not None else self.COMMANDS
+        nvkms = {"source": dict(source,
+                                dispatch_source="src/nvidia-modeset/src/"
+                                                "nvkms.c"),
+                 "summary": {"declared": len(records),
+                             "dispatched": sum(1 for c in records
+                                               if c["dispatched"])},
+                 "commands": records}
+        for name, doc in (("ioctl-inventory.json", ioctl),
+                          ("rm-control-inventory.json",
+                           {"source": source, "methods": []}),
+                          ("rm-object-graph.json",
+                           {"source": source, "records": []}),
+                          ("nvkms-command-inventory.json", nvkms)):
+            with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+        return tmp
+
+    def load(self, tmp):
+        original = (surface_cov.IOCTL_INV, surface_cov.CTRL_INV,
+                    surface_cov.OBJ_GRAPH, surface_cov.NVKMS_INV)
+        surface_cov.IOCTL_INV = os.path.join(tmp, "ioctl-inventory.json")
+        surface_cov.CTRL_INV = os.path.join(tmp, "rm-control-inventory.json")
+        surface_cov.OBJ_GRAPH = os.path.join(tmp, "rm-object-graph.json")
+        surface_cov.NVKMS_INV = os.path.join(
+            tmp, "nvkms-command-inventory.json")
+        try:
+            return surface_cov.load_targets()
+        finally:
+            (surface_cov.IOCTL_INV, surface_cov.CTRL_INV,
+             surface_cov.OBJ_GRAPH, surface_cov.NVKMS_INV) = original
+
+
+class TestTheModesetFamilyEntersTheDenominator(ModesetDenominator):
+
+    def test_modeset_is_a_reported_family(self):
+        self.assertIn("modeset", surface_cov.FAMILIES)
+        self.assertEqual(len(surface_cov.FAMILIES), 6)
+
+    def test_a_dispatched_command_is_a_target_under_its_own_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, _excluded, _ = self.load(self.artefacts(tmp))
+        record = targets["NVKMS_IOCTL_ALLOC_DEVICE"]
+        self.assertEqual(record["family"], "modeset")
+        self.assertEqual(record["nr"], 0)
+        self.assertEqual(record["detail"], "NvKmsAllocDeviceParams")
+
+    def test_an_undispatched_command_is_excluded_and_still_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, excluded, _ = self.load(self.artefacts(tmp))
+        name = "NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES"
+        self.assertNotIn(name, targets)
+        self.assertEqual(excluded[name]["family"], "modeset_undispatched")
+
+    def test_the_abi_key_is_the_dispatch_ordinal_and_not_the_name(self):
+        # A driver that renames a command keeps its ordinal, and the ledger
+        # keyed on the ordinal keeps the row it accounted.
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, _excluded, _ = self.load(self.artefacts(tmp))
+        self.assertEqual(targets["NVKMS_IOCTL_FLIP"]["abi_key"], "modeset/1")
+
+    def test_ordinal_zero_is_not_read_as_a_missing_ordinal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, _excluded, _ = self.load(self.artefacts(tmp))
+        self.assertEqual(targets["NVKMS_IOCTL_ALLOC_DEVICE"]["abi_key"],
+                         "modeset/0")
+
+    def test_a_modeset_inventory_from_another_release_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.artefacts(tmp)
+            path = os.path.join(tmp, "nvkms-command-inventory.json")
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            doc["source"]["driver_version"] = "999.99.99"
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            with self.assertRaises(surface_cov.SurfaceError) as caught:
+                self.load(tmp)
+        self.assertIn("nvkms-command-inventory.json",
+                      str(caught.exception))
+
+    def test_a_summary_disagreeing_with_its_records_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.artefacts(tmp)
+            path = os.path.join(tmp, "nvkms-command-inventory.json")
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            doc["summary"]["dispatched"] += 1
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            with self.assertRaises(surface_cov.SurfaceError) as caught:
+                self.load(tmp)
+        self.assertIn("dispatched", str(caught.exception))
+
+
+class TestTheCommittedModesetDenominator(unittest.TestCase):
+    """The reading over the committed artefacts, which is the number every
+    completion figure from this phase onward is measured against."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.NVKMS_INV):
+            raise unittest.SkipTest("committed inventories not present")
+        cls.targets, cls.excluded, _meta = surface_cov.load_targets()
+
+    def test_the_denominator_reads_828_across_six_families(self):
+        self.assertEqual(len(self.targets), 828)
+        self.assertEqual(
+            len({t["family"] for t in self.targets.values()}), 6)
+
+    def test_the_modeset_family_carries_64_targets(self):
+        modeset = [t for t in self.targets.values()
+                   if t["family"] == "modeset"]
+        self.assertEqual(len(modeset), 64)
+
+    def test_the_other_five_families_are_unmoved(self):
+        counted = {}
+        for target in self.targets.values():
+            counted[target["family"]] = counted.get(target["family"], 0) + 1
+        self.assertEqual(counted["escape"], 32)
+        self.assertEqual(counted["uvm"], 39)
+        self.assertEqual(counted["uvm_tools"], 7)
+        self.assertEqual(counted["control"], 531)
+        self.assertEqual(counted["alloc"], 155)
+
+    def test_both_undispatched_ordinals_are_excluded_by_name(self):
+        undispatched = sorted(
+            name for name, r in self.excluded.items()
+            if r["family"] == "modeset_undispatched")
+        self.assertEqual(undispatched,
+                         ["NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES",
+                          "NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS"])
+
+    def test_every_modeset_target_carries_a_distinct_abi_key(self):
+        keys = [t["abi_key"] for t in self.targets.values()
+                if t["family"] == "modeset"]
+        self.assertEqual(len(set(keys)), 64)
+
+
+class TestTheValueCheckReadsAsAList(unittest.TestCase):
+    """The pin check's value comparison was one hardcoded tuple naming the
+    control prefix, so no second family could ever be compared against an
+    authority. The list form is the fix, and modeset is the second entry."""
+
+    def test_the_groups_carry_a_lookup_beside_the_prefix(self):
+        for entry in regression_check.GROUPS:
+            self.assertEqual(len(entry), 3, entry)
+
+    def test_both_checked_families_are_reporting_groups(self):
+        groups = {name for name, _prefix, _lookup in regression_check.GROUPS}
+        for family, _field, _lookup in regression_check.VALUE_CHECKED:
+            self.assertIn(family, groups)
+
+    def test_control_and_modeset_are_both_value_checked(self):
+        checked = {family for family, _f, _l in regression_check.VALUE_CHECKED}
+        self.assertEqual(checked, {"control", "modeset"})
+
+    def test_each_checked_family_names_the_field_it_compares(self):
+        fields = {family: field
+                  for family, field, _l in regression_check.VALUE_CHECKED}
+        self.assertEqual(fields["control"], "cmd")
+        self.assertEqual(fields["modeset"], "cmd")
+
+    def test_every_checked_field_is_a_selector_the_check_examines(self):
+        # A family compared on a field SELECTORS never reaches is a check
+        # that reports a clean run over nothing.
+        for _family, field, _lookup in regression_check.VALUE_CHECKED:
+            self.assertIn(field, regression_check.SELECTORS)
+
+    def test_the_lookups_are_callables_taking_no_argument(self):
+        for _family, _field, lookup in regression_check.VALUE_CHECKED:
+            self.assertTrue(callable(lookup))
+
+    def test_the_modeset_lookup_is_the_dispatch_ordinal(self):
+        lookup = dict((f, l) for f, _fl, l in
+                      regression_check.VALUE_CHECKED)["modeset"]
+        if not os.path.isfile(surface_cov.NVKMS_INV):
+            self.skipTest("committed inventory not present")
+        ordinals = lookup()
+        # All 66, the two undispatched ones included, for the reason
+        # control_method_ids reads the excluded control commands: a
+        # description hand-added for one still has its pin checked. Only the
+        # 64 the set declares are compared.
+        self.assertEqual(len(ordinals), 66)
+        self.assertEqual(ordinals["NVKMS_IOCTL_ALLOC_DEVICE"], 0)
+        self.assertEqual(
+            ordinals["NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS"], 36)
+
+    def test_the_modeset_floor_is_recorded_beside_the_other_five(self):
+        self.assertEqual(regression_check.TARGET_FLOOR["modeset"], 64)
+        self.assertEqual(len(regression_check.TARGET_FLOOR), 6)
+
+
+class TestTheModesetPinsAreCheckedAgainstTheOrdinal(unittest.TestCase):
+    """A modeset variant pinned to the wrong ordinal reaches another one of
+    the 64 leaves, and nothing else in the set would say so."""
+
+    def run_pins(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = regression_check.check_pins()
+        return code, buf.getvalue()
+
+    def test_the_committed_set_pins_all_64_correctly(self):
+        if not os.path.isfile(surface_cov.NVKMS_INV):
+            self.skipTest("committed inventory not present")
+        code, out = self.run_pins()
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"modeset 64")
+        self.assertRegex(out, r"64 modeset cmd\(s\) checked")
+
+
+class TestTheModesetReferencePage(unittest.TestCase):
+    """The sixth family gets a page of its own and the index counts it, so a
+    reader browsing the enumerated surface sees 828 and not 764."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.NVKMS_INV):
+            raise unittest.SkipTest("committed inventories not present")
+        cls.pages, cls.rows = refgen.render()
+
+    def test_a_modeset_page_is_generated(self):
+        self.assertIn("modeset-commands.md", self.pages)
+        self.assertEqual(self.rows["modeset-commands.md"], 66)
+
+    def test_the_page_names_both_undispatched_commands(self):
+        page = self.pages["modeset-commands.md"]
+        self.assertIn("NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES", page)
+        self.assertIn("NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS", page)
+
+    def test_the_page_carries_a_row_for_every_declared_command(self):
+        page = self.pages["modeset-commands.md"]
+        with open(surface_cov.NVKMS_INV, encoding="utf-8") as fh:
+            commands = json.load(fh)["commands"]
+        for command in commands:
+            self.assertIn("| `%s` |" % command["command"], page)
+        # The two with no dispatch entry are rendered twice: once in the full
+        # ordinal table and once in the section stating why they are out.
+        self.assertEqual(page.count("| `NVKMS_IOCTL_"), len(commands) + 2)
+
+    def test_the_index_states_the_new_total_and_family_count(self):
+        index = self.pages["index.md"]
+        self.assertIn("Total targets: 828.", index)
+        self.assertIn("`modeset`", index)
+        self.assertIn("`modeset_undispatched`", index)
+
+    def test_the_index_no_longer_states_764_as_the_total(self):
+        self.assertNotIn("764", self.pages["index.md"])
+
+    def test_the_index_counts_its_own_pages_and_never_a_literal(self):
+        index = self.pages["index.md"]
+        self.assertEqual(self.rows["index.md"], len(refgen.BUILDERS))
+        self.assertNotIn("Four pages render", index)
+
+    def test_every_generated_page_is_listed_on_the_index(self):
+        index = self.pages["index.md"]
+        for name in refgen.PAGE_TITLES:
+            self.assertIn(refgen.PAGE_TITLES[name][1], index, name)
+
+    def test_the_committed_pages_match_the_regenerated_ones(self):
+        out = os.path.join(os.path.dirname(HERE), "docs", "src", "content",
+                           "docs", "reference", "surface")
+        if not os.path.isdir(out):
+            self.skipTest("documentation tree not present")
+        for name, text in self.pages.items():
+            path = os.path.join(out, name)
+            self.assertTrue(os.path.isfile(path), name)
+            with open(path, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), text, name)
+
+
+class TestTheEnumMemberLayout(BitfieldFixture):
+    """The offsets the enumeration carrier lays out at."""
+
+    def caps_index(self):
+        return self.index_over(ENUM_MEMBER_HEADER)
+
+    def test_every_member_sits_where_gcc_puts_it(self):
+        layout = self.caps_index().layout("NvKmsEventCarrier")
+        offsets = {f.name: f.offset for f in layout.fields}
+        self.assertEqual(offsets["eventType"], 4)
+        self.assertEqual(offsets["history"], 8)
+        self.assertEqual(offsets["source"], 24)
+        self.assertEqual(offsets["tail"], 28)
+        self.assertEqual(layout.size, 32)
 
 
 def pipeline_ctl_cmd_round_end(args):

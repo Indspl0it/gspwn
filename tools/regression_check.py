@@ -149,16 +149,31 @@ SELECTORS = ("cmd", "hClass")
 # over, because an unreadable value is the same blind spot as a free field.
 CONST_VALUE_RE = re.compile(r"^const\[\s*(0[xX][0-9a-fA-F]+|\d+)\s*[,\]]")
 
-# Only the control `cmd` is compared against a value. Its authority is
+# The families whose selector is compared against a committed authority, as
+# (reporting group, field, lookup). A lookup returns {variant name: expected
+# integer} and is called once per run.
+#
+# Two families have such an authority. A control `cmd` is checked against
 # rm-control-inventory.json, where every method row pairs the handler symbol
-# the variant is named for with the method id. An allocation `hClass` has no
-# such authority in any committed artefact: the object graph names the
-# allocation class and carries no number for it, and the class id
-# surface_cov.load_targets joins onto an alloc target is the owning class's
-# SDK class id, which differs from the allocation class number on 17 of the
-# 62 alloc targets that carry one. Comparing against it would report those 17
-# as defects. The XFER inner cmd has no committed authority either.
-VALUE_CHECKED = ("cmd", surface_cov.CONTROL_PREFIX)
+# the variant is named for with the method id. A modeset `cmd` is checked
+# against nvkms-command-inventory.json, where the dispatch ordinal is the
+# array index itself and needs no name join at all.
+#
+# Two do not. An allocation `hClass` has no authority in any committed
+# artefact: the object graph names the allocation class and carries no number
+# for it, and the class id surface_cov.load_targets joins onto an alloc target
+# is the owning class's SDK class id, which differs from the allocation class
+# number on 17 of the 62 alloc targets that carry one. Comparing against it
+# would report those 17 as defects. The XFER inner cmd has no committed
+# authority either.
+#
+# Declared as a list so a third family joins by adding a row. This was one
+# hardcoded tuple naming the control prefix, and a second hardcoded branch
+# beside it would have left the same gap for the fourth.
+VALUE_CHECKED = [
+    ("control", "cmd", lambda: control_method_ids()),
+    ("modeset", "cmd", lambda: modeset_ordinals()),
+]
 
 # The denominator the committed inventories carry, per family, measured on
 # driver 610.57.04. `coverage` compares the description set against whatever
@@ -173,16 +188,20 @@ TARGET_FLOOR = {
     "uvm_tools": 7,
     "control": 531,
     "alloc": 155,
+    "modeset": 64,
 }
 
 # Variant name prefix -> reporting group. A group with no members at all means
 # the emitter stopped producing that family or the parser stopped matching the
 # emitted form, and either way the check has gone silent, so `pins` fails on an
 # empty group instead of reporting a clean run over nothing.
+# Each row is (reporting group, variant name prefix, the surface_cov family
+# it reports on, or None where the group is a calling form and not a family).
 GROUPS = [
-    ("control", "NV_ESC_RM_CONTROL_"),
-    ("alloc", "NV_ESC_RM_ALLOC_"),
-    ("xfer", "NV_ESC_IOCTL_XFER_CMD_"),
+    ("control", "NV_ESC_RM_CONTROL_", "control"),
+    ("alloc", "NV_ESC_RM_ALLOC_", "alloc"),
+    ("xfer", "NV_ESC_IOCTL_XFER_CMD_", None),
+    ("modeset", surface_cov.MODESET_PREFIX, "modeset"),
 ]
 
 # Calls whose selector field is free on purpose, keyed by (variant, struct,
@@ -372,7 +391,7 @@ def const_value(rendered):
 
 def _group_of(variant):
     """-> the reporting group a variant name falls in, or None."""
-    for group, prefix in GROUPS:
+    for group, prefix, _family in GROUPS:
         if variant.startswith(prefix):
             return group
     return None
@@ -400,15 +419,41 @@ def control_method_ids():
     return ids
 
 
-def check_pins():
-    """Every emitted leaf selector renders as a const, and a control cmd
-    renders as the method id the control inventory carries for its handler."""
-    calls, structs = read_descriptions()
-    method_ids = control_method_ids()
+def modeset_ordinals():
+    """-> {modeset variant name: the dispatch ordinal the inventory carries}.
 
-    examined, free, group_counts = 0, [], {name: 0 for name, _p in GROUPS}
+    No join is needed. The ordinal is the index into the dispatch array that
+    nvKmsIoctl reads NvKmsIoctlParams.cmd as, and the variant is named for the
+    enumeration constant sitting at that index.
+    """
+    try:
+        targets, excluded, _meta = surface_cov.load_targets()
+    except surface_cov.SurfaceError as exc:
+        raise CheckInput(str(exc))
+    ordinals = {}
+    for record in list(excluded.values()) + list(targets.values()):
+        if not record["variant"].startswith(surface_cov.MODESET_PREFIX):
+            continue
+        if record.get("nr") is not None:
+            ordinals[record["variant"]] = record["nr"]
+    return ordinals
+
+
+def check_pins():
+    """Every emitted leaf selector renders as a const, and a checked family's
+    cmd renders as the value its own inventory carries for that variant."""
+    calls, structs = read_descriptions()
+    # (group, field) -> {variant: expected}. Read once, so a family whose
+    # authority is unreadable fails the check and never passes it silently.
+    expected_by = {(group, field): lookup()
+                   for group, field, lookup in VALUE_CHECKED}
+
+    examined, free = 0, []
+    group_counts = {name: 0 for name, _p, _f in GROUPS}
     used_allowlist = set()
-    unresolved, wrong, unmatched, values = [], [], 0, {}
+    unresolved, wrong = [], []
+    unmatched = {group: 0 for group, _f, _l in VALUE_CHECKED}
+    values = {group: {} for group, _f, _l in VALUE_CHECKED}
     for variant in sorted(calls):
         struct = calls[variant]
         fields = structs.get(struct)
@@ -431,14 +476,16 @@ def check_pins():
                 group_counts[group] += 1
             rendered = fields[field]
             if rendered.startswith("const["):
-                if (field == VALUE_CHECKED[0]
-                        and variant.startswith(VALUE_CHECKED[1])):
+                authority = expected_by.get((group, field))
+                if authority is not None:
                     value = const_value(rendered)
-                    values.setdefault(value, []).append(variant)
-                    expected = method_ids.get(variant)
+                    values[group].setdefault(value, []).append(variant)
+                    expected = authority.get(variant)
                     if expected is None:
-                        unmatched += 1
-                    elif value is None or value != int(expected, 0):
+                        unmatched[group] += 1
+                    elif value is None or value != (
+                            expected if isinstance(expected, int)
+                            else int(expected, 0)):
                         wrong.append((variant, struct, rendered, expected))
                 continue
             key = (variant, struct, field)
@@ -464,10 +511,13 @@ def check_pins():
           "outside every group %d)"
           % (examined, len(calls),
              ", ".join("%s %d" % (name, group_counts[name])
-                       for name, _p in GROUPS), examined - grouped))
-    print("pins: %d control cmd(s) checked against the inventory's method id "
-          "over %d distinct value(s), %d call(s) the inventory does not carry"
-          % (sum(len(v) for v in values.values()), len(values), unmatched))
+                       for name, _p, _f in GROUPS), examined - grouped))
+    for group, field, _lookup in VALUE_CHECKED:
+        seen = values[group]
+        print("pins: %d %s %s(s) checked against the inventory over %d "
+              "distinct value(s), %d call(s) the inventory does not carry"
+              % (sum(len(v) for v in seen.values()), group, field, len(seen),
+                 unmatched[group]))
     print("pins: %d call(s) whose arg resolves to no declared struct, %d of "
           "them inside a reported group" % (len(unresolved), len(blind)))
     if not free and not stale and not empty and not wrong and not blind:
@@ -476,11 +526,11 @@ def check_pins():
         return 0
 
     if wrong:
-        print("pins: %d control cmd(s) pinned to a value the control "
-              "inventory does not carry for that handler" % len(wrong))
+        print("pins: %d selector(s) pinned to a value their own inventory "
+              "does not carry for that variant" % len(wrong))
         print()
         print("  %-46s %-34s %-24s %s"
-              % ("variant", "struct", "rendered as", "inventory method id"))
+              % ("variant", "struct", "rendered as", "inventory value"))
         print("  %-46s %-34s %-24s %s"
               % ("-" * 46, "-" * 34, "-" * 24, "-" * 19))
         for variant, struct, rendered, expected in wrong:
@@ -491,7 +541,7 @@ def check_pins():
               "leaf than the one the variant is named for, and every later "
               "measurement joins on the name. Regenerate the description set "
               "with tools/syzlang_gen.py emit against the same checkout the "
-              "control inventory was built from.")
+              "inventories were built from.")
     for variant, struct, group in blind:
         print("pins: %s is in the %s group and its arg resolves to %r, which "
               "no description declares as a struct. No field of it is "
@@ -569,9 +619,11 @@ def check_coverage():
         raise CheckInput(str(exc))
     ep_declared = set(surface_cov.scan_call_names(_description_files()))
     ep_missing = sorted(ep_expected - ep_declared)
-    print("coverage: %d entry point(s) on the %d modelled device node(s), of "
-          "%d the driver registers in total. Counted apart from the command "
-          "denominator above and never inside it."
+    print("coverage: %d entry point(s) on the %d device node(s) whose entry "
+          "points are modelled, of %d the driver registers in total. Counted "
+          "apart from the command denominator above and never inside it. "
+          "/dev/nvidia-modeset is opened for the modeset command family and "
+          "its own mmap and poll are not modelled."
           % (ep_modelled, sum(len(t.get("paths") or []) for t in ep_tables),
              ep_registered))
     print("coverage: %d entry-point call(s) required, %d declared"

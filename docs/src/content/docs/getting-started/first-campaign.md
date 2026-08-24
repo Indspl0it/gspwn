@@ -129,11 +129,12 @@ independent only from round 2 on.
 ### describe
 
 Authors syzlang descriptions for the ioctl surface of `/dev/nvidiactl`,
-`/dev/nvidiaX` and `/dev/nvidia-uvm[-tools]`. Every number and struct layout
-comes from the driver source, because the ABI shifts between branches and a
-wrong direction bit produces descriptions that compile, run and never reach the
-driver. `nvidia-drm`, `nvidia-modeset` and `/dev/dri/*` are out of scope: a
-default container tenant never receives those nodes.
+`/dev/nvidiaX`, `/dev/nvidia-uvm[-tools]` and `/dev/nvidia-modeset`. Every
+number and struct layout comes from the driver source, because the ABI shifts
+between branches and a wrong direction bit produces descriptions that compile,
+run and never reach the driver. `nvidia-drm` and `/dev/dri/*` are out of scope:
+a default container tenant receives neither on the legacy injection path, and
+the CDI path for those nodes has not been traced.
 
 Agent-authored descriptions are treated as untrusted until measured, so the
 gate needs four items:

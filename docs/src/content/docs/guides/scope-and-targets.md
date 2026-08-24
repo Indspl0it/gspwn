@@ -38,25 +38,34 @@ refuses it: the value must be a list of non-empty strings.
 | `/dev/nvidiaX` | Yes | Same |
 | `/dev/nvidia-uvm` | Yes | Same |
 | `/dev/nvidia-uvm-tools` | Yes | Same |
-| `/dev/nvidia-modeset` | No | Requires the `graphics` or `display` capability |
-| `/dev/dri/*` | No | Same |
+| `/dev/nvidia-modeset` | Yes | Injected by the CDI generator with no capability check |
+| `/dev/dri/*` | No | Withheld under the default capability set on the legacy path. Untraced under CDI |
 
-`NVIDIA_DRIVER_CAPABILITIES` gates which device nodes a container receives. The
-default that CUDA images request, `compute,utility`, yields no `/dev/dri` and
-no `nvidia-drm` nodes. Any ioctl surface reachable only through them is outside
-a default tenant's reach, so a crash found there falls outside the threat model
-and the descriptions for it are not written.
+The injection path decides the modeset node. The CDI generator lists it beside
+the other control nodes and applies no capability test, and `jit-cdi` is the
+default runtime mode, so a default tenant holds it. The legacy path withholds
+it unless the `display` value is set. The
+[threat model](/gspwn/architecture/threat-model/#device-node-injection-paths)
+carries both mechanisms with their source citations.
 
-The exclusion is enforced in two places. The `describe` sub-agent is told to
-skip those nodes, and `tools/trace2seed.py` refuses to emit a seed referencing
-`/dev/nvidia-modeset`:
+`NVIDIA_DRIVER_CAPABILITIES` gates the legacy path. The default that CUDA
+images request, `compute,utility`, yields no `/dev/dri` and no `nvidia-drm`
+nodes there. The equivalent CDI path for DRM nodes has not been traced, so the
+`/dev/dri/*` exclusion holds provisionally in this branch. An ioctl surface
+reachable only through those nodes is outside a default tenant's reach, so a
+crash found there falls outside the threat model and the descriptions for it
+are not written.
+
+The `/dev/dri/*` exclusion is enforced in two places. The `describe` sub-agent
+is told to skip those nodes, and `tools/trace2seed.py` refuses to emit a seed
+referencing an out-of-scope device:
 
 ```
 # skipped: nvidia-modeset out of scope
 ```
 
-A seed that referenced it would fail the syzkaller-parse gate anyway, because
-no description models it.
+A seed referencing an unmodelled node fails the syzkaller-parse gate anyway,
+because no description declares a call against it.
 
 Widening scope requires a decision recorded in the
 [threat model](/gspwn/architecture/threat-model/) before the `describe`

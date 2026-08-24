@@ -245,7 +245,7 @@ coverage alone.
    and `surface/entry-points.json` records every table it defines with the
    entry points each registers. Entry points are counted beside the command
    denominator and never inside it: an `mmap` or a `poll` carries no method
-   id, no parameter struct and no inventory row, so the 764 counts commands
+   id, no parameter struct and no inventory row, so the 828 counts commands
    alone.
 
    The set also declares one pseudo-syscall, `syz_nvidia_uvm_init`. The
@@ -272,16 +272,25 @@ coverage alone.
    python3 tools/surface_cov.py gaps --stage model --top 40
    ```
 
-   `modelled` reports the share of the 764 targetable commands that have a
-   syzlang variant. The generated baseline already reaches 764 of 764, so this
+   `modelled` reports the share of the 828 targetable commands that have a
+   syzlang variant. The generated baseline already reaches 828 of 828, so this
    number is a regression check. It counts variants declared, never variants
    correct, and a lower number means a variant was lost or renamed. The
-   denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control and 155 alloc
-   targets. It excludes the 236 control commands routed to GSP, the 104
-   uvm_test commands behind `uvm_enable_builtin_tests=1`, the 3 escapes
-   declared with no dispatch case, and the 2 multiplexer escapes whose leaves
-   already count in the control and alloc families. `gaps --stage model` names
-   the targets no description declares.
+   denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc and
+   64 modeset targets. It excludes the 236 control commands routed to GSP, the
+   104 uvm_test commands behind `uvm_enable_builtin_tests=1`, the 3 escapes
+   declared with no dispatch case, the 2 multiplexer escapes whose leaves
+   already count in the control and alloc families, and the 2 modeset commands
+   the dispatch table leaves empty. `gaps --stage model` names the targets no
+   description declares.
+
+   The modeset family carries a limitation the other five do not. All 64
+   commands reach the kernel through one request number, `0xc0106d00`, and
+   the leaf lives in `NvKmsIoctlParams.cmd`, which a strace-shaped trace does
+   not carry. `tools/trace2seed.py` therefore names the family and never the
+   command for a traced modeset call. Correct a modeset description against
+   `surface/nvkms-command-inventory.json` and the header, never against a
+   trace.
 
    The corpus stage measures this round: the count of targets that go from
    declared-but-never-emitted to emitted after the corrections. It is a delta
@@ -293,7 +302,7 @@ coverage alone.
    | after | `python3 tools/surface_cov.py gaps --stage corpus --run-id <smoke run id>` | the smoke run's own `workdir/corpus.db`, unpacked through syz-db |
 
    One smoke run answers both, and the "before" reading needs no run at all.
-   In round 1 the bank is empty, so the before reading is 764 by construction
+   In round 1 the bank is empty, so the before reading is 828 by construction
    and the delta measures the smoke run alone. The smoke run takes a run id of
    the form `r<round>-<n>` from the same namespace the fuzz phase allocates
    from, recorded with `pipeline_ctl.py round-add-run`, and the round's
@@ -325,15 +334,19 @@ coverage alone.
    theirs, so there is nothing to import from them. The only public NVIDIA
    syzlang is Moneta's, at github.com/yonsei-sslab/moneta, whose payloads are
    untyped byte arrays. It carries the escape numbering and no parameter
-   structure, and it models /dev/nvidia-modeset, which is out of scope here.
+   structure, and its /dev/nvidia-modeset descriptions carry no parameter
+   structure either, so they import nothing this set does not already type.
    A crash found only in imported descriptions is not this campaign's finding
    to claim. (Round 1 only, because later rounds start from the worklist.)
-2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools].
-   Skip nvidia-drm, nvidia-modeset and /dev/dri/*, which are out of scope.
-   Those nodes exist only when the container asks for the `graphics` or
+2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools]
+   and /dev/nvidia-modeset. Skip nvidia-drm and /dev/dri/*, which are out of
+   scope. Those two exist only when the container asks for the `graphics` or
    `display` capability, and the threat model is a default tenant
    (`compute,utility`), which gets neither. A crash found there could not be
    claimed under the model, so the descriptions are not worth the round.
+   /dev/nvidia-modeset is inside the model: `lookup_devices` at
+   `libnvidia-container/src/nvc_info.c:515` creates it beside the other four
+   and withholds it only under `OPT_NO_MODESET`.
    Widening scope is a decision recorded in the threat model first. This phase
    does not widen it because the ioctls looked reachable.
 
@@ -504,7 +517,7 @@ Record progress with the state tool, never by editing pipeline.json:
   `docs/src/content/docs/reference/surface/` regenerated and committed with the
   artefacts.
 - The `surface_cov.py modelled` line, which is a regression check and still
-  reads 764/764.
+  reads 828/828.
 - The `NV_ESC_IOCTL_XFER_CMD` `cmd` constraint set quoted from the
   description, with `regression_check.py pins` output beside it.
 - Audit file path with the sampled verdicts and any in-handler capability

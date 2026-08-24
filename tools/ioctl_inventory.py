@@ -6,9 +6,21 @@ phase needs the 32-bit request number strace prints for each. Both come from
 the driver source, and both go stale when the driver branch moves, so this
 tool re-reads a checkout on every run and carries no table of its own.
 
-Three device-node families are in scope (docs threat model): /dev/nvidiactl
-and /dev/nvidiaN, /dev/nvidia-uvm, /dev/nvidia-uvm-tools. nvidia-drm,
-nvidia-modeset and /dev/dri/* are excluded.
+Three device-node families are in scope for the command inventory (docs threat
+model): /dev/nvidiactl and /dev/nvidiaN, /dev/nvidia-uvm,
+/dev/nvidia-uvm-tools. nvidia-drm and /dev/dri/* are excluded.
+
+/dev/nvidia-modeset is handled by `--emit-map` alone. Its whole command set
+multiplexes through one kernel request number, so the map records that number
+and this tool's inventory and counts stay as they were.
+tools/nvkms_inventory.py enumerates the command set behind it.
+
+That number resolves the family for triage and never the sub-command. Every
+call on the node carries it, and the command itself is NvKmsIoctlParams.cmd,
+which sits in the payload and appears in no ioctl trace. This is F18, accepted
+as a permanent limitation of this branch, so a crash matched on this number is
+matched at family level and a reader must not take it for a command-level
+match.
 
 Two numbering schemes appear, and conflating them produces request numbers the
 driver never sees:
@@ -75,6 +87,13 @@ UVM_TEST_C = "kernel-open/nvidia-uvm/uvm_test.c"
 UVM_API_H = "kernel-open/nvidia-uvm/uvm_api.h"
 VERSION_MK = "version.mk"
 
+# The modeset envelope, in both places the tree publishes it. The kernel
+# module compiles against the kernel-open copy and the user-mode side against
+# the interface copy, so a tree where the two differ carries two request
+# numbers for one node. nvkms_request() requires them to agree.
+NVKMS_IOCTL_H = "kernel-open/nvidia-modeset/nvkms-ioctl.h"
+NVKMS_IOCTL_H_INTERFACE = "src/nvidia-modeset/interface/nvkms-ioctl.h"
+
 # The key tools/surface_verify.py reads out of tools/ioctl_map.json,
 # and the format its `stamp` subcommand writes. --emit-map rewrites the
 # whole map, so a stamp applied by that subcommand is dropped on the next
@@ -87,6 +106,16 @@ MAP_VERSION_KEY = "comment_driver_version"
 # tools/regression_check.py's read_ioctl_map(). trace2seed reads the section
 # by name.
 MAP_MULTIPLEXER_KEY = "comment_multiplexers"
+
+# The section of tools/ioctl_map.json holding /dev/nvidia-modeset's one
+# request number. Its key starts with "comment" for the same reason the
+# multiplexer section's does: no description declares a call for the number,
+# so a top-level entry would be looked up as a call name by trace2seed and
+# checked against the description set by regression_check. It hangs under its
+# own key and not under MAP_MULTIPLEXER_KEY because that section is rendered
+# as the RM escapes page's multiplexer table, whose leaf counts are the RM
+# control and allocation totals and do not describe this node.
+MAP_MODESET_KEY = "comment_modeset"
 
 # Escapes whose request number names a dispatcher and not a command, mapped to
 # the parameter-struct field that selects the leaf. The describe phase emits one
@@ -102,6 +131,7 @@ MULTIPLEXER_SELECTOR = {
 REQUIRED_FILES = ESCAPE_NUMBER_FILES + [
     ESCAPE_C, OSAPI_C, NV_C, NV_H, UVM_IOCTL_H, UVM_LINUX_IOCTL_H,
     UVM_TEST_IOCTL_H, UVM_C, UVM_TOOLS_C, UVM_TEST_C, UVM_API_H,
+    NVKMS_IOCTL_H, NVKMS_IOCTL_H_INTERFACE,
 ]
 
 # Include paths that make the driver's parameter headers compile standalone
@@ -184,6 +214,49 @@ PLATFORM_SIZE_LIMIT_NOTE = (
 # still one dispatch case, so they are not a separate scheme. What XFER adds is
 # an argument size above IOC_SIZE_MAX, recorded per command as xfer_only.
 XFER_ESCAPE = "NV_ESC_IOCTL_XFER_CMD"
+
+# /dev/nvidia-modeset is the opposite case to XFER above, and it is the same
+# shape as an RM multiplexer. XFER gives each sub-command its own request
+# number because its argument size differs. The modeset node gives its whole
+# command set one number, because the envelope is a fixed 16 bytes whatever
+# command travels in it. nvkms_ioctl() at NVKMS_DISPATCH_SOURCE compares
+# _IOC_NR against NVKMS_IOCTL_CMD and _IOC_SIZE against sizeof(struct
+# NvKmsIoctlParams), returns -ENOTTY for anything else, and passes params.cmd
+# on as the command. Magic and direction are read by nothing there, exactly as
+# on the RM path, so NVKMS_IOCTL_IOWR is the encoding the user-mode driver is
+# expected to use and a trace showing another is a correction to make here.
+#
+# The number therefore resolves the family for triage and never the
+# sub-command, because params.cmd sits in the payload and no ioctl trace
+# carries it. That is F18, accepted as a permanent limitation of this branch.
+# A triaged crash matched on this number is matched at family level only, and
+# MODESET_DOC states that inside the artefact so a reader of the map cannot
+# mistake it for a command-level match.
+NVKMS_DISPATCH_SOURCE = (
+    "kernel-open/nvidia-modeset/nvidia-modeset-linux.c:1981 (nvkms_ioctl)")
+NVKMS_NODE = "/dev/nvidia-modeset"
+NVKMS_ESCAPE = "NVKMS_IOCTL_CMD"
+NVKMS_PARAM_STRUCT = "NvKmsIoctlParams"
+NVKMS_SELECTOR_FIELD = "cmd"
+
+# Fixed-width scalar types the modeset envelope declares, as (size, alignment)
+# on x86-64. The set is small on purpose: a member of any other type raises,
+# because sizing it would take a rule this table does not state and the whole
+# request number is derived from the total.
+NVKMS_SCALARS = {
+    "NvU8": (1, 1), "NvS8": (1, 1), "NvBool": (1, 1),
+    "NvU16": (2, 2), "NvS16": (2, 2),
+    "NvU32": (4, 4), "NvS32": (4, 4),
+    "NvU64": (8, 8), "NvS64": (8, 8),
+}
+
+RE_NVKMS_MAGIC = re.compile(r"^#define\s+NVKMS_IOCTL_MAGIC\s+'(.)'", re.M)
+RE_NVKMS_CMD = re.compile(r"^#define\s+NVKMS_IOCTL_CMD\s+(\d+)\s*$", re.M)
+RE_NVKMS_PARAMS = re.compile(
+    r"struct\s+NvKmsIoctlParams\s*\{(?P<body>[^}]*)\}\s*;")
+RE_NVKMS_MEMBER = re.compile(
+    r"^\s*(?P<type>\w+)\s+(?P<name>\w+)"
+    r"(?:\s+NV_ALIGN_BYTES\(\s*(?P<align>\d+)\s*\))?\s*;\s*$", re.M)
 
 DEV_NVIDIA = ["/dev/nvidiactl", "/dev/nvidiaN"]
 DEV_UVM = ["/dev/nvidia-uvm"]
@@ -1003,7 +1076,7 @@ MULTIPLEXER_DOC = (
     "surface/rm-chains.json instead.")
 
 
-def build_map(inventory, stamp=None):
+def build_map(inventory, stamp=None, modeset=None):
     """Return the trace2seed request-number map for this inventory.
 
     Commands whose size did not resolve are left out: a key that names the
@@ -1015,6 +1088,11 @@ def build_map(inventory, stamp=None):
     request numbers carry 686 of the 764 targets between them and dominate a
     real CUDA trace, and the name the escape used to carry is declared by no
     description.
+
+    `modeset` is nvkms_request()'s section, or None where it was not derived.
+    It records the one request number /dev/nvidia-modeset accepts, and it goes
+    under MAP_MODESET_KEY for the same reason again: the number covers the
+    whole modeset command set and no call name resolves it.
     """
     out = dict(MAP_COMMENTS)
     multiplexers = {}
@@ -1052,11 +1130,20 @@ def build_map(inventory, stamp=None):
     if multiplexers:
         out[MAP_MULTIPLEXER_KEY] = {"doc": MULTIPLEXER_DOC,
                                     "requests": multiplexers}
+    if modeset:
+        out[MAP_MODESET_KEY] = modeset
     logger.info("map covers %d request numbers, %d multiplexer request "
                 "numbers; %d commands omitted (%s)",
                 sum(1 for k in out if not k.startswith("comment")),
                 len(multiplexers), len(skipped), "gated or size unresolved")
-    return out, skipped
+    # Every comment key first, then the request numbers, whatever order the
+    # keys were added in. The multiplexer and modeset sections are only known
+    # after the loop above, so insertion order alone would append them below
+    # the numbers and every regeneration would move forty lines of a
+    # generated file around the one line that actually changed.
+    comments = [k for k in out if k.startswith("comment")]
+    numbers = [k for k in out if not k.startswith("comment")]
+    return {k: out[k] for k in comments + numbers}, skipped
 
 
 def multiplexer_entries(command, keys):
@@ -1097,6 +1184,139 @@ def multiplexer_entries(command, keys):
             "variant_prefix": command["syzlang"] + "_",
         }
     return out
+
+
+MODESET_DOC = (
+    "/dev/nvidia-modeset accepts one kernel ioctl request number for its "
+    "whole command set. nvkms_ioctl() refuses any other _IOC_NR or _IOC_SIZE "
+    "with -ENOTTY, and the command itself is NvKmsIoctlParams.cmd, read after "
+    "copy_from_user. The number below resolves the family for triage and "
+    "never the sub-command, because the selector sits in the payload and no "
+    "ioctl trace carries it. That is F18, accepted as a permanent limitation "
+    "of this branch: a crash or a traced call matched on this number is "
+    "matched at family level, and taking it for a command-level match is an "
+    "error. tools/nvkms_inventory.py enumerates the commands behind it. No "
+    "single call name covers the number, so it is recorded here and never in "
+    "the name map above, where trace2seed and regression_check would read it "
+    "as a description name.")
+
+
+def nvkms_struct_size(body, where):
+    """-> sizeof the modeset envelope, from its own member declarations.
+
+    Sizes elsewhere in this tool are measured by compiling the header, and
+    that route needs the RM and UVM header set on the include path. The
+    modeset envelope declares fixed-width scalars and one alignment
+    attribute, so the declaration states its layout in full. A member of any
+    type NVKMS_SCALARS does not carry raises, so a driver branch that puts a
+    union or a nested struct in the envelope stops the run and never produces
+    a request number built on an assumed width. The measured JSON still wins
+    where it carries this struct; see nvkms_request().
+    """
+    members = list(RE_NVKMS_MEMBER.finditer(body))
+    if not members:
+        raise InventoryError(
+            "%s declares struct %s with no member this parser recognises, so "
+            "its size cannot be derived and neither can the one request "
+            "number %s accepts" % (where, NVKMS_PARAM_STRUCT, NVKMS_NODE))
+    offset, widest = 0, 1
+    for member in members:
+        kind = member.group("type")
+        if kind not in NVKMS_SCALARS:
+            raise InventoryError(
+                "%s declares %s.%s as %s, which is not one of the "
+                "fixed-width scalars this parser sizes (%s). The request "
+                "number is derived from sizeof(%s), and no size is ever "
+                "guessed to fill a row."
+                % (where, NVKMS_PARAM_STRUCT, member.group("name"), kind,
+                   ", ".join(sorted(NVKMS_SCALARS)), NVKMS_PARAM_STRUCT))
+        width, align = NVKMS_SCALARS[kind]
+        forced = member.group("align")
+        if forced:
+            align = max(align, int(forced))
+        offset = -(-offset // align) * align + width
+        widest = max(widest, align)
+    return -(-offset // widest) * widest
+
+
+def nvkms_request(src, sizes=None):
+    """-> the modeset section of the map, derived from the driver headers.
+
+    Both copies of nvkms-ioctl.h are read and required to agree, because a
+    tree where they differ carries two request numbers for one node and the
+    map holds one.
+
+    `sizes` cross-checks the derived envelope size wherever the measured JSON
+    carries this struct. A disagreement raises: one of the two readings is
+    then wrong, and the request number is built from the size.
+    """
+    readings = {}
+    for relative in (NVKMS_IOCTL_H, NVKMS_IOCTL_H_INTERFACE):
+        path = os.path.join(src, *relative.split("/"))
+        if not os.path.isfile(path):
+            raise InventoryError(
+                "the modeset envelope header is missing from --src: %s. "
+                "--emit-map records the one request number %s accepts, and "
+                "that number is derived from this file."
+                % (relative, NVKMS_NODE))
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+        magic = RE_NVKMS_MAGIC.search(text)
+        number = RE_NVKMS_CMD.search(text)
+        params = RE_NVKMS_PARAMS.search(text)
+        absent = [name for name, found in
+                  (("NVKMS_IOCTL_MAGIC", magic), ("NVKMS_IOCTL_CMD", number),
+                   ("struct " + NVKMS_PARAM_STRUCT, params)) if not found]
+        if absent:
+            raise InventoryError(
+                "%s does not declare %s, so the request number %s accepts "
+                "cannot be derived from it"
+                % (relative, ", ".join(absent), NVKMS_NODE))
+        readings[relative] = (magic.group(1), int(number.group(1)),
+                              nvkms_struct_size(params.group("body"), relative))
+    kernel, published = readings[NVKMS_IOCTL_H], readings[NVKMS_IOCTL_H_INTERFACE]
+    if kernel != published:
+        raise InventoryError(
+            "the two copies of nvkms-ioctl.h disagree, so this checkout "
+            "carries two request numbers for one node and the map holds one: "
+            "%s gives magic %r, nr %d, %d-byte envelope; %s gives magic %r, "
+            "nr %d, %d-byte envelope"
+            % ((NVKMS_IOCTL_H,) + kernel + (NVKMS_IOCTL_H_INTERFACE,)
+               + published))
+    magic, number, size = kernel
+    measured = (sizes or {}).get(NVKMS_PARAM_STRUCT)
+    if measured is not None and measured != size:
+        raise InventoryError(
+            "the measured sizes give %s %d bytes and %s declares a %d-byte "
+            "layout. The request number is derived from the size, so the two "
+            "readings have to agree before either is written."
+            % (NVKMS_PARAM_STRUCT, measured, NVKMS_IOCTL_H, size))
+    if size > IOC_SIZE_MAX:
+        raise InventoryError(
+            "%s declares a %d-byte %s, above the %d-byte ceiling the 14-bit "
+            "_IOC_SIZE field can carry, so no direct request number encodes "
+            "it" % (NVKMS_IOCTL_H, size, NVKMS_PARAM_STRUCT, IOC_SIZE_MAX))
+    # The same encoder the RM escapes use. NVKMS_IOCTL_IOWR is _IOWR like
+    # __NV_IOWR, and a second copy of the formula here is the error class the
+    # numbering-scheme note at the top of this module exists to prevent.
+    request = hex(rm_request(ord(magic), number, size))
+    logger.info("modeset: %s = _IOWR('%s', %d, %d-byte %s) for %s",
+                request, magic, number, size, NVKMS_PARAM_STRUCT, NVKMS_NODE)
+    return {
+        "doc": MODESET_DOC,
+        "requests": {request: {
+            "node": NVKMS_NODE,
+            "escape": NVKMS_ESCAPE,
+            "param_struct": NVKMS_PARAM_STRUCT,
+            "param_size": size,
+            "selector_field": NVKMS_SELECTOR_FIELD,
+            "magic": magic,
+            "nr": number,
+            "resolves": "family",
+            "source": NVKMS_IOCTL_H,
+            "dispatch_source": NVKMS_DISPATCH_SOURCE,
+        }},
+    }
 
 
 def refuse_size_regression(out_path, inventory):
@@ -1202,8 +1422,10 @@ OUTSIDE_TENANT_SURFACE = (
 #
 # `modelled` is true for the nodes descriptions/nvidia.txt opens.
 # `tenant_surface` records whether the node exists inside a default container.
-# The two are independent: /dev/nvidia-modeset is inside the tenant surface
-# and carries no description at this revision.
+# The two are independent, and they are independent per entry point:
+# /dev/nvidia-modeset is inside the tenant surface and its commands are
+# modelled, while the mmap and poll this table registers are not, so it is
+# recorded here as unmodelled and its `reason` says which half is which.
 FOPS_TABLES = (
     {
         "fops": "nvidia_fops",
@@ -1256,11 +1478,30 @@ FOPS_TABLES = (
         "paths": ["/dev/nvidia-modeset"],
         "modelled": False,
         "tenant_surface": True,
-        "reason": "lookup_devices at %s creates the node in a default "
-                  "container, so it is inside the tenant surface. The "
-                  "description set opens no descriptor on it at this "
-                  "revision, and its command family is not in the "
-                  "denominator." % TENANT_DEVICE_SOURCE,
+        # Reachability here is path-dependent, and TENANT_DEVICE_SOURCE
+        # above does not settle it. lookup_devices builds the host-side
+        # driver info list; the mount decision for this node is a separate
+        # gate in nvc_mount.c, and the CDI generator is a second injection
+        # path that does not consult it at all. Both paths are cited in the
+        # reason below, because a reader who takes either one for the whole
+        # picture gets the opposite answer about a default tenant.
+        "reason": "The node reaches a default tenant on the CDI path. "
+                  "controlDeviceNodeDiscoverer at "
+                  "nvidia-container-toolkit/pkg/nvcdi/common-nvml.go:52-63 "
+                  "lists it beside /dev/nvidiactl, /dev/nvidia-uvm and "
+                  "/dev/nvidia-uvm-tools with no capability check, and "
+                  "nvidia-container-toolkit/internal/info/auto.go:89 makes "
+                  "that path the default runtime mode. The legacy path needs "
+                  "the display capability: "
+                  "libnvidia-container/src/nvc_mount.c:786 skips the modeset "
+                  "minor unless OPT_DISPLAY is set, "
+                  "libnvidia-container/src/options.h:92 sets that flag from "
+                  "the display capability alone, and "
+                  "libnvidia-container/src/options.h:100 leaves display out "
+                  "of the default capability set. The description set opens "
+                  "a descriptor on the node and its 64 commands are inside "
+                  "the denominator. The mmap and poll entry points of this "
+                  "table are not modelled.",
     },
     {
         "fops": "nvlink_fops",
@@ -1640,13 +1881,20 @@ def main(argv=None):
 
     try:
         if a.emit_map:
-            mapping, skipped = build_map(inventory, version_stamp(a.src))
+            modeset = nvkms_request(a.src, sizes)
+            mapping, skipped = build_map(inventory, version_stamp(a.src),
+                                         modeset)
             write_json(a.emit_map, mapping)
             requests = sum(1 for k in mapping if not k.startswith("comment"))
             muxes = len(mapping.get(MAP_MULTIPLEXER_KEY, {}).get("requests", {}))
             print("wrote %s (%d request numbers, %d multiplexer request "
                   "numbers carrying no call name, %d commands omitted)"
                   % (a.emit_map, requests, muxes, len(skipped)))
+            for request, record in sorted(modeset["requests"].items()):
+                print("  %s is %s's one request number, family %s only: the "
+                      "sub-command is %s.%s and no trace carries it (F18)"
+                      % (request, record["node"], record["escape"],
+                         record["param_struct"], record["selector_field"]))
         if a.emit_entry_points:
             entry_points = build_entry_points(a.src)
             write_json(a.emit_entry_points, entry_points)

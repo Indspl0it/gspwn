@@ -105,7 +105,7 @@ testable.
 | Never emit a three-argument `openat` | `openat` takes four arguments, the first being the directory file descriptor. Emitting three produces seeds syz-manager refuses to parse, and the whole bank then fails the seeds gate with an error that resembles a description problem |
 | Never share a descriptor across processes | File descriptors are a per-process namespace, and `strace -f` interleaves several |
 | Never treat an undecoded request as unmappable | `strace -v` prints unrecognised requests as `_IOC(...)`; decoding that form makes an unmapped entry a genuine gap in the map |
-| Never emit a seed referencing an out-of-scope device | The `describe` phase does not model `/dev/nvidia-modeset`, so a seed referencing it fails the syzkaller-parse gate |
+| Never emit a seed referencing an out-of-scope device | The `describe` phase does not model `/dev/dri/*`, so a seed referencing it fails the syzkaller-parse gate |
 | Never count mapped calls by a description-name prefix | The map's values are whatever the `describe` phase named its descriptions, and the count matches any emitted call whose first argument is a resource variable |
 | Never overwrite an existing seed | A count-based name overwrites an existing file when the bank has gaps |
 | Never let uppercase-hex map keys silently miss | A map written in uppercase would yield 100% unmapped |

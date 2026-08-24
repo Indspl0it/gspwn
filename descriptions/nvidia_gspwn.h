@@ -209,4 +209,11 @@
 #define UVM_TEST_DRAIN_ACCESS_COUNTERS           0x13b
 #define UVM_TEST_QUERY_CDMM_DEVMEM               0x13c
 
+/* /dev/nvidia-modeset */
+/* One number for the whole command set. The leaf lives in
+ * NvKmsIoctlParams.cmd and is invisible to _IOC, so a trace
+ * carrying this number names the family and not the command.
+ */
+#define NVKMS_IOCTL_CMD_REQUEST                  0xc0106d00
+
 #endif /* GSPWN_NVIDIA_IOCTL_H */

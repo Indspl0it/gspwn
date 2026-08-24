@@ -98,7 +98,7 @@ The content the tools put in front of the agent.
 How the two curves are read. The campaign's stopping rule rests on these
 numbers. The first six govern the edge curve, whose asymptote is unknown and
 has to be extrapolated. The last three govern the surface curve, whose
-denominator is counted at 764, and the completion rule over it invents no
+denominator is counted at 828, and the completion rule over it invents no
 percentage threshold.
 
 | Key | Effect | Type | Accepted values | Default | Read by |

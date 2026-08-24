@@ -8,19 +8,23 @@
 # the same numbers as _IOWR macros for syz-extract to consume on the SUT.
 
 
-# Device nodes. nvidia-drm, nvidia-modeset and /dev/dri/* are out of
-# scope in the threat model, so nothing here opens them.
+# Device nodes. nvidia-drm and /dev/dri/* are out of scope in the
+# threat model, so nothing here opens them. /dev/nvidia-modeset is
+# in scope: libnvidia-container creates it by default
+# (src/nvc.c:317) and withholds it only under OPT_NO_MODESET.
 resource fd_nv[fd]
 resource fd_nvidiactl[fd_nv]
 resource fd_nvidia[fd_nv]
 resource fd_nvidia_uvm[fd]
 resource fd_nvidia_uvm_tools[fd]
+resource fd_nvidia_modeset[fd]
 resource fd_nvidia_uvm_vaspace[fd_nvidia_uvm]
 
 openat$nvidiactl(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidiactl"]], flags const[0x2], mode const[0]) fd_nvidiactl
 openat$nvidia(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia#"]], flags const[0x2], mode const[0]) fd_nvidia
 openat$nvidia_uvm(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-uvm"]], flags const[0x2], mode const[0]) fd_nvidia_uvm
 openat$nvidia_uvm_tools(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-uvm-tools"]], flags const[0x2], mode const[0]) fd_nvidia_uvm_tools
+openat$nvidia_modeset(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-modeset"]], flags const[0x2], mode const[0]) fd_nvidia_modeset
 
 # The initialised UVM descriptor. 36 of the 39 uvm commands and
 # uvm_mmap refuse a descriptor that has not been through

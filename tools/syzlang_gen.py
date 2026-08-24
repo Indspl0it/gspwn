@@ -148,11 +148,22 @@ UVM_INIT_FLAG_MACROS = (
 
 # Header trees the struct parser reads, relative to --src, longest include
 # root first so a header's include path is computed against the right one.
+#
+# src/nvidia-modeset/interface holds nvkms-api.h, which declares every modeset
+# parameter struct and is the only copy of that header in the tree.
+# src/common/unix/common/inc holds nv_mode_timings.h, which nvkms-api.h:201
+# includes and which exists nowhere else; without it the modeset translation
+# unit does not preprocess. Three of the modeset interface headers,
+# nvkms-api-types.h, nvkms-format.h and nvkms-ioctl.h, are byte-identical
+# copies of files already under kernel-open, so the two roots below add no
+# second definition of anything already parsed.
 INCLUDE_ROOTS = [
     os.path.join("kernel-open", "nvidia-uvm"),
     os.path.join("kernel-open", "common", "inc"),
     os.path.join("src", "common", "sdk", "nvidia", "inc"),
     os.path.join("src", "common", "inc"),
+    os.path.join("src", "common", "unix", "common", "inc"),
+    os.path.join("src", "nvidia-modeset", "interface"),
     os.path.join("src", "nvidia", "arch", "nvalloc", "unix", "include"),
 ]
 
@@ -162,12 +173,19 @@ INCLUDE_ROOTS = [
 # through the quoted-include rule. A control header three directories down has
 # no sibling and falls through to the -I order, so with kernel-open first the
 # translation unit gets both copies and every RS_ACCESS type is a redefinition.
+#
+# The modeset interface sits last for the same reason: its nvkms-api-types.h,
+# nvkms-format.h and nvkms-ioctl.h duplicate kernel-open/common/inc copies
+# byte for byte, so whichever arm resolves first gives the same translation
+# unit and the shared include guards make the second inclusion a no-op.
 PROBE_INCLUDES = [
     os.path.join("kernel-open", "nvidia-uvm"),
     os.path.join("src", "common", "sdk", "nvidia", "inc"),
     os.path.join("kernel-open", "common", "inc"),
     os.path.join("src", "common", "inc"),
+    os.path.join("src", "common", "unix", "common", "inc"),
     os.path.join("src", "nvidia", "arch", "nvalloc", "unix", "include"),
+    os.path.join("src", "nvidia-modeset", "interface"),
 ]
 
 # Base type sizes and alignments for x86-64 System V, which is the only
@@ -207,6 +225,72 @@ ALLOC_ESCAPE = "NV_ESC_RM_ALLOC"
 # a loop, so the inner command is dispatched once and cannot unwrap again.
 XFER_ESCAPE = "NV_ESC_IOCTL_XFER_CMD"
 XFER_STRUCT = "nv_ioctl_xfer_t"
+
+# ---------------------------------------------------------------------------
+# /dev/nvidia-modeset
+# ---------------------------------------------------------------------------
+
+# The whole modeset command set reaches the kernel through one request number.
+# nvkms-ioctl.h:47 defines NVKMS_IOCTL_IOWR as _IOWR(NVKMS_IOCTL_MAGIC,
+# NVKMS_IOCTL_CMD, struct NvKmsIoctlParams), and nvkms.c reads the real command
+# from NvKmsIoctlParams.cmd after copy_from_user. NV_ESC_RM_CONTROL has the
+# same shape, so the emission below mirrors emit_control: one variant per leaf,
+# each carrying a per-variant copy of the envelope with cmd pinned.
+
+# The Linux _IOC field layout, from include/uapi/asm-generic/ioctl.h: the
+# command number in bits 0 to 7, the magic in 8 to 15, the argument size in 16
+# to 29 and the direction in 30 to 31, with _IOC_WRITE 1 and _IOC_READ 2, so
+# _IOWR sets both. surface/ioctl-inventory.json records the same widths for
+# the RM escapes under `encoding`; they are repeated here because the modeset
+# node has no inventory row carrying a request number.
+IOC_TYPE_SHIFT = 8
+IOC_SIZE_SHIFT = 16
+IOC_SIZE_BITS = 14
+IOC_SIZE_MAX = (1 << IOC_SIZE_BITS) - 1
+IOC_DIRECTION_SHIFT = 30
+IOC_DIRECTION_READ_WRITE = 3
+
+NVKMS_NODE = "/dev/nvidia-modeset"
+NVKMS_FD_RESOURCE = "fd_nvidia_modeset"
+NVKMS_ENVELOPE_STRUCT = "NvKmsIoctlParams"
+NVKMS_MAGIC_MACRO = "NVKMS_IOCTL_MAGIC"
+NVKMS_CMD_MACRO = "NVKMS_IOCTL_CMD"
+NVKMS_VARIANT_PREFIX = "NVKMS_IOCTL_"
+NVKMS_STRUCT_PREFIX = "nvkms_params_"
+
+# The ten flat handle typedefs of nvkms-api-types.h:55-64, each a plain NvU32
+# with no class hierarchy behind it. Typing a member by its C type rather than
+# by its field name works here and not for RM, because every one of these is a
+# distinct typedef the header applies consistently, where RM spells every
+# handle NvHandle and the type carries no information.
+#
+# Each parameter struct is pointed at inout, so pkg/compiler/check.go:891
+# counts one member as both a constructor and an input for its resource, which
+# is what a reply field carrying a handle and a request field consuming one
+# actually are.
+NVKMS_HANDLE_TYPEDEFS = (
+    "NvKmsDeviceHandle",
+    "NvKmsDispHandle",
+    "NvKmsConnectorHandle",
+    "NvKmsSurfaceHandle",
+    "NvKmsFrameLockHandle",
+    "NvKmsDeferredRequestFifoHandle",
+    "NvKmsSwapGroupHandle",
+    "NvKmsVblankSyncObjectHandle",
+    "NvKmsVblankSemControlHandle",
+    "NvKmsVblankIntrCallbackHandle",
+)
+
+NVKMS_HANDLE_WIDTH = 4
+
+
+def nvkms_resource(typedef):
+    """-> the syzlang resource name for one NvKms<Thing>Handle typedef."""
+    stem = typedef[len("NvKms"):-len("Handle")]
+    return "nvkms_" + re.sub(r"(?<!^)(?=[A-Z])", "_", stem).lower()
+
+
+NVKMS_HANDLE_RESOURCES = {t: nvkms_resource(t) for t in NVKMS_HANDLE_TYPEDEFS}
 # kernel-open/common/inc/nv.h:76. nv.c:2513 rejects a larger inner argument
 # before it validates the inner command.
 #
@@ -274,7 +358,8 @@ class LayoutError(Exception):
 
 
 Member = collections.namedtuple(
-    "Member", "type name dims align inline_kind inline_members")
+    "Member", "type name dims align inline_kind inline_members bits",
+    defaults=(None,))
 
 Field = collections.namedtuple("Field", "name offset size syz")
 
@@ -302,6 +387,17 @@ ENUM_RE = re.compile(r"\benum\b(?:\s+(\w+))?\s*\{")
 DECLARE_ALIGNED_RE = re.compile(r"^NV_DECLARE_ALIGNED\s*\((.*),\s*(\d+)\s*\)$",
                                 re.S)
 DIM_RE = re.compile(r"\[([^\]]*)\]")
+# A named single-bit bitfield member: `NvBool supportsWindowMode :1`. The
+# width is fixed at 1 because that is the only width the layout rule in
+# TypeIndex.layout derives, and it is the only width any header on the
+# modelled ioctl paths uses. A wider field, an unnamed one and a zero-width
+# one all fall through to the LayoutError below.
+BITFIELD_RE = re.compile(
+    r"^(?P<type>[A-Za-z_][\w \t]*?)[ \t]+(?P<name>\w+)[ \t]*:[ \t]*1$")
+# `typedef void (*NAME)(args);`. The alias pattern beside it reads a word-only
+# underlying type and cannot spell this one.
+FUNCTION_POINTER_TYPEDEF_RE = re.compile(
+    r"\btypedef\s+[A-Za-z_][\w\s*]*?\(\s*\*\s*(?P<name>\w+)\s*\)\s*\(")
 # A hex literal contains letters, so an identifier pattern without the
 # left-hand guard matches "x0" inside "0x0" and a macro expression that is
 # already a plain number gets reported as unresolvable.
@@ -395,9 +491,13 @@ def parse_dims(text):
 def parse_member_statement(stmt):
     """One struct member statement as a list of Member records.
 
-    Raises LayoutError for a construct whose layout cannot be derived, which
-    at present means a bitfield: bitfield packing is compiler-defined and a
-    guessed offset produces a description that reaches the wrong field.
+    A named single-bit bitfield is read as a Member carrying `bits`. Every
+    other bitfield form raises LayoutError, because its packing is
+    compiler-defined and a guessed offset produces a description that reaches
+    the wrong field. One bit of a byte-wide type packs the same way under
+    every arm of the x86-64 gcc rules, and NvKmsLayerCapabilities in
+    src/nvidia-modeset/interface/nvkms-api-types.h:499 is the only bitfield
+    on any modelled ioctl path.
     """
     stmt = " ".join(stmt.split())
     m = DECLARE_ALIGNED_RE.match(stmt)
@@ -412,9 +512,33 @@ def parse_member_statement(stmt):
             stmt = " ".join(pattern.sub(" ", stmt).split())
     stmt = " ".join(ATTRIBUTE_RE.sub(" ", stmt).split())
     if ":" in stmt and "::" not in stmt:
-        raise LayoutError("bitfield member %r" % stmt)
-    if stmt.startswith(("typedef", "static", "enum ")):
+        bf = BITFIELD_RE.match(stmt)
+        if not bf:
+            raise LayoutError("bitfield member %r" % stmt)
+        return [Member(" ".join(bf.group("type").split()), bf.group("name"),
+                       [], forced_align, None, None, 1)]
+    if stmt.startswith(("typedef", "static")):
         raise LayoutError("unsupported member declaration %r" % stmt)
+
+    if stmt.startswith("enum "):
+        # A member declared by enumeration tag. Every RM header reaches an
+        # enumeration through a typedef, so this form appears only under
+        # src/nvidia-modeset/interface, where 30 struct definitions on the
+        # ioctl path use it and NvKmsAllocDeviceReply is the first.
+        # TypeIndex.size_align gives a tagged enumeration the size and
+        # alignment of unsigned int, which is the x86-64 gcc arm, and reports
+        # a tag it never scanned rather than assuming one.
+        open_index = stmt.find("{")
+        if open_index != -1:
+            # A definition written where the member is declared, as
+            # NvKmsValidateModeIndexReply.source is. _scan_enums recorded its
+            # enumerators from the same file text, so only the tag is needed
+            # here; a definition carrying no declarator declares no member.
+            end = match_brace(stmt, open_index)
+            declarators = stmt[end:].strip()
+            if not declarators:
+                return []
+            stmt = " ".join((stmt[:open_index] + " " + declarators).split())
 
     agg = AGGREGATE_RE.search(stmt)
     if agg and agg.start() == 0:
@@ -614,6 +738,17 @@ class TypeIndex:
             if name not in self.aliases:
                 self.aliases[name] = under
                 self.alias_source[name] = rel_path
+        # A function-pointer typedef, which the pattern above cannot spell.
+        # NVRgInterruptCallbackProc at kernel-open/common/inc/nvkms-api-types
+        # .h:806 is one, and NvKmsRegisterVblankIntrCallbackRequest declares a
+        # member through it. Registered as a pointer, which is eight bytes on
+        # the only architecture this campaign builds for; what it points at is
+        # never dereferenced by a description.
+        for m in FUNCTION_POINTER_TYPEDEF_RE.finditer(text):
+            name = m.group("name")
+            if name not in self.aliases:
+                self.aliases[name] = "void *"
+                self.alias_source[name] = rel_path
 
     # -- constant evaluation ------------------------------------------------
 
@@ -689,7 +824,24 @@ class TypeIndex:
         type_name = " ".join(type_name.split())
         if type_name.endswith("*"):
             return (8, 8, "int64")
+        resource = NVKMS_HANDLE_RESOURCES.get(type_name)
+        if resource:
+            # The typedef's own width is read back rather than assumed, so a
+            # driver widening a handle stops the run here instead of emitting
+            # a resource that silently shortens its containing struct.
+            underlying = self.resolve_alias(type_name)
+            width = BASE_TYPES.get(underlying, (None, None))[0]
+            if width != NVKMS_HANDLE_WIDTH:
+                raise LayoutError(
+                    "%s resolves to %r, which is not the %d-byte type the "
+                    "modeset handle resources are declared over"
+                    % (type_name, underlying, NVKMS_HANDLE_WIDTH))
+            return (NVKMS_HANDLE_WIDTH, NVKMS_HANDLE_WIDTH, resource)
         canonical = self.resolve_alias(type_name)
+        if canonical.endswith("*"):
+            # A pointer reached through a typedef, which the spelling check
+            # above sees only when the member declares the star itself.
+            return (8, 8, "int64")
         if canonical in BASE_TYPES:
             size, align = BASE_TYPES[canonical]
             return (size, align, SYZ_INT.get(size, "int8"))
@@ -737,6 +889,14 @@ class TypeIndex:
 
         Raises LayoutError when any member's type or array bound could not be
         resolved. Nothing is guessed to complete a layout.
+
+        A run of consecutive single-bit members of one base type shares
+        storage units of that type's width, which is how gcc allocates them on
+        x86-64. The member opening a unit carries the unit's byte size and the
+        rest carry zero, so the offsets below advance once per unit. syzkaller
+        records the same total against the last member of a group instead
+        (pkg/compiler/gen.go:394); the two placements sum alike and only the
+        sum reaches an emitted description.
         """
         if depth > MAX_STRUCT_DEPTH:
             raise LayoutError("struct nesting deeper than %d at %r"
@@ -747,7 +907,39 @@ class TypeIndex:
         kind, members = self.structs[name]
         fields, offset, max_align = [], 0, 1
         union_size = 0
+        # Bits already taken from the open storage unit, and its byte offset.
+        # Reset by any member that is not a bitfield.
+        run_bits, run_offset, run_unit = 0, 0, 0
         for index, member in enumerate(members):
+            if member.bits and kind == "union":
+                raise LayoutError(
+                    "bitfield %s.%s sits in a union, whose storage unit this "
+                    "rule does not derive" % (name, member.name))
+            if member.bits:
+                size, align, syz = self.member_layout(member, name, index,
+                                                      depth)
+                if member.bits > size * 8:
+                    raise LayoutError(
+                        "bitfield %s.%s is %d bits wide in a %d-byte type"
+                        % (name, member.name, member.bits, size))
+                max_align = max(max_align, align)
+                if run_bits and run_bits + member.bits <= run_unit * 8:
+                    # Shares the unit the previous member opened.
+                    fields.append(Field(member.name, run_offset, 0,
+                                        "%s:%d" % (syz, member.bits)))
+                    run_bits += member.bits
+                    continue
+                padded = (offset + align - 1) // align * align
+                if padded != offset:
+                    fields.append(Field("pad%d" % index, offset,
+                                        padded - offset, None))
+                    offset = padded
+                fields.append(Field(member.name, offset, size,
+                                    "%s:%d" % (syz, member.bits)))
+                run_bits, run_offset, run_unit = member.bits, offset, size
+                offset += size
+                continue
+            run_bits, run_offset, run_unit = 0, 0, 0
             size, align, syz = self.member_layout(member, name, index, depth)
             max_align = max(max_align, align)
             if kind == "union":
@@ -1106,6 +1298,7 @@ def build_openat_block():
         "resource fd_nvidia[fd_nv]",
         "resource fd_nvidia_uvm[fd]",
         "resource fd_nvidia_uvm_tools[fd]",
+        "resource %s[fd]" % NVKMS_FD_RESOURCE,
         "resource %s[%s]" % (UVM_VASPACE_RESOURCE, UVM_FD_RESOURCE),
         "",
     ]
@@ -1115,6 +1308,7 @@ def build_openat_block():
         ("openat$nvidia_uvm", "/dev/nvidia-uvm", UVM_FD_RESOURCE),
         ("openat$nvidia_uvm_tools", "/dev/nvidia-uvm-tools",
          UVM_TOOLS_FD_RESOURCE),
+        ("openat$nvidia_modeset", NVKMS_NODE, NVKMS_FD_RESOURCE),
     ]
     for name, path, res in opens:
         lines.append(
@@ -1848,6 +2042,151 @@ def emit_control(emitter, inventory, control, number_to_class, graph,
     return "\n".join(blocks), records, dict(skipped), len(reachable)
 
 
+def nvkms_request(index, envelope_size):
+    """-> the one kernel request number every modeset command carries.
+
+    Derived from NVKMS_IOCTL_MAGIC, NVKMS_IOCTL_CMD and the measured size of
+    NvKmsIoctlParams, so a driver that renumbers the node or widens the
+    envelope moves this number instead of leaving a stale literal behind.
+    """
+    magic = index.defines.get(NVKMS_MAGIC_MACRO, "").strip()
+    m = re.fullmatch(r"'(.)'", magic)
+    if not m:
+        raise SystemExit(
+            "%s reads %r in the headers, which is not a single character "
+            "constant, so the modeset request number cannot be derived. "
+            "Check --src points at an open-gpu-kernel-modules checkout "
+            "carrying src/nvidia-modeset/interface/nvkms-ioctl.h."
+            % (NVKMS_MAGIC_MACRO, magic or "(absent)"))
+    nr = index.const(index.defines.get(NVKMS_CMD_MACRO, ""))
+    if nr is None:
+        raise SystemExit(
+            "%s did not evaluate to an integer, so the modeset request "
+            "number cannot be derived." % NVKMS_CMD_MACRO)
+    if envelope_size > IOC_SIZE_MAX:
+        raise SystemExit(
+            "%s measures %d bytes, which does not fit the %d-bit _IOC_SIZE "
+            "field, so the derived request number would be truncated."
+            % (NVKMS_ENVELOPE_STRUCT, envelope_size, IOC_SIZE_BITS))
+    number = ((IOC_DIRECTION_READ_WRITE << IOC_DIRECTION_SHIFT)
+              | (envelope_size << IOC_SIZE_SHIFT)
+              | (ord(m.group(1)) << IOC_TYPE_SHIFT)
+              | nr)
+    return "0x%08x" % number, ord(m.group(1)), nr
+
+
+def emit_modeset(emitter, nvkms):
+    """One ioctl$NVKMS_* variant per dispatched modeset command.
+
+    nvkms is the record set of surface/nvkms-command-inventory.json. Its
+    param_struct field carries the struct the dispatch macro named, so the
+    naming convention is read and never rebuilt from the proc symbol here.
+    """
+    index = emitter.index
+    try:
+        envelope = index.layout(NVKMS_ENVELOPE_STRUCT)
+    except LayoutError as exc:
+        raise SystemExit(
+            "the %s layout could not be derived, so no modeset description "
+            "can be emitted: %s" % (NVKMS_ENVELOPE_STRUCT, exc))
+    request, magic, nr = nvkms_request(index, envelope.size)
+    logger.info("modeset request number %s from _IOWR(0x%02x, %d, %s) over a "
+                "%d-byte envelope", request, magic, nr,
+                NVKMS_ENVELOPE_STRUCT, envelope.size)
+
+    dispatched = [c for c in nvkms["commands"] if c["dispatched"]]
+    expected = nvkms["summary"]["dispatched"]
+    if len(dispatched) != expected:
+        raise SystemExit(
+            "the modeset inventory carries %d dispatched record(s) against a "
+            "summary claiming %d. The artefact disagrees with itself and the "
+            "denominator would be wrong either way; regenerate it with "
+            "tools/nvkms_inventory.py." % (len(dispatched), expected))
+
+    blocks, records = [], []
+    skipped = collections.Counter()
+    for command in dispatched:
+        name = command["command"]
+        struct = command["param_struct"]
+        emitted = emitter.ensure(struct)
+        if emitted is None:
+            skipped["parameter struct has no layout and no measured "
+                    "size"] += 1
+            records.append({"command": name, "ordinal": command["ordinal"],
+                            "emitted": False,
+                            "reason": "no layout and no measured size for %s"
+                                      % struct})
+            continue
+        try:
+            params_size = index.layout(emitted).size
+        except LayoutError:
+            params_size = emitter.measured(emitted)
+        if params_size is None:
+            skipped["parameter size unknown"] += 1
+            continue
+        variant = NVKMS_STRUCT_PREFIX + name[len(NVKMS_VARIANT_PREFIX):].lower()
+        overrides = {
+            "cmd": "const[%d, int32]" % command["ordinal"],
+            "size": "const[%d, int32]" % params_size,
+            "address": "ptr64[inout, %s]" % emitted,
+        }
+        variant_struct(emitter, NVKMS_ENVELOPE_STRUCT, variant, overrides)
+        what = "the modeset variant for %s" % name
+        # cmd selects the leaf out of 64 and size is validated against the
+        # command's own parameter size before the handler runs, so a free
+        # field on either reaches no handler at all.
+        require_pinned(emitter, variant, "cmd", what)
+        require_pinned(emitter, variant, "size", what)
+        require_pointer(emitter, variant, "address", what)
+        blocks.append(
+            "ioctl$%s(fd %s, cmd const[%s], arg ptr[inout, %s])"
+            % (name, NVKMS_FD_RESOURCE, request, variant))
+        records.append({"command": name, "ordinal": command["ordinal"],
+                        "proc": command["proc"], "param_struct": struct,
+                        "param_size": params_size,
+                        "custom_user": command["custom_user"],
+                        "emitted": True})
+    for reason, count in sorted(skipped.items()):
+        logger.info("modeset commands skipped, %s: %d", reason, count)
+    logger.info("%d modeset variants emitted of %d dispatched",
+                len(blocks), len(dispatched))
+    return "\n".join(blocks), records, dict(skipped), request
+
+
+def emit_nvkms_resources(emitter):
+    """The ten flat modeset handle resources, and the members that carry them.
+
+    A resource no emitted struct names would fail pkg/compiler's unused check,
+    so the members are counted here and a resource with none stops the run:
+    silently dropping it would leave the description set claiming a handle
+    scheme it does not model.
+    """
+    used = collections.Counter()
+    for text in emitter.rendered.values():
+        for resource in set(re.findall(r"\bnvkms_\w+", text)):
+            if resource in NVKMS_HANDLE_RESOURCES.values():
+                used[resource] += 1
+    missing = sorted(set(NVKMS_HANDLE_RESOURCES.values()) - set(used))
+    if missing:
+        raise SystemExit(
+            "%d modeset handle resource(s) are named by no emitted struct "
+            "(%s). syzkaller's pkg/compiler refuses a declared resource "
+            "nothing uses, so the description set would not compile. Either "
+            "the typedef left nvkms-api-types.h or the parameter struct that "
+            "carried it went opaque."
+            % (len(missing), ", ".join(missing)))
+    # The annotation sits on its own line: syzlang takes no trailing comment
+    # after a declaration.
+    lines = []
+    for typedef in NVKMS_HANDLE_TYPEDEFS:
+        resource = NVKMS_HANDLE_RESOURCES[typedef]
+        lines.append("# %s, carried by %d emitted member(s)"
+                     % (typedef, used[resource]))
+        lines.append("resource %s[int%d]"
+                     % (resource, NVKMS_HANDLE_WIDTH * 8))
+    return "\n".join(lines)
+
+
 def graph_depths(graph):
     """Shallowest object-graph depth per NVOC internal class.
 
@@ -2296,7 +2635,7 @@ def emit_flags_sets(index):
 # The _IOWR header
 # ---------------------------------------------------------------------------
 
-def emit_header(inventory):
+def emit_header(inventory, nvkms_request_number=None):
     """The header syz-extract consumes, defining every emitted number."""
     encoding = inventory["encoding"]
     magic = encoding["ioctl_magic"]
@@ -2350,6 +2689,17 @@ def emit_header(inventory):
                 lines.append("#define %-40s %s"
                              % (command["name"], request))
         lines.append("")
+    if nvkms_request_number is not None:
+        lines += [
+            "/* %s */" % NVKMS_NODE,
+            "/* One number for the whole command set. The leaf lives in",
+            " * NvKmsIoctlParams.cmd and is invisible to _IOC, so a trace",
+            " * carrying this number names the family and not the command.",
+            " */",
+            "#define %-40s %s" % ("NVKMS_IOCTL_CMD_REQUEST",
+                                  nvkms_request_number),
+            "",
+        ]
     lines.append("#endif /* GSPWN_NVIDIA_IOCTL_H */")
     return "\n".join(lines)
 
@@ -2529,11 +2879,14 @@ def load_all(args):
                  args.control)
     graph = load_json(args.graph, "the object graph")
     require_keys(graph, ["records"], "the object graph", args.graph)
+    nvkms = load_json(args.nvkms, "the modeset command inventory")
+    require_keys(nvkms, ["commands", "summary", "source"],
+                 "the modeset command inventory", args.nvkms)
     if not inventory["nodes"]:
         raise SystemExit(
             "the escape inventory names no device nodes at %s; regenerate it"
             % args.inventory)
-    return inventory, control, graph
+    return inventory, control, graph, nvkms
 
 
 def rel(path):
@@ -2686,7 +3039,7 @@ def merged_sizes(inventory, extra_paths):
 
 def build(args):
     """Everything both `emit` and `verify` need. Returns a result dict."""
-    inventory, control, graph = load_all(args)
+    inventory, control, graph, nvkms = load_all(args)
     index = scan_headers(args.src)
     ctrl_sizes_paths = resolve_ctrl_sizes(args)
     sizes = merged_sizes(inventory, ctrl_sizes_paths)
@@ -2722,9 +3075,19 @@ def build(args):
         emitter, inventory, class_map, graph, True, True)
     xfer_text, xfer_records = emit_xfer(emitter, inventory)
     uvm_text, uvm_records = emit_uvm(emitter, inventory, args.uvm_test)
+    modeset_text, modeset_records, modeset_skipped, modeset_request = \
+        emit_modeset(emitter, nvkms)
+    # After emission, so the count of members carrying each resource is read
+    # off the structs the run actually rendered.
+    modeset_resources = emit_nvkms_resources(emitter)
     entry_text, entry_records = emit_entry_points()
 
     return {
+        "nvkms": nvkms,
+        "modeset_text": modeset_text, "modeset_records": modeset_records,
+        "modeset_skipped": modeset_skipped,
+        "modeset_request": modeset_request,
+        "modeset_resources": modeset_resources,
         "entry_text": entry_text, "entry_records": entry_records,
         "inventory": inventory, "control": control, "graph": graph,
         "index": index, "emitter": emitter, "sizes": sizes,
@@ -2764,8 +3127,10 @@ def cmd_emit(args):
 
     core = "\n\n".join([
         banner,
-        "# Device nodes. nvidia-drm, nvidia-modeset and /dev/dri/* are out of\n"
-        "# scope in the threat model, so nothing here opens them.\n"
+        "# Device nodes. nvidia-drm and /dev/dri/* are out of scope in the\n"
+        "# threat model, so nothing here opens them. /dev/nvidia-modeset is\n"
+        "# in scope: libnvidia-container creates it by default\n"
+        "# (src/nvc.c:317) and withholds it only under OPT_NO_MODESET.\n"
         + build_openat_block(),
         "# One resource per RM object class. Every handle derives from\n"
         "# nv_handle, so a field typed nv_handle accepts any of them and a\n"
@@ -2826,12 +3191,40 @@ def cmd_emit(args):
         + result["uvm_text"],
     ]) + "\n"
 
+    modeset = "\n\n".join([
+        banner,
+        "# The ten modeset handle types. nvkms-api-types.h:55 declares each as\n"
+        "# a plain NvU32 with no class hierarchy behind it, so each is a flat\n"
+        "# resource and none derives from another. Every parameter struct is\n"
+        "# pointed at inout, so one member both produces a handle from a reply\n"
+        "# field and consumes one in a request field.\n"
+        + result["modeset_resources"],
+        "# /dev/nvidia-modeset. The whole command set multiplexes through one\n"
+        "# kernel request number, %s, which nvkms-ioctl.h:47 builds as\n"
+        "# _IOWR(NVKMS_IOCTL_MAGIC, NVKMS_IOCTL_CMD, struct NvKmsIoctlParams).\n"
+        "# nvkms.c reads the leaf from NvKmsIoctlParams.cmd after\n"
+        "# copy_from_user, so each variant pins that field to its dispatch\n"
+        "# ordinal and sets size to its own parameter struct's measured size.\n"
+        "# Two of the 66 declared commands carry no dispatch entry and are\n"
+        "# absent here: NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES and\n"
+        "# NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS.\n"
+        "#\n"
+        "# One request number for 64 commands means a strace-shaped trace\n"
+        "# names the family and never the leaf, so tools/trace2seed.py cannot\n"
+        "# recover which modeset command a traced call was. That is a stated\n"
+        "# limitation of this branch and not a defect in the map.\n"
+        % result["modeset_request"]
+        + result["modeset_text"],
+    ]) + "\n"
+
     out = args.out_dir
     write_file(os.path.join(out, "nvidia.txt"), core)
     write_file(os.path.join(out, "nvidia_structs.txt"), structs)
     write_file(os.path.join(out, "nvidia_ctrl.txt"), ctrl)
     write_file(os.path.join(out, "nvidia_uvm.txt"), uvm)
-    write_file(os.path.join(out, args.header_name), emit_header(inventory))
+    write_file(os.path.join(out, "nvidia_modeset.txt"), modeset)
+    write_file(os.path.join(out, args.header_name),
+               emit_header(inventory, result["modeset_request"]))
 
     manifest = {
         "schema": SCHEMA,
@@ -2839,6 +3232,7 @@ def cmd_emit(args):
             "escape_inventory": json_source_record(args.inventory, "nodes"),
             "control_inventory": json_source_record(args.control, "methods"),
             "object_graph": json_source_record(args.graph, "records"),
+            "nvkms_inventory": json_source_record(args.nvkms, "commands"),
             "ctrl_sizes": [size_source_record(p)
                            for p in result["ctrl_sizes_paths"]],
             "ctrl_rank": (rank_source_record(result["ranking"])
@@ -2873,6 +3267,11 @@ def cmd_emit(args):
             "uvm_emitted": sum(1 for r in result["uvm_records"]
                                if r["emitted"]),
             "uvm_total": len(result["uvm_records"]),
+            "modeset_variants": sum(1 for r in result["modeset_records"]
+                                    if r["emitted"]),
+            "modeset_dispatched": result["nvkms"]["summary"]["dispatched"],
+            "modeset_declared": result["nvkms"]["summary"]["declared"],
+            "modeset_handle_resources": len(NVKMS_HANDLE_TYPEDEFS),
             # Entry points and the initialisation pseudo-syscall are counted
             # here and never joined into the command families above. An mmap
             # or poll call has no method id and no inventory row, so folding
@@ -2895,13 +3294,15 @@ def cmd_emit(args):
         "unresolved": [{"struct": n, "reason": r}
                        for n, r in sorted(emitter.unresolved)],
         "skipped": {"allocation": result["alloc_skipped"],
-                    "control": result["ctrl_skipped"]},
+                    "control": result["ctrl_skipped"],
+                    "modeset": result["modeset_skipped"]},
         "missing_class_numbers": sorted(result["missing_class_numbers"]),
         "escapes": result["escape_records"],
         "xfer": result["xfer_records"],
         "allocations": result["alloc_records"],
         "control": result["ctrl_records"],
         "uvm": result["uvm_records"],
+        "modeset": result["modeset_records"],
         # Their own key, separate from the five command families, because
         # they are not commands and are not in the 764.
         "entry_points": {
@@ -3014,6 +3415,10 @@ def add_common(parser):
                         default=os.path.join(DEFAULT_SURFACE,
                                              "rm-object-graph.json"),
                         help="output of tools/object_graph.py extract")
+    parser.add_argument("--nvkms",
+                        default=os.path.join(DEFAULT_SURFACE,
+                                             "nvkms-command-inventory.json"),
+                        help="output of tools/nvkms_inventory.py")
     parser.add_argument("--ctrl-sizes", action="append",
                         help="JSON of measured struct sizes from the probe "
                              "runner; may be given more than once. Defaults "
