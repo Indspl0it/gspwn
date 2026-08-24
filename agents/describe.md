@@ -227,10 +227,10 @@ coverage alone.
    It builds `tools/gspwn-check` against a pinned syzkaller checkout and
    runs syzkaller's own compiler over `descriptions/*.txt` together with
    `tools/syz-stub/*`. Exit 0 prints the verdict line, of the form
-   `compile: OK, 4 const(s) loaded, 862 syscall(s), ...`. 862 is the 856
+   `compile: OK, 4 const(s) loaded, 957 syscall(s), ...`. 957 is the 951
    the description set declares plus the 6 `syz_builtinN` pseudo-syscalls
-   `pkg/compiler` prepends to every compile. The 856 is 845 `ioctl`
-   variants, 4 `openat`, 6 entry-point calls and `syz_nvidia_uvm_init`.
+   `pkg/compiler` prepends to every compile. The 951 is 933 `ioctl`
+   variants, 7 `openat`, 5 `mmap`, 5 `poll` and `syz_nvidia_uvm_init`.
    That last one needs no `__NR_` constant: `pkg/compiler/consts.go:250`
    assigns no syscall number to a call whose name begins `syz_`, so the
    set compiles against an unpatched checkout while the executor half
