@@ -73,13 +73,14 @@ loop:
   # runaway backstop and never decides a campaign's end.
   max_total_run_hours: 5000
   campaign_hours: 1000       # each campaign self-stops after this long
-  # Stop early when both curves flatten. Off by operator decision: a
-  # campaign is to end on a kernel panic or a reboot and on nothing else a
-  # judgement can get wrong. The plateau verdict is still computed and
-  # reported, so the reading stays available to the eval phase without
-  # ending a run. Completion is unaffected and still stops a campaign,
-  # because it is a ledger identity with nothing left to fuzz.
-  stop_on_plateau: false
+  # Stop early when both curves flatten. Overridable, unlike the completion
+  # stop: a plateau is a judgement about what another campaign would buy,
+  # while completion is a ledger identity with nothing left to fuzz. A flat
+  # edge curve against a still-climbing surface curve is not a plateau and
+  # does not trip this. The 1000 h horizon raises the bar on its own: the
+  # test asks whether another 1000 h would find fewer than plateau_new_edges
+  # edges, which a still-productive curve clears easily.
+  stop_on_plateau: true
   # Plateau test, applied to the trailing window of the coverage curve.
   plateau_window_min: 240    # measure growth over the last 4h
   plateau_min_growth: 0.02   # < 2% new edges in that window = plateaued
