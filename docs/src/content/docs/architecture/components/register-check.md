@@ -89,7 +89,7 @@ The summary line reports the file count and the hit count.
 | Direction | Modules |
 |---|---|
 | Imports this module | Nothing |
-| Invokes it | `.github/workflows/selftest.yml`, as the last step after the seven `regression_check.py` subcommands |
+| Invokes it | `.github/workflows/selftest.yml`, as the last step after the eight `regression_check.py` subcommands |
 
 ## Limits
 
