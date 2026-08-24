@@ -62,17 +62,21 @@ another file, records its digest in generation.json, and fails when it is
 absent: without it 521 of the 595 size-matched structs lose their measured
 size and the run still exits 0. `--no-ctrl-sizes` is the deliberate case.
 
-The set is generated offline from a source checkout. No GPU, no SUT. It has
-not been through syz-compile, which is the describe phase's first gate.
+The set is generated offline from a source checkout. No GPU, no SUT.
+`compile` is the gate over it: it builds tools/gspwn-check against a
+pinned syzkaller checkout and runs syzkaller's own compiler over the
+descriptions and tools/syz-stub together.
 
 Subcommands:
   emit        write the description set, the _IOWR header and the manifest
   emit-probe  write the C size probes for the structs this tool needs
   verify      report the size-match table and nothing else
   summary     counts per category
+  compile     compile the set with syzkaller's own compiler
 
-Exit codes: 0 success, 1 bad input or unreadable source, 2 strict-mode
-size mismatch.
+Exit codes: 0 success, 1 bad input or unreadable source or a set that
+does not compile, 2 strict-mode size mismatch, 3 `compile` found no Go
+toolchain and no syzkaller checkout.
 """
 import argparse
 import collections
@@ -81,7 +85,10 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -1862,7 +1869,7 @@ def emit_uvm(emitter, inventory, include_test):
                 continue
             request = command["requests"][0]
             struct = command["param_struct"]
-            arg = "const[0, intptr]"
+            arg = "const[0]"
             if struct:
                 emitted = emitter.ensure(struct)
                 if emitted is not None:
@@ -2621,6 +2628,276 @@ def add_common(parser):
                              "match its measured size")
 
 
+
+# ---------------------------------------------------------------------------
+# The compile gate
+#
+# syzkaller ships no `syz-compile` binary. Compiling a description set is
+# `ast.ParseGlob` followed by `compiler.Compile`, both in Go, and
+# `sys/syz-sysgen` wraps them for syzkaller's own build against its fixed
+# sys/<os>/ layout. tools/gspwn-check/main.go calls the same two functions
+# against an arbitrary directory, and the subcommand below builds it and runs
+# it over this repository's descriptions plus tools/syz-stub.
+# ---------------------------------------------------------------------------
+
+# The syzkaller revision the gate is verified against, as a commit hash. A
+# branch or a tag can move and a green run then stops being reproducible.
+# .github/workflows/syzlang.yml pins the same value.
+SYZKALLER_REV = "1e72964b0111319984575e60f266d1fa0a98abb5"
+SYZKALLER_URL = "https://github.com/google/syzkaller"
+
+# Where the pinned revision is cloned when --syzkaller names no checkout. CI
+# puts it inside the runner's workspace, a workstation keeps it under the home
+# cache, so the path is overridable.
+DEFAULT_SYZKALLER_DIR = os.environ.get("GSPWN_SYZKALLER_DIR") or os.path.join(
+    os.path.expanduser("~"), ".cache", "gspwn", "syzkaller")
+
+SYZ_STUB_DIR = os.path.join(REPO_ROOT, "tools", "syz-stub")
+GSPWN_CHECK_SRC = os.path.join(REPO_ROOT, "tools", "gspwn-check", "main.go")
+
+GIT_TIMEOUT_SECONDS = int(os.environ.get("GSPWN_GIT_TIMEOUT_SECONDS", "900"))
+GO_BUILD_TIMEOUT_SECONDS = int(
+    os.environ.get("GSPWN_GO_BUILD_TIMEOUT_SECONDS", "900"))
+SYZ_COMPILE_TIMEOUT_SECONDS = int(
+    os.environ.get("GSPWN_SYZ_COMPILE_TIMEOUT_SECONDS", "300"))
+
+# A toolchain the gate needs and cannot obtain. Kept apart from exit 1, which
+# reports a description set that does not compile: without the split, a runner
+# with no Go on it reads as a broken description set.
+EXIT_NO_TOOLCHAIN = 3
+
+# pkg/compiler/types.go prepends six syz_builtinN pseudo-syscalls to every
+# compile, whatever the input (`builtinDefs`, all marked disabled), so the
+# driver's syscall count runs six above the description set's own.
+SYZ_BUILTIN_SYSCALLS = 6
+
+COMPILE_OK_RE = re.compile(
+    r"^compile: OK, (?P<consts>\d+) const\(s\) loaded, "
+    r"(?P<syscalls>\d+) syscall\(s\), (?P<resources>\d+) resource\(s\), "
+    r"(?P<types>\d+) type\(s\), (?P<unsupported>\d+) unsupported\s*$",
+    re.MULTILINE)
+
+NO_DIAGNOSTICS = "(the driver printed no diagnostics)"
+
+
+def parse_compile_verdict(stdout):
+    """The driver's verdict line, or None when it printed no clean compile.
+
+    `own_syscalls` is the description set's own count, the driver's figure
+    less the pseudo-syscalls pkg/compiler prepends unconditionally.
+    """
+    match = COMPILE_OK_RE.search(stdout or "")
+    if match is None:
+        return None
+    verdict = {key: int(value) for key, value in match.groupdict().items()}
+    verdict["builtin_syscalls"] = SYZ_BUILTIN_SYSCALLS
+    verdict["own_syscalls"] = verdict["syscalls"] - SYZ_BUILTIN_SYSCALLS
+    return verdict
+
+
+def format_diagnostics(text):
+    """The driver's own output, unchanged.
+
+    A syzkaller parse error names a file, a line and the type it rejected. A
+    summary of it is not actionable, so the text is reproduced and never
+    reworded.
+    """
+    stripped = (text or "").strip("\n")
+    if not stripped.strip():
+        return NO_DIAGNOSTICS
+    return stripped
+
+
+def checkout_revision(path):
+    """The checkout's HEAD, or None when git cannot read it."""
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        proc = subprocess.run([git, "-C", path, "rev-parse", "HEAD"],
+                              capture_output=True, text=True,
+                              timeout=GIT_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("reading the revision of %s failed: %s", path, exc)
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def clone_syzkaller(git, target):
+    """Fetch the pinned revision into `target`. Returns None on success and
+    the reason on failure.
+
+    A one-revision fetch, so the 168M history never arrives. The sequence is
+    idempotent: an interrupted run leaves a directory that the next run
+    re-initialises and re-fetches into.
+    """
+    steps = [
+        [git, "init", "--quiet", target],
+        [git, "-C", target, "remote", "remove", "origin"],
+        [git, "-C", target, "remote", "add", "origin", SYZKALLER_URL],
+        [git, "-C", target, "fetch", "--quiet", "--depth", "1", "origin",
+         SYZKALLER_REV],
+        [git, "-C", target, "checkout", "--quiet", "FETCH_HEAD"],
+    ]
+    # `remote remove` fails on a fresh directory, which is the normal case and
+    # not an error. Every other step is required.
+    optional = {1}
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as exc:
+        return "creating %s failed: %s" % (target, exc)
+    for index, argv in enumerate(steps):
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=GIT_TIMEOUT_SECONDS)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return "%s failed: %s" % (" ".join(argv), exc)
+        if proc.returncode != 0 and index not in optional:
+            return "%s exited %d: %s" % (" ".join(argv), proc.returncode,
+                                         proc.stderr.strip())
+    return None
+
+
+def resolve_syzkaller(given, cache_dir):
+    """The checkout to build the driver against, and the reason when there is
+    none. Returns (path, None) or (None, reason).
+
+    A path given on the command line is used as it stands. Otherwise the
+    cache is used, cloned at SYZKALLER_REV when it holds no checkout yet.
+    """
+    if given:
+        if not os.path.isdir(os.path.join(given, "pkg", "compiler")):
+            return None, ("%s holds no pkg/compiler, so it is not a syzkaller "
+                          "checkout" % given)
+        return given, None
+    if os.path.isdir(os.path.join(cache_dir, "pkg", "compiler")):
+        return cache_dir, None
+    git = shutil.which("git")
+    if git is None:
+        return None, ("git is not on PATH and %s holds no checkout, so "
+                      "syzkaller %s cannot be fetched"
+                      % (cache_dir, SYZKALLER_REV))
+    logger.info("cloning syzkaller %s into %s", SYZKALLER_REV, cache_dir)
+    problem = clone_syzkaller(git, cache_dir)
+    if problem is not None:
+        return None, problem
+    if not os.path.isdir(os.path.join(cache_dir, "pkg", "compiler")):
+        return None, "%s has no pkg/compiler after the clone" % cache_dir
+    return cache_dir, None
+
+
+def build_driver(go, checkout, out_path):
+    """Build tools/gspwn-check and return the completed process.
+
+    The driver's source stays in this repository. `go build` is handed its
+    file path and run with the checkout as its working directory, so the
+    checkout's own go.mod supplies pkg/ast and pkg/compiler and the checkout
+    never holds a copy of the driver.
+    """
+    argv = [go, "build", "-o", out_path, GSPWN_CHECK_SRC]
+    logger.debug("building the driver: %s (in %s)", " ".join(argv), checkout)
+    return subprocess.run(argv, cwd=checkout, capture_output=True, text=True,
+                          timeout=GO_BUILD_TIMEOUT_SECONDS)
+
+
+def stage_descriptions(stage_dir, description_dir):
+    """Populate `stage_dir` with the stub and the description set.
+
+    The driver takes one directory and globs `*.txt` and `*.txt.const` in it,
+    and the two inputs live in separate directories under version control.
+    Symlinks where the filesystem takes them, copies where it does not.
+    """
+    staged = []
+    for source_dir in (SYZ_STUB_DIR, description_dir):
+        for name in sorted(os.listdir(source_dir)):
+            if not name.endswith(".txt") and not name.endswith(".txt.const"):
+                continue
+            source = os.path.join(source_dir, name)
+            target = os.path.join(stage_dir, name)
+            try:
+                os.symlink(source, target)
+            except (OSError, NotImplementedError, AttributeError):
+                shutil.copyfile(source, target)
+            staged.append(name)
+    return staged
+
+
+def cmd_compile(args):
+    """Compile the description set with syzkaller's own compiler."""
+    go = shutil.which("go")
+    if go is None:
+        logger.error(
+            "go is not on PATH. The compile gate builds tools/gspwn-check "
+            "against syzkaller's pkg/compiler and pkg/ast, which needs a Go "
+            "toolchain. Install Go and re-run.")
+        return EXIT_NO_TOOLCHAIN
+    checkout, problem = resolve_syzkaller(args.syzkaller, args.cache_dir)
+    if checkout is None:
+        logger.error("no syzkaller checkout: %s", problem)
+        return EXIT_NO_TOOLCHAIN
+    revision = checkout_revision(checkout)
+    logger.info("syzkaller %s at %s", revision or "(revision unread)",
+                checkout)
+    if revision is not None and revision != SYZKALLER_REV:
+        logger.warning("the checkout is at %s and this gate is verified "
+                       "against %s", revision, SYZKALLER_REV)
+    work = tempfile.mkdtemp(prefix="gspwn-compile-")
+    try:
+        driver = os.path.join(work, "gspwn-check")
+        try:
+            built = build_driver(go, checkout, driver)
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.error("building tools/gspwn-check failed: %s", exc)
+            return EXIT_NO_TOOLCHAIN
+        if built.returncode != 0:
+            logger.error("go build exited %d", built.returncode)
+            sys.stderr.write(format_diagnostics(built.stderr) + "\n")
+            return EXIT_NO_TOOLCHAIN
+        stage = os.path.join(work, "stage")
+        os.mkdir(stage)
+        try:
+            staged = stage_descriptions(stage, args.descriptions)
+        except OSError as exc:
+            logger.error("staging %s and %s failed: %s", rel(SYZ_STUB_DIR),
+                         args.descriptions, exc)
+            return EXIT_NO_TOOLCHAIN
+        # The driver's diagnostics name the staged path. The file names are
+        # unchanged by staging, so a diagnostic's basename resolves against
+        # one of the two directories named here.
+        logger.info("compiling %d file(s) from %s and %s, staged into %s: %s",
+                    len(staged), rel(SYZ_STUB_DIR), args.descriptions, stage,
+                    " ".join(staged))
+        try:
+            proc = subprocess.run([driver, "-dir", stage, "-arch", args.arch],
+                                  capture_output=True, text=True,
+                                  timeout=SYZ_COMPILE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            logger.error("tools/gspwn-check did not finish within %d seconds, "
+                         "so the gate produced no verdict",
+                         SYZ_COMPILE_TIMEOUT_SECONDS)
+            return EXIT_NO_TOOLCHAIN
+        except OSError as exc:
+            logger.error("running tools/gspwn-check failed: %s", exc)
+            return EXIT_NO_TOOLCHAIN
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    verdict = parse_compile_verdict(proc.stdout)
+    if proc.returncode != 0 or verdict is None:
+        logger.error("the description set does not compile. The driver's own "
+                     "diagnostics follow, unchanged:")
+        sys.stderr.write(format_diagnostics(proc.stderr) + "\n")
+        if proc.stdout.strip():
+            sys.stderr.write(proc.stdout)
+        return 1
+    sys.stdout.write(proc.stdout)
+    logger.info("%d syscall(s) is %d from the description set plus the %d "
+                "syz_builtinN pseudo-syscalls pkg/compiler prepends to every "
+                "compile", verdict["syscalls"], verdict["own_syscalls"],
+                verdict["builtin_syscalls"])
+    return 0
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="syzlang_gen.py",
@@ -2653,6 +2930,24 @@ def build_parser():
     p.add_argument("--probe-dir", required=True,
                    help="directory to write the probes into")
     p.set_defaults(func=cmd_emit_probe)
+
+    p = sub.add_parser("compile",
+                       help="compile the description set with syzkaller's "
+                            "own compiler")
+    p.add_argument("--syzkaller",
+                   help="an existing syzkaller checkout to build the driver "
+                        "against. Without it the pinned revision %s is "
+                        "cloned into --cache-dir" % SYZKALLER_REV[:12])
+    p.add_argument("--cache-dir", default=DEFAULT_SYZKALLER_DIR,
+                   help="where the pinned revision is cloned "
+                        "(default: %(default)s)")
+    p.add_argument("--descriptions", default=DEFAULT_OUT,
+                   help="the description set to compile "
+                        "(default: %(default)s)")
+    p.add_argument("--arch", default="amd64",
+                   help="target architecture, matching the arch tags in the "
+                        ".const sidecars (default: %(default)s)")
+    p.set_defaults(func=cmd_compile)
     return ap
 
 

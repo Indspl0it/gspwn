@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Five CI checks over the committed surface artefacts.
+"""Seven CI checks over the committed surface artefacts.
 
 Each one catches a class of defect that reached the repository unnoticed
 because nothing compared two artefacts that have to agree:
@@ -37,14 +37,31 @@ because nothing compared two artefacts that have to agree:
                 alongside the pages would not: whoever edits the page is
                 positioned to update the digest, and the digest of a stale
                 page still matches itself.
+    stale       every input descriptions/generation.json records still hashes
+                to the digest the record carries, and the recorded driver
+                version and commit are reported beside them. Five sha256
+                values sat in that record with no reader. A surface artefact
+                regenerated without regenerating the description set leaves
+                the record naming bytes that no longer exist, and every tool
+                that reads either one still reports success.
+    harnesses   the four Track U target lists still name the same harnesses:
+                track_u.targets in config/campaign.yaml, the C_TARGETS array
+                in harnesses/run_all.sh, the Harness column in
+                harnesses/TARGETS.md, and the directories under harnesses/
+                that hold a build.sh. A target added to one and not the others
+                is built and never run, or run and never built, and the fuzz
+                phase reports the skip as a per-target note hours into a
+                campaign.
 
-Run one, or all five:
+Run one, or all seven:
 
     python3 tools/regression_check.py names
     python3 tools/regression_check.py pins
     python3 tools/regression_check.py coverage
     python3 tools/regression_check.py derived
     python3 tools/regression_check.py pages
+    python3 tools/regression_check.py stale
+    python3 tools/regression_check.py harnesses
     python3 tools/regression_check.py all
 
 `-v` logs what each artefact read contributed, and is accepted on either side
@@ -70,6 +87,7 @@ running on a Windows workstation. Everything here reads committed files only,
 so it needs no GPU, no kernel and no network.
 """
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -80,7 +98,8 @@ import tempfile
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import refgen  # noqa: E402  (path set above so the tool runs from anywhere)
+import gspwn_config  # noqa: E402  (path set above so the tool runs from anywhere)
+import refgen  # noqa: E402
 import surface_cov  # noqa: E402
 
 logger = logging.getLogger("regression_check")
@@ -92,6 +111,12 @@ CHAINS = os.path.join(surface_cov.SURFACE_DIR, "rm-chains.json")
 CTRL_RANK = os.path.join(surface_cov.SURFACE_DIR, "rm-control-rank.json")
 PAGES_DIR = refgen.DEFAULT_OUT
 PAGES_REMEDY = "python3 tools/refgen.py"
+GENERATION = os.path.join(DESC_DIR, "generation.json")
+GENERATION_REMEDY = "python3 tools/syzlang_gen.py emit"
+CAMPAIGN_CONFIG = os.path.join(REPO_ROOT, "config", "campaign.yaml")
+HARNESS_DIR = os.path.join(REPO_ROOT, "harnesses")
+RUN_ALL = os.path.join(HARNESS_DIR, "run_all.sh")
+TARGETS_DOC = os.path.join(HARNESS_DIR, "TARGETS.md")
 # The line separator every committed file in the repository carries, declared
 # by .gitattributes. Named so the byte comparison below reads as a comparison
 # and not as an escape sequence buried in a split call.
@@ -175,6 +200,53 @@ UNPINNED_BY_DESIGN = {
     ("NV_ESC_RM_ALLOC_CONTEXT_DMA2", "NVOS39_PARAMETERS", "hClass"):
         "the escape is one target; the alloc family decomposes NV_ESC_RM_ALLOC",
 }
+
+
+# The keys under generated_from that record the driver checkout and not an
+# input file. `stale` reports them in its header, so a reader sees which
+# checkout the description set was generated from without opening the JSON.
+CHECKOUT_KEYS = ("driver_version", "driver_commit")
+
+# The count key an input record carries. tools/syzlang_gen.py names it after
+# the array it counted, so the column reads the artefact's own word for a
+# record. An input carrying none reports no count.
+COUNT_KEYS = ("records", "commands", "entries")
+
+# The four sources that carry the Track U target list, keyed by the name the
+# reader uses and labelled by the file and the construct inside it. The label
+# is what an offender line names, so a disagreement points at the line to edit
+# and not merely at a difference between two lists.
+HARNESS_SOURCES = (
+    ("config", "config/campaign.yaml track_u.targets"),
+    ("run", "harnesses/run_all.sh C_TARGETS"),
+    ("doc", "harnesses/TARGETS.md"),
+    ("build", "harnesses/<name>/build.sh"),
+)
+
+# Directories under harnesses/ that carry no Track U target, and the reason.
+# A name here is dropped from all four sources before they are compared. The
+# Go reason is the one config/campaign.yaml already records against
+# track_u.targets, so the two texts state one fact. A directory holding no
+# build.sh and named nowhere here is reported: the exclusions are the whole of
+# what the check accepts as a known absence.
+HARNESS_EXCLUSIONS = {
+    "common":
+        "a shared helper tree. It holds build_common.sh, which every harness "
+        "build.sh sources, and builds no target of its own",
+    "go_cudacompat_elf":
+        "go test -fuzz writes no fuzzer_stats, so it produces no coverage "
+        "output for the sampler to read",
+}
+
+# The bash array run_all.sh iterates. Anchored on the opening and closing
+# lines so a later array in the same file cannot be read in its place.
+C_TARGETS_RE = re.compile(r"^C_TARGETS=\(\s*$(?P<body>.*?)^\)\s*$",
+                          re.M | re.S)
+
+# A markdown table row, and the cells it holds. TARGETS.md writes every
+# harness name in a column headed Harness.
+HARNESS_COLUMN = "Harness"
+TABLE_RULE = set("-: ")
 
 
 class CheckInput(Exception):
@@ -1012,19 +1084,300 @@ def check_pages():
     return 1
 
 
+def read_generation():
+    """-> (the generated_from record, the root its paths resolve against).
+
+    Recorded paths are repository-relative and the record sits at
+    descriptions/generation.json, so the root is the parent of the directory
+    holding it. Deriving the root from the record's own location leaves the
+    check pointable at a scratch tree through GENERATION alone.
+    """
+    try:
+        with open(GENERATION, encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise CheckInput("%s: %s" % (GENERATION, exc))
+    record = raw.get("generated_from")
+    if not isinstance(record, dict):
+        raise CheckInput(
+            "%s carries no generated_from mapping. `%s` writes it, and "
+            "without it nothing records which artefacts the description set "
+            "was generated from." % (GENERATION, GENERATION_REMEDY))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(GENERATION)))
+    return record, root
+
+
+def recorded_inputs(record):
+    """-> [(key, path, sha256, count)] over every input generated_from names.
+
+    ctrl_sizes is a list holding one member today. Reading a list member the
+    same way as a mapping covers a second measured-size file from the run it
+    is added in.
+    """
+    inputs = []
+    for key in sorted(record):
+        if key in CHECKOUT_KEYS:
+            continue
+        value = record[key]
+        for member in (value if isinstance(value, list) else [value]):
+            if (not isinstance(member, dict) or "path" not in member
+                    or "sha256" not in member):
+                raise CheckInput(
+                    "%s: generated_from[%r] is not an input record. Every "
+                    "entry outside %s carries a path and a sha256, either "
+                    "directly or as a list member, and this one renders as "
+                    "%.120r" % (GENERATION, key, " and ".join(CHECKOUT_KEYS),
+                                member))
+            count = None
+            for name in COUNT_KEYS:
+                if name in member:
+                    count = member[name]
+                    break
+            inputs.append((key, member["path"], member["sha256"], count))
+    return inputs
+
+
+def check_stale():
+    """Every input generation.json records still matches its digest."""
+    record, root = read_generation()
+    inputs = recorded_inputs(record)
+    if not inputs:
+        raise CheckInput(
+            "%s records no input file. The description set is generated from "
+            "the artefacts under surface/ and `%s` digests each one, so a "
+            "record naming none has lost its provenance."
+            % (GENERATION, GENERATION_REMEDY))
+
+    table, offenders = [], []
+    for key, path, digest, count in inputs:
+        on_disk = os.path.join(root, *path.split("/"))
+        if not os.path.isfile(on_disk):
+            state = "absent"
+            offenders.append((path, "no file at this path", digest, None))
+        else:
+            with open(on_disk, "rb") as handle:
+                measured = hashlib.sha256(handle.read()).hexdigest()
+            if measured == digest:
+                state = "OK"
+            else:
+                state = "differs"
+                offenders.append((path, "the file on disk hashes to another "
+                                        "digest", digest, measured))
+        table.append((key, path, count, state))
+
+    checkout = {name: record.get(name) for name in CHECKOUT_KEYS}
+    print("stale: %d recorded input(s) in %s, driver %s at commit %s"
+          % (len(inputs),
+             os.path.relpath(GENERATION, root).replace(os.sep, "/"),
+             checkout["driver_version"] or "(not recorded)",
+             checkout["driver_commit"] or "(not recorded)"))
+    print()
+    print("  %-20s %-40s %8s %9s"
+          % ("input", "path", "records", "state"))
+    print("  %-20s %-40s %8s %9s"
+          % ("-" * 20, "-" * 40, "-" * 8, "-" * 9))
+    for key, path, count, state in table:
+        print("  %-20s %-40s %8s %9s"
+              % (key, path, "" if count is None else count, state))
+    print()
+
+    if not offenders:
+        print("stale: %d of %d recorded input(s) match the digest "
+              "generation.json carries" % (len(inputs), len(inputs)))
+        print("stale: OK")
+        return 0
+
+    for path, problem, recorded, measured in offenders:
+        print("stale: %s: %s" % (path, problem))
+        print("    recorded  %s" % recorded)
+        print("    measured  %s" % (measured or "(no file to hash)"))
+        print()
+    print("The description set under %s was generated from these files and "
+          "carries their digests. A digest that moved means one side was "
+          "regenerated and the other was not. Regenerate the set with `%s` "
+          "against the same driver checkout, or restore the artefact."
+          % (os.path.relpath(os.path.dirname(os.path.abspath(GENERATION)),
+                             root).replace(os.sep, "/"),
+             GENERATION_REMEDY))
+    return 1
+
+
+def harness_config_targets():
+    """-> track_u.targets from config/campaign.yaml."""
+    try:
+        config = gspwn_config.load(CAMPAIGN_CONFIG)
+    except (gspwn_config.ConfigError, OSError) as exc:
+        raise CheckInput("%s: %s" % (CAMPAIGN_CONFIG, exc))
+    return list(config["track_u"]["targets"])
+
+
+def harness_run_targets():
+    """-> the C_TARGETS array in harnesses/run_all.sh."""
+    try:
+        with open(RUN_ALL, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as exc:
+        raise CheckInput("%s: %s" % (RUN_ALL, exc))
+    match = C_TARGETS_RE.search(text)
+    if not match:
+        raise CheckInput(
+            "%s declares no C_TARGETS=( ... ) array. The script iterates that "
+            "array to run each harness, and this check reads the same one."
+            % RUN_ALL)
+    names = []
+    for line in match.group("body").splitlines():
+        names.extend(line.split("#", 1)[0].split())
+    return names
+
+
+def harness_doc_targets():
+    """-> every name in a Harness column of harnesses/TARGETS.md.
+
+    Three tables in that file carry the column: the ranked entry points, the
+    sanitizer policy and the replay commands. The union of the three covers a
+    harness dropped from the file. A harness carried by one table and absent
+    from another is outside what this check reads.
+    """
+    try:
+        with open(TARGETS_DOC, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as exc:
+        raise CheckInput("%s: %s" % (TARGETS_DOC, exc))
+    names, column = [], None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            column = None
+            continue
+        cells = [cell.strip().strip("`")
+                 for cell in stripped.strip("|").split("|")]
+        if column is None:
+            column = (cells.index(HARNESS_COLUMN)
+                      if HARNESS_COLUMN in cells else -1)
+            continue
+        if column < 0 or set("".join(cells)) <= TABLE_RULE:
+            continue
+        if column < len(cells) and cells[column]:
+            names.append(cells[column])
+    if column is None and not names:
+        raise CheckInput(
+            "%s holds no table with a %s column. Every harness name in that "
+            "file sits in one." % (TARGETS_DOC, HARNESS_COLUMN))
+    return names
+
+
+def harness_directories():
+    """-> (directories under harnesses/ holding a build.sh, those holding none)."""
+    try:
+        entries = sorted(os.listdir(HARNESS_DIR))
+    except OSError as exc:
+        raise CheckInput("%s: %s" % (HARNESS_DIR, exc))
+    built, bare = [], []
+    for name in entries:
+        path = os.path.join(HARNESS_DIR, name)
+        if not os.path.isdir(path):
+            continue
+        if os.path.isfile(os.path.join(path, "build.sh")):
+            built.append(name)
+        else:
+            bare.append(name)
+    return built, bare
+
+
+def check_harnesses():
+    """The four Track U target lists still name the same harnesses."""
+    built, bare = harness_directories()
+    carried = {
+        "config": harness_config_targets(),
+        "run": harness_run_targets(),
+        "doc": harness_doc_targets(),
+        "build": built,
+    }
+    labels = dict(HARNESS_SOURCES)
+    excluded = set(HARNESS_EXCLUSIONS)
+    sets = {key: set(names) - excluded for key, names in carried.items()}
+    for key, label in HARNESS_SOURCES:
+        if not sets[key]:
+            raise CheckInput(
+                "%s carries no target name. A source that reads as empty "
+                "makes every other source disagree with it, and the reader "
+                "for it is the thing to fix." % label)
+
+    targets = sorted(set().union(*sets.values()))
+    offenders = []
+    for name in targets:
+        absent = [labels[key] for key, _ in HARNESS_SOURCES
+                  if name not in sets[key]]
+        if absent:
+            present = [labels[key] for key, _ in HARNESS_SOURCES
+                       if name in sets[key]]
+            offenders.append((name, absent, present))
+    stray = sorted(set(bare) - excluded)
+
+    print("harnesses: %d target(s) across %d source(s), %d declared "
+          "exclusion(s)" % (len(targets), len(HARNESS_SOURCES),
+                            len(HARNESS_EXCLUSIONS)))
+    print()
+    print("  %-22s %-14s %-11s %-11s %s"
+          % ("target", "campaign.yaml", "run_all.sh", "TARGETS.md",
+             "build.sh"))
+    print("  %-22s %-14s %-11s %-11s %s"
+          % ("-" * 22, "-" * 14, "-" * 11, "-" * 11, "-" * 8))
+    for name in targets:
+        print("  %-22s %-14s %-11s %-11s %s"
+              % ((name,) + tuple("yes" if name in sets[key] else "NO"
+                                 for key, _ in HARNESS_SOURCES)))
+    print()
+    print("  %-22s %s" % ("excluded", "reason"))
+    print("  %-22s %s" % ("-" * 22, "-" * 6))
+    for name in sorted(HARNESS_EXCLUSIONS):
+        print("  %-22s %s" % (name, HARNESS_EXCLUSIONS[name]))
+    print()
+
+    if not offenders and not stray:
+        print("harnesses: OK")
+        return 0
+
+    for name, absent, present in offenders:
+        for label in absent:
+            print("harnesses: %s: %s does not carry it" % (name, label))
+        print("    carried by  %s" % (", ".join(present) or "no source"))
+        print()
+    for name in stray:
+        print("harnesses: %s: a directory under harnesses/ with no build.sh "
+              "and no declared exclusion" % name)
+        print("    a directory that builds no target belongs in "
+              "HARNESS_EXCLUSIONS with the reason it holds none")
+        print()
+    print("The four lists drive four separate steps: the fuzz phase reads "
+          "config/campaign.yaml, run_all.sh runs the binaries, TARGETS.md "
+          "carries the entry point and the replay command, and build_all.sh "
+          "compiles what the directories hold. A target named by fewer than "
+          "all four is built and never run, or run and never built, and the "
+          "campaign reports the skip hours in.")
+    return 1
+
+
 CHECKS = {
     "names": check_names,
     "pins": check_pins,
     "coverage": check_coverage,
     "derived": check_derived,
     "pages": check_pages,
+    "stale": check_stale,
+    "harnesses": check_harnesses,
 }
 
 # The order `all` runs them in, and the order the module docstring and the CI
 # steps present them in. It follows the dependency between them: names and
 # pins read the description set alone, coverage and derived join it against
 # the inventories, and pages renders the artefacts the other four compare.
-CHECK_ORDER = ("names", "pins", "coverage", "derived", "pages")
+# stale and harnesses close the order because neither reads the description
+# set: stale reads the provenance record against the artefacts the first five
+# compare, and harnesses reads the Track U seam, which the first six never
+# touch.
+CHECK_ORDER = ("names", "pins", "coverage", "derived", "pages", "stale",
+               "harnesses")
 
 
 def check_order():

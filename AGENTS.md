@@ -110,6 +110,7 @@ the state file and never lowers recorded hours.
 | Close a round | `python3 tools/pipeline_ctl.py round-end --from-run <run-id> [--from-run ...]` (measures the outcome) |
 | Continue or stop the loop | `python3 tools/pipeline_ctl.py round-decide` |
 | Open the next round | `python3 tools/pipeline_ctl.py round-advance` |
+| Compile the description set | `python3 tools/syzlang_gen.py compile [--syzkaller <path>]` |
 
 Phase statuses: `pending`, `in_progress`, `done`, `blocked`, `failed`. Mark a
 phase `in_progress` on dispatch, and `done` only once the gate evidence has
@@ -118,12 +119,22 @@ been seen directly. Never mark it done on the subagent's assertion alone.
 Before trusting the tools after any change to them, run
 `python3 tools/selftest.py` (offline, no hardware needed). After editing
 `tools/ioctl_map.json` or regenerating `descriptions/`, run
-`python3 tools/regression_check.py all`, which is the local form of the five
-artefact checks CI runs: `coverage`, `names`, `pins`, `derived` and `pages`.
-`derived` catches a regeneration that stopped before `object_graph.py chains`
-or `ctrl_rank.py rank`, and `pages` catches one that stopped before
-`tools/refgen.py`. `agents/describe.md` step 1 carries the regeneration
-sequence that satisfies all five, and it is the authority on the order.
+`python3 tools/regression_check.py all`, which is the local form of the seven
+artefact checks CI runs: `coverage`, `names`, `pins`, `derived`, `pages`,
+`stale` and `harnesses`. `derived` catches a regeneration that stopped before
+`object_graph.py chains` or `ctrl_rank.py rank`, and `pages` catches one that
+stopped before `tools/refgen.py`. `stale` catches a surface artefact
+regenerated without regenerating the description set, by hashing every input
+`descriptions/generation.json` records. `harnesses` catches a Track U target
+named by fewer than all four of `config/campaign.yaml`, `harnesses/run_all.sh`,
+`harnesses/TARGETS.md` and the directories holding a `build.sh`.
+`agents/describe.md` step 1 carries the regeneration sequence that satisfies
+all seven, and it is the authority on the order.
+
+`python3 tools/syzlang_gen.py compile` is the separate gate over whether
+syzkaller parses the description set at all. It needs a Go toolchain and
+a syzkaller checkout, so it runs in its own CI job and not in the offline
+one. Exit 3 means it reached no verdict, and that is not a pass.
 
 ## Phase order and gates
 
@@ -137,7 +148,7 @@ phase to keep making progress.
 |---|---|---|
 | provision | agents/provision.md | the gate section of `agents/provision.md` holds this phase's full evidence list, and it is the authority. The main items are manifest.json written, `crashlog_ctl.py verify` prints READY, the test panic harvested, a clean `orchestrator_ctl.py preflight`, and a `surface_verify.py check --no-running` verdict. A failing preflight is a blocked gate, and so is exit 3 or exit 4 from that check |
 | build | agents/build.md | booted into the instrumented kernel, KASAN state matches the rung in manifest, and `nvidia-smi` works |
-| describe | agents/describe.md | `surface_verify.py check` exits 0, meaning two or more version sources agree; Syzlang compiles; smoke run reaches driver (dmesg evidence); `regression_check.py pins` exits 0 and the `NV_ESC_IOCTL_XFER_CMD` `cmd` constraint set is quoted; `surface_cov.py modelled` still reports 764/764, which is a regression check and not evidence of work done; `surface_cov.py gaps --stage corpus` names fewer targets with `--run-id <smoke run id>` than it does over `artifacts/seeds`, which is the round's starting position, and that delta is the phase's measured output; audit sample logged. Where the phase regenerated the surface artefacts, `regression_check.py all` exits 0 over all five checks and the reference pages are committed with them |
+| describe | agents/describe.md | `surface_verify.py check` exits 0, meaning two or more version sources agree; Syzlang compiles; smoke run reaches driver (dmesg evidence); `regression_check.py pins` exits 0 and the `NV_ESC_IOCTL_XFER_CMD` `cmd` constraint set is quoted; `surface_cov.py modelled` still reports 764/764, which is a regression check and not evidence of work done; `surface_cov.py gaps --stage corpus` names fewer targets with `--run-id <smoke run id>` than it does over `artifacts/seeds`, which is the round's starting position, and that delta is the phase's measured output; audit sample logged. Where the phase regenerated the surface artefacts, `regression_check.py all` exits 0 over all seven checks and the reference pages are committed with them |
 | seeds | agents/seeds.md | `artifacts/seeds/chain-*.syz` exist, `trace2seed.py chains` exits 0, and its account line is reported with all three of its numbers: commands emitted, commands dropped before emission, commands with no chain. The three close on the whole control surface and no round emits all 531, because 17 reach no chain by construction, so this clause is a regression check on the artefacts and not evidence of work done. Also: every syscall name in the seed bank is declared by a description (`regression_check.py names` exits 0); seeds parse under syz-manager; the per-item report names for every `[finding ...]`, `[history ...]` and `[surface]` item whether a seed establishes its precondition |
 | harness | agents/harness.md | Track U harnesses build and produce coverage under `artifacts/runs/<id>/u/<harness>/`, `harnesses/TARGETS.md` lists every harness with its reachability justification and its `{input}` replay command, `track_u.targets` in `config/campaign.yaml` names every harness directory, and `run_all.sh` runs `replay_crashes.sh` at harvest. A harness that failed to build is named with the number of inputs its failure leaves unreplayed |
 | fuzz | agents/fuzz.md | both systemd units active and coverage increases within the smoke window, then the campaign window has elapsed (`campaign_ctl.py wait --run-id <id>`). The smoke window only says the campaign started. Everything after this phase measures the run, so advancing on the smoke window measures the first half hour of a 24-hour campaign |
