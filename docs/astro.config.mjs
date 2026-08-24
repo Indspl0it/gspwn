@@ -75,7 +75,7 @@ export default defineConfig({
             { label: 'Requirements', slug: 'getting-started/requirements' },
             { label: 'Installation', slug: 'getting-started/installation' },
             { label: 'Quickstart', slug: 'getting-started/quickstart' },
-            { label: 'Your first campaign', slug: 'getting-started/first-campaign' },
+            { label: 'First campaign', slug: 'getting-started/first-campaign' },
           ],
         },
         {

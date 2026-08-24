@@ -21,6 +21,14 @@ carried the latter ten times before this check existed.
 Passing paths on the command line checks those files alone. With no arguments
 it walks both roots.
 
+`agents/*.md` and `AGENTS.md` sit outside both roots by decision. A phase brief
+is an instruction addressed to the agent executing it, so it opens
+`You are the provision-phase agent` and stays in the second person. The register's ban on
+addressing the reader governs documentation written about the system, and
+applying it to a brief would rewrite 48 hits across 13 files into prose that
+instructs nobody. The rest of the register does apply to a brief, and nothing
+mechanical checks it.
+
 ## Checked constructions
 
 | Family | Examples |

@@ -13398,6 +13398,30 @@ class TestTheRegisterCheckSeesAcrossALineWrap(unittest.TestCase):
             for klass in re.findall(r"\[[^\]]*\]", pattern):
                 self.assertNotIn(" ", klass, rule)
 
+    def test_second_person_opening_a_sentence_is_caught(self):
+        # The second-person rule ran case-sensitively and read straight past
+        # the form the construction most often takes.
+        for text in ("You hold the descriptor after this call.",
+                     "Your campaign records the verdict.",
+                     "We record the verdict here.",
+                     "Our reading of the flag was wrong."):
+            self.assertTrue(self.hits(text, "second person"), text)
+
+    def test_second_person_mid_sentence_is_still_caught(self):
+        self.assertTrue(self.hits("The tool hands you the descriptor.",
+                                  "second person"))
+
+    def test_every_rule_is_case_insensitive(self):
+        # One rule ran with flags=0 and the exception was undocumented. A rule
+        # that matches only lowercase misses a sentence opening.
+        for rule, _ in register_check.PATTERNS:
+            if rule in ("emoji", "curly quote", "em dash", "en dash"):
+                continue
+            upper = len(self.hits("filler RATHER filler", "rather"))
+            lower = len(self.hits("filler rather filler", "rather"))
+            self.assertEqual(upper, lower, rule)
+            self.assertEqual(upper, 1, rule)
+
     def test_every_pattern_still_compiles_after_the_rewrite(self):
         # Asserts by the absence of re.error, and still discriminates:
         # a wrap_tolerant returning None makes re.compile raise.

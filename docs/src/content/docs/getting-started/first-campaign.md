@@ -1,5 +1,5 @@
 ---
-title: Your first campaign
+title: First campaign
 description: Round 1 end to end, sub-agent by sub-agent, with the gate evidence each phase must produce.
 sidebar:
   order: 5
