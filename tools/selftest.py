@@ -36,6 +36,7 @@ The git-mining classes skip themselves when git is absent from PATH.
 Usage: python3 tools/selftest.py [-v]      exit 0 = all passed
 """
 import ast
+import collections
 import contextlib
 import csv
 import fcntl
@@ -82,6 +83,7 @@ import surface_cov
 import surface_verify
 import syzlang_gen
 import trace2seed
+import value_families
 
 
 def csv_line(ts, edges=None, source="test", gpu="ok", **extra):
@@ -17816,6 +17818,453 @@ class TestTheDrmReferencePage(unittest.TestCase):
         index = self.pages["index.md"]
         self.assertIn("`drm`", index)
         self.assertIn("`drm_undispatched`", index)
+
+
+def value_index(defines):
+    """A TypeIndex carrying nothing but the macro table a test needs."""
+    index = syzlang_gen.TypeIndex()
+    index.defines.update(defines)
+    return index
+
+
+class TestValueFamilyAnchoredRule(unittest.TestCase):
+    """Rule 1 binds a define to a field only through the struct's own name."""
+
+    NAMES = sorted([
+        "NV2080_CTRL_FB_GET_CACHE_MODE_DISABLED",
+        "NV2080_CTRL_FB_GET_CACHE_MODE_ENABLED",
+        "NV2080_CTRL_FB_GET_CACHE_PARAMS_MODE_LEGACY",
+        "NV2080_CTRL_FB_GET_CACHE_WRITE_MODE_BACK",
+        "NV2080_CTRL_FB_GET_CACHE_WRITE_MODE_THROUGH",
+        "NV2080_CTRL_FB_GET_CACHE_MODE",
+        "NV2080_CTRL_FB_SET_CACHE_MODE_DISABLED",
+        "NV2080_CTRL_GPU_GET_PIDS_ID_TYPE_CLASS",
+        "NV2080_CTRL_GPU_GET_PIDS_ID_TYPE_VGPU_GUEST",
+    ])
+
+    def test_a_define_anchored_on_the_stem_joins_the_family(self):
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "mode", self.NAMES)
+        self.assertIn("NV2080_CTRL_FB_GET_CACHE_MODE_ENABLED", hits)
+        self.assertIn("NV2080_CTRL_FB_GET_CACHE_MODE_DISABLED", hits)
+
+    def test_a_define_anchored_on_the_whole_struct_name_joins_the_family(self):
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "mode", self.NAMES)
+        self.assertIn("NV2080_CTRL_FB_GET_CACHE_PARAMS_MODE_LEGACY", hits)
+
+    def test_a_define_of_a_neighbouring_command_stays_out(self):
+        """NV2080_CTRL_FB_SET_CACHE_* belongs to the SET command."""
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "mode", self.NAMES)
+        self.assertNotIn("NV2080_CTRL_FB_SET_CACHE_MODE_DISABLED", hits)
+
+    def test_a_define_naming_the_field_without_a_separator_stays_out(self):
+        """The bare anchor names the field and never one of its values."""
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "mode", self.NAMES)
+        self.assertNotIn("NV2080_CTRL_FB_GET_CACHE_MODE", hits)
+
+    def test_the_field_name_is_matched_in_upper_snake_case(self):
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "writeMode", self.NAMES)
+        self.assertEqual(hits, ["NV2080_CTRL_FB_GET_CACHE_WRITE_MODE_BACK",
+                                "NV2080_CTRL_FB_GET_CACHE_WRITE_MODE_THROUGH"])
+
+    def test_upper_snake_splits_a_trailing_acronym(self):
+        self.assertEqual(value_families.upper_snake("idType"), "ID_TYPE")
+        self.assertEqual(value_families.upper_snake("cpuClkId"), "CPU_CLK_ID")
+
+    def test_only_the_three_named_suffixes_make_a_stem(self):
+        self.assertEqual(value_families.stems("NV0000_X_PARAMS"),
+                         ["NV0000_X_PARAMS", "NV0000_X"])
+        self.assertEqual(value_families.stems("NV0000_X_INFO"),
+                         ["NV0000_X_INFO", "NV0000_X"])
+        self.assertEqual(value_families.stems("NV0000_X_PARAMS_V2"),
+                         ["NV0000_X_PARAMS_V2"])
+
+    def test_a_longer_anchored_sibling_field_owns_its_defines(self):
+        """`id` and `idType` share the anchor <STEM>_ID_; idType owns it."""
+        names = value_families.anchored_defines(
+            "NV2080_CTRL_GPU_GET_PIDS_PARAMS", "id", self.NAMES)
+        self.assertEqual(len(names), 2)
+        owned = value_families.sibling_owned(
+            "NV2080_CTRL_GPU_GET_PIDS_PARAMS", "id",
+            ["idType", "id", "pidTblCount"], names)
+        self.assertEqual(sorted(owned), names)
+
+    def test_a_sibling_of_an_unrelated_name_owns_nothing(self):
+        names = value_families.anchored_defines(
+            "NV2080_CTRL_GPU_GET_PIDS_PARAMS", "idType", self.NAMES)
+        owned = value_families.sibling_owned(
+            "NV2080_CTRL_GPU_GET_PIDS_PARAMS", "idType",
+            ["idType", "id", "pidTblCount"], names)
+        self.assertEqual(owned, set())
+
+
+class TestValueFamilySwitchRule(unittest.TestCase):
+    """Rule 2 reads a handler body and binds through the inventory row."""
+
+    SOURCE = """
+NV_STATUS
+subdeviceCtrlCmdFooBar_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_FOO_BAR_PARAMS *pFooParams
+)
+{
+    switch (pFooParams->mode)
+    {
+        case NV2080_CTRL_FOO_BAR_MODE_A:
+            break;
+        case NV2080_CTRL_FOO_BAR_MODE_B:
+        {
+            switch (pOther->inner)
+            {
+                case NV2080_NESTED_VALUE:
+                    break;
+            }
+            break;
+        }
+    }
+    switch (pSubdevice->someOtherField)
+    {
+        case NV2080_NOT_A_PARAM_VALUE:
+            break;
+    }
+    return NV_OK;
+}
+"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        root = os.path.join(self.dir, "src", "nvidia")
+        os.makedirs(root)
+        with open(os.path.join(root, "handler.c"), "w") as fh:
+            fh.write(self.SOURCE)
+        self.handlers = {"subdeviceCtrlCmdFooBar": "NV2080_CTRL_FOO_BAR_PARAMS"}
+
+    def scan(self):
+        return value_families.scan_switches(self.dir, self.handlers)
+
+    def test_a_switch_over_the_params_argument_is_read(self):
+        found, _counters = self.scan()
+        self.assertEqual(
+            found[("NV2080_CTRL_FOO_BAR_PARAMS", "mode")],
+            ["NV2080_CTRL_FOO_BAR_MODE_A", "NV2080_CTRL_FOO_BAR_MODE_B"])
+
+    def test_the_impl_suffix_reaches_the_body(self):
+        """NVOC puts the body in <handler>_IMPL and the inventory records
+        the exported name. A scan anchored on the exported name alone reads
+        3 of the 1315 handlers."""
+        _found, counters = self.scan()
+        self.assertEqual(counters["handler_definitions"], 1)
+
+    def test_a_nested_switch_contributes_no_case_to_the_outer_family(self):
+        found, _counters = self.scan()
+        self.assertNotIn(
+            "NV2080_NESTED_VALUE",
+            found[("NV2080_CTRL_FOO_BAR_PARAMS", "mode")])
+
+    def test_a_switch_over_another_pointer_is_skipped(self):
+        """Only the argument declared with the inventory row's struct binds."""
+        found, _counters = self.scan()
+        self.assertNotIn(("NV2080_CTRL_FOO_BAR_PARAMS", "someOtherField"),
+                         found)
+
+    def test_a_handler_with_no_argument_of_that_struct_is_counted(self):
+        self.handlers = {"subdeviceCtrlCmdFooBar": "NV2080_CTRL_OTHER_PARAMS"}
+        found, counters = self.scan()
+        self.assertEqual(found, {})
+        self.assertEqual(
+            counters["handlers_without_a_typed_params_argument"], 1)
+
+    def test_the_params_argument_is_found_by_its_declared_type(self):
+        self.assertEqual(
+            value_families.params_variable(
+                "Subdevice *pSubdevice, NV2080_CTRL_FOO_BAR_PARAMS *pFooParams",
+                "NV2080_CTRL_FOO_BAR_PARAMS"),
+            "pFooParams")
+
+    def test_a_handler_named_by_two_param_structs_is_omitted(self):
+        """Binding one of two would be a choice, and choosing is the defect
+        this rule exists to avoid."""
+        inventory = {"methods": [
+            {"handler": "h1", "param_struct": "A"},
+            {"handler": "h1", "param_struct": "B"},
+            {"handler": "h2", "param_struct": "C"},
+            {"handler": "h2", "param_struct": "C"},
+        ]}
+        self.assertEqual(value_families.handler_param_structs(inventory),
+                         {"h2": "C"})
+
+
+class TestValueFamilyExclusions(unittest.TestCase):
+    """The four rules that drop a candidate before it becomes a family."""
+
+    SITES = {
+        "NV_X_MODE_A": [value_families.DefineSite(
+            "NV_X_MODE_A", "(0x1)", "src/common/sdk/x.h", 10)],
+        "NV_X_MODE_B": [value_families.DefineSite(
+            "NV_X_MODE_B", "(0x2)", "src/common/sdk/x.h", 11)],
+        "NV_X_MODE_ALIAS": [value_families.DefineSite(
+            "NV_X_MODE_ALIAS", "(0x1)", "src/common/sdk/x.h", 12)],
+        "NV_X_MODE_PARAMS_MESSAGE_ID": [value_families.DefineSite(
+            "NV_X_MODE_PARAMS_MESSAGE_ID", "(0x9)", "src/common/sdk/x.h", 13)],
+        "NV_X_MODE_ALIAS_ONE": [value_families.DefineSite(
+            "NV_X_MODE_ALIAS_ONE", "(0x1)", "src/common/sdk/x.h", 14)],
+        "NV_X_MODE_ALIAS_TWO": [value_families.DefineSite(
+            "NV_X_MODE_ALIAS_TWO", "(0x2)", "src/common/sdk/x.h", 15)],
+    }
+    DEFINES = {"NV_X_MODE_A": "(0x1)", "NV_X_MODE_B": "(0x2)",
+               "NV_X_MODE_ALIAS": "(0x1)",
+               "NV_X_MODE_PARAMS_MESSAGE_ID": "(0x9)",
+               "NV_X_MODE_ALIAS_ONE": "(0x1)",
+               "NV_X_MODE_ALIAS_TWO": "(0x2)"}
+
+    def build(self, names, bit_range=(), siblings=()):
+        return value_families.build_family(
+            "NV_X_PARAMS", "mode", value_families.RULE_ANCHORED, list(names),
+            value_index(self.DEFINES), self.SITES, set(bit_range), siblings)
+
+    def test_a_message_id_define_never_joins_a_family(self):
+        record = self.build(["NV_X_MODE_A", "NV_X_MODE_B",
+                             "NV_X_MODE_PARAMS_MESSAGE_ID"])
+        self.assertNotIn("NV_X_MODE_PARAMS_MESSAGE_ID", record["defines"])
+        self.assertEqual(record["excluded"]["message_id"], 1)
+
+    def test_a_family_of_one_distinct_value_is_dropped(self):
+        self.assertIsNone(self.build(["NV_X_MODE_A"]))
+
+    def test_two_names_for_one_value_count_as_one_value(self):
+        """Deduplication runs on the value, so an alias adds no value."""
+        self.assertIsNone(self.build(["NV_X_MODE_A", "NV_X_MODE_ALIAS"]))
+
+    def test_two_names_for_two_values_make_a_family(self):
+        record = self.build(["NV_X_MODE_A", "NV_X_MODE_B"])
+        self.assertEqual(record["values"], [1, 2])
+
+    def test_a_bit_range_body_is_detected(self):
+        self.assertTrue(value_families.is_bit_range("0:0"))
+        self.assertTrue(value_families.is_bit_range("4:3"))
+        self.assertTrue(value_families.is_bit_range(" (8:7) "))
+        self.assertFalse(value_families.is_bit_range("(0x00000001U)"))
+        self.assertFalse(value_families.is_bit_range("3600"))
+
+    def test_a_bit_range_define_is_dropped_from_a_family(self):
+        record = self.build(["NV_X_MODE_A", "NV_X_MODE_B"],
+                            bit_range=["NV_X_MODE_B"])
+        self.assertIsNone(record)
+
+    def test_a_define_owned_by_a_longer_anchored_sibling_is_dropped(self):
+        """`mode` matches <STEM>_MODE_ALIAS_*, which `modeAlias` owns."""
+        record = self.build(["NV_X_MODE_ALIAS_ONE", "NV_X_MODE_ALIAS_TWO"],
+                            siblings=["mode", "modeAlias"])
+        self.assertIsNone(record)
+
+    def test_a_define_no_sibling_claims_stays_in_the_family(self):
+        record = self.build(["NV_X_MODE_A", "NV_X_MODE_B"],
+                            siblings=["mode", "modeAlias"])
+        self.assertEqual(record["values"], [1, 2])
+        self.assertEqual(record["excluded"]["sibling_owned"], 0)
+
+
+class TestValueFamilyBitfieldShape(unittest.TestCase):
+    """A bit range naming the field keeps its values; a bit inside it does
+    not."""
+
+    def record(self, rule, stems):
+        return {
+            "struct": "NV_X_PARAMS", "field": "flags", "rule": rule,
+            "defines": sorted(stems), "values": [0, 1],
+            "define_sites": [{"define": name, "value": i, "header": "x.h",
+                              "line": 1, "bitfield_stem": stem}
+                             for i, (name, stem) in enumerate(sorted(stems.items()))],
+        }
+
+    def test_a_bit_below_the_field_anchor_makes_a_bitfield(self):
+        """NV2080_CTRL_PERF_BOOST_FLAGS_ASYNC is the range 5:5, one bit
+        inside the flags word."""
+        rec = self.record(value_families.RULE_ANCHORED,
+                          {"NV_X_FLAGS_ASYNC_NO": "NV_X_FLAGS_ASYNC",
+                           "NV_X_FLAGS_ASYNC_YES": "NV_X_FLAGS_ASYNC"})
+        self.assertTrue(value_families.is_bitfield_family(rec))
+        verdict, reason = value_families.mechanical_verdict(rec)
+        self.assertEqual(verdict, "rejected")
+        self.assertIn("NV_X_FLAGS_ASYNC", reason)
+
+    def test_a_bit_range_naming_the_field_keeps_its_values(self):
+        """NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID is the
+        range 4:0 and spans the whole of engineId."""
+        rec = self.record(value_families.RULE_ANCHORED,
+                          {"NV_X_FLAGS_A": "NV_X_FLAGS",
+                           "NV_X_FLAGS_B": "NV_X_FLAGS"})
+        self.assertFalse(value_families.is_bitfield_family(rec))
+        self.assertEqual(value_families.mechanical_verdict(rec)[0], "accepted")
+
+    def test_the_switch_rule_outranks_the_bitfield_shape(self):
+        """The handler compares the field itself against those values."""
+        rec = self.record(value_families.RULE_SWITCH,
+                          {"NV_X_FLAGS_ASYNC_NO": "NV_X_FLAGS_ASYNC",
+                           "NV_X_FLAGS_ASYNC_YES": "NV_X_FLAGS_ASYNC"})
+        self.assertFalse(value_families.is_bitfield_family(rec))
+
+    def test_a_family_with_no_bit_range_member_is_no_bitfield(self):
+        rec = self.record(value_families.RULE_ANCHORED,
+                          {"NV_X_FLAGS_A": None, "NV_X_FLAGS_B": None})
+        self.assertFalse(value_families.is_bitfield_family(rec))
+
+
+class TestValueFamilyScope(unittest.TestCase):
+    """The modeset and drm families take no part in the derivation."""
+
+    def test_the_drm_interface_header_is_out_of_scope(self):
+        self.assertEqual(value_families.scope_of(
+            "kernel-open/nvidia-drm/nv_drm_common_ioctl.h"), "drm")
+
+    def test_the_modeset_interface_tree_is_out_of_scope(self):
+        self.assertEqual(value_families.scope_of(
+            "src/nvidia-modeset/interface/nvkms-api.h"), "modeset")
+
+    def test_an_nvkms_header_outside_that_tree_is_out_of_scope(self):
+        """nvkms-api-types.h reaches the description set from kernel-open."""
+        self.assertEqual(value_families.scope_of(
+            "kernel-open/common/inc/nvkms-api-types.h"), "modeset")
+
+    def test_the_two_display_headers_are_out_of_scope(self):
+        for header in ("src/common/unix/common/inc/nv_mode_timings.h",
+                       "kernel-open/common/inc/nv_dpy_id.h"):
+            self.assertEqual(value_families.scope_of(header), "modeset")
+
+    def test_an_sdk_control_header_is_in_scope(self):
+        self.assertIsNone(value_families.scope_of(
+            "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000gpu.h"))
+
+    def test_the_uvm_ioctl_header_is_in_scope(self):
+        self.assertIsNone(value_families.scope_of(
+            "kernel-open/nvidia-uvm/uvm_ioctl.h"))
+
+
+class TestValueFamilyArtefacts(unittest.TestCase):
+    """The two committed artefacts, read as a consumer reads them."""
+
+    @classmethod
+    def setUpClass(cls):
+        for path in (value_families.DEFAULT_OUT,
+                     value_families.DEFAULT_AUDIT_OUT):
+            if not os.path.isfile(path):
+                raise unittest.SkipTest("committed artefacts not present")
+        with open(value_families.DEFAULT_OUT, encoding="utf-8") as fh:
+            cls.derivation = json.load(fh)
+        with open(value_families.DEFAULT_AUDIT_OUT, encoding="utf-8") as fh:
+            cls.audit = json.load(fh)
+
+    def test_both_artefacts_carry_their_schema(self):
+        self.assertEqual(self.derivation["schema"], "gspwn.value-families/1")
+        self.assertEqual(self.audit["schema"], "gspwn.value-families-audit/1")
+
+    def test_the_derivation_records_what_it_read(self):
+        for key in ("src_root", "driver_version", "descriptions",
+                    "control_inventory"):
+            self.assertIn(key, self.derivation["source"])
+        for key in ("headers_read", "define_names",
+                    "bit_range_defines_dropped", "bare_int_fields_in_scope"):
+            self.assertIn(key, self.derivation["scan"])
+
+    def test_the_summary_counts_agree_with_the_records(self):
+        self.assertEqual(self.derivation["summary"]["families"],
+                         len(self.derivation["families"]))
+        counts = collections.Counter(e["verdict"] for e in self.audit["audit"])
+        self.assertEqual(self.audit["summary"]["accepted"],
+                         counts["accepted"])
+        self.assertEqual(self.audit["summary"]["rejected"],
+                         counts["rejected"])
+
+    def test_every_derived_family_appears_in_the_audit(self):
+        derived = {(r["struct"], r["field"])
+                   for r in self.derivation["families"]}
+        recorded = {(e["struct"], e["field"]) for e in self.audit["audit"]}
+        self.assertEqual(derived - recorded, set())
+
+    def test_every_verdict_is_accepted_or_rejected(self):
+        for entry in self.audit["audit"]:
+            self.assertIn(entry["verdict"], ("accepted", "rejected"))
+
+    def test_every_entry_carries_a_reason_and_header_evidence(self):
+        for entry in self.audit["audit"]:
+            self.assertTrue(entry["reason"].strip())
+            self.assertNotEqual(entry["reason"].strip().lower(),
+                                "not a match")
+            self.assertTrue(entry["evidence"]["defines"])
+
+    def test_every_record_carries_its_rule_and_source(self):
+        rules = (value_families.RULE_ANCHORED, value_families.RULE_SWITCH)
+        for record in self.derivation["families"]:
+            self.assertTrue(any(r in record["rule"] for r in rules))
+            self.assertTrue(record["source_file"])
+            self.assertEqual(len(record["defines"]),
+                             len(record["define_sites"]))
+            for site in record["define_sites"]:
+                self.assertTrue(site["header"])
+                self.assertIsInstance(site["line"], int)
+
+    def test_both_out_of_scope_families_are_recorded_with_a_reason(self):
+        families = {e["family"]: e for e in self.audit["out_of_scope"]}
+        self.assertEqual(sorted(families), ["drm", "modeset"])
+        for entry in families.values():
+            self.assertEqual(entry["verdict"], "out_of_scope")
+            self.assertIn("does not run over", entry["reason"])
+
+    def test_no_accepted_family_holds_fewer_than_two_distinct_values(self):
+        for record in value_families.accepted_families(self.derivation,
+                                                       self.audit):
+            self.assertGreaterEqual(len(set(record["values"])), 2)
+
+    def test_no_accepted_family_holds_a_message_id_define(self):
+        for record in value_families.accepted_families(self.derivation,
+                                                       self.audit):
+            for name in record["defines"]:
+                self.assertFalse(name.endswith("_MESSAGE_ID"))
+
+    def test_accepted_families_drops_what_the_audit_rejected(self):
+        accepted = value_families.accepted_families(self.derivation,
+                                                    self.audit)
+        self.assertEqual(len(accepted), self.audit["summary"]["accepted"])
+        rejected = {(e["struct"], e["field"]) for e in self.audit["audit"]
+                    if e["verdict"] == "rejected"}
+        for record in accepted:
+            self.assertNotIn((record["struct"], record["field"]), rejected)
+
+    def test_a_family_recorded_without_a_derivation_is_never_accepted(self):
+        """The gpuId entry is recorded so the defect stays visible. Nothing
+        reaches the emitter through it."""
+        derived = {(r["struct"], r["field"])
+                   for r in self.derivation["families"]}
+        for entry in self.audit["audit"]:
+            if (entry["struct"], entry["field"]) not in derived:
+                self.assertEqual(entry["verdict"], "rejected")
+
+    def test_the_gpu_active_device_gpu_id_family_is_rejected(self):
+        """The regression case for the class-prefix rule, which bound gpuId
+        to the bit definitions of a different field in a different struct."""
+        entries = [e for e in self.audit["audit"]
+                   if e["struct"] == "NV0000_CTRL_GPU_ACTIVE_DEVICE"
+                   and e["field"] == "gpuId"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["verdict"], "rejected")
+        self.assertIn("NV0000_CTRL_GPU_ID_INFO", entries[0]["reason"])
+        self.assertIn("different field", entries[0]["reason"])
+
+    def test_no_accepted_family_lands_on_a_field_that_is_not_a_bare_integer(
+            self):
+        """A field already emitted as a pinned const, a handle or an array is
+        outside the universe, so an accepted family never displaces one."""
+        bare = value_families.load_bare_int_fields(
+            value_families.DEFAULT_DESCRIPTIONS)
+        for record in value_families.accepted_families(self.derivation,
+                                                       self.audit):
+            self.assertIn(record["field"], bare.get(record["struct"], []))
 
 
 def pipeline_ctl_cmd_round_end(args):
