@@ -46,7 +46,7 @@ DEFAULTS = {
         "max_rounds": 10,
         "max_total_run_hours": 5000,
         "campaign_hours": 1000,
-        "stop_on_plateau": False,
+        "stop_on_plateau": True,
         "plateau_window_min": 240,
         "plateau_min_growth": 0.02,
         "coverage_sample_min": 10,
