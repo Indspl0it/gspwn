@@ -99,6 +99,23 @@ instrumented kernel fuzzing.
    in config/machine.yaml as `container_toolkit_version`, beside
    `driver_branch`. The injection path depends on the toolkit version, so a
    campaign that does not record it cannot defend its own denominator later.
+4b. Install the Go toolchain. Step 6 builds syzkaller, which is written in
+   Go and builds on the host, and the pinned revision declares `go 1.26.0` in
+   go.mod. No apt package meets that floor, because Ubuntu 24.04 ships Go
+   1.22. The describe phase also runs `syzlang_gen.py compile`, which invokes
+   go and exits 3 when it is absent.
+
+   ```
+   GO_VERSION=1.26.2
+   curl -fsSLO https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz
+   sudo rm -rf /usr/local/go
+   sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
+   export PATH=/usr/local/go/bin:${PATH}
+   go version
+   ```
+
+   Add the PATH line to the campaign user's shell profile as well, because the
+   describe phase runs in a later session and reads it from there.
 5. Clone into artifacts/src/: upstream linux (stable branch matching the
    newest supported by open-gpu-kernel-modules), open-gpu-kernel-modules,
    syzkaller (master), nvidia-container-toolkit, libnvidia-container. Record
@@ -142,7 +159,9 @@ instrumented kernel fuzzing.
 
    Also write the GSP firmware version (from `nvidia-smi -q`) into the
    manifest, and report.md consumes it from there.
-6. Build syzkaller (`make` in its dir) so bin/syz-manager exists.
+6. Build syzkaller (`make` in its dir) so bin/syz-manager exists. This
+   step builds with the Go toolchain step 4b installs, and `make` stops
+   on the go.mod directive when the toolchain is older.
 7. Measure the tenant surface on this instance, before any campaign spend.
 
    ```

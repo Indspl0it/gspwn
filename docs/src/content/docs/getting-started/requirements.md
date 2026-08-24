@@ -89,6 +89,19 @@ python3-yaml docker.io kdump-tools pstore-tools mokutil
 | `mokutil` | bare metal | reports Secure Boot state to the `build` phase |
 | `docker.io` | every machine | the Track U harnesses run in a container, and the tenant-surface measurement starts one |
 
+## Go toolchain
+
+syzkaller builds on the host, and its pinned revision declares `go 1.26.0` in
+`go.mod`. No `apt` package meets that floor, because Ubuntu 24.04 ships Go
+1.22, so the toolchain comes from the upstream tarball.
+
+| Consumer | Requirement |
+|---|---|
+| `make` in the syzkaller tree | Go at or above the `go.mod` floor. The build stops on the directive otherwise, and `bin/syz-manager` is never produced |
+| `syzlang_gen.py compile` | `go` on `PATH` in the phase's own shell. Exit 3 means no verdict was reached, which is distinct from a description set that fails to compile |
+
+[Installation](/gspwn/getting-started/installation/) carries the commands.
+
 ## Container runtime
 
 The threat model is a container tenant, so the `provision` phase measures which
