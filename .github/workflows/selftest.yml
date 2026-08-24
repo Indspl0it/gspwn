@@ -37,7 +37,7 @@ jobs:
       - name: Shipped config is valid
         run: python3 tools/gspwn_config.py
 
-      # The nine steps below compare committed artefacts that have to agree
+      # The ten steps below compare committed artefacts that have to agree
       # and that nothing else compares. Each reads files only, so they run in
       # the same offline job as everything above.
 
@@ -119,6 +119,17 @@ jobs:
         # argparse parser. A wrong flag stalls the phase on a metered instance
         # and needs a human to notice, diagnose and fix it.
         run: python3 tools/regression_check.py agents
+
+      - name: Prose figures still match the measured surface
+        # A phase brief is executed by a model that takes the numbers in its
+        # prose as fact, and the `agents` step above reads the command lines
+        # and not the prose. Three stale figures survived that way: a
+        # denominator enumeration summing to 828, an exclusion count of 347
+        # and a compile verdict of 862 syscalls. This step settles every
+        # surface figure in a brief or a hand-written page against the
+        # inventories, and a family enumeration against its own sum, so a
+        # family added to the surface and left out of a brief is reported.
+        run: python3 tools/regression_check.py figures
 
       - name: Documentation writing register
         # Question-shaped headings and table column headers scan as labels, so

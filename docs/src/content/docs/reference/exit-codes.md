@@ -49,9 +49,9 @@ beyond failure.
 | `repro_ctl.py` | `verify` | 2 | A rate was recorded on fewer counted runs than requested, because the attempt cap fired |
 | `refgen.py` | | 0 | Every page was written |
 | `refgen.py` | | 2 | An artefact this tool needs is absent, unreadable, empty, or carries a schema stamp it does not read |
-| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `all` | 0 | The check passed |
-| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `all` | 1 | The check found an offending entry |
-| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `all` | 2 | An artefact the check needs is absent, unparseable, or shaped in a way the check did not anticipate, or a check raised an unexpected exception |
+| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `figures`, `all` | 0 | The check passed |
+| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `figures`, `all` | 1 | The check found an offending entry |
+| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `figures`, `all` | 2 | An artefact the check needs is absent, unparseable, or shaped in a way the check did not anticipate, or a check raised an unexpected exception |
 | `register_check.py` | | 0 | No non-exempt register hit in any file read |
 | `register_check.py` | | 1 | At least one hit, each printed with its file, line, rule and surrounding text |
 | `surface_cov.py` | | 1 | An inventory is absent, does not parse, names a different driver release, a `--run-id` corpus could not be unpacked, or `--corpus` and `--run-id` were both given |

@@ -1947,6 +1947,166 @@ class TestBudgetGuard(StateTempMixin, unittest.TestCase):
             self.assertEqual(ps.spend_for_budget(), 300.0)
 
 
+
+class TestProseFiguresMatchTheSurface(unittest.TestCase):
+    """regression_check figures: a number in a brief is an assertion with no
+    test behind it.
+
+    `agents` reads the command lines out of a brief and checks each against
+    the tool's own argparse parser. Nothing read the numbers in the prose, and
+    a brief is executed by a model that takes them as fact. Three stale
+    figures survived every check that way: a denominator enumeration summing
+    to 828, an exclusion count of 347 and a compile verdict of 862 syscalls.
+    """
+
+    def run_over(self, text):
+        """-> (exit code, output) with `text` standing in for every source."""
+        path = os.path.join(tempfile.mkdtemp(prefix="figures-"), "brief.md")
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        self.addCleanup(shutil.rmtree, os.path.dirname(path),
+                        ignore_errors=True)
+        real = regression_check.figure_sources
+        regression_check.figure_sources = lambda: [path]
+        self.addCleanup(setattr, regression_check, "figure_sources", real)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = regression_check.check_figures()
+        return code, buffer.getvalue()
+
+    def measured(self):
+        targets, excluded, _meta = surface_cov.load_targets()
+        families = collections.Counter(r["family"] for r in targets.values())
+        return len(targets), len(excluded), families
+
+    def test_the_committed_prose_states_no_stale_figure(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = regression_check.check_figures()
+        self.assertEqual(code, 0, buffer.getvalue())
+
+    def test_a_retired_denominator_stated_as_current_is_reported(self):
+        code, out = self.run_over("The surface holds 828 targetable "
+                                  "commands.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("superseded", out)
+        self.assertIn("828", out)
+
+    def test_a_retired_denominator_inside_a_code_span_is_left_alone(self):
+        """A figure in a code span reproduces what a tool printed."""
+        code, out = self.run_over("The `surface_cov.py report` output read "
+                                  "`828 targetable` at the time.\n")
+        self.assertEqual(code, 0, out)
+
+    def test_a_retired_denominator_inside_a_fence_is_left_alone(self):
+        code, out = self.run_over("Output:\n\n```\n828 targetable\n```\n")
+        self.assertEqual(code, 0, out)
+
+    def test_a_family_enumeration_missing_a_family_is_reported_by_its_sum(
+            self):
+        """The rule that catches a family added and left out of a brief.
+
+        Every figure in the list is right and the list is still wrong, so no
+        per-figure comparison finds it. The sum moves, and the report names
+        the family the list omits.
+        """
+        code, out = self.run_over(
+            "Counted as 32 escape, 39 uvm, 7 uvm_tools, 531 control, "
+            "155 alloc and 64 modeset targets.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("enumeration", out)
+        self.assertIn("omitting drm", out)
+
+    def test_a_family_enumeration_that_sums_to_the_denominator_passes(self):
+        total, _excluded, families = self.measured()
+        listed = ", ".join("%d %s" % (families[name], name)
+                           for name in sorted(families))
+        code, out = self.run_over("Counted as %s targets, %d in all.\n"
+                                  % (listed, total))
+        self.assertEqual(code, 0, out)
+
+    def test_an_enumeration_wrapped_across_a_line_is_summed_whole(self):
+        """Prose here wraps at 80 columns and an enumeration spans two lines.
+
+        Reading line by line sums a partial list and reports a mismatch that
+        is an artefact of the wrap.
+        """
+        _total, _excluded, families = self.measured()
+        names = sorted(families)
+        head = ", ".join("%d %s" % (families[n], n) for n in names[:4])
+        tail = ", ".join("%d %s" % (families[n], n) for n in names[4:])
+        code, out = self.run_over("Counted as %s,\n%s targets.\n"
+                                  % (head, tail))
+        self.assertEqual(code, 0, out)
+
+    def test_a_wrong_exclusion_total_is_reported(self):
+        code, out = self.run_over("347 commands sit outside the "
+                                  "denominator.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("bound", out)
+        self.assertIn("347", out)
+
+    def test_a_wrong_exclusion_group_count_is_reported(self):
+        code, out = self.run_over("Five groups sit outside it.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("bound", out)
+
+    def test_the_right_exclusion_total_passes(self):
+        _total, excluded, _families = self.measured()
+        code, out = self.run_over("%d commands sit outside the "
+                                  "denominator.\n" % excluded)
+        self.assertEqual(code, 0, out)
+
+    def test_an_offence_names_the_file_and_the_line(self):
+        code, out = self.run_over("A note.\n\nThe surface holds 828 "
+                                  "targetable commands.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("brief.md", out)
+        self.assertIn(":3", out)
+
+    def test_the_generated_reference_tree_is_not_read(self):
+        """`pages` already compares it against the artefacts it renders from.
+
+        Reading it here would report the same drift twice and name the
+        rendered file where the generator is the thing to edit.
+        """
+        for path in regression_check.figure_sources():
+            self.assertNotIn("docs/src/content/docs/reference",
+                             path.replace(os.sep, "/"), path)
+
+    def test_the_retired_denominators_come_from_the_recorded_history(self):
+        """Read with ast, because pipeline_state needs fcntl and importing it
+        would stop this check running on a Windows workstation."""
+        retired = regression_check.retired_denominators(852)
+        self.assertIn(764, retired)
+        self.assertIn(828, retired)
+        self.assertNotIn(852, retired)
+
+    def test_prose_naming_a_figure_as_retired_may_state_it(self):
+        """A page documenting the denominator's history has to name it.
+
+        The rule reports a retired denominator stated as a current one, so
+        prose that marks the figure as retired sits outside the rule. The
+        component page for this tool states 764 and 828 exactly that way.
+        """
+        code, out = self.run_over("The retired denominators are 764 and "
+                                  "828.\n")
+        self.assertEqual(code, 0, out)
+
+    def test_the_exemption_does_not_reach_a_later_sentence(self):
+        """The window ends at the sentence boundary.
+
+        Without that, one mention of the history anywhere above would exempt
+        every stale figure on the rest of the page. The assertion is on the
+        rule's own sentence and not on the figure appearing somewhere in the
+        output, because an offence quotes its neighbourhood and a nearby
+        figure lands in that excerpt without having been reported.
+        """
+        code, out = self.run_over("That history is recorded elsewhere. The "
+                                  "surface holds 828 targetable commands.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("828 is a retired denominator", out)
+
 class TestPlateauAcrossRestarts(unittest.TestCase):
     """The fuzzer restarts by design: units are Restart=always and the box
     panics. Edge counts reset to zero when it does."""
@@ -13337,7 +13497,7 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
         self.assertEqual(regression_check.check_order(),
                          ["names", "pins", "coverage", "derived",
                           "families", "pages", "stale", "harnesses",
-                          "agents"])
+                          "agents", "figures"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -14006,16 +14166,16 @@ class TestHarnessTargetListsAgree(Phase0Fixtures):
 class TestTheTwoGuardsAreRegistered(unittest.TestCase):
     """Both guards run under `regression_check.py all`."""
 
-    def test_the_registry_holds_nine_checks(self):
-        self.assertEqual(len(regression_check.check_order()), 9)
+    def test_the_registry_holds_ten_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 10)
 
     def test_both_guards_are_registered_and_ordered(self):
-        for name in ("stale", "harnesses", "agents"):
+        for name in ("stale", "harnesses", "agents", "figures"):
             self.assertIn(name, regression_check.CHECKS, name)
             self.assertIn(name, regression_check.CHECK_ORDER, name)
 
-    def test_the_module_docstring_names_nine_checks(self):
-        self.assertIn("Nine CI checks", regression_check.__doc__)
+    def test_the_module_docstring_names_ten_checks(self):
+        self.assertIn("Ten CI checks", regression_check.__doc__)
 
     def test_the_workflow_runs_both_guards(self):
         with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
@@ -14023,7 +14183,7 @@ class TestTheTwoGuardsAreRegistered(unittest.TestCase):
             workflow = fh.read()
         # Asserted as a membership test and not with assertIn, because the
         # workflow is one long string and a failure would print all of it.
-        for name in ("stale", "harnesses", "agents"):
+        for name in ("stale", "harnesses", "agents", "figures"):
             self.assertTrue("regression_check.py %s" % name in workflow,
                             "the workflow runs no %s step" % name)
 

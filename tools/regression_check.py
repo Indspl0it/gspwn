@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nine CI checks over the committed surface artefacts.
+"""Ten CI checks over the committed surface artefacts.
 
 Each one catches a class of defect that reached the repository unnoticed
 because nothing compared two artefacts that have to agree:
@@ -74,8 +74,24 @@ because nothing compared two artefacts that have to agree:
                 phase briefs tell a coding agent which commands to run on a
                 metered instance, and a wrong flag stalls the campaign there
                 until a human notices, diagnoses and fixes it.
+    figures     every surface figure a phase brief or a hand-written page
+                states in prose matches what the inventories measure. Three
+                stale figures survived every other check: a denominator
+                enumeration summing to 828, an exclusion count of 347 and a
+                compile verdict of 862 syscalls. `agents` reads the command
+                lines out of a brief and checks them against the tool's own
+                argparse parser, and nothing read the numbers, while a brief
+                is executed by a model that takes them as fact. Three rules
+                apply, in order of precision. A retired denominator stated as
+                a current one is settled by the history in
+                pipeline_state.DENOMINATOR_VERSIONS. A figure the surrounding
+                words bind to a quantity is settled by the artefact that
+                carries it. A family enumeration is checked by its own sum,
+                which is the rule that catches a family added to the surface
+                and left out of a brief, because the sum moves even when
+                every listed figure is right.
 
-Run one, or all nine:
+Run one, or all ten:
 
     python3 tools/regression_check.py names
     python3 tools/regression_check.py pins
@@ -86,6 +102,7 @@ Run one, or all nine:
     python3 tools/regression_check.py stale
     python3 tools/regression_check.py harnesses
     python3 tools/regression_check.py agents
+    python3 tools/regression_check.py figures
     python3 tools/regression_check.py all
 
 `-v` logs what each artefact read contributed, and is accepted on either side
@@ -119,6 +136,7 @@ workstation and `agents` reports the absent fcntl as exit 2 there.
 """
 import argparse
 import ast
+import collections
 import hashlib
 import importlib
 import json
@@ -2366,6 +2384,250 @@ def check_agents():
     return 1
 
 
+# --------------------------------------------------------------- figures ---
+
+# The prose files a phase brief or a hand-written page can state a surface
+# figure in. The reference tree under docs/src/content/docs/reference is
+# generated and `pages` already compares it against the artefacts it was
+# rendered from, so reading it here would report the same drift twice and name
+# the rendered file where the generator is the thing to edit.
+FIGURE_DOC_ROOTS = (
+    os.path.join(REPO_ROOT, "docs", "src", "content", "docs", "architecture"),
+    os.path.join(REPO_ROOT, "docs", "src", "content", "docs", "guides"),
+    os.path.join(REPO_ROOT, "docs", "src", "content", "docs",
+                 "getting-started"),
+)
+GENERATED_DOCS = os.path.join("docs", "src", "content", "docs", "reference")
+
+FAMILY_WORD = r"(?:escape|uvm_tools|uvm|control|alloc|modeset|drm)"
+FIGURE_ENUM = re.compile(r"(?:\d+\s+%s\s*,\s*){2,}"
+                         r"(?:\d+\s+%s\b\s*(?:,\s*)?(?:and\s+)?)+"
+                         % (FAMILY_WORD, FAMILY_WORD))
+FIGURE_PAIR = re.compile(r"(\d+)\s+(%s)\b" % FAMILY_WORD)
+
+EXCLUDED_TOTAL_PATTERNS = (
+    re.compile(r"(\d+)\s+commands?\s+(?:sit|lie)\s+outside\s+the\s+"
+               r"denominator"),
+    re.compile(r"excludes?\s+the\s+(\d+)\s+commands?\s+outside\s+the\s+"
+               r"denominator"),
+)
+GROUP_COUNT_PATTERNS = (
+    re.compile(r"naming\s+the\s+(\w+)\s+excluded\s+groups"),
+    re.compile(r"\b(\w+)\s+groups?\s+(?:sit\s+outside|are\s+counted)"),
+)
+NUMBER_WORDS = {"four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+                "nine": 9, "ten": 10}
+
+# A page documenting the denominator's history has to be able to name the
+# figures it retired. The rule reports a retired denominator stated as a
+# current one, so prose that marks the figure as retired is outside it. The
+# window is the text before the match, because every one of these words
+# qualifies the number that follows.
+RETIRED_CONTEXT = re.compile(
+    r"(?:retired|superseded|former|previous(?:ly)?|no longer|used to be|"
+    r"history|earlier)\b[^.]{0,64}$", re.I)
+
+
+def retired_denominators(current):
+    """-> the denominators this repository has retired, newest first.
+
+    Read out of pipeline_state.DENOMINATOR_VERSIONS with ast rather than by
+    importing the module. pipeline_state needs fcntl, and importing it here
+    would stop this check running on a Windows workstation, which is the
+    reason the module's other imports are already limited the same way.
+    """
+    path = os.path.join(REPO_ROOT, "tools", "pipeline_state.py")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), filename=path)
+    except (OSError, SyntaxError) as exc:
+        raise CheckInput(
+            "cannot read DENOMINATOR_VERSIONS from %s (%s). The denominator's "
+            "own history is what makes a retired figure recognisable, so this "
+            "check cannot run without it."
+            % (os.path.relpath(path, REPO_ROOT).replace(os.sep, "/"), exc))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if "DENOMINATOR_VERSIONS" not in names:
+            continue
+        try:
+            versions = ast.literal_eval(node.value)
+        except ValueError as exc:
+            raise CheckInput(
+                "DENOMINATOR_VERSIONS in %s is not a literal this check can "
+                "read (%s)" % (path, exc))
+        return [n for _label, n in versions if n != current]
+    raise CheckInput(
+        "%s declares no DENOMINATOR_VERSIONS. The denominator's history is "
+        "recorded there and nowhere else."
+        % os.path.relpath(path, REPO_ROOT).replace(os.sep, "/"))
+
+
+def figure_sources():
+    """-> every file whose prose figures this check reads."""
+    out = [os.path.join(REPO_ROOT, "AGENTS.md")]
+    if os.path.isdir(AGENTS_DIR):
+        out.extend(os.path.join(AGENTS_DIR, name)
+                   for name in sorted(os.listdir(AGENTS_DIR))
+                   if name.endswith(".md"))
+    for root in FIGURE_DOC_ROOTS:
+        for base, _dirs, names in os.walk(root):
+            out.extend(os.path.join(base, name) for name in sorted(names)
+                       if name.endswith(".md"))
+    return [p for p in out
+            if os.path.isfile(p) and GENERATED_DOCS not in p]
+
+
+def _blank_code(text):
+    """-> the lines with fenced blocks and inline spans blanked.
+
+    A figure inside a code span reproduces what a tool prints, and
+    register_check.py holds those immutable for the same reason. Blanking to
+    the same width keeps every offset intact, so a match still maps to the
+    line it started on.
+    """
+    out, fenced = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            out.append(" " * len(line))
+            continue
+        out.append(" " * len(line) if fenced
+                   else re.sub(r"`[^`]*`",
+                               lambda m: " " * len(m.group(0)), line))
+    return out
+
+
+def _join_wrapped(lines):
+    """-> (one text with line breaks as spaces, the start offset of each line).
+
+    Prose here wraps at 80 columns and a family enumeration routinely spans
+    two lines. Reading line by line sums a partial list and reports a
+    denominator mismatch that is an artefact of the wrap. register_check.py
+    matches across a line break for the same reason.
+    """
+    starts, offset = [], 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line) + 1
+    return " ".join(lines), starts
+
+
+def _line_of(starts, offset):
+    """-> the 1-based line an offset falls on."""
+    low, high = 0, len(starts) - 1
+    while low < high:
+        mid = (low + high + 1) // 2
+        if starts[mid] <= offset:
+            low = mid
+        else:
+            high = mid - 1
+    return low + 1
+
+
+def _excerpt(text, start, width=104):
+    """-> the matched neighbourhood, for a report line."""
+    return re.sub(r"\s+", " ", text[start:start + width]).strip()
+
+
+def check_figures():
+    """Every surface figure stated in prose matches the measured artefacts."""
+    try:
+        targets, excluded, _meta = surface_cov.load_targets()
+    except (OSError, ValueError, KeyError) as exc:
+        raise CheckInput("cannot load the surface inventories (%s)" % exc)
+
+    denominator = len(targets)
+    excluded_total = len(excluded)
+    families = collections.Counter(r["family"] for r in targets.values())
+    groups = len({r["family"] for r in excluded.values()})
+    retired = retired_denominators(denominator)
+
+    sources = figure_sources()
+    offences = []
+
+    def note(path, starts, offset, rule, why, text):
+        offences.append((os.path.relpath(path, REPO_ROOT).replace(os.sep, "/"),
+                         _line_of(starts, offset), rule, why,
+                         _excerpt(text, offset)))
+
+    for path in sources:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                raw = handle.read()
+        except OSError as exc:
+            raise CheckInput("cannot read %s (%s)" % (path, exc))
+        text, starts = _join_wrapped(_blank_code(raw))
+
+        # superseded: a figure this repository has retired, stated as current.
+        for number in retired:
+            for hit in re.finditer(r"(?<![\d.])%d(?![\d.])" % number, text):
+                if RETIRED_CONTEXT.search(text[:hit.start()]):
+                    continue
+                note(path, starts, hit.start(), "superseded",
+                     "%d is a retired denominator and the current one is %d"
+                     % (number, denominator), text)
+
+        # enumeration: a family list, checked by its own sum. This is the rule
+        # that catches a family added to the surface and left out of a brief,
+        # because the sum moves even when every listed figure is right.
+        for hit in FIGURE_ENUM.finditer(text):
+            pairs = FIGURE_PAIR.findall(hit.group(0))
+            total = sum(int(value) for value, _family in pairs)
+            if total == denominator:
+                continue
+            missing = sorted(set(families) - {f for _v, f in pairs})
+            note(path, starts, hit.start(), "enumeration",
+                 "family enumeration sums to %d against a denominator of %d%s"
+                 % (total, denominator,
+                    (", omitting " + ", ".join(missing)) if missing else ""),
+                 text)
+
+        # bound: a figure the words around it bind to a quantity an artefact
+        # settles.
+        for pattern in EXCLUDED_TOTAL_PATTERNS:
+            for hit in pattern.finditer(text):
+                if int(hit.group(1)) != excluded_total:
+                    note(path, starts, hit.start(), "bound",
+                         "states %s commands outside the denominator against "
+                         "%d counted" % (hit.group(1), excluded_total), text)
+        for pattern in GROUP_COUNT_PATTERNS:
+            for hit in pattern.finditer(text):
+                stated = NUMBER_WORDS.get(hit.group(1).lower())
+                if stated is not None and stated != groups:
+                    note(path, starts, hit.start(), "bound",
+                         "names %s exclusion groups against %d counted"
+                         % (hit.group(1), groups), text)
+
+    print("figures: denominator %d over %d family/families, %d excluded over "
+          "%d group(s)" % (denominator, len(families), excluded_total, groups))
+    print("figures: retired denominator(s) %s"
+          % (", ".join(str(n) for n in retired) or "none"))
+    print("figures: %d prose file(s) read" % len(sources))
+    print()
+
+    if not offences:
+        print("figures: OK")
+        return 0
+
+    print("  %-34s %6s %-12s %s" % ("file", "line", "rule", "figure"))
+    print("  %-34s %6s %-12s %s" % ("-" * 34, "-" * 6, "-" * 12, "-" * 6))
+    for path, line, rule, why, _text in offences:
+        print("  %-34s %6d %-12s %s" % (path, line, rule, why))
+    print()
+    for path, line, _rule, _why, text in offences:
+        print("figures: %s:%d" % (path, line))
+        print("    %s" % text)
+    print()
+    print("A brief is executed by a model that takes these numbers as fact, "
+          "and nothing else reads them: `agents` checks the command lines and "
+          "not the prose. Correct the figure, or state the command that "
+          "produces it instead of the figure.")
+    return 1
+
+
 CHECKS = {
     "names": check_names,
     "pins": check_pins,
@@ -2376,6 +2638,7 @@ CHECKS = {
     "stale": check_stale,
     "harnesses": check_harnesses,
     "agents": check_agents,
+    "figures": check_figures,
 }
 
 # The order `all` runs them in, and the order the module docstring and the CI
@@ -2387,7 +2650,7 @@ CHECKS = {
 # artefacts the first six compare, and harnesses reads the Track U seam, which
 # the first seven never touch.
 CHECK_ORDER = ("names", "pins", "coverage", "derived", "families", "pages",
-               "stale", "harnesses", "agents")
+               "stale", "harnesses", "agents", "figures")
 
 
 def check_order():
