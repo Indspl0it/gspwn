@@ -347,8 +347,8 @@
         "/dev/dri/renderDN"
       ],
       "modelled": false,
-      "tenant_surface": false,
-      "reason": "lookup_devices at libnvidia-container/src/nvc_info.c:515 creates /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-uvm-tools and /dev/nvidia-modeset only, so a default container carries no node served by this table.",
+      "tenant_surface": true,
+      "reason": "the CDI injection path adds every /dev/dri node found for the GPU's PCI bus id to that device's spec with no capability check, at nvidia-container-toolkit/internal/platform-support/dgpu/nvml.go:48-55, and internal/edits/device.go:76 grants them rwm. The legacy path never injects them: libnvidia-container carries no reference to /dev/dri. nvidia-drm registers a device for every GPU nvidia-modeset enumerates (kernel-open/nvidia-drm/nvidia-drm-drv.c:2176). The campaign does not model the 24 driver ioctls at nvidia-drm-drv.c:1806, of which 21 carry DRM_RENDER_ALLOW, so this is reachable surface outside the denominator",
       "notes": {},
       "entry_points": [
         {
