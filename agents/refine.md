@@ -291,13 +291,14 @@ for, and supplying valid object-chain seeds it cannot invent.
   about lines of driver code. The denominator is 852 targets: 32 escape, 39
   uvm, 7 uvm_tools, 531 control, 155 alloc, 64 modeset and 24 drm.
 
-Five groups sit outside that denominator by construction and stay outside any
+Six groups sit outside that denominator by construction and stay outside any
 percentage:
 
 | Group | Count | Reason for exclusion |
 |---|---|---|
 | control_gsp | 236 | Control commands routed to GSP, whose handler is compiled out and where KCOV cannot follow |
 | uvm_test | 104 | Commands that need `uvm_enable_builtin_tests=1` |
+| drm_undispatched | 4 | Declared in the `DRM_NVIDIA_*` command range at 0x19 to 0x1c with no entry in `nv_drm_ioctls[]`, so the DRM core finds no handler for them |
 | escape_dead | 3 | Escapes declared in nv_escape.h with no dispatch case |
 | escape_mux | 2 | NV_ESC_RM_CONTROL and NV_ESC_RM_ALLOC, whose leaves are already counted in the control and alloc families |
 | modeset_undispatched | 2 | Declared in `enum NvKmsIoctlCommand` with an empty dispatch entry, so `nvKmsIoctl` returns before any handler runs |
