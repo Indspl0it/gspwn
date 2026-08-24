@@ -163,7 +163,7 @@ counts.
 `check_budget()` runs on `install-k` and `install-u`:
 
 ```
-refusing to start: 200.0 h already spent + 24.0 h for this campaign exceeds loop.max_total_run_hours (216). Raise the cap in config/campaign.yaml to allow it.
+refusing to start: 4500.0 h already spent + 1000.0 h for this campaign exceeds loop.max_total_run_hours (5000). Raise the cap in config/campaign.yaml to allow it.
 ```
 
 `round-decide` enforces the cap between rounds, and a campaign started directly

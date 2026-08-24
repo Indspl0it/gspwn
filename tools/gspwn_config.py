@@ -44,9 +44,9 @@ DEFAULTS = {
         # config/campaign.yaml so a deployment whose config file is absent, or
         # whose loop block is trimmed, keeps the same backstop.
         "max_rounds": 10,
-        "max_total_run_hours": 216,
-        "campaign_hours": 24,
-        "stop_on_plateau": True,
+        "max_total_run_hours": 5000,
+        "campaign_hours": 1000,
+        "stop_on_plateau": False,
         "plateau_window_min": 240,
         "plateau_min_growth": 0.02,
         "coverage_sample_min": 10,
@@ -167,7 +167,7 @@ DEFAULTS = {
         "plateau_new_edges": 50,
         # How far ahead to extrapolate. Matches loop.campaign_hours by
         # default, since that is the unit of spend the decision authorises.
-        "horizon_hours": 24,
+        "horizon_hours": 1000,
         # Fit quality below which no extrapolation is reported at all and the
         # verdict is unknown. A curve the model does not describe is how a
         # confident wrong number reaches a report.

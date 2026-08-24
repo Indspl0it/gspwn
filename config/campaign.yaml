@@ -67,16 +67,19 @@ loop:
   # round-end bills every campaign's measured hours there per run id (a run
   # that died early bills only what it sampled), so the cap counts every
   # campaign, not one per round. This, and not max_rounds, is the spend
-  # ceiling: 216 h is 9 campaigns of 24 h, whatever number of rounds they fall
-  # across. Raise it before raising max_rounds buys anything.
-  max_total_run_hours: 216
-  campaign_hours: 24         # each campaign self-stops after this long
-  # Stop early when both curves flatten. Overridable, unlike the completion
-  # stop: a plateau is a judgement about what another campaign would buy,
-  # while completion is a ledger identity with nothing left to fuzz. A flat
-  # edge curve against a still-climbing surface curve is not a plateau and
-  # does not trip this.
-  stop_on_plateau: true
+  # ceiling: 5000 h is 5 campaigns of 1000 h, whatever number of rounds they
+  # fall across. Raise it before raising max_rounds buys anything. The cap
+  # binds before max_rounds does at these values, so max_rounds stays a
+  # runaway backstop and never decides a campaign's end.
+  max_total_run_hours: 5000
+  campaign_hours: 1000       # each campaign self-stops after this long
+  # Stop early when both curves flatten. Off by operator decision: a
+  # campaign is to end on a kernel panic or a reboot and on nothing else a
+  # judgement can get wrong. The plateau verdict is still computed and
+  # reported, so the reading stays available to the eval phase without
+  # ending a run. Completion is unaffected and still stops a campaign,
+  # because it is a ledger identity with nothing left to fuzz.
+  stop_on_plateau: false
   # Plateau test, applied to the trailing window of the coverage curve.
   plateau_window_min: 240    # measure growth over the last 4h
   plateau_min_growth: 0.02   # < 2% new edges in that window = plateaued
@@ -223,7 +226,7 @@ coverage:
   plateau_new_edges: 50   # expected new edges over one more campaign, below
                           # which the run has plateaued. Set it to what would
                           # actually justify another campaign of machine time
-  horizon_hours: 24       # how far ahead to extrapolate; match campaign_hours
+  horizon_hours: 1000     # how far ahead to extrapolate; match campaign_hours
   model_min_r2: 0.90      # below this the curve is not described well enough
                           # to extrapolate from, and the verdict is unknown
   min_fit_samples: 8      # points required before extrapolating at all
