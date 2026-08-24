@@ -1878,6 +1878,74 @@ class TestBudgetGuard(StateTempMixin, unittest.TestCase):
         # ledger — it must still be able to start its first campaign.
         self.assertEqual(campaign_ctl.check_budget(24, 216), 0.0)
 
+    def lose_a_bill(self, run_id, hours):
+        """Bill `hours` the way a failed ledger write leaves them.
+
+        campaign_ctl.bill_run catches OSError from record_run_hours, warns and
+        returns, so the round keeps the hours and the ledger never sees them.
+        Reproduced by recording the round directly.
+        """
+        st = ps.load(ps.DEFAULT_STATE_PATH)
+        st["rounds"][-1]["run_ids"] = (st["rounds"][-1].get("run_ids") or []) + [run_id]
+        st["rounds"][-1]["run_hours"] = (st["rounds"][-1].get("run_hours") or 0.0) + hours
+        ps.save(st, ps.DEFAULT_STATE_PATH)
+
+    def test_hours_lost_to_a_failed_ledger_write_still_count_against_the_cap(
+            self):
+        """The expensive direction to be wrong in.
+
+        bill_run catches OSError, warns and returns without billing, and an
+        unattended loop reads no warnings. The ledger then sits below the
+        hours the state file recorded and the guard hands back headroom that
+        was already spent. Three campaigns of 100 h reached the round history
+        and one reached the ledger; the cap must see 300, not 100.
+        """
+        ps.record_run_hours("r1-k1", 100.0)
+        self.lose_a_bill("r1-k1", 100.0)
+        self.lose_a_bill("r2-k1", 100.0)
+        self.lose_a_bill("r3-k1", 100.0)
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(ps.spend_for_budget(), 300.0)
+
+    def test_the_reconciled_figure_is_what_refuses_the_next_campaign(self):
+        """The reconciliation has to reach the guard, not just the reader."""
+        ps.record_run_hours("r1-k1", 100.0)
+        self.lose_a_bill("r2-k1", 200.0)
+        with redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as cm:
+                campaign_ctl.check_budget(24, 216)
+        self.assertIn("max_total_run_hours", str(cm.exception))
+        self.assertIn("never reached the ledger", err.getvalue())
+
+    def test_a_ledger_above_the_state_file_says_nothing_and_stands(self):
+        """The ordinary case, and it must stay silent.
+
+        The ledger is machine-global while the state file is one pipeline, so
+        a ledger holding more than this pipeline recorded is what a second
+        pipeline on the same box looks like. Warning on it would fire on
+        every healthy multi-pipeline machine.
+        """
+        ps.record_run_hours("r1-k1", 100.0)
+        ps.record_run_hours("other-pipeline-1", 50.0)
+        self.lose_a_bill("r1-k1", 100.0)
+        with redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(ps.spend_for_budget(), 150.0)
+        self.assertEqual(err.getvalue(), "")
+
+    def test_reconciliation_reads_the_default_state_not_the_redirect(self):
+        """A fresh GSPWN_STATE must not hide recorded hours from the cap.
+
+        Reading STATE_PATH here would reopen the redirect bypass one level
+        below the guard: point GSPWN_STATE at an empty file, and the
+        reconciliation would find nothing to reconcile against.
+        """
+        self.lose_a_bill("r1-k1", 300.0)
+        ps.record_run_hours("r1-k1", 100.0)
+        ps.STATE_PATH = os.path.join(self.tmp.name, "state", "side.json")
+        ps.save(ps.default_state(), ps.STATE_PATH)
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(ps.spend_for_budget(), 300.0)
+
 
 class TestPlateauAcrossRestarts(unittest.TestCase):
     """The fuzzer restarts by design: units are Restart=always and the box
