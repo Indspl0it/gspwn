@@ -61,11 +61,18 @@ comment at `:37` restricts that function to legacy mode. The earlier exclusion
 rested on that restriction, which governs the legacy path alone.
 
 The two node types differ in what they reach. `nv_drm_fops` dispatches 24 of
-the 28 declared `DRM_NVIDIA_*` commands; the four at 0x19 to 0x1c are declared
-and unreachable. Of the 24, 21 carry `DRM_RENDER_ALLOW` and are reachable on
-either node, 2 require `DRM_MASTER`, and 1 carries no flag. `drm_ioctl_permit`
-refuses a render client any command lacking `DRM_RENDER_ALLOW`, so a tenant
-holding only `renderD*` reaches 21. A default CDI tenant holds both node types.
+the 28 declared `DRM_NVIDIA_*` commands, and the four at 0x19 to 0x1c are
+declared and unreachable.
+
+| Permission flag | Count | Reachable on `renderD*` | Reachable on `card*` |
+|---|---|---|---|
+| `DRM_RENDER_ALLOW` | 21 | Yes | Yes |
+| `DRM_MASTER`, on `NVIDIA_GRANT_PERMISSIONS` and `NVIDIA_REVOKE_PERMISSIONS` | 2 | No | Conditional |
+| Neither, on `NVIDIA_GET_CLIENT_CAPABILITY` | 1 | No | Yes |
+
+`drm_ioctl_permit` refuses a render client any command lacking
+`DRM_RENDER_ALLOW`, so a tenant holding only `renderD*` reaches 21 and one
+holding `card*` reaches 24. A default CDI tenant holds both node types.
 
 The `DRM_MASTER` pair is conditional. The opening file descriptor becomes
 master when `dev->master` is NULL, which is likely on a headless host and is
