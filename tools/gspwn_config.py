@@ -31,7 +31,7 @@ DEFAULTS = {
         "smoke_window_minutes": 30,
     },
     "track_u": {
-        "docker_image": "aflplusplus/aflplusplus:latest",
+        "docker_image": "aflplusplus/aflplusplus:v5.02c",
         "memory_max": "8G",
         "targets": [],
     },

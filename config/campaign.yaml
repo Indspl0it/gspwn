@@ -31,7 +31,10 @@ track_k:
   smoke_window_minutes: 30 # coverage must increase within this window
 
 track_u:
-  docker_image: "aflplusplus/aflplusplus:latest"
+  # Pinned. A floating tag makes a Track U finding irreproducible: the
+  # image carries the compiler and the AFL++ runtime the harness was
+  # built with, and a report cannot state a toolchain that moved.
+  docker_image: "aflplusplus/aflplusplus:v5.02c"
   memory_max: "8G"
   # agent-facing: written by harness phase, read by fuzz phase. Each name is a
   # directory under harnesses/ and the output directory the fuzz
