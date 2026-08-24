@@ -77,6 +77,7 @@ sudo -n:   ok (sudo -n succeeds)
            needs it for: crashlog_ctl.py harvest (post-panic crash log capture)
            needs it for: campaign_ctl.py install-k (starting a Track K campaign)
            needs it for: coverage_ctl.py install-timer (installing the coverage sampler)
+binaries:  8 of 8 on PATH
 disk:      412.6 GB free
 
 preflight clean
