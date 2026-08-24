@@ -13256,7 +13256,7 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
     def test_all_runs_the_checks_in_the_documented_order(self):
         self.assertEqual(regression_check.check_order(),
                          ["names", "pins", "coverage", "derived", "pages",
-                          "stale", "harnesses"])
+                          "stale", "harnesses", "agents"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -13844,16 +13844,16 @@ class TestHarnessTargetListsAgree(Phase0Fixtures):
 class TestTheTwoGuardsAreRegistered(unittest.TestCase):
     """Both guards run under `regression_check.py all`."""
 
-    def test_the_registry_holds_seven_checks(self):
-        self.assertEqual(len(regression_check.check_order()), 7)
+    def test_the_registry_holds_eight_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 8)
 
     def test_both_guards_are_registered_and_ordered(self):
-        for name in ("stale", "harnesses"):
+        for name in ("stale", "harnesses", "agents"):
             self.assertIn(name, regression_check.CHECKS, name)
             self.assertIn(name, regression_check.CHECK_ORDER, name)
 
-    def test_the_module_docstring_names_seven_checks(self):
-        self.assertIn("Seven CI checks", regression_check.__doc__)
+    def test_the_module_docstring_names_eight_checks(self):
+        self.assertIn("Eight CI checks", regression_check.__doc__)
 
     def test_the_workflow_runs_both_guards(self):
         with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
@@ -13861,9 +13861,289 @@ class TestTheTwoGuardsAreRegistered(unittest.TestCase):
             workflow = fh.read()
         # Asserted as a membership test and not with assertIn, because the
         # workflow is one long string and a failure would print all of it.
-        for name in ("stale", "harnesses"):
+        for name in ("stale", "harnesses", "agents"):
             self.assertTrue("regression_check.py %s" % name in workflow,
                             "the workflow runs no %s step" % name)
+
+
+class AgentBriefFixtures(Phase0Fixtures):
+    """A scratch agents/ tree holding one brief, read through AGENTS_DIR.
+
+    Every fixture names a tool that exists in this repository, because the
+    check resolves each command against the tool's own argparse parser and a
+    made-up tool would only ever report as one that is absent.
+    """
+
+    def brief(self, body, name="phase.md"):
+        """One scratch brief, with AGENTS_DIR pointed at the tree holding it."""
+        root = self.tempdir()
+        directory = os.path.join(root, "agents")
+        os.makedirs(directory)
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as fh:
+            fh.write(body)
+        self.use(AGENTS_DIR=directory)
+        return directory
+
+
+class TestAgentCommandsAreExtracted(AgentBriefFixtures):
+    """regression_check agents: every command shape a brief carries is read.
+
+    The briefs write commands in fenced blocks, in inline code spans that wrap
+    across a line break, and as bare indented lines inside a numbered step. A
+    shape the extractor does not read is a command line nothing checks, and
+    the tool would report a clean run over the ones it happened to match.
+    """
+
+    def commands(self, body):
+        """-> every command the extractor reads out of one brief body."""
+        return [command for _number, command
+                in regression_check.agent_commands(body)]
+
+    def test_a_fenced_command_is_read(self):
+        got = self.commands("```\npython3 tools/knowledge_ctl.py show\n```\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_an_inline_span_is_read(self):
+        got = self.commands("Run `python3 tools/knowledge_ctl.py show` now.\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_an_inline_span_wrapped_across_a_line_break_is_read(self):
+        got = self.commands("Run `python3 tools/knowledge_ctl.py show\n"
+                            "--phase seeds` now.\n")
+        self.assertEqual(got,
+                         ["python3 tools/knowledge_ctl.py show --phase seeds"])
+
+    def test_a_bare_line_inside_a_numbered_step_is_read(self):
+        got = self.commands("2. Parse them:\n"
+                            "   python3 tools/knowledge_ctl.py show\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_a_prose_sentence_naming_a_tool_is_not_read_as_a_command(self):
+        self.assertEqual(
+            self.commands("The parser in tools/knowledge_ctl.py reads it.\n"),
+            [])
+
+    def test_a_backslash_continuation_joins_the_lines(self):
+        got = self.commands("```\npython3 tools/knowledge_ctl.py show \\\n"
+                            "  --phase seeds\n```\n")
+        self.assertEqual(got,
+                         ["python3 tools/knowledge_ctl.py show --phase seeds"])
+
+    def test_a_trailing_comment_is_dropped(self):
+        got = self.commands("```\npython3 tools/knowledge_ctl.py show  "
+                            "# both tracks\n```\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_a_heredoc_marker_is_dropped(self):
+        got = self.commands("```\npython3 tools/knowledge_ctl.py show "
+                            "<<'JSON'\n{}\nJSON\n```\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_a_shell_loop_body_is_read_as_its_own_command(self):
+        got = self.commands(
+            "2. Parse them:\n"
+            "   for f in <path>/dmesg-*; do python3 tools/crash_parse.py "
+            "--dmesg \"$f\"; done\n")
+        self.assertEqual(got,
+                         ["python3 tools/crash_parse.py --dmesg \"$f\""])
+
+    def test_a_command_behind_a_test_and_a_pipe_is_read(self):
+        got = self.commands(
+            "2. Parse it:\n"
+            "   [ -e <path>/console.log ] && python3 tools/crash_parse.py "
+            "--dmesg <path>/console.log\n")
+        self.assertEqual(
+            got, ["python3 tools/crash_parse.py --dmesg <path>/console.log"])
+
+    def test_every_committed_brief_is_read(self):
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+        for name in ("build.md", "describe.md", "eval.md", "fuzz.md",
+                     "harness.md", "poc.md", "provision.md", "rca.md",
+                     "refine.md", "report.md", "seeds.md", "triage.md"):
+            self.assertIn(name, out)
+
+    def test_an_agents_tree_with_no_brief_cannot_run(self):
+        root = self.tempdir()
+        directory = os.path.join(root, "agents")
+        os.makedirs(directory)
+        self.use(AGENTS_DIR=directory)
+        code, out = self.check("agents")
+        self.assertEqual(code, 2, out)
+        self.assertIn("no .md", out)
+
+    def test_a_brief_set_carrying_no_command_cannot_run(self):
+        self.brief("# A brief\n\nProse and nothing else.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 2, out)
+        self.assertIn("no command line", out)
+
+
+class TestAgentCommandsResolve(AgentBriefFixtures):
+    """regression_check agents: every command a brief carries resolves.
+
+    Twelve phase briefs tell a coding agent which commands to run on a metered
+    instance. A wrong subcommand or a wrong flag stalls the campaign there and
+    needs a human to notice it, so the claim is checked against the parser the
+    tool declares.
+    """
+
+    def test_the_committed_briefs_resolve(self):
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+        self.assertIn("agents: OK", out)
+
+    def test_a_tool_that_does_not_exist_is_reported(self):
+        self.brief("```\npython3 tools/no_such_ctl.py show\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("tools/no_such_ctl.py", out)
+        self.assertIn("no such tool", out)
+
+    def test_a_subcommand_the_tool_does_not_declare_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py recite\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("recite", out)
+        self.assertIn("no such subcommand", out)
+
+    def test_a_report_on_a_subcommand_names_the_ones_declared(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py recite\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("note", out)
+        self.assertIn("show", out)
+
+    def test_a_flag_the_subcommand_does_not_declare_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show --stage model\n"
+                   "```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--stage", out)
+        self.assertIn("no such flag", out)
+
+    def test_a_flag_declared_on_another_subcommand_is_still_reported(self):
+        # --tags is declared on `note` and not on `show`.
+        self.brief("```\npython3 tools/knowledge_ctl.py show --tags abi\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--tags", out)
+
+    def test_a_value_outside_the_declared_choices_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show --kind rumour\n"
+                   "```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("rumour", out)
+        self.assertIn("choice", out)
+
+    def test_every_alternative_in_a_piped_value_is_checked(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show "
+                   "--kind learning|rumour\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("rumour", out)
+
+    def test_a_literal_the_declared_type_rejects_is_reported(self):
+        # --last is typed int on `show`.
+        self.brief("```\npython3 tools/knowledge_ctl.py show --last many\n"
+                   "```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--last", out)
+        self.assertIn("int", out)
+
+    def test_a_placeholder_is_not_measured_against_the_declared_type(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show --last <n>\n"
+                   "```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_a_value_flag_left_without_a_value_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show --phase\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--phase", out)
+        self.assertIn("needs a value", out)
+
+    def test_a_valueless_flag_given_a_value_is_reported(self):
+        # --json on surface_cov.py report is store_true.
+        self.brief("```\npython3 tools/surface_cov.py report --json=yes\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--json", out)
+        self.assertIn("takes no value", out)
+
+    def test_a_flag_declared_on_the_main_parser_is_accepted(self):
+        self.brief("```\npython3 tools/regression_check.py names -v\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_a_sudo_prefix_does_not_hide_the_command(self):
+        self.brief("```\nsudo python3 tools/knowledge_ctl.py recite\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("recite", out)
+
+    def test_a_tool_named_with_no_subcommand_is_accepted(self):
+        self.brief("The generator is `tools/knowledge_ctl.py` alone.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_a_declared_exclusion_is_reported_and_not_resolved(self):
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+        for name in regression_check.AGENT_TOOL_EXCLUSIONS:
+            self.assertIn(name, out)
+
+    def test_every_declared_exclusion_carries_a_reason(self):
+        for name, reason in regression_check.AGENT_TOOL_EXCLUSIONS.items():
+            self.assertTrue(reason.strip(), name)
+
+    def test_every_declared_exclusion_names_a_file_that_exists(self):
+        for name in regression_check.AGENT_TOOL_EXCLUSIONS:
+            self.assertTrue(
+                os.path.isfile(os.path.join(os.path.dirname(HERE), name)),
+                name)
+
+
+class TestAgentExitCodesAreReachable(AgentBriefFixtures):
+    """regression_check agents: an exit code a brief states, the tool returns.
+
+    A brief states what a non-zero exit means and what the operator does about
+    it. A code no `return` and no `sys.exit` in the tool produces is a gate
+    the operator waits on and never reaches.
+    """
+
+    def test_an_exit_code_the_tool_cannot_return_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show\n```\n"
+                   "Exit 97 means the note file is locked.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("97", out)
+        self.assertIn("cannot exit", out)
+
+    def test_an_exit_code_returned_through_a_named_constant_is_accepted(self):
+        # surface_verify.py returns DISAGREE and INSUFFICIENT, never 3 and 4
+        # as literals, so a check reading literals alone would report both.
+        self.brief("```\npython3 tools/surface_verify.py check\n```\n"
+                   "Exit 3 means they disagree, and exit 4 means fewer than "
+                   "two sources answered.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_an_exit_code_binds_to_the_tool_named_before_it(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show\n```\n"
+                   "```\npython3 tools/surface_verify.py check\n```\n"
+                   "Exit 3 means they disagree.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_an_exit_code_stated_before_any_tool_is_not_bound(self):
+        self.brief("Exit 97 means the note file is locked.\n"
+                   "```\npython3 tools/knowledge_ctl.py show\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
 
 # A syzlang `const` argument, as this generator writes one: a decimal or hex
 # literal, or the format placeholder that will carry one. The filter keeps

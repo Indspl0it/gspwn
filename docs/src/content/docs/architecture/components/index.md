@@ -47,7 +47,7 @@ empirical signal available before a campaign has run.
 | [`patch_mine.py`](/gspwn/architecture/components/patch-mine/) | Command | The container-stack fix history, and the Track U target ranking |
 | [`gitmine.py`](/gspwn/architecture/components/gitmine/) | Library | The git wrapper, the diff parser, the function attribution and the release-tag mapping both miners share |
 | [`refgen.py`](/gspwn/architecture/components/refgen/) | Command and library | The five generated reference pages under `reference/surface/` and the index over them |
-| [`regression_check.py`](/gspwn/architecture/components/regression-check/) | Command | The five CI checks over the committed surface artefacts and the pages generated from them |
+| [`regression_check.py`](/gspwn/architecture/components/regression-check/) | Command | The eight CI checks over the committed surface artefacts, the pages generated from them, and the phase briefs' command lines |
 | [`exec.py`](/gspwn/architecture/components/exec/) | Command | Logged command execution with retries |
 | [`build_kernel.sh`](/gspwn/architecture/components/build-kernel/) | Script | The instrumented kernel build |
 | [`selftest.py`](/gspwn/architecture/components/selftest/) | Test runner | The offline suite |

@@ -67,6 +67,38 @@ instrumented kernel fuzzing.
    because hard-hang capture there is the EC2 console output.
    On bare metal mokutil reports Secure Boot state, and without it the build
    phase cannot tell whether its modules will be allowed to load.
+4a. Install the NVIDIA container runtime. Step 7 measures the tenant surface
+   through a container started with `--runtime=nvidia`, and docker.io provides
+   no runtime under that name. Step 5 clones nvidia-container-toolkit and
+   libnvidia-container as Track U fuzzing targets, and a source checkout
+   installs nothing. Without this step, step 7 fails the container run and
+   `measure` exits 2, which step 7 records as a blocked gate.
+
+   The packages come from NVIDIA's own repository, so this step is compatible
+   with step 0's baseline driver from the distribution.
+
+   ```
+   sudo apt-get install -y --no-install-recommends ca-certificates curl gnupg2
+   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+     | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+   curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+     | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+     | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+   sudo apt-get update
+   export NVIDIA_CONTAINER_TOOLKIT_VERSION=1.20.0-1
+   sudo apt-get install -y \
+       nvidia-container-toolkit=${NVIDIA_CONTAINER_TOOLKIT_VERSION} \
+       nvidia-container-toolkit-base=${NVIDIA_CONTAINER_TOOLKIT_VERSION} \
+       libnvidia-container-tools=${NVIDIA_CONTAINER_TOOLKIT_VERSION} \
+       libnvidia-container1=${NVIDIA_CONTAINER_TOOLKIT_VERSION}
+   sudo nvidia-ctk runtime configure --runtime=docker
+   sudo systemctl restart docker
+   ```
+
+   All four packages are pinned to one version, and that version is recorded
+   in config/machine.yaml as `container_toolkit_version`, beside
+   `driver_branch`. The injection path depends on the toolkit version, so a
+   campaign that does not record it cannot defend its own denominator later.
 5. Clone into artifacts/src/: upstream linux (stable branch matching the
    newest supported by open-gpu-kernel-modules), open-gpu-kernel-modules,
    syzkaller (master), nvidia-container-toolkit, libnvidia-container. Record
@@ -125,6 +157,12 @@ instrumented kernel fuzzing.
    capability, and the CDI path injects it with no capability check. Source
    settles what the code can do. Only this instance settles what this
    instance does.
+
+   A `legacy` verdict from `runtime-mode` is itself a blocked gate. A tenant
+   on the legacy path holds fewer nodes than the recorded tenant surface, so
+   `measure` reports MODELLED AND NOT REACHABLE and exits 1 correctly, and the
+   two conditions are separated before that output is read. Record the verdict
+   from `runtime-mode` before running `measure`.
 
    Exit 1 means the measured node set and `surface/entry-points.json`
    disagree, and it is a blocked gate. A node the container received that the

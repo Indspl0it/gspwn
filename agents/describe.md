@@ -197,7 +197,7 @@ coverage alone.
    against what is committed, so a commit that carries the artefacts and not
    the pages fails.
 
-   `python3 tools/regression_check.py all` runs the seven checks CI runs, and
+   `python3 tools/regression_check.py all` runs the eight checks CI runs, and
    each one reads a different pair of artefacts that have to agree:
 
    | Check | Artefact pair compared |
@@ -209,6 +209,7 @@ coverage alone.
    | `pages` | the generated reference pages still match the surface artefacts |
    | `stale` | every surface artefact `descriptions/generation.json` records still hashes to the recorded digest |
    | `harnesses` | the four Track U target lists still name the same harnesses |
+   | `agents` | every command line in `agents/*.md` resolves against the tool it names |
 
    `derived` fails when the regeneration stopped before `object_graph.py
    chains` or `ctrl_rank.py rank`, and `pages` fails when it stopped before
@@ -512,7 +513,7 @@ Record progress with the state tool, never by editing pipeline.json:
   `artifacts/seeds`, and the after reading with `--run-id <smoke run id>`
   against the smoke run's own corpus, with the smoke run id named. That delta
   is this round's measured output.
-- Where a regeneration ran, `regression_check.py all` output with all seven
+- Where a regeneration ran, `regression_check.py all` output with all eight
   checks passing, and the reference pages under
   `docs/src/content/docs/reference/surface/` regenerated and committed with the
   artefacts.

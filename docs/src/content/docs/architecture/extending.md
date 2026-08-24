@@ -171,8 +171,8 @@ python3 tools/regression_check.py all
 
 CI runs all five commands above, plus the writing-register check and a check
 that every command example in the prose files matches the tools' real `--help`
-output. `regression_check.py all` is itself seven subcommands: `names`, `pins`,
-`coverage`, `derived`, `pages`, `stale` and `harnesses`.
+output. `regression_check.py all` is itself eight subcommands: `names`, `pins`,
+`coverage`, `derived`, `pages`, `stale`, `harnesses` and `agents`.
 `regression_check.py` fails on a surface artefact edited by hand without a
 corresponding edit to the tool that writes it.
 
