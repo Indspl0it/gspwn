@@ -100,6 +100,15 @@ jobs:
         # reports the skip as a per-target note hours into a campaign.
         run: python3 tools/regression_check.py harnesses
 
+      - name: Phase brief commands resolve against the tools
+        # Every command line in agents/*.md is a claim that the tool exists,
+        # that the subcommand exists, that the flag exists and takes the
+        # argument shown, and that the exit code the brief explains is one the
+        # tool can return. Each claim is checked against the tool's own
+        # argparse parser. A wrong flag stalls the phase on a metered instance
+        # and needs a human to notice, diagnose and fix it.
+        run: python3 tools/regression_check.py agents
+
       - name: Documentation writing register
         # Question-shaped headings and table column headers scan as labels, so
         # a read-through does not catch them. One reference table carried the

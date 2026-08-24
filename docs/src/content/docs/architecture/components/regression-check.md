@@ -1,6 +1,6 @@
 ---
 title: regression_check.py
-description: Seven CI checks that compare committed artefacts which have to agree, and the defect class each one closes.
+description: Eight CI checks that compare committed artefacts which have to agree, and the defect class each one closes.
 ---
 
 Compares the committed surface artefacts against each other, and the generated
@@ -14,7 +14,7 @@ offline self-test.
 
 ## Responsibility
 
-The module owns the seven comparisons and their exit codes. It writes nothing.
+The module owns the eight comparisons and their exit codes. It writes nothing.
 
 | Invariant | Enforced by |
 |---|---|
@@ -37,6 +37,9 @@ The module owns the seven comparisons and their exit codes. It writes nothing.
 | The four Track U target lists still name the same harnesses | `harnesses` compares `track_u.targets`, the `C_TARGETS` array, the `Harness` column of `harnesses/TARGETS.md`, and the directories holding a `build.sh` |
 | A source that reads as empty cannot pass as a disagreement | `check_harnesses` exits 2 on a source carrying no name, because the reader for it is then the thing to fix |
 | A directory under `harnesses/` that builds nothing is visible | A directory with no `build.sh` and no `HARNESS_EXCLUSIONS` entry is reported |
+| Every command line in a phase brief resolves against the tool it names | `agents` reads each command out of `agents/*.md` and measures it against the tool's own argparse parser: the file, the subcommand, every flag, whether the flag takes a value, the declared choices and the declared type |
+| An exit code a brief explains is one the tool can return | `agents` reads every `return` and every `sys.exit` in the tool through `ast`, resolving module-level integer constants, and reports a stated code the tool nowhere produces |
+| A command shape the extractor cannot read is visible | A line naming a tool that does not read as an invocation of it is reported, so no command line is dropped in silence |
 
 ## Interface
 
@@ -49,11 +52,12 @@ The module owns the seven comparisons and their exit codes. It writes nothing.
 | `pages` | The per-page records, generated size, committed size and state table, then the first differing line of each page that moved |
 | `stale` | The recorded checkout, then one row per recorded input with its path, record count and state, then each input whose file is absent or hashes to another digest, with both digests |
 | `harnesses` | The per-target table across the four sources, the declared exclusions and their reasons, then each target a source does not carry, naming that source and the ones that do |
-| `all` | The seven in `CHECK_ORDER`, each under its own header, reporting the worst verdict |
+| `agents` | The per-brief command and exit-code counts, the declared exclusions and their reasons, then each command line that does not resolve, with the file, the line and what the tool declares instead |
+| `all` | The eight in `CHECK_ORDER`, each under its own header, reporting the worst verdict |
 
 `CHECK_ORDER` is `names`, `pins`, `coverage`, `derived`, `pages`, `stale`,
-`harnesses`, which is the order the module docstring lists and the order the CI
-steps carry. A check
+`harnesses`, `agents`, which is the order the module docstring lists and the
+order the CI steps carry. A check
 registered in `CHECKS` and absent from `CHECK_ORDER` runs last.
 
 `-v` logs what each artefact read contributed, and is accepted on either side
@@ -67,24 +71,37 @@ of the subcommand: `regression_check.py -v derived` and
 | `parse_structs(text)` | Field renderings per struct block |
 | `parse_calls(text)` | The parameter struct each `ioctl$` line points at |
 | `control_method_ids()` | Handler symbol to the method id `rm-control-inventory.json` carries for it, over the targetable and the GSP-routed commands |
-| `check_names()`, `check_pins()`, `check_coverage()`, `check_derived()`, `check_pages()`, `check_stale()`, `check_harnesses()` | The exit code for that check |
+| `check_names()`, `check_pins()`, `check_coverage()`, `check_derived()`, `check_pages()`, `check_stale()`, `check_harnesses()`, `check_agents()` | The exit code for that check |
 | `chains_implies(doc, path)`, `rank_implies(doc, path)` | The call names an artefact implies and the control commands it accounts for |
 | `rank_consistency(doc, path)`, `chains_consistency(doc, path)` | The places an artefact contradicts its own record structure |
 | `read_generation()` | The `generated_from` record and the repository root its paths resolve against, which is the parent of the directory holding `GENERATION` |
 | `recorded_inputs(record)` | `(key, path, sha256, count)` per recorded input, list members included |
 | `harness_config_targets()`, `harness_run_targets()`, `harness_doc_targets()`, `harness_directories()` | The Track U names each source carries |
+| `agent_briefs()` | `(file name, path)` per brief under `AGENTS_DIR`, raising `CheckInput` when the directory holds none |
+| `agent_commands(text)` | `(line number, command)` per simple command in one brief, over fenced blocks, inline code spans and bare command lines |
+| `simple_commands(line)` | Every tool-bearing simple command inside one shell line, heredoc and comment removed |
+| `command_words(command)` | `(tool path, [argument])`, interpreter, `sudo` and leading environment assignment dropped, or `None` |
+| `tool_parser(tool)` | The argparse parser the tool declares, through `build_parser()` or by capturing the one `main()` builds |
+| `parser_surface(parser)` | `({option string: action}, {subcommand: subparser})` |
+| `tool_exit_codes(tool)` | Every integer a `return` or a `sys.exit` in the tool can yield |
+| `agent_exit_claims(text)` | `(line number, tool path, exit code)` per exit code a brief states, bound to the tool named most recently at or before that line |
 | `_load_derived(label, path, schema, array, remedy)` | The parsed artefact, raising `CheckInput` when it is absent, unparseable, wrongly stamped or missing its array |
 
 ## Callers
 
 | Direction | Modules |
 |---|---|
-| Imports this module | `tools/selftest.py`. `.github/workflows/selftest.yml` invokes it as seven steps, at `:50`, `:58`, `:65`, `:74`, `:84`, `:93` and `:101` |
-| This module imports | `tools/surface_cov.py`, for `load_targets`, `scan_variants`, `CONTROL_PREFIX` and the artefact paths. `tools/refgen.py`, for `render` and `write`, which `pages` regenerates through. `tools/gspwn_config.py`, for `load`, which `harnesses` reads `track_u.targets` through |
+| Imports this module | `tools/selftest.py`. `.github/workflows/selftest.yml` invokes it as eight steps, at `:50`, `:58`, `:65`, `:74`, `:84`, `:93`, `:101` and `:110` |
+| This module imports | `tools/surface_cov.py`, for `load_targets`, `scan_variants`, `CONTROL_PREFIX` and the artefact paths. `tools/refgen.py`, for `render` and `write`, which `pages` regenerates through. `tools/gspwn_config.py`, for `load`, which `harnesses` reads `track_u.targets` through. Every tool a phase brief names, which `agents` imports one at a time inside the check |
 
-`surface_cov.py`, `refgen.py` and `gspwn_config.py` are the whole set.
-`pipeline_state.py` is deliberately absent: it needs `fcntl`, which would stop
-all four modules running on a Windows workstation.
+`surface_cov.py`, `refgen.py` and `gspwn_config.py` are the whole set of
+top-level imports. `pipeline_state.py` is deliberately absent: it needs
+`fcntl`, which would stop all four modules running on a Windows workstation.
+
+`agents` is the one check that imports another tool, because a command line is
+verified against that tool's own parser. Those imports sit inside the check, so
+the other seven still run on a Windows workstation and `agents` reports the
+absent `fcntl` there as exit 2.
 
 ## Failure modes
 
@@ -108,6 +125,10 @@ all four modules running on a Windows workstation.
 | `harnesses` finds a target a source does not carry | The per-source table, then the target, the source that does not carry it and the ones that do | 1 |
 | `harnesses` finds a directory with no `build.sh` and no declared exclusion | The directory named, with the instruction to declare it | 1 |
 | `harnesses` finds a source carrying no name at all | `cannot run:` on stderr, naming the source | 2 |
+| `agents` finds a command naming a tool, a subcommand, a flag or a value the tool does not declare | The per-brief table, then the brief, the line, the command and what the tool declares instead | 1 |
+| `agents` finds a stated exit code the tool cannot return | The brief, the line and the code, stating that no `return` and no `sys.exit` in the tool yields it | 1 |
+| `agents` finds a line naming a tool that does not read as a command | The brief, the line and the text, so a shape the extractor cannot read is visible | 1 |
+| `agents` finds no brief, or a brief set carrying no command line | `cannot run:` on stderr, naming the directory | 2 |
 | A derived artefact carries the wrong schema stamp or no records array | `cannot run:` on stderr, naming the file and the producing command | 2 |
 | An artefact the check needs is absent, unparseable, or shaped in a way the check did not anticipate | `cannot run:` on stderr, naming the file | 2 |
 | A check raises an unexpected exception | `cannot run: unexpected <class>` and the traceback on stderr. Under `all` the remaining checks still run | 2 |
@@ -137,6 +158,9 @@ concurrent invocations do not interact.
 | Never store a digest beside a generated page in place of regenerating it | Whoever edits the page is positioned to update the digest, and the digest of a stale page still matches itself |
 | Never let `harnesses` report only that two lists differ | The reader would then have to open all four files to find which one moved, and the check exists to point at the line to edit |
 | Never treat a directory under `harnesses/` as a known absence without a reason | An undeclared absence and a target dropped by mistake are indistinguishable, and `HARNESS_EXCLUSIONS` carries the reason for both entries |
+| Never let `agents` skip a command line it cannot parse | A silent skip is a command nothing checks, which is the blind spot the check exists to close, so an unreadable line is reported as an offender |
+| Never shell out to `--help` to read a tool's command surface | The help text is a rendering of the parser, and a flag hidden with `SUPPRESS` or a value type declared on an action never reaches it. The parser object carries both |
+| Never measure a placeholder against a declared choice or a declared type | The operator substitutes it, so the brief carries no value to measure, and reporting one would make every documented `<id>` an offender |
 | Never resolve a recorded input path against `REPO_ROOT` | The paths belong to the record, so they resolve against the parent of the directory holding it, which leaves the check pointable at a scratch tree through `GENERATION` alone |
 
 ## Design notes
@@ -277,7 +301,7 @@ known absence.
 | `go_cudacompat_elf` | `go test -fuzz` writes no `fuzzer_stats`, so it produces no coverage output for the sampler to read. `config/campaign.yaml` records the same reason against `track_u.targets` |
 
 
-The seven checks read committed artefacts. `coverage` cannot compute a
+The eight checks read committed artefacts. `coverage` cannot compute a
 denominator without the four inventories under `surface/`, and it cannot
 compute a numerator without the description set, so a checkout missing
 either measures 0 of 828 and fails on every run. See
@@ -293,9 +317,10 @@ Against the committed artefacts at driver 610.57.04.
 | `pins` | 836 selector fields across 909 calls, control 531, alloc 207, xfer 31, modeset 64, outside every group 3. 531 control `cmd` values checked against the inventory over 521 distinct values and 64 modeset `cmd` values over 64, 0 the inventory does not carry. 2 calls whose `arg` resolves to no declared struct, 0 of them inside a reported group. OK, 4 unpinned by design |
 | `coverage` | 828 targetable, 828 modelled, 81 declared variants outside the denominator, denominator floor 828 across 6 families, OK |
 | `derived` | 531 targetable control commands. `rm-chains.json` 98 records implying 598 names and accounting for 531, `rm-control-rank.json` 531 records implying 531 and accounting for 531, 0 undeclared, 0 mismatched and 0 internal, OK |
-| `pages` | 6 generated pages. `allocation-classes.md` 253 records at 38706 bytes, `control-commands.md` 531 at 105433, `driver-cves.md` 61 at 59176, `escapes.md` 37 at 9350, `index.md` 5 at 7154, `modeset-commands.md` 66 at 14198, each equal to the committed copy, OK |
+| `pages` | 6 generated pages. `allocation-classes.md` 253 records at 38706 bytes, `control-commands.md` 531 at 105433, `driver-cves.md` 61 at 59176, `escapes.md` 37 at 9350, `index.md` 5 at 8131, `modeset-commands.md` 66 at 14198, each equal to the committed copy, OK |
 | `stale` | 6 recorded inputs, 6 matching, driver 610.57.04 at commit `e4a5faa`, OK |
 | `harnesses` | 6 targets across 4 sources, 2 declared exclusions, OK |
+| `agents` | 12 briefs, 179 command lines and 25 stated exit codes over 22 tools, 2 declared exclusions, OK |
 
 The two calls whose `arg` resolves to no declared struct are
 `UVM_DEINITIALIZE`, which declares no pointer, and `NV_ESC_ATTACH_GPUS_TO_FD`,
@@ -306,7 +331,7 @@ records the same 521 against 531.
 
 ## Stated limits
 
-None of the seven checks says whether a pinned selector reaches the handler it
+None of the eight checks says whether a pinned selector reaches the handler it
 names. That is settled by a call on the target.
 
 `derived` compares the two artefacts against the inventory and not against the
@@ -328,8 +353,31 @@ neither of those reads the driver source either.
 `harnesses` reads the union of every `Harness` column in
 `harnesses/TARGETS.md`. A harness carried by the replay table and absent from
 the sanitizer table is outside what the check compares. It also says nothing
-about whether a harness compiles or runs; `build_all.sh` settles that on the
-target machine.
+about whether a harness compiles or runs, and `build_all.sh` settles that on
+the target machine.
+
+`agents` reads the argument surface a command claims. It does not run the
+command, so it says nothing about whether the tool succeeds, whether a required
+argument the brief omits is supplied at run time, or whether the value behind a
+placeholder is valid. Positional arguments are counted by neither the check nor
+the parser it reads, because a brief writes them as placeholders.
+
+Two tools a brief names declare no argparse parser and are resolved no further
+than their file existing. `tools/build_kernel.sh` takes its inputs from the
+environment. `tools/crashlog_ctl.py` reads `sys.argv` by hand, so its four
+subcommands and its two flags are literals inside `main()` and no import
+reaches them. `AGENT_TOOL_EXCLUSIONS` carries both with the reason, and the
+check prints the pair on every run.
+
+An exit code binds to the tool named most recently at or before the line that
+states it. The briefs are written in that order, with the command block first
+and the sentence after it saying what each code means. A brief that states a
+code far from the command it belongs to binds it to the wrong tool.
+
+The exit set covers every `return` and every `sys.exit` in the module. Reading
+`main()` alone would miss the value a helper produces, so the set
+over-approximates, and the check reports a code only when nothing anywhere in
+the tool produces it.
 
 ## See also
 

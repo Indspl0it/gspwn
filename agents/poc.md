@@ -48,7 +48,17 @@ window has closed and the deadline timer has stopped the units.
    Re-run the reproducer inside a container matching the model, as a
    non-root user, with the default capability set:
 
-     docker run --rm --gpus all        -e NVIDIA_DRIVER_CAPABILITIES=compute,utility        --user 1000:1000        -v $PWD/artifacts/pocs/<id>:/poc:ro        <cuda-runtime-image> /poc/repro
+     docker run --rm --runtime=nvidia        -e NVIDIA_VISIBLE_DEVICES=all        -e NVIDIA_DRIVER_CAPABILITIES=compute,utility        --user 1000:1000        -v $PWD/artifacts/pocs/<id>:/poc:ro        <cuda-runtime-image> /poc/repro
+
+   `--runtime=nvidia` selects the injection path. On Docker Engine 29.1.x and
+   older, `--gpus` injects the `nvidia-container-runtime-hook` prestart hook,
+   and that hook pins its own default to legacy mode, where the container
+   receives neither `/dev/nvidia-modeset` nor any `/dev/dri` node. A
+   reproducer needing either family then fails in a container narrower than
+   the model and records `not-tenant-reachable`, which understates the impact
+   of a real bug. Docker 29.2.0 and later read a CDI specification for
+   `--gpus` and reach the same device set, so the two flags are equivalent
+   there.
 
    Record the outcome in the PoC README as one of:
 
@@ -58,9 +68,21 @@ window has closed and the deadline timer has stopped the units.
    | `not-tenant-reachable` | It needs privilege the model's attacker does not have | Still a real driver bug worth reporting. The impact statement changes and must name the privilege it needs |
    | `profile-check-blocked` | The check could not be run (no suitable image, no Docker, the reproducer needs a kernel-side harness) | Record why. Never record it as tenant-reachable by default |
 
-   Confirm what the container actually received before trusting the result:
-   `ls /dev/nvidia*` inside it. If `/dev/dri` is present, the capability set
-   is wider than the model and the check proves nothing about tenant reach.
+   Confirm what the container actually received before trusting the result.
+   Run `ls /dev/nvidia* /dev/dri` inside it and compare the node set against
+   what `python3 tools/verify_tenant_surface.py expected` prints. The
+   comparison runs in both directions:
+
+   | Disagreement | Consequence for the run |
+   |---|---|
+   | A node the model places outside the tenant surface is present | The run is wider than the model, and it establishes nothing about tenant reach |
+   | A node the model places inside the tenant surface is absent | The run is narrower than the model, and a failure in it establishes nothing either |
+
+   A one-way test on a single node misses the second direction, and a
+   legacy-mode container produces exactly that direction.
+   `/dev/nvidia-nvswitch*` is conditional on `NVIDIA_NVSWITCH`. Record it in
+   the impact statement when it is present, and its absence is not a
+   disagreement.
 5. Write artifacts/pocs/<id>/README.md: build steps, run steps, expected
    sanitizer signature, reproduction rate, the profile-check outcome from
    step 4, and preconditions. For Track U the precondition is an

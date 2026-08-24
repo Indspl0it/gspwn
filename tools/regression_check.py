@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seven CI checks over the committed surface artefacts.
+"""Eight CI checks over the committed surface artefacts.
 
 Each one catches a class of defect that reached the repository unnoticed
 because nothing compared two artefacts that have to agree:
@@ -52,8 +52,18 @@ because nothing compared two artefacts that have to agree:
                 is built and never run, or run and never built, and the fuzz
                 phase reports the skip as a per-target note hours into a
                 campaign.
+    agents      every command line in agents/*.md resolves against the tool it
+                names: the file exists, the subcommand is one the tool's
+                argparse parser declares, every flag is declared on that
+                subparser or on the main parser, a flag takes a value where
+                the parser says it does, a literal value sits inside the
+                declared choices and parses under the declared type, and an
+                exit code the brief states is one the tool can return. Twelve
+                phase briefs tell a coding agent which commands to run on a
+                metered instance, and a wrong flag stalls the campaign there
+                until a human notices, diagnoses and fixes it.
 
-Run one, or all seven:
+Run one, or all eight:
 
     python3 tools/regression_check.py names
     python3 tools/regression_check.py pins
@@ -62,6 +72,7 @@ Run one, or all seven:
     python3 tools/regression_check.py pages
     python3 tools/regression_check.py stale
     python3 tools/regression_check.py harnesses
+    python3 tools/regression_check.py agents
     python3 tools/regression_check.py all
 
 `-v` logs what each artefact read contributed, and is accepted on either side
@@ -85,13 +96,21 @@ Deliberately no pipeline_state import, for the reason tools/surface_cov.py
 gives at its own import block: that module needs fcntl and would stop this
 running on a Windows workstation. Everything here reads committed files only,
 so it needs no GPU, no kernel and no network.
+
+`agents` is the one check that imports another tool, because a command line is
+verified against that tool's own parser. Those imports sit inside the check
+and not at the top of this file, so the other seven still run on a Windows
+workstation and `agents` reports the absent fcntl as exit 2 there.
 """
 import argparse
+import ast
 import hashlib
+import importlib
 import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -117,6 +136,8 @@ CAMPAIGN_CONFIG = os.path.join(REPO_ROOT, "config", "campaign.yaml")
 HARNESS_DIR = os.path.join(REPO_ROOT, "harnesses")
 RUN_ALL = os.path.join(HARNESS_DIR, "run_all.sh")
 TARGETS_DOC = os.path.join(HARNESS_DIR, "TARGETS.md")
+AGENTS_DIR = os.path.join(REPO_ROOT, "agents")
+TOOLS_DIR = os.path.join(REPO_ROOT, "tools")
 # The line separator every committed file in the repository carries, declared
 # by .gitattributes. Named so the byte comparison below reads as a comparison
 # and not as an escape sequence buried in a split call.
@@ -1438,6 +1459,539 @@ def check_harnesses():
     return 1
 
 
+# ---------------------------------------------------------------------------
+# agents: every command line in agents/*.md against the tool it names.
+#
+# The tool modules are imported inside check_agents() and not at the top of
+# this file. Some of them reach pipeline_state, which needs fcntl, and the
+# import block above states why this module stays runnable on a Windows
+# workstation. Keeping the imports inside the check confines that to `agents`:
+# the other seven still run there, and `agents` reports the absent module as a
+# condition it cannot run under rather than as an offending entry.
+# ---------------------------------------------------------------------------
+
+# Tools a brief names whose command surface no argparse parser declares. A
+# name here is resolved no further than its file existing, so the reason has
+# to state what the check gives up. This is the whole of what the check
+# accepts as unreadable; anything else that fails to yield a parser is
+# reported.
+AGENT_TOOL_EXCLUSIONS = {
+    "tools/build_kernel.sh":
+        "a bash script. It reads JOBS, LINUX_SRC, NVIDIA_SRC and RUNG from "
+        "the environment and takes no argument for a parser to declare",
+    "tools/crashlog_ctl.py":
+        "reads sys.argv by hand. Its four subcommands and its two flags are "
+        "literals inside main(), so no parser carries them and no import "
+        "reaches them",
+}
+
+# A fenced block delimiter, either backticks or tildes, at any indent.
+FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
+
+# A tool named as a path, which is the form every command line uses.
+TOOL_PATH_RE = re.compile(r"\btools/([A-Za-z0-9_]+\.(?:py|sh))\b")
+
+# A tool named anywhere in the prose, with the directory optional. The exit
+# code sentences write `surface_verify.py check` without the directory, so the
+# binding below needs the looser form. Every match is resolved against
+# tools/ before it is used, so a stray word ending in .py binds nothing.
+TOOL_MENTION_RE = re.compile(r"\b(?:tools/)?([A-Za-z0-9_]+\.(?:py|sh))\b")
+
+# An inline code span. DOTALL, because a span in these briefs wraps across a
+# line break and the command inside it is one command.
+SPAN_RE = re.compile(r"`([^`]+)`", re.S)
+
+# The list markers, block quote markers and table cell bars a command line
+# sits behind in a numbered step.
+LIST_MARKER_RE = re.compile(r"^\s*(?:(?:[-*+>]|\d+[.)]|\|)\s+)*")
+
+# A heredoc and everything after it on the joined line.
+HEREDOC_RE = re.compile(r"<<-?\s*['\"]?\w+['\"]?.*$", re.S)
+
+# The words a simple command is separated from its neighbours by. A single
+# bar is a separator only when it is spaced, because the briefs write
+# alternatives as in_progress|done|blocked with no spaces.
+SEPARATOR_RE = re.compile(r";|&&|\|\||\s\|\s|\s>>?\s")
+
+# The shell keywords a simple command sits behind once the separators have
+# split the line. `for f in ...; do CMD; done` puts one in front of CMD.
+SHELL_KEYWORDS = ("do", "done", "then", "else", "fi", "elif")
+
+# The words a simple command carries in front of the interpreter.
+COMMAND_PREFIXES = ("sudo", "python3", "python", "bash", "sh", "time", "exec")
+
+# The first word of a bare command line in prose. A prose sentence naming a
+# tool starts with a capital or with the tool's own path, so the check reads a
+# line as a command only when it opens with one of these.
+COMMAND_STARTERS = ("python3", "python", "sudo", "bash", "sh", "for", "[")
+
+# An argument whose value the brief withholds: an angle bracket placeholder,
+# a shell variable, an ellipsis, or a quoted one. A placeholder is measured
+# against neither the declared choices nor the declared type, because the
+# operator substitutes it and the brief carries no value to measure.
+PLACEHOLDER_RE = re.compile(r"^[\"']?(?:<[^<>]*>[^\s]*|\$[\w{].*|\.{3})[\"']?$")
+
+# An exit code a brief states, in either the noun or the verb form: "exits 4",
+# "Exit 3 means", "reaches exit 4".
+EXIT_CODE_RE = re.compile(r"\bexits?\s+(\d+)\b", re.I)
+
+# Every tool returns 0 by falling off the end of main(), so 0 is reachable
+# whether or not a return statement names it.
+IMPLICIT_EXIT = 0
+
+
+def agent_briefs():
+    """-> every phase brief under AGENTS_DIR, by path."""
+    if not os.path.isdir(AGENTS_DIR):
+        raise CheckInput(
+            "%s is not a directory. The phase briefs are committed artefacts; "
+            "a checkout missing them cannot run this check." % AGENTS_DIR)
+    found = sorted(name for name in os.listdir(AGENTS_DIR)
+                   if name.endswith(".md"))
+    if not found:
+        raise CheckInput(
+            "no .md brief under %s. A brief set that reads as empty makes "
+            "every command line resolve vacuously, and the reader for it is "
+            "the thing to fix." % AGENTS_DIR)
+    return [(name, os.path.join(AGENTS_DIR, name)) for name in found]
+
+
+def _join_continuations(numbered):
+    """-> [(line number, line)] with backslash continuations joined."""
+    joined, held, start = [], None, None
+    for number, line in numbered:
+        body = line.rstrip()
+        if held is None:
+            held, start = body, number
+        else:
+            held = held + " " + body.strip()
+        if held.endswith("\\"):
+            held = held[:-1].rstrip()
+            continue
+        joined.append((start, held))
+        held, start = None, None
+    if held is not None:
+        joined.append((start, held))
+    return joined
+
+
+def _flatten(line):
+    """-> the line as one whitespace-normalised shell line.
+
+    A lone backslash survives whitespace normalisation as its own word, which
+    is what a continuation inside a wrapped code span collapses to. Dropping
+    it here means one rule covers the continuation in all three sources.
+    """
+    return " ".join(word for word in line.split() if word != "\\")
+
+
+def _split_fences(text):
+    """-> (fenced lines, prose lines), both numbered, both the same length.
+
+    A fenced line is blanked in the prose stream and a prose line is dropped
+    from the fenced stream, so the span scan below cannot pair a fence
+    delimiter's backticks with a backtick in the surrounding prose.
+    """
+    fenced, prose, fence = [], [], None
+    for number, line in enumerate(text.splitlines(), 1):
+        opened = FENCE_RE.match(line)
+        if opened:
+            if fence is None:
+                fence = opened.group(1)
+            elif line.strip().startswith(fence):
+                fence = None
+            prose.append((number, ""))
+            continue
+        if fence:
+            fenced.append((number, line))
+            prose.append((number, ""))
+        else:
+            prose.append((number, line))
+    return fenced, prose
+
+
+def agent_commands(text):
+    """-> [(line number, command)] for every command line in one brief.
+
+    Three sources, because the briefs write commands three ways: inside a
+    fenced block, inside an inline code span, and as a bare indented line
+    under a numbered step. A source the extractor does not read is a command
+    line nothing checks. Each source yields shell lines, and every simple
+    command inside one is returned on its own.
+    """
+    fenced, prose = _split_fences(text)
+    lines = set()
+
+    for number, line in _join_continuations(fenced):
+        if TOOL_PATH_RE.search(line):
+            lines.add((number, _flatten(line)))
+
+    body = "\n".join(line for _number, line in prose)
+    for match in SPAN_RE.finditer(body):
+        if TOOL_PATH_RE.search(match.group(1)):
+            number = body.count("\n", 0, match.start()) + 1
+            lines.add((number, _flatten(match.group(1))))
+
+    for number, line in _join_continuations(prose):
+        if "`" in line or not TOOL_PATH_RE.search(line):
+            continue
+        bare = LIST_MARKER_RE.sub("", line).strip()
+        if bare.split(" ")[0] in COMMAND_STARTERS:
+            lines.add((number, _flatten(bare)))
+
+    found = set()
+    for number, line in lines:
+        for command in simple_commands(line):
+            found.add((number, command))
+    return sorted(found)
+
+
+def _strip_comment(line):
+    """-> the line up to the first comment marker outside a quoted string."""
+    for index, char in enumerate(line):
+        if char != "#" or (index and line[index - 1] not in " \t"):
+            continue
+        if line.count('"', 0, index) % 2 or line.count("'", 0, index) % 2:
+            continue
+        return line[:index]
+    return line
+
+
+def simple_commands(line):
+    """-> every simple command inside one shell line, tool-bearing ones only.
+
+    A loop body, a command behind a `[ -e ... ] &&` test and a command on the
+    receiving end of a pipe are each a command the operator runs, and each one
+    is checked on its own.
+    """
+    line = HEREDOC_RE.sub("", line)
+    line = _strip_comment(line)
+    out = []
+    for part in SEPARATOR_RE.split(line):
+        part = part.strip()
+        while part.split(" ")[0] in SHELL_KEYWORDS:
+            part = part.split(" ", 1)[1].strip() if " " in part else ""
+        if part and TOOL_PATH_RE.search(part):
+            out.append(part)
+    return out
+
+
+def command_words(command):
+    """-> (tool path, [argument]) for one simple command, or None.
+
+    The interpreter, sudo, the loop keyword and any leading environment
+    assignment are dropped, because none of them is part of the tool's own
+    argument surface.
+    """
+    try:
+        words = shlex.split(command, comments=False, posix=False)
+    except ValueError:
+        words = command.split()
+    while words:
+        head = words[0]
+        if head in COMMAND_PREFIXES or re.match(r"^\w+=", head):
+            words.pop(0)
+            continue
+        break
+    if not words:
+        return None
+    match = TOOL_PATH_RE.search(words[0])
+    if not match:
+        return None
+    return "tools/" + match.group(1), words[1:]
+
+
+class _ParserCaptured(BaseException):
+    """The parser a tool builds inside main(), caught before it parses."""
+
+    def __init__(self, parser):
+        BaseException.__init__(self)
+        self.parser = parser
+
+
+def tool_parser(tool):
+    """-> the argparse parser tools/<tool> declares.
+
+    Most tools expose build_parser(). The rest build the parser as the first
+    statement of main() and parse immediately, so the parser is taken by
+    replacing parse_args with one that hands it back. Nothing in either path
+    runs the tool's work.
+    """
+    module = importlib.import_module(os.path.basename(tool)[:-3])
+    builder = getattr(module, "build_parser", None)
+    if builder is not None:
+        return builder()
+    if not hasattr(module, "main"):
+        raise CheckInput("%s declares neither build_parser nor main" % tool)
+
+    def capture(parser, *_args, **_kwargs):
+        raise _ParserCaptured(parser)
+
+    saved_parse = argparse.ArgumentParser.parse_args
+    saved_known = argparse.ArgumentParser.parse_known_args
+    saved_argv = sys.argv
+    argparse.ArgumentParser.parse_args = capture
+    argparse.ArgumentParser.parse_known_args = capture
+    sys.argv = [tool]
+    try:
+        module.main()
+    except _ParserCaptured as caught:
+        return caught.parser
+    finally:
+        argparse.ArgumentParser.parse_args = saved_parse
+        argparse.ArgumentParser.parse_known_args = saved_known
+        sys.argv = saved_argv
+    raise CheckInput("%s builds no argparse parser in main()" % tool)
+
+
+def parser_surface(parser):
+    """-> ({option string: action}, {subcommand: subparser})."""
+    flags, subcommands = {}, {}
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            subcommands.update(action.choices)
+        for option in action.option_strings:
+            flags[option] = action
+    return flags, subcommands
+
+
+def tool_exit_codes(tool):
+    """-> every integer a return or a sys.exit in tools/<tool> can yield.
+
+    Read from the source, because the value is often a named module constant:
+    surface_verify.py returns DISAGREE and INSUFFICIENT and never 3 and 4 as
+    literals. The walk covers every function and not main() alone, so the set
+    over-approximates what the process can exit with. That is the safe
+    direction: the check reports a documented code only when nothing anywhere
+    in the tool produces it.
+    """
+    with open(os.path.join(REPO_ROOT, tool), encoding="utf-8") as handle:
+        tree = ast.parse(handle.read(), filename=tool)
+    named = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not isinstance(node.value, ast.Constant):
+            continue
+        if not isinstance(node.value.value, int):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                named[target.id] = node.value.value
+
+    def resolve(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return {node.value}
+        if isinstance(node, ast.Name) and node.id in named:
+            return {named[node.id]}
+        if isinstance(node, ast.IfExp):
+            return resolve(node.body) | resolve(node.orelse)
+        return set()
+
+    codes = {IMPLICIT_EXIT}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Return) and node.value is not None:
+            codes |= resolve(node.value)
+        elif isinstance(node, ast.Call) and _is_exit_call(node):
+            for argument in node.args:
+                codes |= resolve(argument)
+    return codes
+
+
+def _is_exit_call(node):
+    """-> whether the call node is sys.exit or a bare exit."""
+    if isinstance(node.func, ast.Attribute):
+        return (node.func.attr == "exit"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in ("sys", "os"))
+    return isinstance(node.func, ast.Name) and node.func.id == "exit"
+
+
+def agent_exit_claims(text):
+    """-> [(line number, tool path, exit code)] for one brief.
+
+    An exit code binds to the tool named most recently at or before the line
+    that states it. That is how the briefs read: the command block comes
+    first, and the sentence after it says what each code means. A code stated
+    before any tool is named binds to nothing and is dropped.
+    """
+    claims, current = [], None
+    for number, line in enumerate(text.splitlines(), 1):
+        for match in TOOL_MENTION_RE.finditer(line):
+            candidate = "tools/" + match.group(1)
+            if os.path.isfile(os.path.join(REPO_ROOT, candidate)):
+                current = candidate
+        if current is None:
+            continue
+        for match in EXIT_CODE_RE.finditer(line):
+            claims.append((number, current, int(match.group(1))))
+    return claims
+
+
+def _resolve_command(tool, arguments, parsers):
+    """-> [fault] for one command, each fault a line naming what disagreed."""
+    if not os.path.isfile(os.path.join(REPO_ROOT, tool)):
+        return ["no such tool %s" % tool]
+    if tool in AGENT_TOOL_EXCLUSIONS:
+        return []
+    if tool not in parsers:
+        parsers[tool] = tool_parser(tool)
+    flags, subcommands = parser_surface(parsers[tool])
+
+    faults = []
+    words = list(arguments)
+    if subcommands and words and not words[0].startswith("-"):
+        name = words.pop(0)
+        if name not in subcommands:
+            return ["no such subcommand %s. %s declares %s"
+                    % (name, tool, ", ".join(sorted(subcommands)))]
+        sub_flags, _ = parser_surface(subcommands[name])
+        flags = dict(flags)
+        flags.update(sub_flags)
+        where = "%s %s" % (tool, name)
+    elif subcommands and words and words[0].startswith("-"):
+        where = tool
+    else:
+        where = tool
+
+    index = 0
+    while index < len(words):
+        word = words[index]
+        index += 1
+        if not word.startswith("-") or word == "-" or word == "--":
+            continue
+        option, _, inline = word.partition("=")
+        if option not in flags:
+            faults.append("no such flag %s. %s declares %s"
+                          % (option, where,
+                             ", ".join(sorted(flags)) or "no flag"))
+            continue
+        action = flags[option]
+        if action.nargs == 0:
+            if inline:
+                faults.append("%s on %s takes no value, and the brief gives "
+                              "it %s" % (option, where, inline))
+            continue
+        if inline:
+            value = inline
+        elif index < len(words) and not words[index].startswith("--"):
+            value = words[index]
+            index += 1
+        else:
+            faults.append("%s on %s needs a value, and the brief gives it "
+                          "none" % (option, where))
+            continue
+        faults.extend(_resolve_value(option, where, action, value))
+    return faults
+
+
+def _resolve_value(option, where, action, value):
+    """-> [fault] for one argument value against the action that takes it."""
+    faults = []
+    for alternative in value.strip("\"'").split("|"):
+        if not alternative or PLACEHOLDER_RE.match(alternative):
+            continue
+        if action.choices is not None and alternative not in action.choices:
+            faults.append("%s on %s: %s is not among the declared choices %s"
+                          % (option, where, alternative,
+                             ", ".join(str(c) for c in action.choices)))
+            continue
+        if action.type is None:
+            continue
+        try:
+            action.type(alternative)
+        except (TypeError, ValueError):
+            faults.append("%s on %s: %s is not a valid %s"
+                          % (option, where, alternative,
+                             getattr(action.type, "__name__", action.type)))
+    return faults
+
+
+def check_agents():
+    """Every command line in agents/*.md resolves against the tool it names."""
+    briefs = agent_briefs()
+    parsers = {}
+    offenders = []
+    counted = {}
+    tools = set()
+    commands = 0
+    claims = 0
+
+    for name, path in briefs:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        found, stated = 0, 0
+        for number, command in agent_commands(text):
+            parsed = command_words(command)
+            if parsed is None:
+                # The line names a tool and does not read as an invocation of
+                # it. Reported rather than dropped: a shape the extractor
+                # cannot read is a command line nothing checks, and a silent
+                # skip is the blind spot this check exists to close.
+                offenders.append((name, number, command,
+                                  "names a tool and does not read as a "
+                                  "command invoking it"))
+                continue
+            tool, arguments = parsed
+            found += 1
+            tools.add(tool)
+            for fault in _resolve_command(tool, arguments, parsers):
+                offenders.append((name, number, command, fault))
+        for number, tool, code in agent_exit_claims(text):
+            if tool in AGENT_TOOL_EXCLUSIONS:
+                continue
+            if not os.path.isfile(os.path.join(REPO_ROOT, tool)):
+                offenders.append((name, number, "exit %d" % code,
+                                  "no such tool %s" % tool))
+                continue
+            stated += 1
+            if code not in tool_exit_codes(tool):
+                offenders.append((name, number, "exit %d" % code,
+                                  "%s cannot exit %d: no return and no "
+                                  "sys.exit in it yields that value"
+                                  % (tool, code)))
+        counted[name] = (found, stated)
+        commands += found
+        claims += stated
+
+    if not commands:
+        raise CheckInput(
+            "no command line in any brief under %s. A brief set carrying no "
+            "command makes every tool agree with it vacuously, and the "
+            "extractor is then the thing to fix." % AGENTS_DIR)
+
+    print("agents: %d brief(s), %d command line(s) and %d stated exit code(s) "
+          "over %d tool(s), %d declared exclusion(s)"
+          % (len(briefs), commands, claims, len(tools),
+             len(AGENT_TOOL_EXCLUSIONS)))
+    print()
+    print("  %-16s %8s %11s" % ("brief", "commands", "exit codes"))
+    print("  %-16s %8s %11s" % ("-" * 16, "-" * 8, "-" * 11))
+    for name, _path in briefs:
+        print("  %-16s %8d %11d" % ((name,) + counted[name]))
+    print()
+    print("  %-24s %s" % ("excluded", "reason"))
+    print("  %-24s %s" % ("-" * 24, "-" * 6))
+    for tool in sorted(AGENT_TOOL_EXCLUSIONS):
+        print("  %-24s %s" % (tool, AGENT_TOOL_EXCLUSIONS[tool]))
+    print()
+
+    if not offenders:
+        print("agents: OK")
+        return 0
+
+    for name, number, command, fault in offenders:
+        print("agents: agents/%s:%d: %s" % (name, number, command))
+        print("    %s" % fault)
+        print()
+    print("Each line above is a command a phase brief tells a coding agent to "
+          "run on a metered instance. A subcommand, a flag or a value the "
+          "tool does not declare stalls the phase there and needs a human to "
+          "diagnose it, and the brief and the tool are the two things to "
+          "reconcile.")
+    return 1
+
+
 CHECKS = {
     "names": check_names,
     "pins": check_pins,
@@ -1446,6 +2000,7 @@ CHECKS = {
     "pages": check_pages,
     "stale": check_stale,
     "harnesses": check_harnesses,
+    "agents": check_agents,
 }
 
 # The order `all` runs them in, and the order the module docstring and the CI
@@ -1457,7 +2012,7 @@ CHECKS = {
 # compare, and harnesses reads the Track U seam, which the first six never
 # touch.
 CHECK_ORDER = ("names", "pins", "coverage", "derived", "pages", "stale",
-               "harnesses")
+               "harnesses", "agents")
 
 
 def check_order():
