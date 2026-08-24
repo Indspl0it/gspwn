@@ -1,9 +1,28 @@
 ---
 title: Threat model
-description: The two attackers the campaign models, the capability asymmetry that produces over-claims, and the boundaries the campaign does not cross.
+description: The authorisation boundary, the two attackers the campaign models, the device nodes each injection path grants, the capability asymmetry that produces over-claims, and the claims the campaign refuses.
 ---
 
 The campaign models one attacker per track.
+
+## Authorisation
+
+gspwn is for security research on a machine the operator owns or is explicitly
+authorised to test. It builds an instrumented kernel, panics the machine
+repeatedly, and drives hostile input into a device driver. Nothing else of
+value may share that machine, and a machine under this pipeline is expected to
+be unhealthy.
+
+| The pipeline may | The pipeline does not |
+|---|---|
+| Install a kernel and reboot into it | Contact NVIDIA PSIRT or publish anything |
+| Panic the machine, repeatedly and on purpose | Weaponise a reproducer past reliable triggering |
+| Write systemd units and grant itself passwordless sudo for its own tools | Build an escalation from a memory-safety primitive |
+| Leave the machine in a state where the GPU has stopped responding | Record a finding in the committed `knowledge/` tree |
+
+Every action in the left column is normal operation. The `report` phase
+assembles a disclosure package per confirmed finding and stops there. Nothing
+leaves the machine.
 
 ## Attacker definitions
 
@@ -29,9 +48,9 @@ prompt forbids one.
 
 ## Device node injection paths
 
-Two mechanisms inject NVIDIA device nodes into a container. They differ on
-`/dev/nvidia-modeset` and on the `/dev/dri` nodes, and the path in force decides
-whether those lie inside the Track K attacker's reach.
+Two mechanisms inject NVIDIA device nodes into a container. The path in force
+decides whether `/dev/nvidia-modeset` and the `/dev/dri` nodes lie inside the
+Track K attacker's reach.
 
 | Path | Modeset under `compute,utility` | `/dev/dri` under `compute,utility` | Mechanism |
 |---|---|---|---|
@@ -122,7 +141,7 @@ it, and it appears there only inside `blockedPrefixes`.
 | The cloud provider boundary | See [Blast radius](/gspwn/architecture/threat-model/#blast-radius) |
 
 This page is where scope widens. A phase does not add a surface because its
-ioctls looked reachable; the entry above changes first.
+ioctls looked reachable. The entry above changes first.
 
 ## Capability asymmetry
 
@@ -207,6 +226,20 @@ Nothing observed on that instance is evidence about other tenants or about
 provider infrastructure. A claim about either exceeds what the campaign
 measures.
 
+## Claims the campaign refuses
+
+| Claim | Status | Basis |
+|---|---|---|
+| An unprivileged container tenant reaching host kernel compromise on a GPU container platform | Supported | The claim this campaign is built to support |
+| A finding is reachable by an unprivileged container tenant | Conditional | Only on a `tenant-reachable` profile-check outcome |
+| Anything about the cloud provider's boundary | Refused | Fuzzing a rented instance crosses no boundary the provider maintains |
+| Anything about other tenants or provider infrastructure | Refused | Nothing observed here is evidence about either |
+| Coverage of GSP firmware | Refused | GSP firmware is not instrumented |
+| A fraction of the driver covered | Refused | It needs per-edge frequency counts that syz-manager does not report |
+| A severity the evidence chain does not carry | Refused | `undetermined` is a valid outcome and carries no penalty |
+| A crash count including Xid 13 and 31 | Refused | Those are the fuzzer's own noise floor |
+| A memory-corruption finding against `nvidia-container-toolkit` | Refused | Go is memory-safe |
+
 ## GSP coverage blind spot
 
 Turing and later cards run a large part of the Resource Manager on the GSP
@@ -237,4 +270,5 @@ Every artifact that reports coverage carries this statement. `series` and
   detects and what it cannot.
 - [Impact and severity](/gspwn/architecture/impact-and-severity/): how a
   severity is argued from a reproducer.
-- [Rules of engagement](/gspwn/project/rules-of-engagement/).
+- [Attack surface](/gspwn/architecture/attack-surface/): the measured
+  denominator behind the nodes named here.

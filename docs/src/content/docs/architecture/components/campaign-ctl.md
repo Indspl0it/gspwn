@@ -21,10 +21,10 @@ the billing of a finished campaign to the spend ledger.
 | Enforcement does not depend on a later command being run | `install_deadline_timer` instantiates a per-run timer at install time |
 | A second campaign cannot repoint the units of a live one | `check_overlap` refuses unless the run id matches or `--replace` is given |
 | Every campaign reaches the ledger | `bill_run` bills round and non-round campaigns alike |
-| A campaign cannot start past the run-hour cap | `check_budget` reads machine-global spend before the install |
+| A campaign cannot start past the run-hour cap | `check_budget` reads machine-global spend before the install, through `pipeline_state.spend_for_budget`, which reconciles the ledger against the state file and returns the larger figure |
 | Seeds are visible to syz-manager | `install_seeds` packs them into `workdir/corpus.db` |
 
-## Interface
+## Operations
 
 | Subcommand | Purpose |
 |---|---|
@@ -34,22 +34,6 @@ the billing of a finished campaign to the spend ledger.
 | `wait` | Block until the run's campaign window has elapsed |
 | `start`, `stop` | Start or stop one track's unit |
 | `status` | Report unit state and deadline for a run |
-
-| Function | Returns | Raises |
-|---|---|---|
-| `read_deadline(run_id)` | The absolute epoch second, or `None` | |
-| `reconstruct_deadline(run_id)` | A rebuilt deadline, or `None` | |
-| `effective_deadline(run_id)` | The deadline, rebuilt from state when the file is gone | |
-| `configured_hours(run_id)` | The window the run was installed with, if recoverable | |
-| `measured_run_hours(run_id)` | `(hours, basis)`, the basis naming the derivation | |
-| `unit_active(name)` | `bool`; `activating` counts as active | |
-| `unit_run_id(name)` | The run id baked into an installed unit, or `None` | |
-| `units_for_run(run_id)` | Campaign units currently running that run id | |
-| `enabled_deadline_runs()` | Run ids with an enabled deadline timer instance | |
-| `check_budget(hours, cap)` | Spend before this campaign | Exits 1 when over the cap |
-| `install_seeds(dest_db, seeds_dir)` | `None` | Exits 1 when `syz-db pack` fails |
-| `register_campaign(run_id, track, hours)` | `None` | |
-| `bill_run(run_id, why)` | `None` | |
 
 ## Callers
 
@@ -67,6 +51,7 @@ the billing of a finished campaign to the spend ledger.
 | `--replace` cannot stop the old unit | Exits 1 and leaves the old campaign in place |
 | Spend plus this campaign exceeds `loop.max_total_run_hours` | Exits 1 naming both figures and the setting. Exact equality is admitted |
 | Spend ledger missing while hours are recorded | Exits 1 with the ledger's remediation |
+| Spend ledger below the hours the state file records | Warns naming both figures and the shortfall, and the state file's larger figure counts against the cap |
 | Corpus policy `carry` without `--from-run` | Exits 1 |
 | No `corpus.db` in the named source run | Exits 1 naming the path searched |
 | `syz-db pack` fails | Exits 1 carrying the tool's error |
@@ -101,32 +86,24 @@ the billing of a finished campaign to the spend ledger.
 
 ## Design notes
 
-The deadline is an absolute epoch second in a file, so it survives the reboots
-this pipeline causes. `install-u` writes its own, which resets the clock when it
-runs after `install-k`.
+`install-u` writes its own deadline file, which resets the clock when it runs
+after `install-k`.
 
 `reconstruct_deadline` rebuilds a lost deadline from the install event, which
-already records when the campaign started and the window it was given. Without
-it, losing that one file removes the spend ceiling silently.
+records when the campaign started and the window it was given. Without it,
+losing that one file removes the spend ceiling silently.
 
 `measured_run_hours` returns the basis alongside the figure, so the fallback to
 the configured window is visible in the output.
 
-`bill_run` bills every campaign, round or not. Skipping round campaigns on the
-assumption that `round-end` bills them leaves a round that never closes with its
-hours off the ledger.
+Skipping round campaigns in `bill_run` on the assumption that `round-end` bills
+them leaves a round that never closes with its hours off the ledger.
 
 `cmd_wait` re-reads the deadline on every pass, because a `--replace` install
-moves it and the wait has to follow the campaign that is actually running. On
-return it enforces the deadline itself if the units are still active. Measuring
-a campaign that is still running produces the same wrong number the wait exists
-to prevent.
+moves it. On return it enforces the deadline itself if the units are still
+active, since measuring a campaign that is still running produces the same
+wrong number the wait exists to prevent.
 
-`register_campaign` records the install with its hours. That record makes the
-run id a registered run the coverage sampler accepts, and a lost deadline is
-reconstructed from it.
+`register_campaign` records the install with its hours, which makes the run id
+a registered run the coverage sampler accepts.
 
-## See also
-
-- [campaign_ctl.py reference](/gspwn/reference/cli/campaign-ctl/)
-- [systemd units](/gspwn/reference/systemd-units/)

@@ -174,7 +174,7 @@ this page installs a toolchain.
 The pinned revision declares `go 1.26.0` in `go.mod`. Go 1.21 and later read
 that directive and download the named toolchain on demand, because
 `GOTOOLCHAIN` defaults to `auto`, so a distribution package at 1.21 or later
-also satisfies the build on a machine that can reach the Go module proxy.
+satisfies the build on a machine that can reach the Go module proxy.
 
 | Method | Requires | Behaviour |
 |---|---|---|
@@ -182,8 +182,7 @@ also satisfies the build on a machine that can reach the Go module proxy.
 | The upstream tarball below | Nothing beyond the download | The declared version is present before the build starts |
 
 The tarball is the method used here, following syzkaller's own setup
-documentation. It keeps the toolchain download off the build's critical path
-and works on an instance with no module-proxy access.
+documentation.
 
 ```
 GO_VERSION=1.26.2

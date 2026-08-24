@@ -32,8 +32,7 @@ blocks cooperate.
 
 ## Warps and divergence
 
-A warp is 32 threads. The scheduler issues one instruction for the warp, and
-every lane executes it.
+The scheduler issues one instruction for a warp, and every lane executes it.
 
 When threads in one warp take different branches, the warp executes both paths
 and masks off the lanes that are inactive for each. The cost is the sum of the
@@ -87,7 +86,7 @@ kernel<<<gridDim, blockDim, sharedBytes, stream>>>(args);
 | `gridDim` | Blocks in the grid, up to three dimensions |
 | `blockDim` | Threads per block, up to three dimensions, at most 1024 in total |
 | `sharedBytes` | Dynamic shared memory per block, added to what the kernel declares statically |
-| `stream` | The stream the launch is ordered in. Work in one stream is ordered; work in different streams may overlap. |
+| `stream` | The stream the launch is ordered in. Work in one stream is ordered, and work in different streams may overlap. |
 
 Block dimensions that are not a multiple of 32 waste lanes. A block of 100
 threads occupies four warps, and the last one runs with 28 of its 32 lanes
@@ -112,9 +111,7 @@ A kernel over one million elements, with 256 threads per block.
    threads read consecutive addresses, so each warp's 32 reads fall in one or
    two 128-byte transactions.
 
-Block slots, warp slots, register file and shared memory are four separate
-limits and the smallest one decides. The block-slot figure is quoted most often
-for a part and binds least often.
+The block-slot figure is quoted most often for a part and binds least often.
 
 ## See also
 

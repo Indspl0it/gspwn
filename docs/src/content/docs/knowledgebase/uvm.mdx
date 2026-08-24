@@ -41,11 +41,10 @@ flowchart TB
 | --- | --- | --- |
 | VA space | One process | Every managed range, and which GPUs are registered to it |
 | VA range | One allocation | The range's policy: preferred location, accessed-by set, read-duplication |
-| VA block | 2 MB of a range | Per-page residency and mapping state for every processor |
+| VA block | 2 MB of a range, `UVM_VA_BLOCK_BITS` 21 in `kernel-open/nvidia-uvm/uvm_va_block_types.h` | Per-page residency and mapping state for every processor |
 
-The VA block carries the per-page state. It tracks, for each page it covers,
-which processors hold a copy and which have it mapped. A migration is a change
-to that state plus the page table updates that follow from it.
+A migration is a change to a VA block's per-page state plus the page table
+updates that follow from it.
 
 ## Fault classes
 
@@ -55,10 +54,9 @@ to that state plus the page table updates that follow from it.
 | Non-replayable | A copy engine or another engine that cannot re-issue | The channel is faulted off. There is no replay, so it is reported as an error. |
 
 Replayable faults are batched. The hardware writes entries into a fault buffer
-in device memory and raises an interrupt; the driver drains many entries at
+in device memory and raises an interrupt, and the driver drains many entries at
 once, coalesces those hitting the same block, services them, and issues a
-single replay. Servicing one fault at a time would make first-touch migration
-unusable.
+single replay.
 
 ## Migration policies
 

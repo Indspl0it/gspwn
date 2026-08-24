@@ -52,11 +52,9 @@ gates language and hardware features, so it appears in `nvcc` flags as
 | Hopper | 9.0 | H100, H200 | Thread block clusters, the tensor memory accelerator, transformer engine |
 | Blackwell | 10.x, 12.x | B200 at 10.x; RTX 50 series at 12.x | FP4 and FP6 tensor operations, second generation transformer engine |
 
-Compiled device code carries the capability it was built for. Binary
-compatibility holds within a major version at an equal or higher minor
-version, so a cubin built for `sm_80` runs on 8.6 and 8.9 and fails on 7.5. A
-binary that also embeds PTX can be compiled just in time for a capability that
-did not exist when it was built.
+Compiled device code carries the capability it was built for. The rules
+deciding which parts then accept it are on
+[Compilation pipeline](/gspwn/knowledgebase/compilation/).
 
 ## Memory and form factor
 
@@ -95,5 +93,6 @@ training parts on SXM modules with NVLink between them.
 ## See also
 
 - [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/)
+- [Compilation pipeline](/gspwn/knowledgebase/compilation/)
 - [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/)
 - [Installed stack](/gspwn/knowledgebase/installed-stack/)

@@ -3,8 +3,11 @@ title: ioctl_inventory.py
 description: The in-scope ioctl surface read out of the driver source, the two numbering schemes it keeps apart, and the compiled sizes behind every request number.
 ---
 
-Derives the dispatched ioctl surface of the three in-scope device nodes from an
-open-gpu-kernel-modules checkout, and generates `tools/ioctl_map.json` from it.
+Derives the dispatched ioctl surface of `/dev/nvidiactl` and `/dev/nvidiaN`,
+`/dev/nvidia-uvm` and `/dev/nvidia-uvm-tools` from an open-gpu-kernel-modules
+checkout, and generates `tools/ioctl_map.json` from it. The other two in-scope
+nodes are enumerated elsewhere: `/dev/nvidia-modeset` by `nvkms_inventory.py`
+and `/dev/dri` by `drm_inventory.py`.
 The `describe` phase needs one command per syzlang description, and the
 `seeds` phase needs the 32-bit request number `strace` prints for each. Both live in the
 driver source and both move when the driver branch moves.
@@ -21,7 +24,7 @@ from them. It writes only the JSON files it is given.
 | Invariant | Enforced by |
 |---|---|
 | A request number is never published without a measured size | `size_source` is `measured`, `unresolved` or `no_parameter_struct`, and `requests` stays empty unless a size resolved |
-| The two numbering schemes stay apart | RM commands go through `rm_request()`; UVM commands take the bare command number, and the Linux `UVM_IOCTL_BASE(i) -> i` definition is asserted present |
+| The two numbering schemes stay apart | RM commands go through `rm_request()`, which builds the same request number `trace2seed.py` decodes; UVM commands take the bare command number, and the Linux `UVM_IOCTL_BASE(i) -> i` definition is asserted present |
 | A banner comment does not swallow a file | `strip_c_noise` is a left-to-right scanner, so `//*****` is a line comment and never an open block comment |
 | A nested switch does not steal its parent's case body | `case_blocks` tracks brace depth and reports an assertion inside a nested block separately |
 | Line numbers survive comment stripping | Every removed character becomes a space |
@@ -31,48 +34,15 @@ from them. It writes only the JSON files it is given.
 | Two commands never share one map key | `build_map` raises on a collision, so a later command cannot overwrite an earlier one |
 | A checkout missing a parsed file fails before it emits | `REQUIRED_FILES` is checked in full before any parse runs |
 
-## Interface
+## Output
 
-`--src` selects the checkout and is the only required flag.
-
-| Flag | Argument | Default | Effect |
-|---|---|---|---|
-| `--src` | `DIR` | Required | The open-gpu-kernel-modules checkout |
-| `--out` | `PATH` | `surface/ioctl-inventory.json` | Where the inventory JSON is written |
-| `--sizes` | `PATH` | `surface/ioctl-sizes.json` | The measured struct sizes, from the runner `--emit-probe` writes |
-| `--emit-map` | `PATH` | Off | Also write the request-number map, at `tools/ioctl_map.json` |
-| `--emit-probe` | `DIR` | Off | Write the C size probes and their runner into `DIR` and exit |
-| `-v` | None | Off | Log each parsing step |
-
-The shipped invocation is therefore one line, and it reproduces the committed
-inventory byte for byte.
-
-```
-python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules
-```
+One invocation against a checkout reproduces the committed inventory byte for
+byte.
 
 Every request number is derived from a measured struct size, so a run without
 `--sizes` writes an inventory carrying 0 sizes measured, 183 unresolved and no
 request numbers at all. That file parses, validates and reads clean downstream
 while every consumer reports a smaller surface with nothing naming the cause.
-`refuse_size_regression` refuses to replace an inventory with one measuring
-fewer sizes, so such a run fails at exit 1 and the committed measurements
-survive.
-
-| Function | Returns |
-|---|---|
-| `build_inventory(src, sizes)` | The whole inventory as a dict: encoding, one entry per device node, dead escapes, counts |
-| `build_map(inventory)` | The request-number map and the list of omitted commands |
-| `rm_request(magic, nr, size)` | The Linux ioctl request number, matching the decoder in `trace2seed.py` |
-| `strip_c_noise(text)` | The source with comments and literals blanked, line numbering intact |
-| `case_blocks(text)` | Per case label: the line, the body at its own brace depth, and the full body |
-| `parse_escape_numbers(src)` | The magic, the base, every `NV_ESC_*` number, and where each is defined |
-| `parse_validation_tables(src)` | Command to parameter struct, with the argument-array flag |
-| `parse_uvm_numbers(src)` | Every `UVM_*` command number across the three UVM headers |
-| `emit_probe(src, out_dir, rm, uvm)` | The written probe paths |
-
-Exported constants: `DIRECTION_BITS`, `DIRECTION_SOURCE`, `IOC_SIZE_MAX`,
-`XFER_ESCAPE`, `MAP_COMMENTS`, `REQUIRED_FILES`.
 
 ## Callers
 
@@ -84,21 +54,21 @@ Exported constants: `DIRECTION_BITS`, `DIRECTION_SOURCE`, `IOC_SIZE_MAX`,
 
 ## Failure modes
 
-| Condition | Behaviour | Exit |
-|---|---|---|
-| `--src` is not a directory, or a required source file is absent | Message naming the count and every missing path | 2 |
-| The run measured fewer struct sizes than the inventory it would replace | `refuse_size_regression` names both counts and the file, and nothing is written | 1 |
-| `NV_IOCTL_MAGIC` or `NV_IOCTL_BASE` absent from the header | Message stating the header changed shape and the request numbers would be wrong | 1 |
-| The dual-size check for `NV_ESC_RM_ALLOC` is absent | Message stating one request number for it would miss half the traffic | 1 |
-| The Linux `UVM_IOCTL_BASE(i) -> i` definition is absent | Message stating UVM request numbers rest on that identity | 1 |
-| The `uvm_enable_builtin_tests` gate is absent | Message stating the test commands would otherwise be recorded as reachable | 1 |
-| A measured UVM size contradicts its route macro's `BUILD_BUG_ON` | Message naming every mismatched command and its struct | 1 |
-| A command is dispatched with no header defining its number | Message naming the command and the dispatch site | 1 |
-| Two commands resolve to the same request number | Message naming both and the shared key | 1 |
-| `--sizes` names a file that is absent, is not JSON, or holds a non-positive size | Message naming the file and the offending entry | 1 |
-| A parameter struct has no measured size | Recorded `unresolved`, its request number omitted, and the struct listed in `unresolved_param_structs` | 0 |
-| `--sizes` names no file and the default is absent | Warning that every command will read unresolved, then the size-regression refusal above | 1 |
-| The output directory does not exist | Created, and the creation is logged | 0 |
+| Condition | Behaviour |
+|---|---|
+| `--src` is not a directory, or a required source file is absent | Message naming the count and every missing path |
+| The run measured fewer struct sizes than the inventory it would replace | `refuse_size_regression` names both counts and the file, and nothing is written |
+| `NV_IOCTL_MAGIC` or `NV_IOCTL_BASE` absent from the header | Message stating the header changed shape and the request numbers would be wrong |
+| The dual-size check for `NV_ESC_RM_ALLOC` is absent | Message stating one request number for it would miss half the traffic |
+| The Linux `UVM_IOCTL_BASE(i) -> i` definition is absent | Message stating UVM request numbers rest on that identity |
+| The `uvm_enable_builtin_tests` gate is absent | Message stating the test commands would otherwise be recorded as reachable |
+| A measured UVM size contradicts its route macro's `BUILD_BUG_ON` | Message naming every mismatched command and its struct |
+| A command is dispatched with no header defining its number | Message naming the command and the dispatch site |
+| Two commands resolve to the same request number | Message naming both and the shared key |
+| `--sizes` names a file that is absent, is not JSON, or holds a non-positive size | Message naming the file and the offending entry |
+| A parameter struct has no measured size | Recorded `unresolved`, its request number omitted, and the struct listed in `unresolved_param_structs` |
+| `--sizes` names no file and the default is absent | Warning that every command will read unresolved, then the size-regression refusal above |
+| The output directory does not exist | Created, and the creation is logged |
 
 ## Concurrency and durability
 
@@ -136,8 +106,8 @@ pipeline that needs `gcc`.
 Three numbers describe the RM surface and each comes from a different place.
 The command number is in a header, the parameter struct is in one of three
 validation tables, and the size is `sizeof()` on that struct. Only the third
-resists reading, which is why `--emit-probe` exists: the probe is generated from
-the parsed struct list, so it cannot drift from the table it was derived from.
+resists reading, so `--emit-probe` generates the probe from the parsed struct
+list, which cannot drift from the table it was derived from.
 
 The direction bits are `_IOC_READ|_IOC_WRITE`. The kernel never checks them,
 since `nv_validate_ioctls` forwards only `_IOC_NR` and `_IOC_SIZE`, but the
@@ -154,9 +124,9 @@ driver switches to the transfer path may be lower.
 The transfer path adds one byte over the direct path, so the description of it
 as a way past the size ceiling holds architecturally and buys almost nothing
 against this command set. No dispatched escape has a struct above 16383 bytes.
-What it does change is the shape of the call: the buffer pointer comes out of
-the payload, the command widens from 8 bits to 32, and every escape shares one
-request number.
+It changes the shape of the call: the buffer pointer comes out of the payload,
+the command widens from 8 bits to 32, and every escape shares one request
+number.
 
 Validation masks the command with `0xFF` and dispatch does not, so a command
 with high bits set validates through the RM tables and then matches no case in
@@ -174,7 +144,7 @@ wrong struct almost always lands on the wrong side of 288.
 
 | Limit | Consequence |
 |---|---|
-| Measured sizes come from a committed file | `surface/ioctl-sizes.json` is the `--sizes` default. A checkout without it measures nothing, and `refuse_size_regression` fails the run at exit 1 before the smaller inventory is written. See [Artifacts](/gspwn/reference/artifacts/) |
+| Measured sizes come from a committed file | `surface/ioctl-sizes.json` is the `--sizes` default. A checkout without it measures nothing, and `refuse_size_regression` fails the run at exit 1 before the smaller inventory is written. |
 | Measuring the sizes needs the driver headers compiled | `--emit-probe` writes the probes and a runner, and running them needs a toolchain and the headers. A clean checkout cannot produce the measurements itself |
 
 ## See also

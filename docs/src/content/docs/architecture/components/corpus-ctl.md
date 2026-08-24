@@ -4,8 +4,9 @@ description: The persistent seed bank, and content-hash promotion.
 ---
 
 Promotes programs from a finished run's corpus into `artifacts/seeds/`, the bank
-that outlives rounds. The outer improvement loop requires persistent storage:
-syzkaller's `corpus.db` lives inside one run's workdir and is discarded with it.
+that outlives rounds. The outer improvement loop requires persistent storage,
+because syzkaller's `corpus.db` lives inside one run's workdir and is discarded
+with it.
 
 Promoted programs are named `promoted-<run-id>-<hash>.syz` and tracked in the
 ledger `promoted.json` beside them.
@@ -24,22 +25,12 @@ The module owns the seed bank and its ledger. It is the sole writer of
 | A truncated promotion says so | `--limit` reports how many corpus entries were not considered |
 | Provenance survives the loss of the ledger | The run id and hash are in every filename |
 
-## Interface
+## Operations
 
 | Subcommand | Purpose |
 |---|---|
 | `promote` | Add a run's corpus programs the bank does not already hold |
 | `stats` | Report the bank's size and provenance |
-
-| Function | Returns | Raises |
-|---|---|---|
-| `prog_hash(text)` | The content hash over the normalised program text | |
-| `unpack_corpus(db, dest)` | `None`; unpacks a corpus database into a directory | Exits 1 when `syz-db` is missing or the unpack fails |
-| `corpus_db(run_id)` | The path to that run's `corpus.db` | |
-| `load_ledger(seeds)`, `save_ledger(seeds, ledger)` | The ledger dict, `None` | |
-| `existing_hashes(seeds, ledger)` | Hashes from the ledger plus anything on disk it does not know about | |
-
-Exported constants: `SYZ_DB`, `SEEDS_DIR`, `LEDGER`.
 
 ## Callers
 
@@ -67,8 +58,7 @@ The ledger is written atomically through a temporary file, `fsync` and rename,
 matching every other persistent write in the pipeline. No lock is taken:
 `promote` runs once per finished run from the `refine` phase. Promotion is
 idempotent because the content hash is recomputed from the program text on every
-run, so re-running against the same corpus adds nothing. A lost ledger does not
-cause double promotion, since `existing_hashes` reads the `.syz` files on disk.
+run, so re-running against the same corpus adds nothing.
 
 ## Prohibited behaviour
 
@@ -82,24 +72,18 @@ cause double promotion, since `existing_hashes` reads the `.syz` files on disk.
 
 ## Design notes
 
-`promoted-<run-id>-<hash>.syz` names carry their provenance in the filename as
-well as in the ledger, so a bank recovered without its ledger is still
-attributable.
-
 A promotion that adds nothing is reported as a result:
 
 ```
 The run produced nothing the bank did not already have — that is the corpus-level signal that this round stopped learning.
 ```
 
-That line is a direct input to the stop decision, and `refine` is told to record
-it in `gaps.md`.
+`refine` is told to record that line in `gaps.md`.
 
-`unpack_corpus` exits with a clear message when `syz-db` is missing, naming the
-provision step that builds it, because that binary is a hard prerequisite for
-both promotion and seed packing.
+`syz-db` is a hard prerequisite for both promotion and seed packing, so
+`unpack_corpus` names the provision step that builds it when the binary is
+missing.
 
 ## See also
 
 - [Corpus and seeds](/gspwn/guides/corpus-and-seeds/)
-- [corpus_ctl.py reference](/gspwn/reference/cli/corpus-ctl/)

@@ -149,24 +149,13 @@ retains the target.
 
 ### Impact analysis
 
-The impact record stops at the primitive. Stating that a use-after-free yields
-a controlled write into a reclaimable allocation is analysis. Building the
-escalation is out of scope.
-
-`undetermined` is a valid outcome and carries no penalty, provided
+The impact record stops at the primitive, and building the escalation is out of
+scope. `undetermined` is a valid outcome and carries no penalty, provided
 `undetermined_reason` names what blocked the analysis. A fault path entering
-GSP firmware cannot be followed further from the kernel side. See
+GSP firmware cannot be followed further from the kernel side.
+`pipeline_ctl.py impact-set` and `pipeline_ctl.py validate` refuse a conclusion
+exceeding its evidence. See
 [Impact and severity](/gspwn/architecture/impact-and-severity/).
-
-## Enforcement points
-
-| Property | Enforced by |
-|---|---|
-| Every coverage artifact states the GSP blind spot | `coverage_ctl.py series` and `coverage_ctl.py plateau`, on every invocation |
-| The instrumentation rung reaches the report | `config/machine.yaml` and `artifacts/builds/manifest.json`, cited by the `report` sub-agent |
-| An unmodelled surface is named for the next round | The `refine` sub-agent, in `gaps.md` |
-| An unreached precondition is named | The `seeds` gate |
-| A conclusion exceeding its evidence is refused | `pipeline_ctl.py impact-set` and `pipeline_ctl.py validate` |
 
 ## See also
 

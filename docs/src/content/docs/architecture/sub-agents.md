@@ -1,15 +1,26 @@
 ---
 title: Sub-agents
-description: The dispatch contract, the isolation boundary, the prohibitions the contract enforces, and the path by which a finding reaches the next round.
+description: The twelve phases, the dispatch contract and its isolation boundary, the prohibitions and method rules the contracts enforce, and the path by which a finding reaches the next round.
 ---
 
 Twelve sub-agent definitions live in `agents/`, one per phase. Each file is a
 contract stating what the sub-agent reads, what it does, what it writes, what
 gate evidence it returns, and what it records in `knowledge/`.
 
-Per-phase detail is in
-[Sub-agents reference](/gspwn/reference/sub-agents/). This page specifies the
-dispatch boundary and the two signals a sub-agent produces for the next round.
+| Sub-agent | Runs | Track | Produces |
+|---|---|---|---|
+| `provision` | Once per machine | Both | A prepared machine, its recorded facts, the build manifest |
+| `build` | Once per machine | K | An instrumented kernel and NVIDIA modules |
+| `describe` | Once per round | K | syzlang descriptions |
+| `seeds` | Once per round | K | Seed programs from traces and from allocation chains |
+| `harness` | Once per round | U | libFuzzer and AFL++ harnesses |
+| `fuzz` | Once per round | Both | A completed campaign |
+| `triage` | Once per round | Both | A deduplicated crash registry |
+| `rca` | Once per round | Both | RCA prose, research records, impact records |
+| `poc` | Once per round | Both | Verified reproducers with reproduction rates |
+| `eval` | Once per round | Both | The round's measurements |
+| `refine` | Once per round | Both | The gap analysis and the next round's work list |
+| `report` | Once, after the loop stops | Both | The report and the disclosure packages |
 
 ## The dispatch contract
 
@@ -25,14 +36,13 @@ Sub-agents hand off artifact paths. Two properties follow from that boundary.
 
 The orchestrator reads the named artifacts and checks that they exist and state
 what the sub-agent reported, before recording `done`. A phase whose evidence
-cannot be confirmed is recorded `blocked`.
+cannot be confirmed is recorded `blocked`. See
+[Execution model](/gspwn/architecture/execution-model/).
 
-A phase marked `done` on an unconfirmed claim leaves every later gate satisfied
-by having nothing to inspect, and the condition stays invisible until
-`round-end` measures the round. The `fuzz` phase carries the largest cost:
-advancing on the smoke window makes `triage` scan a nearly empty workdir,
-satisfies every later gate, and bills a full campaign for
-`track_k.smoke_window_minutes` of measurement.
+The `fuzz` phase carries the largest cost of an unconfirmed claim. Advancing on
+the smoke window makes `triage` scan a nearly empty workdir, satisfies every
+later gate, and bills a full campaign for `track_k.smoke_window_minutes` of
+measurement.
 
 ### Cross-phase state on disk
 
@@ -51,20 +61,6 @@ agree on a filename convention.
 | Widening scope because an ioctl surface looked reachable | Scope is a threat-model decision, recorded in [Threat model](/gspwn/architecture/threat-model/) first |
 | Claiming tenant reachability from the fuzzer's own environment | syzkaller holds a wider capability set than the modelled attacker |
 | Recording a finding in `knowledge/` | Those files are committed to a public repository |
-
-## Parallelism
-
-`describe`, `seeds` and `harness` may run concurrently after `build`.
-`PARALLEL_AFTER_BUILD` in `tools/pipeline_state.py` exempts the trio from the
-phase-ordering integrity check.
-
-In round 1, `seeds` consumes the `NV_*` header that `describe` produces. From
-round 2 the header and `tools/ioctl_map.json` already exist, and the trio is
-independent.
-
-Background sub-agents are allowed for `fuzz`, a long-running monitor, and for
-the parallel trio. A timed-out sub-agent is resumed, and its work is not
-restarted from the beginning.
 
 ## The two steering signals
 
@@ -89,15 +85,12 @@ flowchart LR
 | Findings | `pipeline_ctl.py finding-list` | Where the bugs have been | `refine`, into `worklist.md` |
 | History | `surface/worklist-round1.md` | Where the vendor has fixed bugs before | The round-1 `describe` and `seeds` phases |
 
-The three are not interchangeable. A loop following coverage alone keeps
-widening the surface and never returns to a subsystem that already yielded a
-bug. Every work-list item carries a `[surface]`, `[finding crash-NNNN]` or
-`[history CVE-YYYY-NNNNN]` tag naming which signal produced it, and the
-`refine` gate reports the split.
-
-`[surface]` absorbed the older `[coverage]` tag. `surface_cov.py gaps` names
-the exact enumerated command a corpus has not reached, where an edge count only
-gestures at a region.
+A loop following coverage alone keeps widening the surface and never returns to
+a subsystem that already yielded a bug. Every work-list item carries a
+`[surface]`, `[finding crash-NNNN]` or `[history CVE-YYYY-NNNNN]` tag naming
+which signal produced it, and the `refine` gate reports the split. The tags are
+specified in
+[Historical targeting](/gspwn/architecture/historical-targeting/).
 
 ## The feedback edge
 
@@ -129,10 +122,9 @@ Each hop carries a check, because each can fail without producing an error.
 | The work list is recorded | `--worklist` omitted from `round-end` | `round-advance` carries only what was recorded | `pipeline_ctl.py` |
 | `describe` consumes the items | An item modelled in name only | The gate reports, per item, what was modelled and whether the smoke run reached it | The `describe` sub-agent |
 
-The `rca_done_at` stamp is durable. `rca_done` is a transient status: the `poc`
-phase writes the reproduction class over it, so a check keyed on the current
-status stops seeing an unanalysed crash exactly when the pipeline reaches the
-phase that should notice it.
+The `rca_done_at` stamp is durable, and `rca_done` is a transient status the
+`poc` phase writes the reproduction class over. See
+[Crash identity](/gspwn/architecture/crash-identity/).
 
 ## The three targeting fields
 
@@ -156,10 +148,32 @@ that disappears into GSP where the other callers are not visible. A
 neighbouring call invented to fill the field costs the next round a full
 describe-and-fuzz cycle against a target that was never adjacent to the bug.
 
+## Method rules the contracts carry
+
+A gate says what a phase must show. Six of the contracts also carry a rule
+about how the work is done, and each exists because the cheap way to satisfy
+the gate produces a wrong number.
+
+| Phase | Rule | Failure it prevents |
+|---|---|---|
+| `describe` | Descriptions are agent-authored and treated as untrusted until measured. Every number and struct layout comes from the driver source | The ABI shifts between branches, and a wrong direction bit produces descriptions that compile, run and never reach the driver |
+| `seeds` | A precondition no available CUDA workload reaches is reported as unreached. A control command reaches a program through the allocation chains and never through a trace | `strace` decodes no NVIDIA parameter struct, so a trace names the escape and never the command behind it |
+| `harness` | Sanitizer settings are explicit per harness. Leak detection is a stated choice, and UBSan runs with `halt_on_error=1` | Without it the process continues past the first error and the crashing input no longer matches the report |
+| `fuzz` | The smoke window is an early abort check. The gate requires the full campaign window | Advancing on the smoke window bills a full campaign for half an hour of measurement |
+| `rca` | Every claim about code behaviour not verified against source is marked `[UNVERIFIED]`, and `eval` samples from exactly that set. `rca` records what the fault is worth, and `poc` establishes who can reach it | An unmarked guess about a fault path reaches a vendor as an asserted mechanism |
+| `report` | Detailed vulnerability sections only, no executive summary. A severity is argued as an explicit chain. A finding whose impact record cannot carry a severity is reported with its mechanism and no severity claim | A severity invented at report time rests on less evidence than the analysis phase had |
+
+`eval` carries two more. Version persistence replays every reliable reproducer
+against one newer driver branch, and its outcome is required: a recorded
+`skipped` with a reason satisfies the gate, and an absent answer fails it. The
+impact audit re-reads the evidence behind every record claiming
+`privilege-escalation` or `container-escape`, the two claims a vendor
+challenges first.
+
 ## Knowledge
 
-Every sub-agent runs `knowledge_ctl.py show --phase <p>` before starting, and
-records what it learns as it learns it.
+Every sub-agent reads the accumulated knowledge for its phase before starting,
+and records what it learns as it learns it.
 
 | File | Subject | Example entry |
 |---|---|---|
@@ -176,18 +190,8 @@ The repository is public, so entries carry ABI and process facts.
 `knowledge_ctl.py note` refuses text naming a crash id or a path under
 `artifacts/crashes`, `artifacts/pocs` or `artifacts/rca`.
 
-## Enforcement points
-
-| Property | Enforced by |
-|---|---|
-| A phase advances only on confirmed evidence | The orchestrator's step 4, against the files the gate names |
-| Parallel sub-agents do not lose each other's writes | An exclusive `flock` held across every state transaction |
-| A finding reaches the next round | `finding-set`, `round-end --worklist`, `round-advance` |
-| A record that steers nothing is named | `finding-list` and `pipeline_ctl.py validate` |
-| No finding is published to the public repository | `knowledge_ctl.py note` |
-
 ## See also
 
 - [Steering the next round](/gspwn/guides/steering-the-next-round/)
-- [Sub-agents reference](/gspwn/reference/sub-agents/)
+- [Execution model](/gspwn/architecture/execution-model/)
 - [Impact and severity](/gspwn/architecture/impact-and-severity/)

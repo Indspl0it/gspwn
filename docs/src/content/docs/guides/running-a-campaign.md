@@ -12,10 +12,6 @@ to 8 run in order for every campaign.
 One run id of the form `r<round>-<n>` covers both tracks. `r2-1` is the first
 campaign of round 2.
 
-```
-python3 tools/campaign_ctl.py gen-config --run-id r2-1
-```
-
 Track U data lives under `artifacts/runs/<id>/u/`, and the coverage sampler and
 the deadline timer key on that same id. Per-track ids such as `r2-k1` and
 `r2-u1` leave Track U unsampled and break the round accounting.
@@ -73,9 +69,8 @@ a `corpus.db`, and directs the operator to a new run id.
 :::
 
 Seeds must be packed into `workdir/corpus.db`, because that database is
-syz-manager's only corpus input. Programs placed in a directory beside it are
-never loaded, and a seeded run then becomes indistinguishable from an unseeded
-one.
+syz-manager's only corpus input. See
+[Corpus and seeds](/gspwn/guides/corpus-and-seeds/).
 
 ## 4. Install both tracks
 
@@ -93,7 +88,7 @@ Each install does four things before writing a unit:
 4. Installs and enables `gspwn-deadline@<run-id>.timer`.
 
 ```
-campaign window: 24 h (stops at epoch 1786000000, enforced by gspwn-deadline@r2-1.timer); budget 23.5 of 216 run-hours spent before this campaign
+campaign window: 1000 h (stops at epoch 1786000000, enforced by gspwn-deadline@r2-1.timer); budget 991.6 of 5000 run-hours spent before this campaign
 installed gspwn-k.service for run r2-1 (MemoryMax=12G)
 ```
 
@@ -215,5 +210,5 @@ gate.
 - [Corpus and seeds](/gspwn/guides/corpus-and-seeds/) covers the seed bank.
 - [Long-running campaigns](/gspwn/guides/long-running-campaigns/) covers
   panics, reboots and resumption.
-- [campaign_ctl.py reference](/gspwn/reference/cli/campaign-ctl/) lists every
+- [campaign_ctl.py reference](/gspwn/architecture/components/campaign-ctl/) lists every
   flag.

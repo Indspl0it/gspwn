@@ -126,8 +126,7 @@ Copying 1 GB from GPU 0 to GPU 1.
 | PCIe peer-to-peer | No NVLink, `cudaDeviceCanAccessPeer` true | Copy engine issues PCIe writes to GPU 1's BAR1 window through the host bridge |
 | Staged through host | Peer access unavailable | Device to host copy into a bounce buffer, then host to device copy, so the data crosses PCIe twice |
 
-Tracing the third route, which an application takes when peer access is
-unavailable:
+Tracing the third route:
 
 1. `cudaMemcpyPeer` finds peer access disabled between the two devices.
 2. The runtime allocates or reuses a pinned host staging buffer.

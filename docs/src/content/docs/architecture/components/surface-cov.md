@@ -13,9 +13,7 @@ The inventories supply a denominator that has been measured.
 `ioctl_inventory.py`, `ctrl_surface.py`, `object_graph.py` and
 `nvkms_inventory.py` enumerate the 852 targets a default tenant may call,
 across escapes, UVM commands, RM control commands, class allocations and
-modeset commands. Counting how many of those a corpus names is a ratio over
-that denominator, and the ratio is a claim about the command surface and never
-about lines of driver code.
+modeset commands.
 
 The module reads committed artefacts. It reaches no device and needs no KCOV,
 no syz-manager and no GPU.
@@ -33,11 +31,10 @@ no syz-manager and no GPU.
 | control | 531 | Non-privileged RM control commands carrying a kernel-side handler |
 | alloc | 155 | Unprivileged allocatable classes, plus the three root classes the file descriptor itself gates |
 | modeset | 64 | Commands on `/dev/nvidia-modeset` carrying a dispatch entry |
-| drm | 24 | |
+| drm | 24 | Dispatched `DRM_NVIDIA_*` commands on `/dev/dri/cardN` and `/dev/dri/renderDN` |
 | total | 852 | |
 
-Six groups are counted and reported outside the denominator. Folding any of
-them in would move the ratio with no campaign changing.
+Six groups are counted and reported outside the denominator.
 
 | Group | Count | Exclusion reason |
 |---|---|---|
@@ -57,14 +54,23 @@ count.
 
 | Stage | Measured from | Fix when it loses a target |
 |---|---|---|
-| targetable | The four inventories | None. This stage is the denominator |
+| targetable | The five inventories | None. This stage is the denominator |
 | modelled | `descriptions/` | The describe phase writes the missing syzlang variant |
 | exercised | The corpus under `artifacts/seeds/` | The programs do not build the state the call needs, which is a resource-chain problem before it is a seed problem |
 
+```mermaid
+flowchart LR
+    A["targetable<br/>852 commands the driver enumerates"] -->|"describe phase<br/>writes a syzlang variant"| B["modelled<br/>852 declared"]
+    B -->|"fuzzer builds a program<br/>that emits the call"| C["exercised<br/>named in corpus text"]
+    A -.->|"loss here is impossible:<br/>this stage is the denominator"| A
+    B -.->|"loss: a target no description declares"| X1[Fix in the describe phase]
+    C -.->|"loss: the programs never build<br/>the state the call needs"| X2[Fix the resource chain, then the seeds]
+```
+
 modelled over targetable measures the describe phase's own completeness.
 exercised over modelled measures whether the fuzzer builds programs valid
-enough to emit the call at all. A headline ratio on its own hides which stage
-lost the surface.
+enough to emit the call at all. A single headline ratio cannot separate the
+two, and the two call for different work.
 
 The generated baseline models 852 of 852 targets, 100.0% in every family. The
 exercised column reads 0 because no campaign has run, and `report` states that
@@ -74,8 +80,7 @@ The measurement works because `syzlang_gen.py` names every control command as
 its own syzlang variant, `ioctl$NV_ESC_RM_CONTROL_<handler>`, and never one
 opaque `NV_ESC_RM_CONTROL` carrying a command field. The variant name is the
 join key for all three stages, because a description declares it and a corpus
-program names it in the same spelling. Corpus text is therefore
-self-describing.
+program names it in the same spelling.
 
 ## Responsibility
 
@@ -94,61 +99,27 @@ writes only the JSON file `targets --out` is given.
 | A directory that yielded no file is visible | `scan_variants` logs a warning when it reads nothing, so every stage below it reading zero is attributable |
 | A description declaring a variant no inventory names is reported | `modelled` lists the surplus variants, because a stale inventory and a description outside the tenant surface both land there |
 
-## Interface
+## Measurement inputs
 
-| Subcommand | Output |
+The denominator comes from the five inventories. The modelled set comes from
+the syzlang description files. The exercised set comes from corpus program
+text, and a corpus reaches the tool by either of two routes.
+
+| Corpus | Read from |
 |---|---|
-| `targets [--json] [--out PATH]` | The denominator per family, then the four excluded groups with the reason for each |
-| `modelled [--top N]` | Modelled against targetable per family, then the variants the descriptions declare that no inventory names |
-| `report [--json]` | The three-stage decomposition per family, the loss at each stage, and the excluded counts |
-| `gaps [--stage model\|corpus] [--family F] [--top N]` | The uncovered targets, one worklist-ready line each, each carrying its variant in brackets |
-
-`--desc` defaults to `descriptions`. `--family` accepts `escape`,
-`uvm`, `uvm_tools`, `control` or `alloc`. `-v` logs at DEBUG.
-
-Two flags name the corpus, and they are refused together.
-
-| Flag | Corpus measured |
-|---|---|
-| `--corpus DIR` | A directory of programs. Omitting both falls back to `artifacts/seeds`, the seed bank |
-| `--run-id ID` | `artifacts/runs/<id>/workdir/corpus.db`, unpacked through syz-db into a temporary directory and removed afterwards |
+| The seed bank | `artifacts/seeds`, the programs a round started from |
+| A run's own corpus | `artifacts/runs/<id>/workdir/corpus.db`, unpacked through syz-db into a temporary directory and removed afterwards |
 
 Every report prints the corpus path, its modification time and its program
-count, and `report --json` carries `corpus`, `corpus_mtime` and
-`corpus_programs`. The seed-bank fallback prints an extra line saying the bank
-holds this round's programs only after `corpus_ctl.py promote` has run.
+count, so a stale read is visible. The seed bank holds a round's own programs
+only after the promotion step has run, and reading the run's corpus removes
+that ordering requirement.
 
-| Function | Returns |
-|---|---|
-| `load_targets()` | The target map keyed by syzlang variant, the excluded map, and the version metadata |
-| `abi_key(record)` | The composite ABI identity the completion ledger stores a target under |
-| `scan_variants(paths, what)` | Variant name to the files naming it, over syzlang or program text |
-| `stages(desc_dir, corpus_dir, label, stamp)` | The targets, the exclusions, the metadata, and the modelled and exercised variant sets |
-| `unpack_run_corpus(run_id, dest)` | Programs written, unpacking a run's `corpus.db` through syz-db |
-| `measure(desc_dir, corpus=None, run_id=None)` | `stages()` over a corpus named either way, removing any unpack afterwards |
-
-## Callers
-
-| Direction | Modules |
-|---|---|
-| Imports this module | `selftest.py`, for the denominator and scanner tests. The `describe` phase invokes `modelled` as a command and gates on it |
-| This module imports | Nothing in `tools/`. `pipeline_state.py` is deliberately absent, because that module needs `fcntl` and this one stays POSIX-free so the describe agent can check its own denominator on the workstation before the target exists |
-
-## Failure modes
-
-| Condition | Behaviour | Exit |
-|---|---|---|
-| An inventory is absent | Message naming the file, the path, and the effect a missing inventory would have on the ratio | 1 |
-| An inventory does not parse | Message naming the file and the underlying error | 1 |
-| The inventories record different driver releases | Message listing the version each file carries, then the regeneration and `surface_verify.py check` steps | 1 |
-| The description directory holds no file | Warning, and every stage below it reports zero | 0 |
-| The corpus directory holds no program | Warning, and `report` states the exercised column is empty by construction | 0 |
-| A file under either directory cannot be read | Warning naming the path, and the file is skipped | 0 |
-| `gaps` finds nothing uncovered | The heading and a count of zero | 0 |
-| `--corpus` and `--run-id` are both given | Refused, because they name two different corpora | 1 |
-| `--run-id` names a run with no `corpus.db` | Message naming the run, the path and the two states that produce it | 1 |
-| syz-db is absent, or the unpack fails or times out | Message naming the binary and `coverage.unpack_timeout_sec` | 1 |
-| No subcommand given | argparse usage message | 2 |
+The tool refuses to measure at all when an inventory is absent, unparseable, or
+records a driver release the others do not, because each of those would shrink
+or mix the denominator silently. An empty description directory or an empty
+corpus warns and reports zero, which is a different condition and is reported
+as one.
 
 ## Concurrency and durability
 
@@ -192,23 +163,11 @@ tenant surface or a stale inventory is a defect. The generated baseline
 produces 81 such variants: 49 per-parent allocation forms, 31 XFER wrapper
 routes, and `NV_ESC_RM_ALLOC_NVOS21`.
 
-`--run-id` exists because a run's corpus is a syzkaller `corpus.db` under
-`artifacts/runs/<id>/workdir/`, and only `corpus_ctl.py promote` turns one into
-`.syz` files in the seed bank. A report taken against the bank before promotion
-describes the bank the round started from, whatever the round went on to find.
-Reading the run's own corpus removes the ordering requirement, and printing the
-corpus path with its modification time makes a stale read visible either way.
-
-The flag needs syz-db and therefore needs the target, which is a property of the
-corpus format and not of an import. No `pipeline_state` import was added: the
-run directory and the syz-db path are derived from the repository root this
-module already computes, so `--corpus` and every read-only subcommand still run
-on the Windows workstation.
-
-`abi_key(record)` is the identity the completion ledger stores a target under,
-and it is not the variant name. A control variant carries the C handler function
-name, which a driver refactor renames freely, and a ledger keyed on it would
-lose every accounted row at the next driver bump while still looking full.
+The completion ledger stores a target under a composite ABI key, never under
+the variant name. A control variant carries the C
+handler function name, which a driver refactor renames freely, and a ledger
+keyed on it would lose every accounted row at the next driver bump while still
+looking full.
 
 | Family | Key | Distinct |
 |---|---|---|
@@ -217,6 +176,8 @@ lose every accounted row at the next driver bump while still looking full.
 | uvm | `uvm/<nr>` | 39 |
 | uvm_tools | `uvm_tools/<nr>` | 7 |
 | alloc | `alloc/<external_class>` | 155 |
+| modeset | `modeset/<nr>` | 64 |
+| drm | `drm/<nr>` | 24 |
 
 `(sdk_prefix, method_id)` is not sufficient for the control family: it yields
 521 values for 531 commands, because five NV0090 commands are each exported by

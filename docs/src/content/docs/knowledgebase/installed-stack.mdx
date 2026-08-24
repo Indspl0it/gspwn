@@ -63,10 +63,9 @@ machine. Control operations that are not addressed to a specific GPU go to
 | `libcudart.so` | The CUDA runtime API | Toolkit package | Closed |
 | `libnvidia-container.so` | Device and library injection into containers | Container toolkit | Open |
 
-`libcuda.so` and `libcudart.so` are frequently confused. The first ships with
-the driver and talks to the kernel. The second ships with the toolkit and talks
-to the first. A missing `libcuda.so.1` means the driver is absent; a missing
-`libcudart.so.12` means the toolkit is.
+`libcuda.so` ships with the driver and talks to the kernel. `libcudart.so`
+ships with the toolkit and talks to `libcuda.so`. A missing `libcuda.so.1`
+means the driver is absent. A missing `libcudart.so.12` means the toolkit is.
 
 ## Command line and daemons
 
@@ -96,8 +95,7 @@ the first call of every process.
 
 ## Kernel interfaces outside /dev
 
-The driver exposes state through `/proc` and `/sys` as well as through the
-device nodes. These are read-only status interfaces.
+The driver exposes read-only status through `/proc` and `/sys`.
 
 | Path | Reports |
 | --- | --- |
@@ -108,8 +106,6 @@ device nodes. These are read-only status interfaces.
 | `/sys/module/nvidia/parameters/` | One file per module parameter |
 
 ## Worked example: nvidia-smi to the ioctl
-
-One `nvidia-smi` invocation, traced from process start to the kernel.
 
 1. The process starts and links `libnvidia-ml.so`.
 2. NVML opens `/dev/nvidiactl` and allocates a root client handle over it.
@@ -125,14 +121,12 @@ Every CUDA process follows the same first three steps, with `libcuda.so` in the
 place `libnvidia-ml.so` holds here. The device node, the handle model and the
 call mechanism are shared. The object classes allocated over them differ.
 
-The escape numbers and parameter structs behind step 3 live in
-`kernel-open/common/inc/nv-ioctl-numbers.h` and
-`src/common/sdk/nvidia/inc/nvos.h` in `open-gpu-kernel-modules`. The values
-move between driver branches. Reading them from a checked-out tree at the
-matching tag is the only reliable way to obtain them.
+The escapes and parameter structs behind step 3 are on
+[Resource Manager object model](/gspwn/knowledgebase/rm-object-model/).
 
 ## See also
 
 - [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/)
+- [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/)
 - [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/)
 - [Product lines](/gspwn/knowledgebase/product-lines/)

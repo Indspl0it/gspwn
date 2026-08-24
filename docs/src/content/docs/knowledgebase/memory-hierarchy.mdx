@@ -31,9 +31,8 @@ SM, which is the trade `cudaFuncSetAttribute` with
 
 ## Transaction sizes
 
-Device memory is not accessed a byte at a time. The hardware moves fixed
-quantities, and the ratio of bytes requested to bytes moved is the effective
-bandwidth.
+The hardware moves fixed quantities, and the ratio of bytes requested to bytes
+moved is the effective bandwidth.
 
 | Quantity | Size |
 | --- | --- |
@@ -75,7 +74,7 @@ so that repeatedly read data is not evicted by streaming traffic.
 ## ECC
 
 Data centre parts carry error-correcting codes on device memory. Single-bit
-errors are corrected and counted; double-bit errors are uncorrectable and
+errors are corrected and counted. Double-bit errors are uncorrectable and
 raise an Xid.
 
 | Property | Behaviour |

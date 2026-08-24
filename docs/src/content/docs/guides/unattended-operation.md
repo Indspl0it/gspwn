@@ -25,15 +25,16 @@ sudo -n:   ok (sudo -n succeeds)
            needs it for: crashlog_ctl.py harvest (post-panic crash log capture)
            needs it for: campaign_ctl.py install-k (starting a Track K campaign)
            needs it for: coverage_ctl.py install-timer (installing the coverage sampler)
+binaries:  8 of 8 on PATH
 disk:      412.6 GB free
 
 preflight clean
 ```
 
-It checks the configuration, the agent command, passwordless sudo and disk
-headroom, and exits 1 listing what is missing. It is deliberately not part of
-`run`: a preflight that blocked the supervisor would turn a warning into an
-outage.
+It checks the configuration, the agent command, passwordless sudo, the host
+binaries and disk headroom, and exits 1 listing what is missing. It is
+deliberately not part of `run`: a preflight that blocked the supervisor would
+turn a warning into an outage.
 
 ## Passwordless sudo
 
@@ -103,13 +104,12 @@ over a subscription login. The unit written here does not set it.
 ## The circuit breaker
 
 An always-restarting agent consumes tokens with no ceiling. `run` refuses to
-launch under two conditions, counted separately because they mean different
-things.
+launch under two conditions.
 
 | Condition | Key | Meaning |
 |---|---|---|
 | Same-boot starts | `orchestrator.max_same_boot_starts` | The agent keeps exiting and being restarted without the machine going down. Nothing is progressing and each restart costs tokens |
-| Reboots | `orchestrator.max_reboots` | The machine keeps going down. Kernel fuzzing panics the machine by design, so this is expected; it is a problem only when reboots arrive faster than a round can progress between them |
+| Reboots | `orchestrator.max_reboots` | The machine keeps going down. Kernel fuzzing panics the machine by design, so this is expected, and it is a problem only when reboots arrive faster than a round can progress between them |
 
 Both are counted within `orchestrator.window_min`. Counting them against one
 limit would stop a campaign that is panicking normally, or allow a same-boot
@@ -220,13 +220,13 @@ into a shell command line the operator has already quoted.
 
 ## Stall detection
 
-The breaker counts starts, not stalls. An agent blocked on an interactive
-prompt or a wedged tool would hold the pipeline open indefinitely while the
-instance billed.
+The breaker counts starts. Without a second limit an agent blocked on an
+interactive prompt or a wedged tool would hold the pipeline open indefinitely
+while the instance billed.
 
 ```yaml
 orchestrator:
-  max_agent_hours: 30
+  max_agent_hours: 1100
 ```
 
 The launch is killed by process group when it exceeds that, because the
@@ -274,5 +274,4 @@ removed gspwn-orchestrator (breaker state in state/orchestrator.json is kept; `r
 
 - [Long-running campaigns](/gspwn/guides/long-running-campaigns/) covers the
   recovery sequence the supervisor automates.
-- [systemd units](/gspwn/reference/systemd-units/) lists every generated unit.
-- [orchestrator_ctl.py reference](/gspwn/reference/cli/orchestrator-ctl/)
+- [orchestrator_ctl.py reference](/gspwn/architecture/components/orchestrator-ctl/)

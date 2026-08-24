@@ -26,30 +26,38 @@ the build manifest. It is the sole writer of `artifacts/builds/manifest.json`.
 | The machine reboots into the kernel just built | The GRUB entry is found by matching the kernel release, and `grub-editenv list` confirms the saved entry changed |
 | Earlier build facts survive | The manifest is extended in place |
 
-## Interface
+## Instrumentation
 
-| Variable | Required | Meaning |
-|---|---|---|
-| `LINUX_SRC` | Yes | Kernel source directory |
-| `NVIDIA_SRC` | Yes | `open-gpu-kernel-modules` directory |
-| `RUNG` | Yes | `1`, `2` or `3` |
-| `JOBS` | No | Parallel make jobs, default `nproc` |
-| `BASE_CONFIG` | No | Base configuration, default `/boot/config-$(uname -r)` |
-| `SKIP_KERNEL` | No | `1` reuses the kernel already built and installed |
+| Group | Options enabled |
+|---|---|
+| Coverage | `CONFIG_KCOV`, `CONFIG_KCOV_INSTRUMENT_ALL`, `CONFIG_KCOV_ENABLE_COMPARISONS` |
+| Sanitizers | `CONFIG_KASAN`, `CONFIG_KASAN_GENERIC`, `CONFIG_UBSAN` |
+| Symbolization | `CONFIG_DEBUG_KERNEL`, `CONFIG_DEBUG_INFO`, `CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT`, `CONFIG_KALLSYMS_ALL` |
+| Crash capture | `CONFIG_PSTORE`, `CONFIG_PSTORE_RAM`, `CONFIG_PSTORE_CONSOLE`, `CONFIG_KEXEC_CORE`, `CONFIG_CRASH_DUMP` |
 
-Instrumentation enabled: `CONFIG_KCOV`, `CONFIG_KCOV_INSTRUMENT_ALL`,
-`CONFIG_KCOV_ENABLE_COMPARISONS`, `CONFIG_KASAN`, `CONFIG_KASAN_GENERIC`,
-`CONFIG_UBSAN`, `CONFIG_DEBUG_KERNEL`, `CONFIG_DEBUG_INFO`,
-`CONFIG_KALLSYMS_ALL`, plus pstore and crash-dump support.
+`make olddefconfig` silently drops anything the tree does not offer, and
+`CONFIG_DEBUG_INFO` stopped being user-selectable in 5.18, so the build checks
+what actually took in both directions. Six symbols must be `=y`, one of the
+three `CONFIG_DEBUG_INFO` spellings must be `=y`, and every symbol in
+`REQUIRED_DISABLED` must not be.
 
-`REQUIRED_DISABLED` holds the four symbols the check asserts are off:
-`CONFIG_RANDOMIZE_BASE`, `CONFIG_MODULE_SIG_FORCE`,
-`CONFIG_SECURITY_LOCKDOWN_LSM_EARLY` and `CONFIG_DEBUG_INFO_NONE`. Each was
-disabled deliberately and each fails differently, and none of the failures
-names itself: KASLR degrades the secondary dedup key silently, the two module
-symbols surface as `nvidia-smi` errors, and `CONFIG_DEBUG_INFO_NONE` compiles
-the debug info out from under `CONFIG_DEBUG_INFO`. Per-symbol costs are in
-[build_kernel.sh](/gspwn/reference/cli/build-kernel/).
+`CONFIG_KCOV_ENABLE_COMPARISONS` is not implied by `CONFIG_KCOV` and carries no
+`default y`. Without it `kernel/kcov.c` compiles out every
+`__sanitizer_cov_trace_cmp*` definition, and the NVIDIA modules built at rungs
+1 and 2 with `-fsanitize-coverage=trace-cmp` reference symbols the kernel does
+not export, so `insmod` fails with `Unknown symbol
+__sanitizer_cov_trace_cmp1`. syzkaller's comparison-hint mutation reads the
+same data.
+
+`REQUIRED_DISABLED` holds four symbols. Each fails differently and none of the
+failures names itself.
+
+| Symbol | Cost of it surviving |
+|---|---|
+| `CONFIG_RANDOMIZE_BASE` | Every address in every report shifts. `stack_hash` strips offsets and module names and keeps function names, so the primary dedup key survives and the secondary key degrades silently |
+| `CONFIG_MODULE_SIG_FORCE` | The unsigned out-of-tree NVIDIA module does not load, and the build gate fails with `nvidia-smi` errors naming neither signing nor lockdown |
+| `CONFIG_SECURITY_LOCKDOWN_LSM_EARLY` | The same |
+| `CONFIG_DEBUG_INFO_NONE` | Selecting it compiles the debug info out from under `CONFIG_DEBUG_INFO` |
 
 Three logs are written under `artifacts/logs/`, one per stage, so a
 configuration failure and a build failure are not interleaved.
@@ -63,19 +71,19 @@ configuration failure and a build failure are not interleaved.
 
 ## Failure modes
 
-| Condition | Behaviour | Exit code |
-|---|---|---|
-| `LINUX_SRC`, `NVIDIA_SRC` or `RUNG` unset | Parameter expansion error naming the variable | 1 |
-| `RUNG` outside 1 to 3 | Message naming the valid values | 2 |
-| `SKIP_KERNEL=1` with no `.config` in the source tree | Message instructing that rung 1 runs first | 2 |
-| Base configuration absent | Falls back to `defconfig` with a loud warning naming the consequence | |
-| An instrumentation symbol missing from `.config` after `olddefconfig` | Names every missing symbol | 1 |
-| A `REQUIRED_DISABLED` symbol still `=y` | Names every surviving symbol and points at `REQUIRED_DISABLED` for what each costs | 1 |
-| Either failure under `SKIP_KERNEL=1` | The same messages, with the context `reused kernel, SKIP_KERNEL=1` | 1 |
-| `mokutil` absent | Warning that Secure Boot state is unknown, with the command to install it | |
-| Secure Boot enabled | Refused, since an unsigned out-of-tree module will not load | 1 |
-| No GRUB menu entry matching the kernel release | Message naming the release and the file searched | 1 |
-| `grub-set-default` does not stick | Message naming the expected `saved_entry` | 1 |
+| Condition | Behaviour |
+|---|---|
+| `LINUX_SRC`, `NVIDIA_SRC` or `RUNG` unset | Parameter expansion error naming the variable |
+| `RUNG` outside 1 to 3 | Message naming the valid values |
+| `SKIP_KERNEL=1` with no `.config` in the source tree | Message instructing that rung 1 runs first |
+| Base configuration absent | Falls back to `defconfig` with a loud warning naming the consequence |
+| An instrumentation symbol missing from `.config` after `olddefconfig` | Names every missing symbol |
+| A `REQUIRED_DISABLED` symbol still `=y` | Names every surviving symbol and points at `REQUIRED_DISABLED` for what each costs |
+| Either failure under `SKIP_KERNEL=1` | The same messages, with the context `reused kernel, SKIP_KERNEL=1` |
+| `mokutil` absent | Warning that Secure Boot state is unknown, with the command to install it |
+| Secure Boot enabled | Refused, since an unsigned out-of-tree module will not load |
+| No GRUB menu entry matching the kernel release | Message naming the release and the file searched |
+| `grub-set-default` does not stick | Message naming the expected `saved_entry` |
 
 ## Concurrency and durability
 
@@ -83,10 +91,7 @@ The script is sequential and takes no lock; one build runs at a time on the
 machine under test. `SKIP_KERNEL=1` makes rungs 2 and 3 idempotent with respect
 to the kernel: they reuse the installed image and rebuild only the NVIDIA
 modules, after running the full configuration check against the `.config` the
-installed kernel came from. Rung 2 compiles the NVIDIA modules with
-`-fsanitize-coverage=trace-cmp` against whatever kernel is installed, so a tree
-that lost `CONFIG_KCOV_ENABLE_COMPARISONS` fails `insmod` with
-`Unknown symbol __sanitizer_cov_trace_cmp1` hours later. The manifest is
+installed kernel came from. The manifest is
 appended to, so a rung that runs after `provision` keeps the
 GSP firmware version that phase recorded. The boot default is verified after it
 is set, so an unattended reboot does not depend on an unchecked write.
@@ -118,9 +123,8 @@ the kernel.
 
 The script is validated in CI by `bash -n`. Stubbing `make`, `scripts/config`,
 `sudo`, `update-grub`, `grub-editenv`, `mokutil` and `depmod` would test the
-stubs; a real provision run validates it.
+stubs, so a real provision run is the only validation of the rest.
 
 ## See also
 
-- [build_kernel.sh reference](/gspwn/reference/cli/build-kernel/)
 - [Scope and oracle](/gspwn/architecture/scope-and-oracle/)

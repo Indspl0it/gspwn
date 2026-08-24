@@ -52,16 +52,6 @@ CODE_SPAN = "\x01"
 
 # path suffix -> (rule name, a tuple of rule names, or "*" for all, reason)
 EXEMPT = {
-    "project/faq.md": (
-        ("question heading", "question column"),
-        "A genuine question-and-answer page. The register rule exempts the "
-        "question shape explicitly, because questions are its structure. It "
-        "exempts nothing else, so every other category applies here.",
-    ),
-    "project/changelog.md": (
-        "rather",
-        "Entries quote commit subjects verbatim.",
-    ),
     "components/ThemeProvider.astro": (
         "rather",
         "A source comment. The register governs prose for a reader, not code "

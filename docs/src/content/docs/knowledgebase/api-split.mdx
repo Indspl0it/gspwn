@@ -54,11 +54,9 @@ program allocates on the device.
 Contexts are per-device and per-process. Two processes on one GPU have separate
 contexts and separate address spaces, and the GPU switches between them.
 
-The runtime API creates the primary context lazily on first use.
-Before it exists, `cudaMalloc` has nothing to allocate from; that is why the
-first CUDA call in a process is far slower than the rest. It is paying for
-context creation, module loading and, without `nvidia-persistenced`, device
-initialisation.
+The runtime API creates the primary context lazily on first use, so the first
+CUDA call in a process pays for context creation, module loading and, without
+`nvidia-persistenced`, device initialisation.
 
 ## Kernel launch
 

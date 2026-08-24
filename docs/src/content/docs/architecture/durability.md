@@ -172,19 +172,7 @@ Records left in place leave the next panic with nowhere to write, which on a
 machine that panics by design loses findings. Every later harvest also
 re-copies the same records.
 
-## Enforcement points
-
-| Property | Enforced by |
-|---|---|
-| No reader sees a truncated file | Temp file, `fsync`, `os.replace`, directory `fsync` |
-| Parallel sub-agents do not lose each other's updates | An exclusive `flock` across the whole transaction |
-| Billing does not deadlock against a state transaction | Separate locks for the state file and the ledger |
-| Two verifiers do not corrupt each other's dmesg window | A non-blocking lock on `state/repro.lock` |
-| A campaign stays bounded after the deadline file is lost | Reconstruction from the install event, and a forced stop when neither is available |
-| A non-root command still works after a root write | Ownership handed back to `$SUDO_USER` |
-
 ## See also
 
-- [State file schema](/gspwn/reference/state-file/)
 - [Loops](/gspwn/architecture/loops/)
 - [Long-running campaigns](/gspwn/guides/long-running-campaigns/)
