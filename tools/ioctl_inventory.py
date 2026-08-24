@@ -8,7 +8,11 @@ tool re-reads a checkout on every run and carries no table of its own.
 
 Three device-node families are in scope for the command inventory (docs threat
 model): /dev/nvidiactl and /dev/nvidiaN, /dev/nvidia-uvm,
-/dev/nvidia-uvm-tools. nvidia-drm and /dev/dri/* are excluded.
+/dev/nvidia-uvm-tools. The other two families a tenant reaches are enumerated
+by their own tools, because each multiplexes or numbers its commands
+differently: tools/nvkms_inventory.py for /dev/nvidia-modeset and
+tools/drm_inventory.py for /dev/dri/cardN and /dev/dri/renderDN. This tool
+still records their entry points through --emit-entry-points.
 
 /dev/nvidia-modeset is handled by `--emit-map` alone. Its whole command set
 multiplexes through one kernel request number, so the map records that number
