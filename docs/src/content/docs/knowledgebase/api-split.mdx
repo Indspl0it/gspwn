@@ -4,8 +4,8 @@ description: "The runtime API against the driver API, what a context owns, how t
 ---
 
 Two APIs reach the GPU. Almost all CUDA code calls the higher one and never
-names the lower one, so the boundary appears in stack traces and linker errors
-before it appears in source.
+names the lower one, so the boundary between them appears in stack traces and
+linker errors before it appears in the source a program was written from.
 
 ```mermaid
 flowchart TB
@@ -60,7 +60,8 @@ CUDA call in a process pays for context creation, module loading and, without
 
 ## Kernel launch
 
-The `<<<>>>` syntax is not C++. `nvcc` rewrites it.
+`nvcc` rewrites the `<<<grid, block>>>` launch syntax, which no C++ compiler
+accepts, into an ordinary function call before the host compiler sees it.
 
 | Stage | Produced |
 | --- | --- |
@@ -84,8 +85,8 @@ associating the host stub address with the device function inside the fatbin.
 | `cudaEventRecord` and `cudaStreamWaitEvent` | An explicit edge between two streams |
 
 Launches are asynchronous. A kernel launch returns after the command is queued,
-so a timing measurement that does not synchronise measures the queue and not
-the kernel.
+so a timing measurement taken without an intervening `cudaDeviceSynchronize`
+measures the time to queue the command.
 
 ## Worked example: cudaMalloc to the ioctl
 
@@ -110,8 +111,8 @@ cudaMalloc(&p, 1024);
 8. `cudaMalloc` writes that address into `p` and returns `cudaSuccess`.
 
 Steps 1 through 3 happen once per process. A later `cudaMalloc` in the same
-process starts at step 4, which is why the first one costs so much more than
-the second.
+process starts at step 4, so the first call in a process costs context creation
+and the second costs one allocation.
 
 ## See also
 

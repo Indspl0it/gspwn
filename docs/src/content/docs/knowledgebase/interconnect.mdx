@@ -1,6 +1,6 @@
 ---
 title: Interconnect
-description: "PCIe config space and BAR windows, NVLink and NVSwitch topology, peer-to-peer and GPUDirect paths, and one transfer traced across three routes."
+description: "PCIe config space and the three BAR windows the driver records, NVLink and NVSwitch topology, the peer-to-peer and GPUDirect paths, and coherent CPU attachment."
 ---
 
 A GPU is reached over two distinct fabrics. PCIe carries control: config space,
@@ -38,20 +38,26 @@ flowchart TB
 ## PCIe
 
 Every GPU is a PCIe endpoint whatever else it is attached to. The kernel module
-binds to it as an ordinary PCI driver.
+binds to it as an ordinary PCI driver. Config space holds the vendor and device
+IDs, the class code, the capability list and the BAR sizing registers.
 
-| Structure | Contents |
-| --- | --- |
-| Config space | Vendor and device IDs, class code, capability list, the BAR sizing registers |
-| BAR0 | The register aperture. Every hardware register the driver programs is a store into this window. |
-| BAR1 | The device memory aperture the host uses to reach GPU memory directly |
-| BAR3 | A further aperture, used for host access paths that vary by architecture |
+The driver records three memory apertures, named at
+`kernel-open/common/inc/nv.h:292-295` and filled from the device's PCI
+resources at `kernel-open/nvidia/nv-pci.c:2103`.
 
-BAR1 is sized at boot by platform firmware. Where it is smaller than device
-memory, the host sees one window at a time and the driver moves that window to
-reach the rest. Resizable BAR removes the limit: with it enabled and supported
-by the platform firmware, BAR1 covers the whole of device memory and host
-mappings need no window movement.
+| Driver name | Index | Contents |
+| --- | --- | --- |
+| `NV_GPU_BAR_INDEX_REGS` | 0 | The register aperture. Every hardware register the driver programs is a store into this window |
+| `NV_GPU_BAR_INDEX_FB` | 1 | The device memory aperture the host uses to reach GPU memory directly |
+| `NV_GPU_BAR_INDEX_IMEM` | 2 | The instance memory aperture, holding per-channel hardware structures |
+
+The device memory aperture is sized at boot by platform firmware. Where it is
+smaller than device memory, the host sees one window at a time and the driver
+moves that window to reach the rest. Resizable BAR removes the limit. With it
+enabled and supported by the platform firmware, the aperture covers the whole
+of device memory and host mappings need no window movement.
+`nv_resize_pcie_bars` at `kernel-open/nvidia/nv-pci.c:2090` performs the resize
+during probe and fails the probe when it cannot.
 
 | Quantity | Command |
 | --- | --- |
@@ -71,11 +77,13 @@ names both the current value and the maximum.
 | NVLink 2 | V100 | 25 GB/s | 6 |
 | NVLink 3 | A100 | 25 GB/s | 12 |
 | NVLink 4 | H100 | 25 GB/s | 18 |
-| NVLink 5 | B200 | higher per link | more per GPU |
+| NVLink 5 | B200 | 50 GB/s | 18 |
 
 Aggregate figures quoted for a part are the per-link figure multiplied by the
-link count and often by two for bidirectional traffic. Comparing a bidirectional
-aggregate against a unidirectional PCIe figure overstates the ratio.
+link count and often by two for bidirectional traffic. A B200's published
+1.8 TB/s is 18 links times 50 GB/s each direction, doubled. Comparing a
+bidirectional aggregate against a unidirectional PCIe figure overstates the
+ratio by two.
 
 NVSwitch is a crossbar. Without it, GPUs are connected in a mesh and the
 available bandwidth between two GPUs depends on how many links directly join
@@ -115,33 +123,6 @@ NVLink-C2C, which is cache coherent.
 | No migration for correctness | A page is reachable from either side wherever it is resident |
 | Migration for performance only | Placement still matters for bandwidth, so the advice APIs remain useful |
 | `malloc` memory is addressable | No separate allocator is required to reach host data from a kernel |
-
-## Worked example: one transfer, three routes
-
-Copying 1 GB from GPU 0 to GPU 1.
-
-| Route | Condition | Path taken |
-| --- | --- | --- |
-| NVLink direct | An NVLink route exists and peer access is enabled | Copy engine on GPU 0 reads its own memory and writes GPU 1's over NVLink |
-| PCIe peer-to-peer | No NVLink, `cudaDeviceCanAccessPeer` true | Copy engine issues PCIe writes to GPU 1's BAR1 window through the host bridge |
-| Staged through host | Peer access unavailable | Device to host copy into a bounce buffer, then host to device copy, so the data crosses PCIe twice |
-
-Tracing the third route:
-
-1. `cudaMemcpyPeer` finds peer access disabled between the two devices.
-2. The runtime allocates or reuses a pinned host staging buffer.
-3. A copy engine on GPU 0 reads device memory and writes the staging buffer
-   over PCIe.
-4. The runtime waits for that copy to complete.
-5. A copy engine on GPU 1 reads the staging buffer over PCIe and writes its own
-   device memory.
-6. The call returns.
-
-The transfer crossed PCIe twice and consumed host memory bandwidth for both
-crossings, with a synchronisation point between them. Enabling peer access with
-`cudaDeviceEnablePeerAccess` removes steps 2 through 4 entirely, and the same
-1 GB moves once. `nvidia-smi topo -m` establishes in advance which of the three
-routes a given pair will take.
 
 ## See also
 

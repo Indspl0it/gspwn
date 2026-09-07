@@ -3,9 +3,11 @@ title: Compilation pipeline
 description: "Source to PTX to SASS to fatbin, what -arch and -code select, when the driver compiles at load time, and one binary traced onto a newer GPU."
 ---
 
-CUDA device code passes through two compilers and two instruction sets. Which
-one a binary carries determines whether it runs on a GPU released after it was
-built.
+CUDA device code passes through two compilers and two instruction sets. PTX,
+Parallel Thread Execution, is a virtual instruction set held as text. SASS,
+Streaming Assembler, is the binary instruction set a given GPU generation
+executes. A binary carries one or both, and that choice decides whether it runs
+on a GPU released after it was built.
 
 ```mermaid
 flowchart TB
@@ -36,7 +38,15 @@ flowchart TB
   JIT --> GPU
 ```
 
+A cubin is the compiled object holding SASS for exactly one architecture. A
+fatbin bundles one or more cubins, and optionally the PTX they were compiled
+from, into a single object the host executable embeds. NVVM IR is the
+LLVM-based intermediate representation `nvcc` produces before emitting PTX.
+
 ## The two instruction sets
+
+PTX and SASS differ in six properties: nature, form, stability,
+documentation, the tool that produces each, and the tool that reads each back.
 
 | Property | PTX | SASS |
 | --- | --- | --- |
@@ -47,22 +57,26 @@ flowchart TB
 | Produced by | `nvcc`, from NVVM IR | `ptxas`, from PTX |
 | Inspected with | Read directly, or `cuobjdump -ptx` | `cuobjdump -sass`, `nvdisasm` |
 
-The GPU executes SASS. Every path ends there, and the only variable is whether
-`ptxas` ran when the binary was built or when it was loaded.
+The GPU executes SASS, so `ptxas` runs on every path. It runs either when the
+binary is built or when the binary is loaded.
 
 ## Compatibility rules
 
-| Rule | Statement |
-| --- | --- |
-| Binary compatibility | A cubin for `sm_X.y` runs on `sm_X.z` where `z` is at least `y`. It does not run across a major version. |
-| PTX compatibility | PTX for `compute_X.y` compiles for any capability at or above `X.y`, including ones released later |
-| Just-in-time compilation | When no compatible cubin is present and PTX is, the driver compiles it at load time |
+- Binary compatibility runs a cubin built for `sm_X.y` on `sm_X.z` where `z` is
+  at least `y`. It does not carry across a major version.
+- PTX compatibility compiles PTX for `compute_X.y` for any capability at or
+  above `X.y`, including ones released later.
+- Just-in-time compilation takes over when no compatible cubin is present and
+  PTX is, and the driver compiles it at load time.
 
 A binary built only for `sm_80` runs on 8.0, 8.6 and 8.9. It fails on 9.0. The
 same binary with `compute_80` PTX embedded runs on 9.0 through the just-in-time
 path, after a compilation pause on first load.
 
 ## Selecting targets
+
+`-arch`, `-code` and `-gencode` select a virtual architecture, a real
+architecture, or a pair of both.
 
 | Flag | Selects | Produces |
 | --- | --- | --- |
@@ -83,8 +97,9 @@ nvcc -gencode arch=compute_70,code=sm_70 \
      kernel.cu
 ```
 
-Each `-gencode` adds a cubin, so the binary grows with the list. This is why
-framework wheels are large and why they name their supported architectures.
+Each `-gencode` adds a cubin, so the binary grows with the list. Framework
+wheels carry a cubin per supported architecture, which is why they are large
+and why their release notes name the architectures they cover.
 
 ## The just-in-time path
 
@@ -98,11 +113,14 @@ PTX to `libnvidia-ptxjitcompiler.so`. The result is cached.
 | Cost | A pause on first load, once per binary and architecture |
 | Failure mode | An older driver cannot compile PTX from a newer toolkit |
 
-Forward compatibility is a property of PTX against newer hardware. It does not
-make a newer toolkit's output loadable by an older driver, which is the failure
-in the last row.
+Forward compatibility runs in one direction. PTX from an older toolkit compiles
+on a newer driver for newer hardware. PTX from a newer toolkit uses directives
+an older driver's compiler has never seen, which produces the failure in the
+last row.
 
 ## Inspecting a binary
+
+Five commands report what a built binary carries.
 
 | Command | Reports |
 | --- | --- |
@@ -112,26 +130,8 @@ in the last row.
 | `nvdisasm <cubin>` | SASS with control flow, from a standalone cubin |
 | `nvcc --keep` | Leaves every intermediate on disk, including the PTX and the cubin |
 
-## Worked example: an sm_80 binary on a Hopper GPU
-
-A library built with `-gencode arch=compute_80,code=[sm_80,compute_80]`, run on
-an H100 at compute capability 9.0.
-
-1. `cuobjdump --list-elf` reports one ELF for `sm_80`. `cuobjdump -ptx` reports
-   PTX for `compute_80`.
-2. The process starts and `libcuda.so` loads the module.
-3. The driver looks for a cubin at 9.0, then for one at 9.x. Neither exists.
-4. Binary compatibility does not apply: 8.0 and 9.0 differ in major version.
-5. The driver finds the `compute_80` PTX and passes it to
-   `libnvidia-ptxjitcompiler.so`, which compiles it for `sm_90`.
-6. The result is cached under `~/.nv/ComputeCache`. The first launch is delayed
-   by the compilation. Later runs of the same binary skip step 5.
-7. The kernel runs, using no Hopper-specific feature. Thread block clusters and
-   the tensor memory accelerator are unreachable from `compute_80` PTX, so the
-   code is correct and leaves the new hardware idle.
-
 ## See also
 
 - [Execution model](/gspwn/knowledgebase/execution-model/)
 - [Product lines](/gspwn/knowledgebase/product-lines/)
-- [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/)
+- [Installed stack](/gspwn/knowledgebase/installed-stack/)

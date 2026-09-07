@@ -5,14 +5,18 @@ description: "The eight layers between application code and GPU silicon, where t
 
 import GpuStack from '../../../components/GpuStack.astro';
 
-A GPU workload passes through eight layers between application code and silicon.
-Track K enters at L4 and lands in L3 and L2. Everything above L4 is replaced by
-the fuzzer. Everything below L2 carries no instrumentation and therefore
-supports no finding.
+A GPU workload passes through eight layers between application code and
+silicon. Layers L7 to L5 are userspace libraries the tenant links against, L4
+is the set of character devices the tenant opens, L3 and L2 are kernel code,
+L1 is firmware running on a microcontroller inside the card, and L0 is the
+silicon itself.
 
 <GpuStack />
 
 ## Layer detail
+
+Two layers, L3 and L2, are open source and build with compiler
+instrumentation. The rest are closed binaries, signed firmware or hardware.
 
 | Layer | Name and components | Executes as | Instrumentation |
 | --- | --- | --- | --- |
@@ -25,38 +29,52 @@ supports no finding.
 | L1 | GSP firmware: a signed RISC-V image running most of the Resource Manager on a microcontroller inside the GPU | GPU System Processor | None |
 | L0 | GPU silicon: SMs, GMMU, copy engines, memory controllers | Hardware | None |
 
-The device nodes at L4 are granted to a default container by the
-`compute,utility` capability set, so a tenant reaches them without any elevated
-privilege. That is the reachability the threat model assumes.
+KASAN is the kernel address sanitizer, which reports a memory-safety violation
+at the moment it happens. KCOV records which basic blocks a system call
+executed, which is the coverage signal a fuzzer steers on. Both are compile
+time options, so they reach only the two layers that build from source.
+
+A default GPU container receives the four L4 nodes on both injection
+mechanisms: the legacy hook grants them under its default `utility,compute`
+capability set, and the CDI path grants them without reading any capability
+value.
+[Container device access](/gspwn/knowledgebase/container-device-access/) states
+the two device sets. A tenant therefore reaches the ioctl boundary without any
+elevated privilege, which is the reachability the threat model assumes.
 
 ## Instrumentation boundary
 
-The instrumentation boundary sits at L2. A defect inside the GSP is invisible
-to KCOV and surfaces only as a symptom such as an Xid. The consequences for a
-coverage figure are on
+KCOV records basic blocks in L3 and L2 and stops there. A defect inside the
+GSP surfaces only as a symptom such as an Xid, with no edge recorded for it.
+The consequences for a coverage figure are on
 [Threat model](/gspwn/architecture/threat-model/#gsp-coverage-blind-spot).
 
 ## Emulation requirements
 
-Running Track K against an emulated GPU requires a model of three layers before
-a single ioctl reaches parsing code.
+Running Track K against an emulated GPU requires a model of three layers
+before a single ioctl reaches parsing code.
 
-| Layer | Emulator requirement | Consequence when absent |
-| --- | --- | --- |
-| L0 silicon | A model of the register aperture, BAR windows, doorbells and interrupt behaviour of a specific NVIDIA part. No public model exists. | Module load and device probe fail. |
-| L1 GSP | The firmware itself, plus its RPC protocol, since L2 is an RPC client and expects replies from a live GSP. | Almost every allocation and object call returns an error before reaching parsing code. |
-| L2 RM | Valid handles, object hierarchies and completion semantics for every request the fuzzer sends. | The campaign measures the error path. Edge growth stops near device init. |
-| L3 modules | Nothing. This layer is open source and builds with instrumentation. | Emulation still permits this layer. It is the current target. |
+- L0 silicon needs a model of the register aperture, BAR windows, doorbells and
+  interrupt behaviour of a specific NVIDIA part. No public model exists, and
+  without one module load and device probe fail.
+- L1 GSP needs the firmware itself, plus its RPC protocol, since L2 is an RPC
+  client and expects replies from a live GSP. Without it almost every
+  allocation and object call returns an error before reaching parsing code.
+- L2 RM needs valid handles, object hierarchies and completion semantics for
+  every request the fuzzer sends. Without them the campaign measures the error
+  path, and edge growth stops near device init.
 
-Track U carries no such dependency. It executes no GPU code, so libFuzzer and
-AFL++ drive `libnvidia-container` and `nvidia-container-toolkit` on any Linux
-machine.
+L3 modules build with instrumentation on any Linux machine, which is why they
+remain the target under emulation.
+
+Track U executes no GPU code, so libFuzzer and AFL++ drive
+`libnvidia-container` and `nvidia-container-toolkit` on any Linux machine.
 
 ## Rented instance properties
 
 A rented instance carries the instance family, driver build and default
-`compute,utility` capability set a real tenant receives, so a reachability
-result transfers. The campaign panics the kernel deliberately and the pipeline
+container configuration a real tenant receives, so a reachability result
+transfers. The campaign panics the kernel deliberately and the pipeline
 resumes after the reboot.
 [Blast radius](/gspwn/architecture/threat-model/#blast-radius) states what a
 panic reaches and [Cloud deployment](/gspwn/architecture/cloud-deployment/) the

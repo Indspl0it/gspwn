@@ -1,13 +1,14 @@
 ---
 title: Telemetry
-description: "Where GPU counters originate, what the utilisation figure actually measures, the throttle reasons, Xid and ECC reporting, and one low-throughput device diagnosed from counters alone."
+description: "Where GPU counters originate, what the utilisation figure actually measures, the clock event reasons, Xid and ECC reporting, and one low-throughput device diagnosed from counters alone."
 ---
 
-GPU counters originate in hardware registers.
-The Resource Manager reads the registers, NVML exposes them, and `nvidia-smi`
-and DCGM are clients of NVML. The Prometheus exporters read DCGM, not NVML.
-CUPTI reaches the performance monitors on a separate path and requires
-privileges NVML does not.
+GPU counters originate in hardware registers. The Resource Manager reads the
+registers, NVML exposes them, and `nvidia-smi` and DCGM are clients of NVML.
+NVML is the NVIDIA Management Library, shipped as `libnvidia-ml.so`. DCGM is
+the Data Center GPU Manager, a sampling daemon with its own client. The
+Prometheus exporters read DCGM. CUPTI, the CUDA Profiling Tools Interface,
+reaches the performance monitors on a separate path.
 
 ```mermaid
 flowchart LR
@@ -22,66 +23,100 @@ flowchart LR
   HW --> RM --> NVML
   NVML --> SMI
   NVML --> DCGM --> EXP
-  HW --> CUPTI
+  RM --> CUPTI
 ```
 
-Field values are sampled on a driver-internal interval. A query returns the most
-recent sample, so two consecutive queries can return identical figures, and a
-spike shorter than the interval falls between samples and is never reported.
+The performance monitors CUPTI reads are gated by a module parameter.
+`NVreg_RestrictProfilingToAdminUsers` compiles in at `1`
+(`kernel-open/nvidia/nv-reg.h:1034`), so a process needs `CAP_SYS_ADMIN` to
+read GPU performance counters. The comment block documenting the option states
+`0` as its default (`kernel-open/nvidia/nv-reg.h:516`), which the definition
+below it contradicts.
+
+Field values are sampled on a driver-internal interval, between 1 second and
+1/6 second depending on the part
+(`vendor/github.com/NVIDIA/go-nvml/pkg/nvml/nvml.h:249`). A query returns the
+most recent sample, so two consecutive queries can return identical figures,
+and a spike shorter than the interval falls between samples and is never
+reported.
 
 ## Utilisation
 
+Four fields describe how busy a part is, and each measures something
+different.
+
 | Field | Measures |
 | --- | --- |
-| `utilization.gpu` | The percentage of the sampling period during which at least one kernel was resident |
-| `utilization.memory` | The percentage of the period during which device memory was being read or written |
-| SM occupancy | The ratio of resident warps to the maximum, reported by profilers |
+| `utilization.gpu` | The percentage of the sample period during which one or more kernels was executing on the GPU |
+| `utilization.memory` | The percentage of the sample period during which device memory was being read or written |
+| SM occupancy | The ratio of resident warps to the architectural maximum, reported by profilers |
 | SM activity | The proportion of SMs with at least one active warp, reported by DCGM |
 
-`utilization.gpu` at 100% establishes that a kernel was always running. It
+The first two definitions are the doc comments on `nvmlUtilization_t`
+(`vendor/github.com/NVIDIA/go-nvml/pkg/nvml/nvml.h:253`).
+
+`utilization.gpu` at 100% establishes that a kernel was always executing. It
 establishes nothing about how much of the device that kernel used. A kernel
 occupying one SM out of 108 for the whole period reports the same 100% as one
 saturating the part. DCGM reports the occupancy directly, through
 `DCGM_FI_PROF_SM_ACTIVE`, `DCGM_FI_PROF_SM_OCCUPANCY` and
 `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`.
 
-## Clocks and throttling
+## Clocks and clock event reasons
+
+Four fields report the clock and the reason it holds that value.
 
 | Field | Reports |
 | --- | --- |
 | `clocks.current.sm` | The SM clock at the sample |
 | `clocks.max.sm` | The maximum the part will reach |
 | `clocks.applications.graphics` | An operator-set target, where one has been applied |
-| `clocks_throttle_reasons.active` | A bitmask naming why the clock is below maximum |
+| `clocks_throttle_reasons.active` | A bitmask naming why the clock holds its current value |
 
-| Throttle reason | Cause |
-| --- | --- |
-| SW power cap | The power limit was reached. Raise it with `nvidia-smi -pl` where the part allows. |
-| HW thermal slowdown | The part crossed its thermal threshold. An airflow or ambient problem. |
-| HW power brake | An external signal from the platform asserted the brake line |
-| SW thermal slowdown | The driver reduced clocks ahead of the hardware threshold |
-| Sync boost | The part is in a sync boost group and matched to a slower peer |
-| Applications clocks setting | An operator set a clock below the maximum |
-| Display clock setting | A display configuration constrains the clock |
+Nine bits are defined in the bitmask, at
+`vendor/github.com/NVIDIA/go-nvml/pkg/nvml/nvml.h:3343` and the eight defines
+after it. The header uses two prefixes for one family: six carry
+`nvmlClocksEventReason` and three carry the older `nvmlClocksThrottleReason`.
 
-A GPU reporting high utilisation and low throughput with a power cap throttle
-active is power limited. The same GPU with a thermal slowdown active is a
-cooling problem.
+| Reason | Bit | Cause the header states |
+| --- | --- | --- |
+| GPU idle | `0x1` | Nothing is running on the GPU and the clocks are dropping to idle |
+| Applications clocks setting | `0x2` | Clocks are set to application-specific values |
+| SW power cap | `0x4` | Clocks were reduced to hold the part inside its current power limit |
+| HW slowdown | `0x8` | Hardware cut the core clock by a factor of two or more. Temperature too high, an external power brake asserted, fast trigger power protection, or a P-state change |
+| Sync boost | `0x10` | The part is in a sync boost group and holds the lowest clock any member can reach |
+| SW thermal slowdown | `0x20` | The driver reduced clocks to hold GPU and memory temperature under their maximum operating temperatures |
+| HW thermal slowdown | `0x40` | Hardware cut the core clock by a factor of two or more because temperature is too high |
+| HW power brake slowdown | `0x80` | Hardware cut the core clock by a factor of two or more because the platform asserted the external power brake |
+| Display clock setting | `0x100` | The display clock setting limits the GPU clock |
+
+Two of the nine describe a healthy part. GPU idle means no work is resident,
+and applications clocks setting means an operator asked for the clock the part
+is holding, which `nvidia-smi -ac` sets and `nvidia-smi -rac` clears.
+
+A GPU reporting high utilisation and low throughput with SW power cap active is
+power limited, and `nvidia-smi -pl` raises the limit where the part allows it.
+The same GPU with either thermal slowdown active is a cooling problem, and the
+power limit has no effect on it.
 
 ## Xid
 
 Xid entries are the driver's numbered error reports, written to the kernel log
 and counted by NVML.
 
-| Read from | Command |
-| --- | --- |
-| The kernel log, with PID and channel where available | `dmesg -T \| grep -i xid` |
-| The most recent Xid as a DCGM field | `dcgmi dmon -e 230`, field `DCGM_FI_DEV_XID_ERRORS` |
-| Continuous monitoring with classification | `dcgmi diag` and the DCGM health checks |
+Three sources report them.
 
-The kernel log is the primary source. `nvidia-smi` has no Xid history query:
-the ECC and page-retirement sections it prints are separate counters that some
-Xid classes correlate with, and reading them is not a substitute for the log.
+- The kernel log, which carries the PID and channel where available. Read it
+  with `dmesg -T | grep -i xid`.
+- DCGM, which exposes the most recent Xid as field `DCGM_FI_DEV_XID_ERRORS`,
+  read with `dcgmi dmon -e 230`.
+- `dcgmi diag` and the DCGM health checks, for continuous monitoring with
+  classification.
+
+The kernel log is the primary source. `nvidia-smi` has no Xid history query.
+The ECC and page-retirement sections it prints are separate counters that some
+Xid classes correlate with. The log carries the Xid number, the PID and the
+channel, which those counters omit.
 
 An Xid names a class of fault. Attribution to a process is present for some
 classes and absent for others, because a fault reported by the GSP after a
@@ -89,14 +124,20 @@ context has already been torn down carries no owner.
 
 ## ECC and page retirement
 
+Six counters cover error correction and the pages retired as a result.
+
 | Field | Meaning |
 | --- | --- |
-| Volatile corrected errors | Single-bit errors since the last driver reload |
-| Aggregate corrected errors | Single-bit errors over the part's lifetime, held in board storage |
+| Volatile corrected errors | Single-bit errors since the driver last loaded |
+| Aggregate corrected errors | Single-bit errors persisting across reboots, for the lifetime of the part |
 | Uncorrectable errors | Double-bit errors. Each raises an Xid and may kill a context. |
 | Retired pages, single-bit | Pages retired after repeated correctable errors |
 | Retired pages, double-bit | Pages retired after an uncorrectable error |
 | Pending retirement | A retirement scheduled for the next reset |
+
+The volatile and aggregate split is `nvmlEccCounterType_t`, and the two
+retirement causes are `nvmlPageRetirementCause_t`
+(`vendor/github.com/NVIDIA/go-nvml/pkg/nvml/nvml.h:1360`).
 
 Row remapping on HBM parts replaces the older page retirement model.
 `nvidia-smi -q -d ROW_REMAPPER` reports the counts and whether a remapping
@@ -105,12 +146,17 @@ service.
 
 ## Processes and memory
 
+Four fields report device memory and the processes holding it.
+
 | Field | Reports |
 | --- | --- |
-| `memory.used` | Device memory allocated, including driver overhead |
-| `memory.total` | Capacity as the driver sees it, which on parts where ECC reserves memory is below the advertised figure |
+| `memory.used` | Reserved plus allocated device memory. The driver always sets aside a small amount for bookkeeping. |
+| `memory.total` | Total physical device memory as the driver reports it, which on parts where ECC reserves memory is below the advertised figure |
 | Compute processes | PIDs holding a context, with their memory usage |
 | `nvidia-smi pmon` | Per-process utilisation sampled over time |
+
+The first two definitions are the doc comments on `nvmlMemory_t`
+(`vendor/github.com/NVIDIA/go-nvml/pkg/nvml/nvml.h:261`).
 
 Inside a container the process list is often empty even while memory is in use,
 because the PIDs belong to a namespace the tool cannot resolve. The memory
@@ -118,44 +164,20 @@ figures remain correct.
 
 ## DCGM
 
+Five components make up DCGM.
+
 | Component | Role |
 | --- | --- |
 | `nv-hostengine` | The daemon that samples and serves fields |
 | `dcgmi` | The command-line client |
 | Field groups | Named sets of fields sampled together |
 | Health checks | Threshold-based classification of counters into pass, warn and fail |
-| `dcgmi diag` | An active diagnostic that runs workloads on the part, at three depth levels |
+| `dcgmi diag` | An active diagnostic that runs workloads on the part, at a depth selected by `-r` |
 
-`dcgmi diag -r 3` runs the deepest level and takes the GPU out of service while
-it runs. The lower levels are safe alongside a workload.
-
-## Worked example: a device at 100% utilisation and low throughput
-
-An inference service reports a third of its expected throughput. The GPU shows
-`utilization.gpu` at 99%.
-
-1. `nvidia-smi --query-gpu=utilization.gpu,clocks.current.sm,clocks.max.sm,power.draw,power.limit,temperature.gpu --format=csv`
-   reports the SM clock at half its maximum, power draw at the limit, and
-   temperature well inside the threshold.
-2. `nvidia-smi --query-gpu=clocks_throttle_reasons.active --format=csv` returns
-   the software power cap bit. The part is power limited, not thermally limited.
-3. `nvidia-smi -q -d POWER` shows the enforced limit below the default, which
-   points at an operator setting or a platform constraint.
-4. `dcgmi dmon -e 1002,1004` reports SM activity at 12% and tensor pipe activity
-   near zero. Most of the device is idle even though a kernel is always
-   resident.
-5. The workload is small kernels launched back to back, each occupying a
-   fraction of the device, so `utilization.gpu` stays at 99% while the SMs are
-   mostly empty.
-6. `nvidia-smi pmon -i 0` shows one process, so the device is not being shared.
-7. The power cap and the low SM activity have separate causes. Raising the
-   power limit recovers clock headroom. The throughput ceiling requires larger
-   batches or concurrent streams to fill the SMs.
-
-Steps 1 through 3 use `nvidia-smi` alone and identify the power cap. Step 4
-requires DCGM and identifies the occupancy ceiling, which accounts for the
-larger part of the shortfall. A diagnosis stopping at step 3 raises the power
-limit and recovers the clock, leaving most of the throughput gap in place.
+`dcgmi diag -r 3` runs the long level and takes the GPU out of service while it
+runs. DCGM ships outside the trees this documentation reads, so its field ids
+and level names come from the vendor documentation and not from source in this
+repository.
 
 ## See also
 

@@ -6,9 +6,8 @@ description: "Publicly disclosed vulnerabilities in the NVIDIA GPU driver's loca
 NVIDIA discloses driver vulnerabilities through PSIRT security bulletins. The
 bulletins carry a CVE identifier, a one-sentence description, a CWE, a CVSS
 vector and the affected driver branches. They rarely name an ioctl, an escape
-code, a Resource Manager control command or a source function. This page
-records what the disclosed history establishes and marks the point where it
-stops.
+code, a Resource Manager control command or a source function, so the disclosed
+history establishes the layer and the weakness class and stops there.
 
 Two device-node populations divide the record. `nvidia.ko` and `nvidia-uvm.ko`
 expose `/dev/nvidiactl`, `/dev/nvidiaN`, `/dev/nvidia-uvm` and
@@ -16,11 +15,13 @@ expose `/dev/nvidiactl`, `/dev/nvidiaN`, `/dev/nvidia-uvm` and
 privilege the process already has. Everything else in the GPU display driver
 package reaches a different attacker: the Windows kernel-mode driver
 `nvlddmkm.sys`, the user-mode driver libraries, the vGPU host plugin, the
-installer, `nvidia-modeset`, and GPU firmware. The record below separates the
-first population from the second, and holds a third group for the disclosures
-where NVIDIA's own wording does not decide which one applies.
+installer, `nvidia-modeset`, and GPU firmware. The classification below keeps
+the two populations apart and holds a third group for the disclosures where
+NVIDIA's own wording does not decide which one applies.
 
 ## Sources
+
+Three sources carry the record, and only the second holds every bulletin.
 
 | Source | Coverage | Form |
 | --- | --- | --- |
@@ -37,7 +38,7 @@ classification and its basis, is `surface/prior-cves.json`.
 
 ## Classification method
 
-Each CVE lands in one of four buckets. The rules run in the order below, and
+Each CVE is assigned to one of four buckets. The rules run in the order below, and
 the first that matches decides. Every record carries the rule that decided it.
 
 | Rule | Outcome |
@@ -52,10 +53,10 @@ the first that matches decides. Every record carries the rule that decided it.
 | NVIDIA names the kernel mode layer, the kernel driver, a kernel module, `nvidia.ko`, the Unified Memory driver or UVM, on a Linux platform with a local attack vector | Kernel modules |
 | Otherwise | Undetermined layer |
 
-The third bucket collapses several distinct exclusions into one label. A
-Windows-only defect and a vGPU host defect are both outside the local Linux
-ioctl surface for different reasons, and the per-record basis in the JSON keeps
-them apart.
+The `Outside both` bucket collapses several distinct exclusions into one label.
+A Windows-only defect and a vGPU host defect are both outside the local Linux
+ioctl surface for different reasons, and the per-record `classification_basis`
+field in `surface/prior-cves.json` keeps them apart.
 
 ## Totals
 
@@ -157,12 +158,13 @@ runtime configuration.
 | [CVE-2025-23267](https://nvd.nist.gov/vuln/detail/CVE-2025-23267) | 2025-08-12 | [5659](https://nvidia.custhelp.com/app/answers/detail/a_id/5659) | CWE-59 | 8.5 | An attacker could cause a link following by using a specially crafted container image |
 | [CVE-2026-24260](https://nvd.nist.gov/vuln/detail/CVE-2026-24260) | 2026-06-30 | [5850](https://nvidia.custhelp.com/app/answers/detail/a_id/5850) | CWE-367 | 8.5 | An attacker could cause a time-of-check time-of-use race condition |
 
-All ten sit in filesystem, mount and search-path logic: four
+All ten are in filesystem, mount and search-path logic: four
 time-of-check-to-time-of-use races (CWE-367), three improper isolation defects
 (CWE-653), two link-following defects (CWE-59 and CWE-61) and one untrusted
 search path (CWE-426). Wiz Research reported six of the ten and shared credit
-on a seventh. None is a memory-safety defect, and the class yields poorly to
-fuzzing.
+on a seventh. None is a memory-safety defect. Each requires a particular
+filesystem state at a particular moment during container start, and none is
+reached by handing malformed bytes to a parser.
 
 ## Bug classes across the kernel-module record
 
@@ -196,14 +198,22 @@ a reporting bias. CWE-476 is the cheapest class to observe, because a NULL
 dereference panics deterministically, and its share says as much about what
 gets noticed as about what exists.
 
-Five of the 61 name the Unified Memory driver: CVE-2020-5967, CVE-2024-0090,
-CVE-2024-53869, CVE-2025-23300 and CVE-2026-24195. The remaining 56 name the
-kernel mode layer or `nvidia.ko` without naming a subsystem inside it.
+`surface/cve-hotspots.json` places five of the 61 in the Unified Memory driver
+and the remaining 56 in the Resource Manager or `nvidia.ko` without a subsystem
+inside it. The five split by who names UVM.
+
+| CVE | Names UVM |
+| --- | --- |
+| CVE-2020-5967 | NVIDIA's own bulletin sentence, "in the UVM driver" |
+| CVE-2024-53869 | NVIDIA's own bulletin sentence, "NVIDIA Unified Memory driver for Linux" |
+| CVE-2026-24195 | NVIDIA's own bulletin sentence, "a vulnerability in UVM" |
+| CVE-2024-0090 | A published researcher writeup. NVIDIA's sentence says "GPU driver for Windows and Linux" |
+| CVE-2025-23300 | A published researcher writeup. NVIDIA's sentence says "in the kernel driver" |
 
 ## Disclosures with published technical detail
 
-Seven of the 241 have a public source naming the module, the entry point or the
-faulting function.
+Seven of the 61 kernel-module disclosures have a public source naming the
+module, the entry point or the faulting function.
 
 | CVE | Module | Entry point | Function | Class | Source |
 | --- | --- | --- | --- | --- | --- |
@@ -239,11 +249,12 @@ what. Recurring reporters over the record:
 | Wiz Research | CVE-2024-0132 to CVE-2024-0137, CVE-2025-23359 | Container Toolkit |
 
 Two of the reporter groups on this list built GPU driver fuzzers and disclosed
-the bugs those fuzzers found. The overlap between the fuzzing literature and
-the acknowledgement sections is the strongest signal in the record that this
-surface responds to automated testing.
+the bugs those fuzzers found: the Yonsei group behind Moneta and Xiaochen Zou,
+a StepStone author. Both works are tabulated below.
 
 ## Published work on fuzzing this surface
+
+Five published works target this driver family.
 
 | Work | Venue and date | Target | Descriptions published |
 | --- | --- | --- | --- |
@@ -262,7 +273,7 @@ Moneta's vendored syzkaller tree holds the only public NVIDIA syzlang, in
 `go/src/github.com/google/syzkaller/sys/linux/sys.txt`. It declares 30 named
 variants of `syz_ioctl_nvidia` plus a generic form, one per NV_ESC escape,
 covering the allocate, free, control, map, unmap, duplicate, share, export and
-import families. Its shape bounds what it can find:
+import families. Six properties bound what it reaches.
 
 | Property | Value |
 | --- | --- |
@@ -290,8 +301,8 @@ blocks access to the DRM nodes and that `namespace` does not.
 
 StepStone reports that KernelGPT's generated NVIDIA descriptions reference over
 60 missing structure or type definitions and do not compile under syzkaller
-beyond trivially fixable syntax. Its own 11 NVIDIA bugs name the functions they
-fired in: `devmem_page_to_chunk_locked`, `uvm_mmu_chunk_unmap`,
+once the syntax errors are corrected. Its own 11 NVIDIA bugs name the functions
+they fired in: `devmem_page_to_chunk_locked`, `uvm_mmu_chunk_unmap`,
 `uvm_page_mask_test`, `portMemCmp`, `block_phys_page_address`, `mapFind_IMPL`,
 `uvm_gpu_chunk_get_gpu`, `nvidia_mmap_helper`, `remove_proc_entry`, and two
 NVKMS assertions. Seven of the eleven came through CUDA APIs and four through
@@ -308,10 +319,13 @@ Vulkan.
 | Whether a given CVE is reachable from a container with `compute,utility` | Asserted for CVE-2025-23282 and CVE-2025-23332, unstated for the rest |
 | Which driver branch first introduced a defect | Never stated. Bulletins give the fixed version and never the introducing one |
 
-NVIDIA's bulletin sentences establish the layer and the weakness class. They do
-not establish the entry point. Any statement about which ioctl a historical CVE
-reached, absent one of the seven researcher sources above, is an inference and
-is marked as one in `surface/prior-cves.json`.
+Any statement about which ioctl a historical CVE reached, absent one of the
+seven researcher sources above, is an inference. Reading the driver's own tags
+between the affected and updated versions narrows it no further for most of the
+record: `surface/cve-hotspots.json` places 4 of the 61 in a named function, 4
+more plausibly, leaves 45 not located, and cannot resolve 8 at all, because
+NVIDIA backfilled the PSIRT repository only to 2022 and no bulletin text is
+cached for the older ones.
 
 ## See also
 

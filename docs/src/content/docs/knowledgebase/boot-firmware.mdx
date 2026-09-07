@@ -40,8 +40,13 @@ Older microcontrollers are Falcon cores. Newer designs use RISC-V.
 | NVDEC, NVENC, NVJPEG controllers | Their own codec firmware |
 
 Firmware for these is either resident in board flash as part of the VBIOS or
-supplied by the host from `/lib/firmware/nvidia/<version>/`. Everything loaded
-from the host is signed and verified on the GPU before it executes.
+supplied by the host. `NV_FIRMWARE_FOR_NAME` at
+`kernel-open/nvidia/nv.c:27` builds the host-side name as
+`nvidia/<version>/<image>.bin`, resolved under the kernel's firmware search
+path at `/lib/firmware/`. The GSP image is `gsp_tu10x.bin` on Turing and GA100
+and `gsp_ga10x.bin` on Ampere GA10x and later, selected by chip family in
+`kernel-open/common/inc/nv-firmware.h`. Everything loaded from the host is
+signed and verified on the GPU before it executes.
 
 ## The trust boundary
 
@@ -53,8 +58,10 @@ from the host is signed and verified on the GPU before it executes.
 | Kernel module | The host kernel's module signing policy, where enforced | Yes. The source is published. |
 | Userspace libraries | Nothing beyond ordinary file permissions | Yes |
 
-The boundary sits between the kernel module and the GSP firmware. No host tool
-reads or alters anything on the firmware side.
+The boundary falls between the kernel module and the GSP firmware. The host
+side is readable and buildable from published source. Everything above the
+boundary is a signed image the GPU verifies, and no host tool reads or alters
+it.
 
 ## VBIOS
 
@@ -84,8 +91,8 @@ reporting detail exists.
 
 Without a process holding the device open, the driver tears this state down and
 repeats it on the next open. `nvidia-persistenced` holds a handle so the
-sequence runs once, which is why the first CUDA call on an idle machine can
-take seconds without it and milliseconds with it.
+sequence runs once. The first CUDA call on an idle machine takes seconds
+without it and milliseconds with it.
 
 ## Reset
 
@@ -113,38 +120,6 @@ GPU attests to its own firmware state.
 
 The mode is set per GPU and reported by `nvidia-smi -q`. Peer-to-peer and some
 profiling capabilities are unavailable while it is active.
-
-## Worked example: a cold boot to the first kernel
-
-1. Power is applied. The boot ROM executes from immutable storage inside the
-   part.
-2. The boot ROM reads the VBIOS from board flash and verifies its signature
-   against a key fused into the die. A failure here stops the sequence with no
-   host-visible reporting beyond the device failing to enumerate correctly.
-3. devinit runs: memory is trained, clocks and voltages are set, straps are
-   applied. Device memory becomes usable.
-4. Platform firmware enumerates the PCIe bus and assigns BAR windows. A
-   platform without resizable BAR support assigns a BAR1 smaller than device
-   memory here, and nothing later can change it.
-5. The operating system boots. `nvidia.ko` binds to the PCI device, maps BAR0
-   and installs its interrupt handler.
-6. The module reads the GSP firmware image matching its own version from
-   `/lib/firmware/nvidia/<version>/`, writes it into device memory, and signals
-   the GSP to begin.
-7. The GSP verifies the image's signature. On failure it does not execute it,
-   and the module reports an initialisation error.
-8. The GSP runs the Resource Manager: engines are initialised, the runlists are
-   built, the fault buffers are allocated.
-9. `nvidia.ko` and the GSP complete their handshake. The character devices
-   become usable.
-10. A process opens `/dev/nvidiactl`, allocates a client, and the first CUDA
-    call proceeds.
-
-Steps 1 through 3 leave no host-side trace. Steps 5 through 9 appear in the
-kernel log. An error arising anywhere in steps 1 through 4 presents at step 5
-or later as a failure with a cause the host never observed, which is why
-initialisation failures on new hardware are diagnosed from `lspci` and platform
-firmware settings before the driver is suspected.
 
 ## See also
 

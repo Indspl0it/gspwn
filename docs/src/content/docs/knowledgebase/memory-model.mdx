@@ -6,14 +6,18 @@ description: "The CUDA address spaces ordered by scope, where each physically li
 import MemoryScopes from '../../../components/MemoryScopes.astro';
 
 CUDA exposes seven address spaces. They differ in how many threads can reach a
-value and in where that value physically sits, and those two properties are
+value and in which physical storage holds it, and those two properties are
 independent of each other.
+
+The figure orders storage by how far a value is visible, from one thread to the
+host. It covers six of the seven spaces and adds the L1 and L2 caches, which
+the hardware manages and a program does not address by name.
 
 <MemoryScopes />
 
 ## The spaces
 
-| Space | Scope | Lifetime | Physically |
+| Space | Scope | Lifetime | Physical storage |
 | --- | --- | --- | --- |
 | Register | One thread | The thread | The SM's register file |
 | Local | One thread | The thread | Device memory, cached in L1 and L2 |
@@ -24,10 +28,10 @@ independent of each other.
 | Host | The host | The allocation | System memory |
 
 Local memory is device memory. The name states the scope, one thread, and says
-nothing about where the storage sits. Local is where the compiler spills
-registers, and where a thread-local array lands when it is indexed dynamically
-so it cannot live in registers. A kernel that slows down after a small edit has
-usually started spilling.
+nothing about the storage behind it. Local is where the compiler spills
+registers, and where it places a thread-local array that is indexed
+dynamically, because a register file carries no index. A kernel that slows down
+after a small edit has usually started spilling.
 
 Shared memory and L1 share one physical block of storage on the SM. On Volta
 and later the split is configurable, so a kernel using little shared memory
@@ -35,9 +39,10 @@ leaves more capacity as cache.
 
 ## Coalescing
 
-A warp's 32 loads are serviced together. When those 32 addresses fall in the
-same aligned 128-byte region, the hardware issues one transaction. When they
-scatter, it issues up to 32.
+Coalescing is the hardware merging the addresses a warp's 32 threads issue in
+one instruction into as few memory transactions as it can. When those 32
+addresses fall in the same aligned 128-byte region, the hardware issues one
+transaction. When they scatter, it issues up to 32.
 
 | Access pattern | Transactions per warp |
 | --- | --- |
@@ -45,19 +50,24 @@ scatter, it issues up to 32.
 | `a[i * 2]` | 2 to 4 |
 | `a[perm[i]]` with a random permutation | Up to 32 |
 
-This is why array-of-structures layouts underperform structure-of-arrays on a
-GPU. Reading one field from 32 consecutive structures strides through memory.
-Reading 32 consecutive values from one field array does not.
+Coalescing is the reason array-of-structures layouts underperform
+structure-of-arrays on a GPU. Reading one field from 32 consecutive structures
+strides through memory by the structure size. Reading 32 consecutive values
+from one field array reads one contiguous region.
 
 ## Unified virtual addressing and unified memory
 
-| Mechanism | Provides | Since |
-| --- | --- | --- |
-| Unified virtual addressing | One address space for host and device allocations, so a pointer's value identifies where it lives | Fermi, CUDA 4 |
-| Unified memory | One allocation reachable from host and device, migrated between them on demand | Kepler, CUDA 6. Page faulting added in Pascal. |
+Two mechanisms share addresses between host and device.
+
+- Unified virtual addressing gives one address space to host and device
+  allocations, so a pointer's value identifies which of them holds it. It
+  arrived with Fermi and CUDA 4.
+- Unified memory gives one allocation reachable from host and device, migrated
+  between them on demand. It arrived with Kepler and CUDA 6, and page faulting
+  was added in Pascal.
 
 `cudaMallocManaged` returns a pointer valid on both sides. On Pascal and later
-the pages are not placed anywhere in particular at allocation. The first access
+it reserves address space and leaves every page unpopulated. The first access
 from either side takes a page fault, and the driver migrates the page to the
 faulting processor.
 
@@ -69,13 +79,15 @@ faulting processor.
 | `malloc` | Pageable host memory. A copy to the device stages through a pinned buffer first. |
 
 `cudaMemPrefetchAsync` moves pages ahead of use, and `cudaMemAdvise` marks a
-range as mostly-read or preferred-location. Both exist to avoid the repeated
-faulting that first-touch access produces.
+range as mostly-read or preferred-location. Both bound the repeated faulting
+that first-touch access produces.
 
 ## The fault path
 
 Unified memory faults are handled by `nvidia-uvm.ko`, separately from the
-Resource Manager.
+Resource Manager. The GMMU is the GPU memory management unit, the hardware that
+translates a device virtual address and raises the fault when no translation
+exists.
 
 ```mermaid
 sequenceDiagram
@@ -96,33 +108,6 @@ sequenceDiagram
 
 The two fault classes and the structures the driver tracks residency in are on
 [UVM subsystem](/gspwn/knowledgebase/uvm/).
-
-## Worked example: a first touch on managed memory
-
-```
-float *a;
-cudaMallocManaged(&a, N * sizeof(float));   // 1
-for (int i = 0; i < N; i++) a[i] = 1.0f;    // 2
-kernel<<<blocks, threads>>>(a, N);          // 3
-cudaDeviceSynchronize();                    // 4
-printf("%f\n", a[0]);                       // 5
-```
-
-1. The allocation reserves address space in both page tables. No physical
-   pages are committed.
-2. The host loop faults on each new page. The driver commits system memory and
-   maps it for the host. After the loop, every page is resident on the host.
-3. The launch begins. The first warp touching each page takes a device fault.
-   `nvidia-uvm.ko` unmaps the page from the host, migrates it to device memory,
-   maps it, and replays the access. The kernel spends its early execution
-   migrating.
-4. The synchronise waits for the kernel and for the migrations it caused.
-5. The host read faults again, and the page migrates back.
-
-The same code with `cudaMemPrefetchAsync(a, bytes, deviceId)` between steps 2
-and 3 moves every page in one operation, and the kernel starts with its data
-already resident. The migration cost remains, paid once for the range and no
-longer one page fault at a time inside the kernel.
 
 ## See also
 

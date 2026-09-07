@@ -3,9 +3,12 @@ title: Orchestration
 description: "How Kubernetes discovers, advertises and allocates GPUs on a node, what the GPU Operator installs, and the device plugin protocol."
 ---
 
-Kubernetes has no built-in knowledge of GPUs. A node advertises them as an
-extended resource named `nvidia.com/gpu`, supplied by a device plugin installed
-on top of the cluster. Everything below runs on one node.
+Kubernetes schedules GPUs through the same mechanism it uses for any hardware
+it knows nothing about. A node advertises them as an extended resource named
+`nvidia.com/gpu`, which is a countable quantity a pod asks for by name, and a
+device plugin installed on top of the cluster supplies the count and the
+per-container details. The diagram covers one node, plus the scheduler and the
+operator that act on it from the control plane.
 
 ```mermaid
 flowchart TB
@@ -44,6 +47,10 @@ flowchart TB
 
 ## Components
 
+Seven components make up a GPU-enabled node. Six run as a DaemonSet, which is
+one pod per matching node, and the seventh is a Deployment that reconciles the
+rest.
+
 | Component | Runs as | Responsibility |
 | --- | --- | --- |
 | `node-feature-discovery` | DaemonSet | Labels the node with its PCI devices, so GPU components schedule only where a GPU exists |
@@ -60,9 +67,9 @@ and a driver upgrade drains GPU pods first.
 
 ## The device plugin protocol
 
-The kubelet contains no GPU-specific code. It communicates with a plugin over a
-Unix socket in `/var/lib/kubelet/device-plugins/`, and the plugin supplies
-everything device-specific.
+The kubelet, the agent running on every node, learns everything
+device-specific from the plugin. The two speak gRPC over a Unix socket in
+`/var/lib/kubelet/device-plugins/`.
 
 | Call | Direction | Carries |
 | --- | --- | --- |
@@ -72,14 +79,17 @@ everything device-specific.
 | `Allocate` response | Plugin to kubelet | Environment variables, device nodes and mounts to apply |
 
 The plugin returns `NVIDIA_VISIBLE_DEVICES` set to the chosen UUIDs. That
-variable is the entire interface between the plugin and the container toolkit.
+variable is the entire interface between the plugin and the container toolkit,
+and the toolkit reads it exactly as it would from an image or a run command.
 
 ## Resource names
 
-| Resource | Advertised when |
-| --- | --- |
-| `nvidia.com/gpu` | Whole GPUs, or MIG instances under the single strategy |
-| `nvidia.com/mig-1g.5gb` | MIG instances under the mixed strategy, one resource name per profile |
+The plugin advertises one of two resource name shapes.
+
+- `nvidia.com/gpu`, for whole GPUs, and for MIG instances under the single
+  strategy.
+- `nvidia.com/mig-1g.5gb`, for MIG instances under the mixed strategy, one
+  resource name per profile.
 
 Under the single strategy every MIG instance is advertised as
 `nvidia.com/gpu`, so a pod requesting one GPU may receive a `1g.5gb` slice. The
@@ -91,32 +101,8 @@ Extended resources are integers and cannot be over-committed. A pod requesting
 `requests`. Time-slicing changes this: the plugin can be configured to
 advertise one physical GPU as several replicas, which lets several pods share
 it with no isolation between them.
-
-## Worked example: a pod requesting one GPU
-
-```yaml
-resources:
-  limits:
-    nvidia.com/gpu: 1
-```
-
-1. The device plugin has already registered with the kubelet and is streaming
-   `ListAndWatch`, reporting two healthy device ids.
-2. The kubelet adds `nvidia.com/gpu: 2` to the node's advertised capacity.
-3. The scheduler finds a node whose allocatable `nvidia.com/gpu` exceeds what
-   is already assigned, and binds the pod there.
-4. The kubelet picks one free device id and calls `Allocate` on the plugin with
-   it.
-5. The plugin returns `NVIDIA_VISIBLE_DEVICES=GPU-<uuid>` for that id.
-6. The kubelet passes the environment to containerd, which calls
-   `nvidia-container-runtime`.
-7. The admission path runs. The hook injects the driver libraries and the
-   device nodes for that one UUID.
-8. The container starts and `nvidia-smi -L` inside it lists exactly one GPU.
-
-Steps 5 through 7 cross from orchestration into the admission path. A plugin
-reporting a UUID that does not match the device it allocated produces a
-container holding the wrong GPU, with no error raised at either layer.
+[Partitioning modes](/gspwn/knowledgebase/partitioning/) states where the
+isolation line falls in each sharing mode.
 
 ## See also
 

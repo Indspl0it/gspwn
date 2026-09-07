@@ -6,12 +6,15 @@ description: "The five ways one GPU is shared between tenants, where isolation f
 import PartitionModes from '../../../components/PartitionModes.astro';
 
 Five mechanisms divide one GPU between consumers. They differ in where the
-boundary sits, which decides what one consumer can observe or disturb about
+boundary falls, which decides what one consumer can observe or disturb about
 another.
 
 <PartitionModes />
 
 ## Comparison
+
+Each mode is placed by where its boundary falls, what memory a consumer sees,
+what a fault reaches, how work is scheduled, and what the mode requires.
 
 | Mode | Boundary | Memory | Fault containment | Scheduling | Requires |
 | --- | --- | --- | --- | --- | --- |
@@ -54,25 +57,28 @@ Volta changed the isolation properties substantially.
 
 Even on Volta and later, MPS shares SMs, L2 and memory bandwidth with no
 partition between clients, so one client's traffic degrades another's
-throughput. It bounds what a client can read. It does not bound what a client
-can consume, so it suits cooperating co-tenants such as the ranks of one MPI
-job and does not substitute for MIG where the tenants are mutually untrusted.
+throughput. `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` caps the share of SMs a client
+may occupy, and memory bandwidth stays uncapped. MPS therefore bounds what a
+client can read and leaves what a client can consume open, which suits
+cooperating co-tenants such as the ranks of one MPI job. Mutually untrusted
+tenants need MIG.
 
 ## MIG
 
-Multi-Instance GPU divides the hardware. An A100 exposes seven compute slices
-and eight memory slices, and a partition takes a whole number of each.
+Multi-Instance GPU divides the hardware itself. An A100 exposes seven compute
+slices and eight memory slices, and a partition takes a whole number of each.
 
-The split is two levels. A GPU Instance holds memory slices, SM slices and its
-own L2 and memory controllers. Inside a GPU Instance, one or more Compute
-Instances divide the SMs further, sharing that instance's memory.
+The split is two levels.
 
-| Level | Owns | Divides |
-| --- | --- | --- |
-| GPU Instance | Memory slices, SM slices, L2 slices, memory controllers | The physical GPU |
-| Compute Instance | SM slices within its GPU Instance | One GPU Instance |
+- A GPU Instance divides the physical GPU. It holds memory slices, SM slices,
+  L2 slices and its own memory controllers.
+- A Compute Instance divides one GPU Instance. It holds SM slices within that
+  GPU Instance, and the Compute Instances inside one GPU Instance share that
+  instance's memory.
 
 ### Profile names
+
+Five profiles are defined on an A100 40GB.
 
 | Profile | Compute slices | Memory slices | Frame buffer | Instances that fit on an A100 40GB |
 | --- | --- | --- | --- | --- |
@@ -91,46 +97,23 @@ makes some combinations unbuildable even where the compute count allows them.
 Each instance appears as its own device. `nvidia-smi -L` lists them with their
 own UUIDs, and `/dev/nvidia-caps/` carries the capability files that gate
 access to each one.
+[Container device access](/gspwn/knowledgebase/container-device-access/) states
+the three routes by which those capability files reach a container.
 
 ## vGPU
 
 A licensed host-side driver presents a mediated device to each guest. The guest
 runs an NVIDIA guest driver and addresses the mediated device as a physical
 GPU. The host manager schedules the guests onto the device and mediates
-register access.
-Profiles fix the frame buffer per guest, so a 16 GB card divided into four 4 GB
-profiles serves four guests.
+register access. Profiles fix the frame buffer per guest, so a 16 GB card
+divided into four 4 GB profiles serves four guests.
 
 vGPU and MIG compose. A MIG instance can back a vGPU profile, which gives the
 guest a hardware-partitioned share in place of a time-shared one.
 
-## Worked example: an A100 40GB for three workloads
-
-The requirement is three tenants: one large training job, and two small
-inference services that must not disturb it.
-
-1. Enable MIG: `nvidia-smi -mig 1`. The GPU stops being usable as a whole
-   device until MIG is disabled again.
-2. Create one `3g.20gb` GPU Instance for training. It takes three compute
-   slices and half the frame buffer.
-3. Create two `1g.5gb` GPU Instances for the inference services. Compute slices
-   used so far: 3 + 1 + 1 = 5 of 7.
-4. Create one Compute Instance in each GPU Instance, giving each tenant the
-   whole of its own instance.
-5. `nvidia-smi -L` now lists three MIG devices with distinct UUIDs. A container
-   is pinned to one by passing its UUID in `NVIDIA_VISIBLE_DEVICES`.
-
-Two compute slices and 10 GB remain. Whether a given profile fits them is a
-placement question. Each profile has a fixed set of legal start positions, and
-instances already created may leave the remainder in positions no profile
-accepts, so the arithmetic working out is necessary and not sufficient.
-`nvidia-smi mig -lgip` lists the profiles with their placements, and
-`nvidia-smi mig -lgipp` lists the placements still free.
-
-MIG has no mechanism to lend idle slices to a busy instance.
-
 ## See also
 
 - [Container admission path](/gspwn/knowledgebase/container-admission/)
+- [Container device access](/gspwn/knowledgebase/container-device-access/)
 - [Orchestration](/gspwn/knowledgebase/orchestration/)
 - [Product lines](/gspwn/knowledgebase/product-lines/)
