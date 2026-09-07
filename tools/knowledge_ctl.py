@@ -87,6 +87,27 @@ CRASH_REF_RE = re.compile(r"\bcrash-\d{3,}\b", re.I)
 ARTIFACT_REF_RE = re.compile(r"artifacts/(?:crashes|pocs|rca)/", re.I)
 
 
+def _positive_int(value):
+    """-> `value` as an int above zero, for an argparse `type`.
+
+    `--last` slices the tail of the entry list. Unvalidated, 0 slices
+    `rows[0:]` and shows every entry under a flag asking for none, and a
+    negative N slices `rows[N:]` and drops entries from the front, both
+    reporting success.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            "--last takes a whole number of entries and was given %r" % value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(
+            "--last takes a count above zero and was given %d. 0 asks for no "
+            "entry and reads the whole file, and a negative count drops "
+            "entries from the front." % number)
+    return number
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -95,18 +116,26 @@ def _path(kind):
     return os.path.join(KNOWLEDGE_DIR, FILENAME[kind])
 
 
-def _check_disclosure(text):
-    """Refuse text that carries finding data into a committed file."""
+def _check_disclosure(text, field="note"):
+    """Refuse text that carries finding data into a committed file.
+
+    `field` names the argument the text came from, because every argument
+    written into the entry is checked and the message has to say which one
+    carried the reference. Checking the note alone let `--tags crash-0007`
+    write a crash identifier into the committed knowledge/learnings.md: the
+    tags are concatenated into the block by cmd_note, so they reach the public
+    file by the same route the note text does.
+    """
     hit = CRASH_REF_RE.search(text) or ARTIFACT_REF_RE.search(text)
     if not hit:
         return
     raise ValueError(
-        "refusing to record a note naming %r: knowledge/ is committed to a "
-        "public repo, and anything tied to a specific crash is finding data. "
-        "Record the general form instead — the lesson that applies to the "
-        "next crash of that shape — and keep the specifics in the crash "
+        "refusing to record a note whose %s names %r: knowledge/ is committed "
+        "to a public repo, and anything tied to a specific crash is finding "
+        "data. Record the general form instead, the lesson that applies to "
+        "the next crash of that shape, and keep the specifics in the crash "
         "registry (`pipeline_ctl.py crash-set <id> --notes`) or its research "
-        "record (`pipeline_ctl.py finding-set`)." % hit.group(0))
+        "record (`pipeline_ctl.py finding-set`)." % (field, hit.group(0)))
 
 
 def _atomic_append(path, block):
@@ -181,11 +210,16 @@ def cmd_note(a):
     text = (a.text or "").strip()
     if not text:
         sys.exit("error: a note needs text")
+    tags = [t.strip() for t in (a.tags or "").split(",") if t.strip()]
     try:
-        _check_disclosure(text)
+        # Every argument the block carries, checked before any of it is
+        # written. The phase is a choices-constrained value and carries no
+        # free text.
+        _check_disclosure(text, "text")
+        for tag in tags:
+            _check_disclosure(tag, "--tags entry %r" % tag)
     except ValueError as e:
         sys.exit("error: %s" % e)
-    tags = [t.strip() for t in (a.tags or "").split(",") if t.strip()]
     block = "## %s — %s\n" % (_now(), a.phase)
     if tags:
         block += "Tags: %s\n" % ", ".join(tags)
@@ -208,7 +242,7 @@ def cmd_show(a):
         rows = _entries(kind)
         if a.phase:
             rows = [r for r in rows if r[1] == a.phase]
-        if a.last:
+        if a.last is not None:
             rows = rows[-a.last:]
         if not rows:
             continue
@@ -244,7 +278,7 @@ def build_parser():
     p = sub.add_parser("show", help="read the knowledge files back")
     p.add_argument("--kind", choices=KINDS)
     p.add_argument("--phase", choices=ps.PHASES)
-    p.add_argument("--last", type=int, metavar="N",
+    p.add_argument("--last", type=_positive_int, metavar="N",
                    help="only the most recent N entries per file")
     p.set_defaults(fn=cmd_show)
     return ap
