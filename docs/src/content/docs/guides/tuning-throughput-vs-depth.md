@@ -3,7 +3,9 @@ title: Throughput against depth
 description: Which knobs change how fast a campaign runs, and which change what it concludes.
 ---
 
-Two kinds of value live in `config/campaign.yaml`.
+`config/campaign.yaml` carries two kinds of value. One kind changes how much
+work a campaign gets through. The other changes what the campaign concludes
+from identical work.
 
 ## Knobs that change throughput
 
@@ -27,8 +29,9 @@ then has to work around.
 
 ## Knobs that change conclusions
 
-Changing these changes what the campaign concludes from identical work. Two
-runs measured under different values are not comparable.
+Each of these sets a threshold, a window or an identity that a verdict rests
+on. Two runs measured under different values answer different questions, so
+record the value in force beside any figure taken from them.
 
 | Key | Effect |
 |---|---|
@@ -44,10 +47,18 @@ runs measured under different values are not comparable.
 | `triage.signature_frames` | Whether a reproduction is a hit for this crash |
 | `triage.frameless_signature_lines` | The identity of a report with no stack |
 | `triage.frameless_signature_chars` | The same |
+| `loop.stop_on_plateau` | Whether a `plateaued` verdict ends the loop at all |
+| `coverage.gpu_probe_timeout_sec` | Whether a hung GPU is recorded as hung. `plateau` refuses a verdict on that record |
+| `coverage.surface_min_samples` | How many surface samples the second curve's shape is read from |
+| `coverage.unpack_timeout_sec` | Whether a large corpus reports a surface at all. Too low reads as `surface_verdict=unknown` and blocks the completion stop |
+
+`coverage.surface_sample_min` belongs to both lists. Raising it lowers the cost
+of each coverage sample and gives the surface curve fewer points to be read
+from.
 
 ## Coverage sampling interval
 
-`loop.coverage_sample_min` sits in both lists, and it interacts with the
+`loop.coverage_sample_min` appears in both lists, and it interacts with the
 plateau test.
 
 The validator refuses `loop.plateau_window_min` under three sampling intervals:
@@ -131,9 +142,15 @@ workdir and corpus policy:
 python3 tools/coverage_ctl.py compare --run-id r2-1 --against r1-1
 ```
 
+It prints one line per run carrying the first edge count, the last, the
+difference and the span in hours, then the caveat that governs the reading:
+
 ```
 Comparing runs is only meaningful when each had its own workdir and corpus policy. See campaign_ctl.py --corpus.
 ```
+
+A run with no edge samples prints `no edge samples` in place of its line.
+`--track` selects the track and defaults to `k`.
 
 See [Corpus and seeds](/gspwn/guides/corpus-and-seeds/#comparing-runs).
 
