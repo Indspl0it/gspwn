@@ -3,9 +3,10 @@ title: Execution model
 description: "The orchestrator dispatch cycle, the return values of pipeline_ctl.py next, the concurrency rules, and the conditions that halt the walk."
 ---
 
-The orchestrator executes one serialised walk of the phase state machine. It
-holds no pipeline state in conversation: every decision is derived from
-`state/pipeline.json` at the moment it is needed.
+The orchestrator executes one serialised walk of the phase state machine,
+deriving every decision from `state/pipeline.json` at the moment it is needed.
+`state/pipeline.json` is the orchestrator's whole memory, so a fresh agent
+started after a panic reaches the same next action a running one would.
 
 The layer inventory and the crash-resilience mechanisms are in
 [Architecture overview](/gspwn/architecture/overview/). This page specifies the
@@ -27,10 +28,10 @@ dispatch cycle itself.
    `set-phase <phase> blocked --notes "<why>"` when confirmation fails.
 
 Sub-agents are isolated and hand off artifact paths, so the evidence a
-sub-agent returns is a claim about files. A
-phase marked `done` on an unconfirmed claim leaves every later gate satisfied
-by having nothing to inspect, and the condition stays invisible until
-`round-end` measures the round, at which point the campaign hours are spent.
+sub-agent returns is a claim about files. A phase marked `done` on an
+unconfirmed claim leaves every later gate satisfied by having nothing to
+inspect, and the condition stays invisible until `round-end` measures the
+round, at which point the campaign hours are spent.
 
 ## Phase inventory
 
@@ -53,7 +54,7 @@ by having nothing to inspect, and the condition stays invisible until
 |---|---|---|
 | A phase name | That phase is not `done`, walking setup then round then final | Dispatch its sub-agent |
 | `wait` | `fuzz` is `done` and a run attached to this round is still inside its campaign window | Block on `campaign_ctl.py wait --run-id <id>` |
-| `decide` | Every round phase is `done` and the round has no recorded decision | Run `round-decide` |
+| `decide` | Every setup and round phase is `done` and the round has no recorded decision | Run `round-decide` |
 | `advance-round` | The round decision is `continue` | Run `round-advance` |
 | `complete` | Every phase including `report` is `done` | Exit |
 
@@ -88,10 +89,19 @@ The live-run check is applied to whatever the walk returned, so a live campaign
 suspends `decide`, `advance-round` and `complete` as well as a round phase.
 `fuzz` is exempt, because `fuzz` starts the campaign the check guards.
 
-A `blocked` or `failed` phase halts the walk at that phase. `round-advance`
-refuses to open a new round while one is present.
+`next_action()` treats every status other than `done` as pending, so a phase
+recorded `blocked` or `failed` is returned again on the next call. Two other
+mechanisms turn that into a stop. `pipeline_stop_reason()` in
+`tools/orchestrator_ctl.py` refuses to launch an agent while any phase is
+`blocked`, and `advance_round()` refuses to open a new round while any round
+phase is anything but `done`. A `failed` phase is listed by
+`pipeline_ctl.py brief` with its notes and stops neither the supervisor nor the
+walk on its own.
 
 ## Concurrency
+
+Four rules govern what may run at the same time and how the state file is
+written.
 
 | Rule | Scope | Enforced by |
 |---|---|---|
@@ -126,7 +136,7 @@ sequenceDiagram
   M->>M: pick a corpus program, mutate it
   M->>E: send the program
   E->>KC: enable coverage for this task
-  E->>D: ioctl on a modelled node, one of seven command families
+  E->>D: ioctl on a modelled node, in one of seven command families
   D-->>E: return value
   E->>KC: read the trace
   KC-->>E: covered PCs
@@ -152,18 +162,21 @@ sampling has to survive the panics this loop produces.
 
 ## Panic during an iteration
 
-| Step | Actor | Effect |
-|---|---|---|
-| 1 | Kernel | Halts. pstore or kdump captures the final log output |
-| 2 | systemd | Restarts `gspwn-k.service` after `RestartSec=30` |
-| 3 | syz-manager | Reloads and re-executes its corpus |
-| 4 | Sampler | Reports an edge count climbing steeply back towards its previous value |
-| 5 | `coverage_ctl.py` | Accumulates the y axis with a running maximum, so the replay contributes zero |
+1. The kernel halts. pstore or kdump captures the final log output.
+2. systemd restarts `gspwn-k.service` after `RestartSec=30`.
+3. syz-manager reloads and re-executes its corpus.
+4. The sampler reports an edge count climbing steeply back towards its previous
+   value.
+5. `coverage_ctl.py` accumulates the y axis with a running maximum, so the
+   replay contributes zero.
 
 The running maximum in step 5 is specified in
 [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/).
 
 ## Halt conditions
+
+Nine conditions halt the loop, and two of them can be overridden with
+`--reason`.
 
 | Condition | Mechanism | Overridable |
 |---|---|---|
@@ -173,7 +186,7 @@ The running maximum in step 5 is specified in
 | `loop.max_total_run_hours` spent | `round-decide` returns `stop` from `hard_cap_reason()` | No |
 | Both curves flat with `loop.stop_on_plateau` set | `round-decide` returns `stop` | Yes, with `--reason` |
 | Coverage verdict `unknown` | `round-decide` returns `stop` | Yes, with `--reason` |
-| A phase is `blocked` | `next` halts there. `orchestrator_ctl.py run` exits 78 | No |
+| A phase is `blocked` | `orchestrator_ctl.py run` names the blocked phases and exits 78 without launching an agent | No |
 | The circuit breaker tripped | `orchestrator_ctl.py run` exits 78 | Reset only, through `orchestrator_ctl.py reset` |
 | The pipeline is `complete` | `orchestrator_ctl.py run` exits 78 | No |
 

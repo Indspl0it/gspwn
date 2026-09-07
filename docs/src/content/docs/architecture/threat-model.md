@@ -13,18 +13,28 @@ repeatedly, and drives hostile input into a device driver. Nothing else of
 value may share that machine, and a machine under this pipeline is expected to
 be unhealthy.
 
-| The pipeline may | The pipeline does not |
-|---|---|
-| Install a kernel and reboot into it | Contact NVIDIA PSIRT or publish anything |
-| Panic the machine, repeatedly and on purpose | Weaponise a reproducer past reliable triggering |
-| Write systemd units and grant itself passwordless sudo for its own tools | Build an escalation from a memory-safety primitive |
-| Leave the machine in a state where the GPU has stopped responding | Record a finding in the committed `knowledge/` tree |
+The pipeline may:
 
-Every action in the left column is normal operation. The `report` phase
+- Install a kernel and reboot into it.
+- Panic the machine, repeatedly and on purpose.
+- Write systemd units and grant itself passwordless sudo for its own tools.
+- Leave the machine in a state where the GPU has stopped responding.
+
+The pipeline does not:
+
+- Contact NVIDIA PSIRT or publish anything.
+- Weaponise a reproducer past reliable triggering.
+- Build an escalation from a memory-safety primitive.
+- Record a finding in the committed `knowledge/` tree.
+
+Every action in the first list is normal operation. The `report` phase
 assembles a disclosure package per confirmed finding and stops there. Nothing
 leaves the machine.
 
 ## Attacker definitions
+
+The two attackers differ in position, in the privilege the code under test
+holds, and in the confinement in force when it runs.
 
 | Property | Track K | Track U |
 |---|---|---|
@@ -52,10 +62,23 @@ Two mechanisms inject NVIDIA device nodes into a container. The path in force
 decides whether `/dev/nvidia-modeset` and the `/dev/dri` nodes lie inside the
 Track K attacker's reach.
 
-| Path | Modeset under `compute,utility` | `/dev/dri` under `compute,utility` | Mechanism |
-|---|---|---|---|
-| CDI, including `jit-cdi` | Yes | Yes | `pkg/nvcdi/common-nvml.go:52` lists `/dev/nvidia-modeset` beside the three unconditional control nodes, and `:28` calls that discoverer with no capability check. `internal/platform-support/dgpu/nvml.go:48-55` adds every `/dev/dri` node found for the GPU's PCI bus id, and `internal/edits/device.go:76` grants them `rwm`. `NVIDIA_DRIVER_CAPABILITIES` appears nowhere in `pkg/nvcdi` |
-| Legacy `libnvidia-container` | No | No | `src/nvc_mount.c:786` skips the modeset minor unless `OPT_DISPLAY` is set. `src/options.h:92` sets that flag from the `display` value alone, `:91` shows `graphics` does not set it, and `:100` omits it from the container defaults. No source file in `libnvidia-container` references `/dev/dri` at all |
+File and line citations below read `libnvidia-container` at `v1.20.0`, commit
+`08cb279`, and `nvidia-container-toolkit` at `v1.20.0`, commit `1780ac69`. The
+[attack surface](/gspwn/architecture/attack-surface/) page carries all three
+source pins.
+
+- CDI, including `jit-cdi`, injects `/dev/nvidia-modeset` and the `/dev/dri`
+  nodes under `compute,utility`. `pkg/nvcdi/common-nvml.go:52` lists
+  `/dev/nvidia-modeset` beside the three unconditional control nodes, and `:28`
+  calls that discoverer with no capability check.
+  `internal/platform-support/dgpu/nvml.go:48-55` adds every `/dev/dri` node
+  found for the GPU's PCI bus id, and `internal/edits/device.go:76` grants them
+  `rwm`. `NVIDIA_DRIVER_CAPABILITIES` appears nowhere in `pkg/nvcdi`.
+- Legacy `libnvidia-container` injects neither under `compute,utility`.
+  `src/nvc_mount.c:786` skips the modeset minor unless `OPT_DISPLAY` is set.
+  `src/options.h:92` sets that flag from the `display` value alone, `:91` shows
+  `graphics` does not set it, and `:100` omits it from the container defaults.
+  No source file in `libnvidia-container` references `/dev/dri` at all.
 
 `internal/info/auto.go:89` resolves the default runtime mode to `jit-cdi`, and
 `internal/modifier/mode.go:17` routes both CDI modes through the CDI generator.
@@ -66,8 +89,7 @@ attacker's reach and its 64 dispatched commands are counted in the denominator.
 yields the modeset node. A deployment pinned to `legacy` mode withholds it, and
 a modeset crash is claimable against a CDI deployment only.
 
-`/dev/dri/card*` and `/dev/dri/renderD*` are inside the model. The CDI trace
-that this page previously recorded as open work has been completed:
+`/dev/dri/card*` and `/dev/dri/renderD*` are inside the model.
 `internal/platform-support/dgpu/nvml.go:48-55` adds the nodes and
 `internal/edits/device.go:76` grants read, write and mknod on them, and neither
 call site tests `NVIDIA_DRIVER_CAPABILITIES`. `nvidia-drm` registers a device
@@ -75,13 +97,15 @@ for every GPU `nvidia-modeset` enumerates, at
 `kernel-open/nvidia-drm/nvidia-drm-drv.c:2176`, so a tenant holding the GPU
 holds the nodes.
 
-`internal/discover/graphics.go:39` declares `NewDRMNodesDiscoverer` and the
-comment at `:37` restricts that function to legacy mode. The earlier exclusion
-rested on that restriction, which governs the legacy path alone.
+`internal/discover/graphics.go:39` declares `NewDRMNodesDiscoverer`, and the
+comment at `:37` restricts that function to legacy mode. That restriction
+governs the legacy path alone and places no bound on the CDI path.
 
-The two node types differ in what they reach. `nv_drm_fops` dispatches 24 of
-the 28 declared `DRM_NVIDIA_*` commands, and the four at 0x19 to 0x1c are
-declared and unreachable.
+The two node types differ in what they reach. `nv_drm_ioctls[]` dispatches 24
+of the 28 declared `DRM_NVIDIA_*` commands. The four at 0x19 to 0x1c,
+`NVIDIA_REGISTER_ROI`, `NVIDIA_UNREGISTER_ROI`, `NVIDIA_GET_CRTC_ROI_CRCS` and
+`NVIDIA_GET_ROI_CAPABILITIES`, have no entry in that table and reach no kernel
+code.
 
 | Permission flag | Count | Reachable on `renderD*` | Reachable on `card*` |
 |---|---|---|---|
@@ -106,18 +130,26 @@ even where its subsystem sounds excluded. The
 [attack surface](/gspwn/architecture/attack-surface/) page holds the
 measurement behind both statements.
 
-## Surfaces inside the model that the node list does not name
+## Reachable surfaces beyond the node list
 
-A device-node list understates what the Track K attacker reaches. Four surfaces
-sit inside the model and are named here so a phase does not have to rediscover
-them.
+A device-node list understates what the Track K attacker reaches. Four further
+surfaces are in the model.
 
-| Surface | Reached by | Status |
-|---|---|---|
-| `NV04_DISPLAY_COMMON`, class 0x0073, and 20 non-privileged `NV0073` control commands | `NV_ESC_RM_ALLOC` on `/dev/nvidiactl` under `NV01_DEVICE_0`. No display node takes part | In scope. 4 of the 20 have a kernel-side handler |
-| `/dev/nvidia-nvswitchctl` and `/dev/nvidia-nvswitch*` | `NVIDIA_NVSWITCH=enabled` in the image environment, honoured for unprivileged containers by default | In scope where the deployment leaves the default. Neither node checks privilege on open |
-| `/var/run/nvidia-persistenced/socket` and `/var/run/nvidia-fabricmanager/socket` | Granted by the `utility` capability, which a default tenant requests | In scope as a boundary. Both speak to host root processes |
-| Host-side `mknod` driven by `NVIDIA_IMEX_CHANNELS` | The image environment, read by `libnvidia-container` running as root | Track U surface. Not an ioctl target |
+- `NV04_DISPLAY_COMMON`, class 0x0073, and 20 non-privileged `NV0073` control
+  commands, reached by `NV_ESC_RM_ALLOC` on `/dev/nvidiactl` under
+  `NV01_DEVICE_0`. No display node takes part. In scope, and 4 of the 20 have a
+  kernel-side handler.
+- `/dev/nvidia-nvswitchctl` and `/dev/nvidia-nvswitch*`, reached by
+  `NVIDIA_NVSWITCH=enabled` in the image environment, honoured for unprivileged
+  containers by default. In scope where the deployment leaves the default.
+  Neither node checks privilege on open.
+- `/var/run/nvidia-persistenced/socket` and
+  `/var/run/nvidia-fabricmanager/socket`, granted by the `utility` capability,
+  which a default tenant requests. In scope as a boundary. Both speak to host
+  root processes.
+- Host-side `mknod` driven by `NVIDIA_IMEX_CHANNELS`, reached through the image
+  environment, read by `libnvidia-container` running as root. A Track U
+  surface, and not an ioctl target.
 
 The display exclusion rests on the privilege flag as well as the node list.
 `NVC570_DISPLAY` and all 38 classes below it carry
@@ -130,18 +162,26 @@ it, and it appears there only inside `blockedPrefixes`.
 
 ## Scope exclusions
 
-| Excluded | Reason |
-|---|---|
-| `/dev/nvidia-nvlink` | The container toolkit never injects it. It appears there only inside `blockedPrefixes` |
-| `/dev/dri/*` on a deployment pinned to `legacy` mode | `libnvidia-container` never injects those nodes. The exclusion applies to that deployment alone, and a default instance resolves to the CDI path. See [Device node injection paths](/gspwn/architecture/threat-model/#device-node-injection-paths) |
-| The display channel class tree below `NVC570_DISPLAY` | All 38 classes carry `RS_FLAGS_ALLOC_PRIVILEGED`, so the tenant cannot allocate them |
-| Symlink TOCTOU and mount-escape logic bugs on Track U | Fuzzing finds them poorly. Recorded in the report as future work |
-| Memory-corruption claims against the Go toolkit | Go is memory-safe |
-| GSP firmware | Not instrumented. KCOV cannot see it, and no coverage number says anything about it |
-| The cloud provider boundary | See [Blast radius](/gspwn/architecture/threat-model/#blast-radius) |
+Seven items are outside the model.
 
-This page is where scope widens. A phase does not add a surface because its
-ioctls looked reachable. The entry above changes first.
+- `/dev/nvidia-nvlink`. The container toolkit never injects it, and it appears
+  there only inside `blockedPrefixes`.
+- `/dev/dri/*` on a deployment pinned to `legacy` mode. `libnvidia-container`
+  never injects those nodes. The exclusion applies to that deployment alone,
+  and a default instance resolves to the CDI path. See
+  [Device node injection paths](/gspwn/architecture/threat-model/#device-node-injection-paths).
+- The display channel class tree below `NVC570_DISPLAY`. All 38 classes carry
+  `RS_FLAGS_ALLOC_PRIVILEGED`, so the tenant cannot allocate them.
+- Symlink TOCTOU and mount-escape logic bugs on Track U. Fuzzing finds them
+  poorly, and the report records them as future work.
+- Memory-corruption claims against the Go toolkit. Go is memory-safe.
+- GSP firmware. It is not instrumented, KCOV cannot see it, and no coverage
+  number says anything about it.
+- The cloud provider boundary. See
+  [Blast radius](/gspwn/architecture/threat-model/#blast-radius).
+
+Widening the scope changes the list above first, and the enforcement points at
+the end of this page apply it.
 
 ## Capability asymmetry
 
@@ -187,11 +227,14 @@ docker run --rm --runtime=nvidia \
   <cuda-runtime-image> /poc/repro
 ```
 
-`--runtime=nvidia` is required here. Docker 29.1.x and older inject the
-prestart hook for `--gpus`, and the hook defaults to legacy, which hands the
-container a narrower device set than the deployment the model describes. A
-reproducer needing the modeset node or a DRM node fails in such a container and
-would be recorded `not-tenant-reachable`, understating the finding.
+`--runtime=nvidia` selects the injection path. On Docker Engine 29.1.x and
+older, `--gpus` injects the `nvidia-container-runtime-hook` prestart hook, and
+that hook pins its own default to legacy mode, where the container receives
+neither `/dev/nvidia-modeset` nor any `/dev/dri` node. A reproducer needing
+either family then fails in a container narrower than the model and records
+`not-tenant-reachable`, understating a real bug. Docker 29.2.0 and later read a
+CDI specification for `--gpus` and reach the same device set, so the two flags
+are equivalent there.
 
 1. Confirm what that container received. Run `ls /dev/nvidia* /dev/dri` inside
    it and compare against the model, which
@@ -212,11 +255,12 @@ would be recorded `not-tenant-reachable`, understating the finding.
 
 ## Blast radius
 
-The campaign supports one claim: **an unprivileged container tenant reaching
-host kernel compromise on a GPU container platform.**
+The campaign supports one claim, an unprivileged container tenant reaching host
+kernel compromise on a GPU container platform.
 
 The claim stops at the cloud provider boundary. Fuzzing an instance the operator
-rents crosses no boundary the provider maintains:
+rents crosses no boundary the provider maintains, because three properties of a
+rented instance hold the damage inside the guest:
 
 - A guest kernel panic reboots that guest.
 - The hypervisor is unaffected.
@@ -227,6 +271,9 @@ provider infrastructure. A claim about either exceeds what the campaign
 measures.
 
 ## Claims the campaign refuses
+
+One claim is supported, one is conditional on a profile-check outcome, and
+seven are refused.
 
 | Claim | Status | Basis |
 |---|---|---|
@@ -255,6 +302,8 @@ Every artifact that reports coverage carries this statement. `series` and
 `plateau` print it on every invocation.
 
 ## Enforcement points
+
+Five constraints from this page are enforced at a named point in the pipeline.
 
 | Constraint | Enforced by |
 |---|---|
