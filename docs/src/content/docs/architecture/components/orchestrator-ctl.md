@@ -18,7 +18,7 @@ file.
 
 | Invariant | Enforced by |
 |---|---|
-| A restart never runs into a condition that will recur | Five conditions return `BLOCKED_EXIT`, which the unit names in `RestartPreventExitStatus` |
+| A restart never runs into a condition that will recur | Eight conditions return `BLOCKED_EXIT`, which the unit names in `RestartPreventExitStatus` |
 | Reboots and same-boot restarts are counted separately | Two limits over one window, since kernel fuzzing panics the box by design |
 | A session id exists before the agent is launched | The id is a UUID generated here and substituted into the invocation |
 | A panic cannot lose the record of the launch | The session and the resume count are written before the launch |
@@ -36,42 +36,47 @@ afterwards is lost on precisely the restarts this exists for.
 
 ```mermaid
 flowchart TD
-    U[systemd starts a supervised launch] --> G1{Command unset,<br/>orchestrator blocked,<br/>or breaker tripped?}
+    U[systemd starts a supervised launch] --> G1{Config unreadable or invalid,<br/>command unset,<br/>breaker file unreadable,<br/>orchestrator blocked,<br/>or breaker tripped?}
     G1 -->|yes| STOP["Decline to launch.<br/>systemd stops on this exit status<br/>and does not restart"]
     G1 -->|no| S[Resolve the session: resume or rotate]
     S --> W[Record the session and the resume count]
-    W --> G2{Phase blocked or pipeline complete?}
+    W --> G2{State file unreadable,<br/>phase blocked,<br/>or pipeline complete?}
     G2 -->|yes| STOP
     G2 -->|no| H[Harvest crash logs from the last panic]
     H --> L[Launch the agent]
     L --> E{How did it end?}
     E -->|panic| U
-    E -->|stall past the hour bound,<br/>when max_agent_hours is non-zero| K[Kill the process group, restart fresh]
+    E -->|stall past the hour bound,<br/>unless max_agent_hours is "unbounded"| K[Kill the process group, restart fresh]
     E -->|resume exited non-zero| C[Clear the session id, next start is fresh]
     K --> U
     C --> U
 ```
 
-Five conditions make a launch decline with `BLOCKED_EXIT`, which is exit status
-78.
+Eight conditions make a launch decline with `BLOCKED_EXIT`, which is exit status
+78. Each is cleared by a human act, so a restart reaches the same wall.
 
 | Condition | Check site |
 |---|---|
+| `config/campaign.yaml` is absent, unreadable or fails validation | `cfg`, before any state is touched |
 | `orchestrator.command` is unset in `config/campaign.yaml` | Before the breaker lock is taken |
+| The breaker state file will not open or will not parse | `_read`, inside the breaker lock |
 | An operator has blocked the orchestrator | The `blocked` key in the breaker state file |
 | The breaker has tripped | `check`, over the start history in the counted window |
+| The pipeline state file will not open or will not parse | `pipeline_stop_reason`, after the session is recorded |
 | A phase is `blocked` | `pipeline_stop_reason`, after the session is recorded |
 | The pipeline is complete | `pipeline_stop_reason`, from `next_action` |
 
 The unit names that exit status in `RestartPreventExitStatus`, so systemd stops
 there and no restart loop forms.
 
-A corrupt breaker state file is the exception. It exits 1, which the restart
-policy does not name, so `Restart=always` relaunches after `RestartSec` into a
-file that is still corrupt. What bounds that loop is the unit's
 `StartLimitIntervalSec` and `StartLimitBurst`, written under `[Unit]` and set to
 `orchestrator.window_min` minutes and four times
-`orchestrator.max_same_boot_starts`.
+`orchestrator.max_same_boot_starts`, back the breaker up for the one case it
+cannot see: a crash before its own state file has been written. They belong
+under `[Unit]`, because `systemd.service(5)` only cross-references them, and
+under `[Service]` they are an unknown key that systemd ignores while the manager
+default of five starts per ten seconds applies, which `RestartSec=60` never
+reaches.
 
 A separate check reports what an unattended run needs and nothing else
 verifies: a valid configuration, a set agent command, passwordless sudo, the

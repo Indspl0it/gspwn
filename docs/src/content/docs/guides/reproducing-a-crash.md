@@ -164,9 +164,21 @@ flowchart TB
 
 The signature is derived at verification start from the registry title with
 volatile fields removed, plus the top `triage.signature_frames` stack frames of
-the registered report. A generic `BUG:` or `Oops` in the window never scores on
-its own, because the fuzzer panics this machine by design and any-crash
-matching would inflate the rate that gates disclosure.
+the registered report. The sanitizer's own machinery frames, the report printer,
+the unwinder, the syscall entry stubs and the panic printers, are dropped before
+that cap is applied, so the cap spends its slots on frames that name this crash.
+
+A run counts as a hit only when the window carries every frame in the signature.
+Any one of five frames was not enough: frames 2 to 5 of a sanitizer report are
+the sanitizer's own machinery, so a delta holding an unrelated KASAN report
+matched on `dump_stack_lvl` and scored as a reproduction. A generic `BUG:` or
+`Oops` in the window never scores on its own either, because the fuzzer panics
+this machine by design and any-crash matching would inflate the rate that gates
+disclosure.
+
+The title phrases are the fallback for a crash whose report carries no frames at
+all, and they match on the same all-members rule. A crash with frames never
+falls back to them.
 
 Hang-class titles are matched on `hung task`, `task hung`, `watchdog`,
 `soft lockup`, `softlockup`, `rcu_sched`, `rcu_preempt` and `deadlock`.

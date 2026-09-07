@@ -123,12 +123,14 @@ assuming a reboot would let a same-boot loop run forever.
 
 ## Conditions that stop the unit
 
-`run` exits 78 in six situations, and the unit lists that code in
+`run` exits 78 in eight situations, and the unit lists that code in
 `RestartPreventExitStatus`, so systemd stops the unit and leaves it stopped.
 
 | Situation | Message | Reason a restart does not help |
 |---|---|---|
+| `config/campaign.yaml` is absent, unreadable or fails validation | `error: <the key, the value and the rule it broke>` | A typo is fixed by editing the file, and a permission bit by changing it |
 | `orchestrator.command` is unset | `orchestrator.command is not set in config/campaign.yaml` | Only a human can supply it |
+| The breaker state file cannot be read | `refusing to start: <error>` | The next start reads the same file. `reset`, or restoring the file, clears it |
 | The breaker is already recorded as blocked | `orchestrator is blocked (since <time>): <reason>` | The trip stands until `reset` clears it |
 | The breaker trips on this start | `circuit breaker tripped: <reason>` | The next start hits the same limit |
 | The state file cannot be read | `not launching the agent: pipeline state cannot be read: <error>` | A relaunched agent reads the same broken file and stops again, once per restart |
@@ -231,16 +233,25 @@ while the instance billed.
 
 ```yaml
 orchestrator:
-  max_agent_hours: 1100
+  max_agent_hours: 24
 ```
 
 The launch is killed by process group when it exceeds that, because the
 immediate child is a shell and killing only that leaves the agent running
-detached. `0` disables the timeout.
+detached. The string `"unbounded"` turns the per-launch bound off, and it is the
+only value that does; `0` is refused, because every reader took it for unset and
+it left the shipped configuration with no guard against a wedged agent holding a
+billing GPU instance.
 
-The value must exceed `loop.campaign_hours`, because the `fuzz` phase
-legitimately waits out the whole campaign window inside one launch. The
-configuration refuses a value that does not.
+The setting is the headroom one launch gets beyond the work it waits on. The
+`fuzz` phase waits out the whole campaign window inside one launch, so
+`orchestrator_ctl.launch_hours` adds `loop.campaign_hours` for that launch and
+for no other. At the shipped values the bound is 24 h for every phase and 1024 h
+for `fuzz`.
+
+The value may not exceed `loop.campaign_hours`. A bound longer than a whole
+campaign fires only after the campaign has ended, so it bounds nothing. The
+configuration refuses a larger value.
 
 A stall exit is distinct from the blocked exit code, so systemd restarts into a
 fresh session, which recovers a stalled launch.

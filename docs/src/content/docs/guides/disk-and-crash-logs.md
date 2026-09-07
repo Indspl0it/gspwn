@@ -136,27 +136,36 @@ passwordless rule. See
 
 | Exit | Condition | Last line |
 |---|---|---|
-| 0 | Something was harvested | the harvest directory path |
+| 0 | Something was harvested and every source was read | the harvest directory path |
 | 0 | Nothing was found and every source was readable | `no new crash logs found (checked pstore and /var/crash)` |
 | 1 | Nothing was found and at least one source could not be read | the refusal below |
 | 1 | The command was not run as root | the root refusal |
+| 2 | Something was harvested and at least one source was unread or still being written | the harvest directory path |
 
-The distinction between the two exit-0 cases and the failure matters because
-the orchestrator runs `harvest` unattended after every panic. "Nothing to
-harvest" and "could not look" must not be the same answer:
+The three outcomes are separated because the orchestrator runs `harvest`
+unattended after every panic and a caller may read nothing but the exit code.
+"Nothing to harvest" and "could not look" must not be the same answer:
 
 ```
-harvest read nothing and failed on 2 source(s): /sys/fs/pstore/dmesg-ramoops-0, /var/crash/202608160412. This is not evidence that no crash occurred — fix the cause and re-run before treating the panic as unrecorded.
+harvest read nothing and left 2 source(s) unread: /sys/fs/pstore/dmesg-ramoops-0, /var/crash/202608160412. This is not evidence that no crash occurred — fix the cause and re-run before treating the panic as unrecorded.
 ```
 
-A harvest that collected something and also failed on a source exits 0 and
-names what is missing, so the warning has to be read even after a success:
+A harvest that collected something and also left a source unread exits 2 and
+names what is missing. The directory path is still the last line, so a caller
+reading it gets the partial evidence:
 
 ```
 WARN: 1 source(s) could not be read and are missing from this harvest: /var/crash/202608160412
 ```
 
-Both messages name at most five sources.
+A dump `kdump-tools` is still writing is deferred, not failed, and a later
+`harvest` picks it up. It carries the same exit 2:
+
+```
+WARN: 1 dump(s) were still being written and are missing from this harvest: /var/crash/202608160412. Re-run harvest once they finish.
+```
+
+All three messages name at most five sources.
 
 ## 5. Parse the harvest into the registry
 

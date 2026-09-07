@@ -17,7 +17,7 @@ measured is not the driver installed.
 
 | Command | Effect |
 |---|---|
-| `check` | Compares every available version source and prints the verdict. `--allow-single-source` accepts one deliberate source. `--no-running` skips the loaded-driver comparison. |
+| `check` | Compares every available version source against every other, pairwise, and prints the verdict with the comparison count beside the source count. `--allow-single-source` accepts one deliberate source. `--no-running` skips the loaded-driver comparison. |
 | `stamp` | Records the checkout's `NVIDIA_VERSION` into `tools/ioctl_map.json`, for use after regenerating the map. |
 | `show` | Prints each source, the value read from it, and the checkout commit. |
 
@@ -64,9 +64,18 @@ says nothing about the release under test.
 
 | Verdict | Condition | Remedy |
 |---|---|---|
-| Agreement | Two or more independent groups answered and agree | None |
-| Disagreement | Two or more groups answered and disagree, or a partial regeneration falls inside the artefact group | Named per problem, since the two disagreements have different remedies |
+| Agreement | Two or more independent groups answered and every pair of them agrees | None |
+| Disagreement | Any pair of answering groups disagrees, or a partial regeneration falls inside the artefact group | Named per problem, since the two disagreements have different remedies |
 | Nothing compared | Only one group could answer | Bring a second group up, or accept the single source deliberately |
+
+Every available group is compared against every other, which is `n * (n - 1) / 2`
+comparisons for `n` groups, and the count is printed beside the source count so a
+reader can check it. A verdict over `running or declared` compared one of those
+two and never the other: on the machine the campaign runs on a driver is loaded
+by definition, so `config/machine.yaml driver_branch` was printed in the table,
+counted in the agreement line, and compared against nothing. This is a
+provision-phase and describe-phase gate, so every later figure is measured
+against whichever driver the unread source named.
 
 A disagreement and an unmeasured comparison exit differently, because the
 operator does different work for each. A disagreement means the artefacts model
@@ -105,7 +114,7 @@ same tree, because a checkout can be updated without regenerating.
 
 ```
 $ python3 tools/surface_verify.py check --no-running --src artifacts/src/open-gpu-kernel-modules
-agreement across 2 independent sources: artefacts (11 files), checkout version.mk
+agreement across 2 independent sources over 1 pairwise comparison(s): artefacts (11 files), checkout version.mk
 ```
 
 With `--no-running` and no reachable checkout, the same tree reports:

@@ -221,8 +221,10 @@ re-copies the same records.
 `/var/crash` are root-only, so a non-root harvest reads nothing while reporting
 that it found nothing, and the unattended post-panic path would record success
 over evidence still sitting on the machine. A harvest that reads nothing and
-also fails on a source exits non-zero for the same reason: "nothing to harvest"
-and "could not look" are different answers.
+also fails on a source exits 1 for the same reason: "nothing to harvest" and
+"could not look" are different answers. A harvest that collects evidence and
+still leaves a source unread or deferred exits 2, so an unattended caller
+reading only the exit code learns the record is incomplete.
 
 ## See also
 

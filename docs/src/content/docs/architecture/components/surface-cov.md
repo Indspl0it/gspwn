@@ -126,9 +126,9 @@ program names it in the same spelling.
 ## Entry points
 
 `modelled` and `report` print an entry-point block beside the command total.
-The description set registers 24 entry points on the six device nodes whose
-entry points are modelled, out of 42 across every `file_operations` table the
-driver defines, and declares 10 calls over them: `mmap$dri_card`,
+The driver registers 24 entry points on the six device nodes whose entry points
+are modelled, out of 42 across every `file_operations` table it defines. The
+description set declares 10 calls over them: `mmap$dri_card`,
 `mmap$dri_render`, `mmap$nvidia`, `mmap$nvidia_uvm`, `mmap$nvidiactl`,
 `poll$dri_card`, `poll$dri_render`, `poll$nvidia`, `poll$nvidia_uvm_tools` and
 `poll$nvidiactl`.
