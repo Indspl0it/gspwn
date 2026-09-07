@@ -20,10 +20,16 @@ The patterns match across one line break, because prose in the documentation
 tree wraps at 80 columns and a construction split by the wrap is the same
 construction. The reported line number is the line it starts on.
 
+Code is blanked before any rule runs: <style> and <script> elements, fenced
+blocks, inline code spans, and the frontmatter fence of an `.astro` component,
+whose body is JavaScript and whose comments are addressed to a maintainer. The
+register governs prose written for a reader, and prose is what is left.
+
 Exempt content is listed in EXEMPT below, each entry with the reason it is
-exempt. Verbatim reproductions are immutable: documentation has to match what
-the program actually prints, so a banned construction inside quoted tool
-output is a defect in the tool, not in the page.
+exempt. Every entry is a verbatim reproduction, and a verbatim reproduction is
+immutable: documentation has to match what the program actually prints, so a
+banned construction inside quoted tool output is a defect in the tool and not
+in the page.
 """
 import os
 import re
@@ -50,13 +56,19 @@ SUFFIXES = (".md", ".mdx", ".astro")
 # one command".
 CODE_SPAN = "\x01"
 
+# The frontmatter fence of an `.astro` component: `---` alone on the first
+# line, closed by the next line that is exactly `---`. The body between them is
+# JavaScript. A `---` further down the file is markup or a horizontal rule and
+# opens nothing, so the pattern is anchored at the start of the source.
+ASTRO_FRONTMATTER = re.compile(r"\A---\n.*?^---$", re.S | re.M)
+
 # path suffix -> (rule name, a tuple of rule names, or "*" for all, reason)
+#
+# Every entry names a verbatim reproduction. A source comment reaches no entry
+# here: strip_exempt_regions blanks the `.astro` frontmatter that holds one,
+# which covers every component at once. An exemption list that grows one file
+# at a time for one recurring cause hides the cause.
 EXEMPT = {
-    "components/ThemeProvider.astro": (
-        "rather",
-        "A source comment. The register governs prose for a reader, not code "
-        "comments.",
-    ),
     "knowledgebase/gsp-offload.mdx": (
         "marketing adjective",
         "Robust channel is NVIDIA's name for the recovery mechanism. Renaming "
@@ -271,13 +283,18 @@ def _mark_span(match):
     return CODE_SPAN * len(match.group(0))
 
 
-def strip_exempt_regions(src):
+def strip_exempt_regions(src, suffix=""):
     """Blank code, keeping line numbers.
 
     Covers <style>, <script>, fenced blocks and inline code spans. Everything
     in a code span is a reproduction: a path, a command, a string literal the
     program prints, or an example of a construction being described. The
     register governs prose, and prose is what is left.
+
+    suffix is the file's extension, lowercased, and decides the file-type
+    regions. For ".astro" the leading frontmatter fence goes first, because its
+    body is JavaScript and its comments are written for a maintainer. Any other
+    suffix, and the empty default, leave the source's opening lines alone.
 
     The regions are blanked, never deleted. Deleting shifts every line number
     after the first edit, which makes the reported location useless.
@@ -289,7 +306,8 @@ def strip_exempt_regions(src):
     continuation. Both fills are non-word characters, so a pattern anchored on
     \\b reads either as a boundary and no other rule can see the difference.
     """
-    out = re.sub(r"<(style|script)\b.*?</\1>", _blank, src, flags=re.S | re.I)
+    out = ASTRO_FRONTMATTER.sub(_blank, src) if suffix == ".astro" else src
+    out = re.sub(r"<(style|script)\b.*?</\1>", _blank, out, flags=re.S | re.I)
     out = re.sub(r"^```.*?^```", _blank, out, flags=re.S | re.M)
     out = re.sub(r"``[^`]+``", _mark_span, out)
     return re.sub(r"`[^`\n]+`", _mark_span, out)
@@ -313,7 +331,8 @@ def md_table_headers(src):
 def check_file(path, rel_path):
     """Return a list of (rule, line, detail) for one file."""
     with open(path, encoding="utf-8") as handle:
-        prose = strip_exempt_regions(handle.read())
+        prose = strip_exempt_regions(handle.read(),
+                                     os.path.splitext(path)[1].lower())
 
     hits = []
 
