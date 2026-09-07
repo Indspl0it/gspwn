@@ -59,6 +59,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -194,6 +197,96 @@ def parse_entries(src):
     return entries
 
 
+# The NVOC class hierarchy, read from the generated headers.
+#
+# resource_list.h names one internal class per allocatable class and never
+# names a base class, so an RS_ENTRY internal class is always a leaf. A control
+# command's handler is compiled into whichever class declares it, which is often
+# a base: the six memCtrlCmd* commands are compiled into Memory and the nine
+# profilerBaseCtrlCmd* commands into ProfilerBase, and neither appears in
+# resource_list.h at all. Without the inheritance edge those fifteen commands
+# join to no allocatable class.
+#
+# NVOC states the edge itself. Inside each generated `struct <Class> {` block it
+# emits one `struct <Ancestor> *__nvoc_pbase_<Ancestor>;` member per ancestor,
+# base first, ending with the class itself, under the comment "Ancestor object
+# pointers for `staticCast` feature". That list is the class's own ancestor
+# chain and is read whole. The embedded base member beside it states one step
+# and would have to be walked to reach the same answer.
+GENERATED_REL = os.path.join("src", "nvidia", "generated")
+NVOC_STRUCT_RE = re.compile(r"^struct (\w+) \{(.*?)^\};", re.M | re.S)
+NVOC_PBASE_RE = re.compile(r"^\s*struct \w+ \*__nvoc_pbase_(\w+);", re.M)
+
+
+def nvoc_ancestors(src):
+    """-> {NVOC class: [ancestor, ...]}, base first, the class itself last.
+
+    Reads every generated `g_*_nvoc.h` under the driver checkout. A class whose
+    struct carries no `__nvoc_pbase_` member is not recorded: NVOC emits the
+    list for every class it generates, so an empty one is a forward
+    declaration or a plain struct and not a class with no ancestors.
+    """
+    directory = os.path.join(src, GENERATED_REL)
+    if not os.path.isdir(directory):
+        raise SystemExit(
+            "generated NVOC headers not found at %s\n"
+            "Expected a checkout of NVIDIA/open-gpu-kernel-modules at %s. "
+            "The class hierarchy is read from them, and resource_list.h names "
+            "no base class. Pass --src if the checkout lives elsewhere."
+            % (directory, src))
+    chains, scanned, conflicts = {}, 0, []
+    for name in sorted(os.listdir(directory)):
+        if not name.endswith("_nvoc.h"):
+            continue
+        scanned += 1
+        with open(os.path.join(directory, name), encoding="utf-8",
+                  errors="replace") as fh:
+            text = fh.read()
+        for cls, body in NVOC_STRUCT_RE.findall(text):
+            chain = NVOC_PBASE_RE.findall(body)
+            if not chain:
+                continue
+            if cls in chains and chains[cls] != chain:
+                conflicts.append(cls)
+                continue
+            chains[cls] = chain
+    if conflicts:
+        raise SystemExit(
+            "%d NVOC class(es) carry two different ancestor chains across the "
+            "generated headers, so the hierarchy cannot be read from them: "
+            "%s. The generator's output format has changed and this parser "
+            "needs updating before its output can be trusted."
+            % (len(conflicts), ", ".join(sorted(set(conflicts)))))
+    if not chains:
+        raise SystemExit(
+            "no NVOC ancestor chain matched in %d header(s) under %s. The "
+            "generator's output format has changed; this parser needs "
+            "updating before its output can be trusted." % (scanned,
+                                                            directory))
+    logger.info("read %d NVOC class hierarchy/hierarchies from %d generated "
+                "header(s)", len(chains), scanned)
+    return chains
+
+
+def proper_ancestors(chains, cls):
+    """-> the ancestors of one class, base first, excluding the class itself.
+
+    The generated list ends with the class, so the tail is dropped. A class
+    whose list does not end with itself is refused: the position carries the
+    meaning and a shifted list would record a sibling as a base.
+    """
+    chain = chains.get(cls)
+    if chain is None:
+        return None
+    if chain[-1] != cls:
+        raise SystemExit(
+            "the NVOC ancestor list for %s ends at %s and not at %s, so the "
+            "generated header no longer states the chain in the order this "
+            "parser reads. The hierarchy cannot be derived until the parser "
+            "is updated." % (cls, chain[-1], cls))
+    return chain[:-1]
+
+
 def alloc_param(rec):
     """('none'|'optional'|'required'|'unparsed', struct name or None)."""
     m = PARAM_RE.search(rec["alloc_param"] or "")
@@ -322,14 +415,28 @@ def shortest_chain(graph, depth, cls):
     return chain
 
 
-def records(entries, graph, depth):
+def records(entries, graph, depth, chains):
+    """One artefact record per RS_ENTRY row.
+
+    `internal_ancestors` carries the NVOC ancestor chain of `internal_class`,
+    base first and excluding the class itself. A control command names the
+    class its handler is compiled into, which is a base for fifteen of the 531
+    targetable commands, and this field is the only route from that name to a
+    class an unprivileged process can allocate.
+    """
     out = []
+    unknown = []
     for rec in entries:
         cls = rec["external_class"]
         kind, struct = alloc_param(rec)
+        ancestors = proper_ancestors(chains, rec["internal_class"])
+        if ancestors is None:
+            unknown.append(rec["internal_class"])
+            continue
         out.append({
             "external_class": cls,
             "internal_class": rec["internal_class"],
+            "internal_ancestors": ancestors,
             "multi_instance": rec["multi_instance"],
             "parents": graph.get(cls, []),
             "alloc_param_kind": kind,
@@ -339,6 +446,14 @@ def records(entries, graph, depth):
             "access_rights": rec["access_rights"],
             "depth": depth.get(cls),
         })
+    if unknown:
+        raise SystemExit(
+            "%d RS_ENTRY internal class(es) have no generated NVOC struct, so "
+            "their ancestor chain cannot be derived: %s. Every one of the 222 "
+            "records carries one today. Emitting the graph without them would "
+            "silently drop those classes from every join that reads "
+            "internal_ancestors."
+            % (len(unknown), ", ".join(sorted(set(unknown)))))
     return out
 
 
@@ -629,43 +744,42 @@ def cmd_chains(args):
 
 
 def write_json(path, payload):
-    """Write JSON through a temp file in the same directory, then rename.
+    """Serialise the graph and hand the text to the shared durable writer.
 
     A reader that opens the artefact while it is being rewritten sees either
     the old file or the new one and never a truncated prefix.
+
+    indent=1 and sort_keys=True are this artefact's committed shape and
+    regression_check.py stale hashes it, so both stay here where the payload
+    is serialised. tools/atomic_write.py owns the temporary file, the two
+    fsyncs and the rename, and it names the temporary uniquely, so two runs
+    against one output directory no longer share <path>.tmp.
     """
     out_dir = os.path.dirname(os.path.abspath(path))
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
         logger.info("created output directory %s", out_dir)
-    tmp = os.path.abspath(path) + ".tmp"
-    try:
-        # newline="\n" so a run on Windows and a run under WSL produce the
-        # same bytes.
-        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump(payload, fh, indent=1, sort_keys=True)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+    atomic_write.atomic_write_text(
+        path, json.dumps(payload, indent=1, sort_keys=True))
 
 
 def cmd_extract(args):
     entries = parse_entries(args.src)
     graph, _ = build_graph(entries)
     depth = depths(graph)
+    chains = nvoc_ancestors(args.src)
     payload = {
         "source": {
             # Forward slashes on every platform, the form cmd_chains already
             # writes. A backslash path here made the artefact differ between a
             # Windows run and a WSL run over identical source.
             "path": repo_relative(os.path.join(args.src, TABLE_REL)),
+            "hierarchy_path": repo_relative(
+                os.path.join(args.src, GENERATED_REL)),
             "driver_version": driver_version(args.src),
         },
         "record_count": len(entries),
-        "records": records(entries, graph, depth),
+        "records": records(entries, graph, depth, chains),
     }
     write_json(args.out, payload)
     unreached = [r["external_class"] for r in payload["records"]
