@@ -3,8 +3,8 @@ title: Steering the next round
 description: How a round's findings and coverage become the next round's work list.
 ---
 
-A round produces two signals. Coverage identifies the surface the fuzzer has
-**not reached**. Findings identify the code that **has produced bugs**.
+A round produces two signals. Coverage names the surface the corpus has yet to
+exercise. Findings name the code that has already produced a bug.
 
 A loop that follows coverage alone keeps widening the surface and never returns
 to a subsystem that already yielded a bug. The research record is the only path
@@ -13,7 +13,7 @@ by which a finding changes where the fuzzer looks.
 ## The chain
 
 ```mermaid
-flowchart LR
+flowchart TB
   C["crash-0001<br/>KASAN UAF"] --> RCA["rca reads the source"]
   RCA --> FS["finding-set<br/>adjacent, preconditions"]
   FS --> FL["finding-list<br/>per-subsystem rollup"]
@@ -52,11 +52,12 @@ crash-0001: nvidia_uvm uaf/ioctl-sequence (confidence medium)
 
 Three fields do the steering:
 
-| Field | Consumed by | Contents |
-|---|---|---|
-| `adjacent` | `describe` | Calls sharing an object, lock, refcount or teardown path with the fault, that this reproducer never exercised |
-| `preconditions` | `seeds` | The object state that must exist before the bug class is reachable |
-| `hypothesis` | `describe` | The underlying pattern, as a reason to model more of it |
+- `adjacent`, consumed by `describe`. Calls sharing an object, lock, refcount
+  or teardown path with the fault, that this reproducer never exercised.
+- `preconditions`, consumed by `seeds`. The object state that must exist before
+  the bug class is reachable.
+- `hypothesis`, consumed by `describe`. The underlying pattern, as a reason to
+  model more of it.
 
 `adjacent` is the only field carrying information the crash does not already
 contain. `ioctls` is transcribed from the reproducer and `preconditions` mostly
@@ -109,13 +110,16 @@ crash-0004 [nvidia_rm] refcount/fd-lifecycle  confidence=low
     STEERS NOTHING: every adjacent call is already in ioctls, so the record names no call the reproducer did not already make and adds nothing to the next round's worklist
 
 by subsystem (what refine raises priority from):
-  nvidia_uvm               3 finding(s)  uaf, refcount
   nvidia_rm                1 finding(s)  refcount
+  nvidia_uvm               1 finding(s)  uaf
 
-2 of 3 record(s) can send the next round somewhere new.
+1 of 2 record(s) can send the next round somewhere new.
 These cannot, and rca should revisit them:
   crash-0004: every adjacent call is already in ioctls, so the record names no call the reproducer did not already make and adds nothing to the next round's worklist
 ```
+
+The rollup orders by finding count and then alphabetically, so two subsystems
+holding one finding each print in name order.
 
 The closing count measures the `rca` phase. A round where every record was
 accepted and none of them steer produces no work for the next round, and
@@ -130,7 +134,8 @@ non-coverage evidence for where to look next.
 
 ## 3. refine merges both signals
 
-The `refine` phase classifies every coverage gap by **why** it is uncovered:
+The `refine` phase classifies every coverage gap by the reason it is
+uncovered, and each classification names the phase that fixes it:
 
 | Classification | Fix | Phase |
 |---|---|---|
@@ -217,15 +222,18 @@ python3 tools/pipeline_ctl.py worklist
 artifacts/eval/r2-1/worklist.md
 ```
 
-It exits 1 when there is none, which is round 1, and 1 with a message when
-`refine` recorded a path whose file is missing:
+Three outcomes, distinguished by what it prints:
 
-```
-artifacts/eval/r2-1/worklist.md (MISSING: refine recorded it but the file is not there)
-```
+| Condition | Output | Exit |
+|---|---|---|
+| The round inherited a work list and the file is present | The path | 0 |
+| The round inherited none, which is round 1 or a `refine` that recorded nothing | `none: round N has no inherited worklist (first round, or the previous round's refine recorded none)` | 1 |
+| `refine` recorded a path whose file is gone | `<path> (MISSING: refine recorded it but the file is not there)` | 1 |
 
-A non-zero exit in round 2 or later is a blocked gate, and round 1's work is
-not repeated in its place.
+A non-zero exit in round 2 or later is a blocked gate. Round 1 has a work list
+of its own, `surface/worklist-round1.md`, generated offline by
+`cve_patch_map.py worklist` and committed. This command does not print that
+path, because `refine` recorded nothing in round 1.
 
 ## Verifying the feedback edge
 

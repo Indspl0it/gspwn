@@ -91,9 +91,9 @@ under the invoking user's home directory. Left as root the agent would look in
 `/root`, find no credentials, fail, and be restarted until the breaker trips.
 `install` refuses when it has no non-root user to use.
 
-The command lives in the configuration and the unit reads it at launch, so
-editing `config/campaign.yaml` and rebooting cannot silently keep running the
-old invocation.
+The unit file carries no copy of the command. It reads
+`orchestrator.command` from the configuration at each launch, so an edit to
+`config/campaign.yaml` takes effect on the next start.
 
 :::caution[ANTHROPIC_API_KEY in the unit environment bills the API]
 `install` warns when the variable is set in its own environment. If it is also
@@ -106,10 +106,13 @@ over a subscription login. The unit written here does not set it.
 An always-restarting agent consumes tokens with no ceiling. `run` refuses to
 launch under two conditions.
 
-| Condition | Key | Meaning |
-|---|---|---|
-| Same-boot starts | `orchestrator.max_same_boot_starts` | The agent keeps exiting and being restarted without the machine going down. Nothing is progressing and each restart costs tokens |
-| Reboots | `orchestrator.max_reboots` | The machine keeps going down. Kernel fuzzing panics the machine by design, so this is expected, and it is a problem only when reboots arrive faster than a round can progress between them |
+- Same-boot starts past `orchestrator.max_same_boot_starts`. The agent keeps
+  exiting and being restarted without the machine going down. Nothing is
+  progressing and each restart costs tokens.
+- Reboots past `orchestrator.max_reboots`. The machine keeps going down. Kernel
+  fuzzing panics the machine by design, so this is expected, and it is a
+  problem only when reboots arrive faster than a round can progress between
+  them.
 
 Both are counted within `orchestrator.window_min`. Counting them against one
 limit would stop a campaign that is panicking normally, or allow a same-boot
@@ -120,18 +123,20 @@ assuming a reboot would let a same-boot loop run forever.
 
 ## Conditions that stop the unit
 
-`run` exits 78 in four situations, and the unit lists that code in
-`RestartPreventExitStatus`, so systemd stops the unit and does not restart it.
+`run` exits 78 in six situations, and the unit lists that code in
+`RestartPreventExitStatus`, so systemd stops the unit and leaves it stopped.
 
-| Situation | Reason a restart does not help |
-|---|---|
-| A breaker tripped | The next start hits the same limit |
-| `orchestrator.command` is unset | Only a human can supply it |
-| A phase is `blocked` | A blocked gate is a stop by design |
-| The pipeline is complete | Nothing left to drive |
+| Situation | Message | Reason a restart does not help |
+|---|---|---|
+| `orchestrator.command` is unset | `orchestrator.command is not set in config/campaign.yaml` | Only a human can supply it |
+| The breaker is already recorded as blocked | `orchestrator is blocked (since <time>): <reason>` | The trip stands until `reset` clears it |
+| The breaker trips on this start | `circuit breaker tripped: <reason>` | The next start hits the same limit |
+| The state file cannot be read | `not launching the agent: pipeline state cannot be read: <error>` | A relaunched agent reads the same broken file and stops again, once per restart |
+| One or more phases are `blocked` | `not launching the agent: phase(s) <names> are blocked.` | A blocked gate is a stop by design |
+| The pipeline is complete | `not launching the agent: the pipeline is complete.` | Nothing left to drive |
 
-A corrupt state file also stops the launch, because a relaunched agent would
-read the same broken file and stop again, once per restart.
+The last three come from one check, which runs after the session is resolved
+and before any crash log is harvested.
 
 ## Reading and clearing the breaker
 
@@ -142,7 +147,7 @@ python3 tools/orchestrator_ctl.py status
 ```
 unit:      installed
 command:   claude --session-id {session} -p 'Drive the pipeline per AGENTS.md.'
-session:   3f9a0c2e-...; opened 2026-08-15 09:12:44
+session:   3f9a0c2e-..., opened 2026-08-15 09:12:44
            transcript 2.3 MB (rotates at 6 MB)
            4 of 40 resume(s) used (backstop)
 window:    60 min; limits: 5 same-boot start(s), 10 reboot(s)

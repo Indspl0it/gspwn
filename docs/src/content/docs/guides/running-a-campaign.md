@@ -12,9 +12,9 @@ to 8 run in order for every campaign.
 One run id of the form `r<round>-<n>` covers both tracks. `r2-1` is the first
 campaign of round 2.
 
-Track U data lives under `artifacts/runs/<id>/u/`, and the coverage sampler and
-the deadline timer key on that same id. Per-track ids such as `r2-k1` and
-`r2-u1` leave Track U unsampled and break the round accounting.
+Track U writes its output under `artifacts/runs/<id>/u/`, and the coverage
+sampler and the deadline timer key on that same id. Per-track ids such as
+`r2-k1` and `r2-u1` leave Track U unsampled and break the round accounting.
 
 Never reuse a run id, and never point two campaigns at one workdir. Runs
 sharing a workdir share an evolved corpus, so neither run's coverage numbers
@@ -40,10 +40,10 @@ inspect the result first.
 
 ## 3. Pick the corpus policy
 
-| Policy | Effect |
-|---|---|
-| `carry` | Copy a previous run's `corpus.db` into this run's workdir |
-| `fresh` | Start from an empty corpus |
+Two policies exist.
+
+- `carry` copies a previous run's `corpus.db` into this run's workdir.
+- `fresh` starts from an empty corpus.
 
 The default comes from `loop.corpus_policy`. Pass `--corpus` to override it for
 one run.
@@ -79,13 +79,16 @@ sudo python3 tools/campaign_ctl.py install-k --run-id r2-1 --seeds artifacts/see
 sudo python3 tools/campaign_ctl.py install-u --run-id r2-1
 ```
 
-Each install does four things before writing a unit:
+Each install does four things before writing a unit, and `install-k` applies
+the corpus policy of step 3 between the second and the third:
 
 1. Checks the run-hour budget and refuses a campaign the cap cannot cover.
 2. Refuses while another run's campaign is still live.
 3. Writes the deadline file `artifacts/runs/<id>/deadline` holding an absolute
    epoch second.
 4. Installs and enables `gspwn-deadline@<run-id>.timer`.
+
+Both installs need root and refuse without it.
 
 ```
 campaign window: 1000 h (stops at epoch 1786000000, enforced by gspwn-deadline@r2-1.timer); budget 991.6 of 5000 run-hours spent before this campaign
@@ -136,8 +139,12 @@ sudo python3 tools/coverage_ctl.py sample --run-id r2-1 --track u
 ```
 
 ```
-artifacts/runs/r2-1/coverage.csv edges=18422 corpus=512 crashes=0 (source: json:/stats?format=json, gpu: ok)
+artifacts/runs/r2-1/coverage.csv edges=18422 surface=137 corpus=512 crashes=0 (source: json:/stats?format=json, gpu: ok)
 ```
+
+The `surface` column is measured on the coarser `coverage.surface_sample_min`
+cadence, so a sample taken between surface measurements reports
+`surface=None` and prints the reason on the line below.
 
 A `source: unreachable` sample means the campaign records nothing. For Track K,
 fix `track_k.http` or the stats endpoint for the pinned syzkaller version. For
@@ -151,12 +158,13 @@ python3 tools/pipeline_ctl.py round-add-run --run-id r2-1
 ```
 
 ```
-round 2 now has 1 run(s); added r2-1
+round 2 now has 1 run(s) after adding r2-1
 ```
 
 Installing a campaign already registers the run id, which lets the
 sampler accept it. `round-add-run` also attaches it to the current
-round, which `round-end` measures and bills.
+round, which `round-end` measures and bills. The command is idempotent: a run
+id already on the round is not added twice.
 
 ## 7. Check the smoke window
 
@@ -168,13 +176,18 @@ python3 tools/campaign_ctl.py status --run-id r2-1
 python3 tools/coverage_ctl.py series --run-id r2-1
 ```
 
-Flat coverage across the whole smoke window is a failed gate. Before treating
-it as a descriptions problem, check the card, because a GPU that has fallen off
-the bus produces an identical curve:
+Flat coverage across the whole smoke window is a failed gate. Two causes
+produce the same flat curve, so check the card before correcting any syscall
+description:
 
 ```
 python3 tools/coverage_ctl.py gpu-health
 ```
+
+| Result | Cause | Action |
+|---|---|---|
+| A status other than `ok` | The GPU stopped answering, so the fuzzer executed against nothing | Recover the card, then re-measure. A round whose GPU died records no coverage claim |
+| `ok` | The generated programs bounce off the driver's argument validation | Read the smoke run's dmesg for a uniform early-out per device node. Missing resource chaining is the usual cause |
 
 ## 8. Wait out the campaign
 

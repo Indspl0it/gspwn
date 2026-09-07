@@ -7,7 +7,9 @@ Fifty-two keys in `config/campaign.yaml`, and eleven in `config/machine.yaml`.
 
 ## Table columns
 
-Every key table below carries these seven.
+Each `config/campaign.yaml` table below carries these seven columns. The
+`machine.yaml` table carries six of them and omits Override, because no
+validator and no per-invocation flag reads that file.
 
 | Column | Contents |
 |---|---|
@@ -114,7 +116,7 @@ over it sets no percentage threshold.
 | `coverage.horizon_hours` | How far ahead the fitted curve is extrapolated. Matching `loop.campaign_hours` scopes the verdict to exactly one further campaign | number | `> 0` | `1000` | `coverage_ctl.py plateau --horizon-hours` | `coverage_ctl.plateau_verdict` |
 | `coverage.model_min_r2` | The fit quality below which no extrapolation is reported and the verdict is `unknown` | number | `0 < v < 1`. `0` would accept any curve and extrapolate from noise | `0.90` | | `coverage_ctl.plateau_verdict` |
 | `coverage.min_fit_samples` | Points required inside the fitted tail before extrapolating at all | integer | `>= 3`. A least-squares fit of two points is exact and says nothing about the curve | `8` | | `coverage_ctl.plateau_verdict` |
-| `coverage.fit_tail_fraction` | The share of the run's **executions** the fit covers. Fitting the whole run lets the early steep phase dominate | number | `(0, 1]`, where `1.0` fits the whole run | `0.5` | | `coverage_ctl.fit_tail` |
+| `coverage.fit_tail_fraction` | The share of the run's executions the fit covers. Fitting the whole run lets the early steep phase dominate | number | `(0, 1]`, where `1.0` fits the whole run | `0.5` | | `coverage_ctl.fit_tail` |
 | `coverage.beta_tolerance` | Slack above a discovery exponent of 1 before the series is judged not to be an accumulation curve | number | `0 <= v < 1` | `0.05` | | `coverage_ctl.plateau_verdict` |
 | `coverage.gpu_probe_timeout_sec` | How long to wait for `nvidia-smi` before recording the driver as wedged. A dead GPU fails fast. A hung GPU blocks until this timeout expires | integer | `> 0` | `20` | | `coverage_ctl.gpu_health` |
 | `coverage.surface_sample_min` | Minutes between surface samples. The measurement unpacks the run's `corpus.db` and rescans every program, so it runs on a coarser cadence than the other columns. `0` measures it on every coverage sample | integer | `>= 0` | `60` | `GSPWN_SURFACE_SAMPLE_MIN` | `coverage_ctl.surface_sample_min` |
@@ -162,13 +164,13 @@ carries no accepted-value bound and no override.
 
 | Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
-| `distro` | The distribution id from `/etc/os-release`, which decides package names | string | Free text, e.g. `debian`, `kali` | `(none)` | sub-agent context only |
+| `distro` | The distribution id from `/etc/os-release`, which decides package names | string | Free text, such as `debian` or `kali` | `(none)` | sub-agent context only |
 | `environment` | Which crash-capture path applies. `crashlog_ctl.py --env auto` detects the same thing at run time | string | `ec2` or `baremetal` | `(none)` | sub-agent context only |
 | `gpu_model` | The card under test, from `nvidia-smi --query-gpu=name` | string | Free text | `(none)` | sub-agent context only |
 | `secure_boot` | Whether unsigned out-of-tree modules can load, from `mokutil --sb-state`. Bare metal only | string | `enabled` or `disabled` | `(none)` | sub-agent context only |
 | `kernel_version` | The instrumented kernel the `build` phase produced | string | Free text | `(none)` | sub-agent context only |
 | `driver_branch` | The `open-gpu-kernel-modules` branch or commit under test, cited in the report as an affected version | string | Free text | `(none)` | sub-agent context only |
-| `container_toolkit_version` | The pinned `nvidia-container-toolkit` version the Track U harnesses are built against | string | Free text, e.g. `1.20.0-1` | `(none)` | sub-agent context only |
+| `container_toolkit_version` | The pinned `nvidia-container-toolkit` version the Track U harnesses are built against | string | Free text, such as `1.20.0-1` | `(none)` | sub-agent context only |
 | `gsp_firmware` | The GSP firmware version from `nvidia-smi -q`, also written into the build manifest | string | Free text | `(none)` | sub-agent context only |
 | `syzkaller_commit` | The pinned syzkaller build, which decides the stats endpoint shape the sampler must handle | string | Free text | `(none)` | sub-agent context only |
 | `instrumentation_rung` | Which rung of the degradation ladder the build settled on, which bounds what coverage and KASAN can report | integer | `0` undecided, `1` full KASAN and KCOV, `2` KCOV-only modules, `3` uninstrumented modules | `0` | sub-agent context only |
@@ -179,15 +181,27 @@ carries no accepted-value bound and no override.
 Seven conditions are checked outside the per-key bounds above. Each refuses the
 whole configuration.
 
-| Condition | Failure prevented |
-|---|---|
-| `loop.corpus_policy` is `fresh` or `carry` | A campaign install with a policy no code path implements |
-| `loop.campaign_hours` does not exceed `loop.max_total_run_hours` | A loop that spends the whole ceiling on run 1 and stops, because no round could finish inside the budget |
-| `orchestrator.max_agent_hours`, when non-zero, exceeds `loop.campaign_hours` | Every healthy agent being killed at the same point in every round, because the `fuzz` phase waits out the whole campaign window inside one launch |
-| `loop.plateau_window_min` is at least three `loop.coverage_sample_min` intervals | A plateau test that never has enough samples and always reports `unknown`, which stops the loop |
-| `orchestrator.command`, `orchestrator.resume_command` and `orchestrator.session_transcript_glob` are strings | A value YAML parsed as something else reaching `subprocess` as whatever it parsed into |
-| `orchestrator.session_transcript_glob`, when non-empty, contains `{session}` | A size check that matches every session's transcript and rotates on some other run's history |
-| When `orchestrator.resume_command` is set, both it and `orchestrator.command` contain `{session}` | A restart that silently opens a new session while the resume counter believes otherwise |
+- `loop.corpus_policy` is `fresh` or `carry`. This refuses a campaign install
+  with a policy no code path implements.
+- `loop.campaign_hours` does not exceed `loop.max_total_run_hours`. Without it
+  a loop spends the whole ceiling on run 1 and stops, because no round could
+  finish inside the budget.
+- `orchestrator.max_agent_hours`, when non-zero, exceeds
+  `loop.campaign_hours`. Without it every healthy agent is killed at the same
+  point in every round, because the `fuzz` phase waits out the whole campaign
+  window inside one launch.
+- `loop.plateau_window_min` is at least three `loop.coverage_sample_min`
+  intervals. Below that the plateau test never has enough samples, always
+  reports `unknown`, and stops the loop.
+- `orchestrator.command`, `orchestrator.resume_command` and
+  `orchestrator.session_transcript_glob` are strings. A value YAML parsed as
+  something else otherwise reaches `subprocess` as whatever it parsed into.
+- `orchestrator.session_transcript_glob`, when non-empty, contains
+  `{session}`. Without it the size check matches every session's transcript
+  and rotates on some other run's history.
+- When `orchestrator.resume_command` is set, both it and
+  `orchestrator.command` contain `{session}`. Without it a restart silently
+  opens a new session while the resume counter believes otherwise.
 
 `orchestrator.resume_anchor` is checked as a per-key bound, not here: it must
 contain no apostrophe and no double quote, because it is substituted into a
@@ -205,16 +219,19 @@ error: invalid configuration in config/campaign.yaml:
 
 ## Precedence
 
-| Rank | Source |
-|---|---|
-| 1 | A per-command flag, or the environment variable named in the Override column |
-| 2 | `config/campaign.yaml`, or the file named by `$GSPWN_CONFIG` |
-| 3 | Built-in defaults |
+Three sources supply a value, and the first that carries one decides it.
+
+1. A per-command flag, or the environment variable named in the Override
+   column.
+2. `config/campaign.yaml`, or the file named by `$GSPWN_CONFIG`.
+3. Built-in defaults.
 
 Rank 1 wins, and it applies to one invocation only. A config edit is the
 durable change.
 
 ## Loading
+
+Seven conditions decide what a load does with the configuration file.
 
 | Condition | Result |
 |---|---|

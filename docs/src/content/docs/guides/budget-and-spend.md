@@ -1,30 +1,50 @@
 ---
 title: Budget and spend
-description: The three caps that bound an unattended run, how hours are measured, and the refusals once the budget is spent.
+description: The five stop conditions that end an unattended loop, how billed hours are measured, and the refusals once the budget is spent.
 ---
 
-Three declared stopping rules bound an unattended run.
+An unattended loop ends on one of five stop conditions. `pipeline_ctl.py
+round-decide` evaluates them in the order below and records the first that
+holds. A sixth limit, `loop.campaign_hours`, ends one campaign and leaves the
+loop running.
 
-| Cap | Key | Enforced by |
-|---|---|---|
-| Rounds | `loop.max_rounds`, default 10 | `round-decide` |
-| Total run-hours | `loop.max_total_run_hours` | `round-decide`, and every campaign install |
-| Per-campaign hours | `loop.campaign_hours` | The per-run deadline timer |
+| Order | Stop condition | Key | Overridable |
+|---|---|---|---|
+| 1 | Command surface complete: every enumerated target either exercised or carrying a written reason in the completion ledger | none, it is a ledger identity | no |
+| 2 | Round cap reached | `loop.max_rounds`, default 10 | no |
+| 3 | Run-hour budget spent | `loop.max_total_run_hours`, default 5000 | no |
+| 4 | Both coverage curves flat | `loop.stop_on_plateau`, default true | yes, with `--reason` |
+| 5 | No coverage verdict for the round | none | yes, with `--reason` |
 
-`loop.max_rounds` is a backstop against a runaway loop. The campaign's primary
-termination is surface completion, which `hard_cap_reason()` checks ahead of
-both caps, so a campaign that reaches the round cap has failed to converge.
-`loop.max_total_run_hours` is the spend ceiling.
+Completion is checked first, so a campaign that finishes its work on its last
+permitted round records why it finished and not which limit it hit. The round
+cap is a backstop against a runaway loop: a campaign that reaches it failed to
+converge, and its stop reason says so. `loop.max_total_run_hours` is the spend
+ceiling, and at the shipped values it binds before the round cap does.
 
-A plateau on both curves and an `unknown` coverage verdict also stop the loop,
-and both are overridable. See
-[Coverage and plateau](/gspwn/architecture/coverage-and-plateau/).
+[Coverage and plateau](/gspwn/architecture/coverage-and-plateau/) covers how
+conditions 4 and 5 are computed.
+
+## The per-campaign window
+
+`loop.campaign_hours`, default 1000, is the window one campaign runs for.
+`campaign_ctl.py install-k` and `install-u` write it to
+`artifacts/runs/<run-id>/deadline` as an absolute epoch second and install a
+per-run `gspwn-deadline@<run-id>.timer`. That timer runs `check-deadline` every
+`loop.deadline_check_min` minutes, default 2. When the window is up the
+campaign units are stopped and disabled, so a later panic cannot bring them
+back.
+
+A deadline on disk survives the reboot a kernel panic causes. The campaign
+units carry `Restart=always`, so without the deadline file nothing would ever
+end a campaign.
 
 ## Measuring billed hours
 
 A campaign's billed hours are the wall-clock span from its first coverage
-sample to its last, on either track. A run that died after three hours must not
-bill the configured thousand.
+sample to its last, on either track. Two samples are the minimum; a run with
+one sample or none has no measurable span. A run that died after three hours
+must not bill the configured thousand.
 
 ```
 python3 tools/pipeline_ctl.py round-end --from-run r2-1
@@ -33,7 +53,11 @@ python3 tools/pipeline_ctl.py round-end --from-run r2-1
 ```
 round 2 closed: growing, crashes=4, run_h=987.42
   measured from run r2-1: k: growing (...); u: growing (...)
+  surface incomplete: 245 of 852 target(s) closed: 214 exercised, 31 accounted for, 607 left
 ```
+
+The surface line prints on every `round-end`, because the completion reading
+decides stop condition 1 and is never carried over from the previous round.
 
 The configured window stands in only when a run left no usable coverage
 samples, and that fallback says so:
@@ -50,18 +74,19 @@ A run with no samples at all is reported:
 
 ## The ledger
 
-`state/spend.json` maps run id to billed hours. It is machine-global on
-purpose: unlike `state/pipeline.json` it does **not** follow `GSPWN_STATE`, so
-a run with its own state file still counts against the one cap.
+`state/spend.json` maps run id to billed hours. It is machine-global:
+`state/pipeline.json` follows `GSPWN_STATE`, and the ledger follows
+`GSPWN_SPEND` alone, so a run with its own state file still counts against the
+one cap.
 
 Recording is idempotent per run id. Re-billing a run overwrites its entry, so a
 retried `round-end` never double-counts a campaign.
 
-A campaign install does not trust the ledger alone. `spend_for_budget()`
-compares its total against the hours the state file records and uses the larger,
-because a ledger write that failed on permissions leaves hours on record and out
-of the ledger, and the cap would then read headroom that was already spent. The
-gap is reported:
+A campaign install reconciles two records before trusting either.
+`spend_for_budget()` compares the ledger total against the hours the state file
+records and uses the larger, because a ledger write that failed on permissions
+leaves hours on record and out of the ledger, and the cap would then read
+headroom that was already spent. The gap is reported:
 
 ```
 WARNING: spend ledger state/spend.json holds 1979.0 run-hours while the state file records 2966.4. 987.4 h of spend never reached the ledger, most likely a write that failed on permissions. Using the larger figure so the cap counts what actually ran. Fix the ledger's ownership and re-run: python3 tools/pipeline_ctl.py spend-init
@@ -70,26 +95,27 @@ WARNING: spend ledger state/spend.json holds 1979.0 run-hours while the state fi
 `round-decide` and `round-show` read the ledger alone, so the two figures can
 disagree until the ledger is re-seeded.
 
-Two paths bill, and they cannot double-count because both derive the figure the
-same way:
+Four commands bill, and they cannot double-count because all four derive the
+figure from the same coverage-sample span:
 
-| Path | When |
+| Command | Bills when |
 |---|---|
-| `campaign_ctl.py` | On deadline stop, on manual stop, and when `status` finds a campaign already finished |
-| `pipeline_ctl.py round-end` | When the round closes |
+| `campaign_ctl.py check-deadline --run-id ID` | the campaign window has elapsed and every unit stopped cleanly |
+| `campaign_ctl.py stop <k\|u> --run-id ID` | the operator stops the campaign by hand |
+| `campaign_ctl.py status --run-id ID` | the deadline has already passed when `status` looks |
+| `pipeline_ctl.py round-end --from-run ID` | the round closes |
 
-Billing in both places keeps a round that never closes from leaving its hours
-off the cap entirely. A round can fail to close because a phase blocked, the
-breaker tripped, or a human stopped it.
+Billing outside `round-end` as well keeps a round that never closes from
+leaving its hours off the cap entirely. A round can fail to close because a
+phase blocked, the breaker tripped, or a human stopped it.
 
 ```mermaid
 flowchart LR
   CS["coverage samples<br/>artifacts/runs/&lt;id&gt;/coverage.csv"] --> MH["measured_run_hours()<br/>first sample to last"]
   MH --> RC["record_run_hours(run_id, h)<br/>idempotent per run id"]
   RC --> SJ[("state/spend.json<br/>machine-global")]
-  RC --> PJ[("state/pipeline.json<br/>round.run_hours")]
   SJ --> SB["spend_for_budget()<br/>larger of the two"]
-  PJ --> SB
+  PJ[("state/pipeline.json<br/>round.run_hours")] --> SB
   SB --> CB["check_budget()<br/>at campaign install"]
   SJ --> LD["loop_decision()<br/>at round-decide"]
   DL["check-deadline / stop / status"] --> MH
@@ -114,42 +140,56 @@ rounds: 2 of max 10   run-hours: 1979.0 of 5000
             executing: artifacts/eval/r1-1/worklist.md
 ```
 
-`show` and `brief` print the same two figures on their first lines.
+The first line carries the two figures conditions 2 and 3 are checked against.
+`pipeline_ctl.py show` reports the same two on its second line, and
+`pipeline_ctl.py brief` under its `## Where the pipeline is` heading.
 
 ## Budget check at campaign install
 
-A campaign install checks the budget before writing anything:
+`campaign_ctl.py install-k` and `install-u` check the budget before writing
+anything:
 
 ```
 refusing to start: 4500.0 h already spent + 1000.0 h for this campaign exceeds loop.max_total_run_hours (5000). Raise the cap in config/campaign.yaml to allow it.
 ```
 
-`round-decide` enforces the cap between rounds, but a campaign started directly
+`round-decide` enforces the cap between rounds, and a campaign started directly
 by the `fuzz` phase never passes through it, so without this check the cap could
 be overshot by an arbitrary number of extra runs. Raising the cap is a
 deliberate edit to `config/campaign.yaml`.
 
-Exact equality is admitted, matching the enforcement point in `round-decide`.
+The refusal fires only on `spent + hours > cap`. Exact equality is admitted,
+matching the enforcement point in `round-decide`.
 
-## Hard caps and overridable stops
+## Overriding a stop
 
 ```
 python3 tools/pipeline_ctl.py round-decide --decision continue --reason "one more"
 ```
 
+Against a completion, round-cap or budget stop, `round-decide` refuses:
+
 ```
 error: computed decision is stop (run-hour budget spent (5000.0 of 5000.0 h)). A completion, budget or round-cap stop cannot be overridden
 ```
 
-The round cap behaves the same way. A plateau stop or an `unknown` stop can be
-overridden, and requires `--reason`:
+A completion stop adds the route back: the verdict is recomputed from the
+completion ledger on every `round-end`, so a target closed by a row that should
+not have been written is reopened with `pipeline_ctl.py surface-unaccount
+--variant NAME` followed by another `round-end`.
+
+A plateau stop and an `unknown` stop are overridable, and each requires
+`--reason`:
 
 ```
 python3 tools/pipeline_ctl.py round-decide --decision continue \
   --reason "sampler was down for the last four hours; curve is not evidence"
 ```
 
-## Missing ledger recovery
+## Recovering a missing ledger
+
+A deleted or unreadable `state/spend.json` with billed hours still on record
+refuses every command that reads spend:
 
 ```
 error: spend ledger state/spend.json is missing, but the state file records 1979.0 billed run-hours. Refusing to treat the budget as unspent. Re-seed it from the state file with: python3 tools/pipeline_ctl.py spend-init
@@ -158,21 +198,36 @@ error: spend ledger state/spend.json is missing, but the state file records 1979
 Falling back to zero would hand the loop a fresh budget. A genuinely fresh
 machine, with no ledger and no recorded hours, reads 0.0 and starts normally.
 
-```
-python3 tools/pipeline_ctl.py spend-init
-```
+1. Re-seed the ledger from the hours the state file records.
 
-```
-seeded ledger state/spend.json: 1979.0 run-hours billed
-```
+   ```
+   python3 tools/pipeline_ctl.py spend-init
+   ```
 
-It rebuilds the ledger from the hours the state file records and never lowers
-recorded spend. With a ledger already present it changes nothing:
+   ```
+   seeded ledger state/spend.json: 1979.0 run-hours billed
+   ```
 
-```
-ledger already present at state/spend.json: 1979.0 run-hours billed
-(no change. Delete the ledger first to rebuild it from the state file)
-```
+   With a ledger already present the command changes nothing and says so:
+
+   ```
+   ledger already present at state/spend.json: 1979.0 run-hours billed
+   (no change. Delete the ledger first to rebuild it from the state file)
+   ```
+
+   Because it never lowers recorded spend, it cannot be used to clear the
+   budget. Re-seeding a ledger that is present but wrong needs the file
+   deleted first.
+
+2. Confirm the figure the loop will now read.
+
+   ```
+   python3 tools/pipeline_ctl.py round-show
+   ```
+
+   The `run-hours` figure on the first line must match the seeded total. A
+   remaining gap means the state file and the ledger disagree, and the
+   reconciliation warning under [The ledger](#the-ledger) names the amount.
 
 ## Hours entered by hand
 
@@ -189,15 +244,17 @@ idempotent.
 Derived per-run hours are preferred. The cap is measured against `run_hours`,
 and typing it in puts a transcription step in front of a budget.
 
-## Outside the caps
+## Outside the stop conditions
 
-The three caps bound the search. The repository has no view of what an instance
-costs and produces no cost estimate.
+The five stop conditions bound the search. The repository has no view of what
+an instance costs and produces no cost estimate.
 
-| Cost | Bounded by | Source |
-|---|---|---|
-| Instance cost | Nothing in the repository | The provider's console |
-| Token cost | The circuit breaker bounds agent restarts and `orchestrator.max_agent_hours` bounds one launch, both in restart and hour counts | The agent vendor's usage page |
+- Instance cost is bounded by nothing in the repository, and the provider's
+  console reports it.
+- Token cost is bounded by the circuit breaker over agent restarts
+  (`orchestrator.max_same_boot_starts`, `orchestrator.max_reboots`) and by
+  `orchestrator.max_agent_hours` over one launch. The agent vendor's usage page
+  reports it.
 
 Neither figure is a currency amount. See
 [Unattended operation](/gspwn/guides/unattended-operation/).
@@ -206,5 +263,5 @@ Neither figure is a currency amount. See
 
 - [Spend accounting](/gspwn/architecture/spend-accounting/) covers the write
   path and the idempotency argument.
-- [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/) covers the
-  other two stop conditions.
+- [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/) covers stop
+  conditions 4 and 5.
