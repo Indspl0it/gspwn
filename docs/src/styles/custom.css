@@ -540,15 +540,26 @@ pre.mermaid {
   overflow-x: auto;
   margin-block: 1.75rem;
   padding: 1.25rem 1rem;
-  text-align: center;
+  display: flex;
+  /* A diagram narrower than the card is centred. One wider than the card
+     starts at its left edge, because centring overflowing content puts the
+     start of the diagram outside the scrollable area. */
+  justify-content: safe center;
   border: 1px solid var(--gs-border);
   border-radius: 0.75rem;
   background: var(--gs-surface);
 }
 
-.mermaid svg {
-  max-width: 100%;
+/* Natural size, set by useMaxWidth: false in astro.config.mjs. A diagram wider
+   than the card scrolls inside it and keeps its type at the configured 14px.
+   Starlight's content styles set max-width: 100% on every svg they contain, so
+   the override is marked important; a selector cannot outrank it reliably,
+   because the two stylesheets' load order is decided by the integration. */
+.mermaid svg,
+pre.mermaid svg {
+  max-width: none !important;
   height: auto;
+  flex: none;
 }
 
 /* Mermaid's own light and dark themes carry the text and line colours, because
