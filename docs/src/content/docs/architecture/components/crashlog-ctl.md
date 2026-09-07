@@ -30,7 +30,7 @@ newest `pstore-*` directory there.
 | Invariant | Enforced by |
 |---|---|
 | An empty harvest means the sources were readable and empty | `cmd_harvest` refuses to run as non-root, where the globs return empty and the copies raise |
-| Nothing to harvest and could not read a source are distinguishable | The two conditions carry different exit codes, 0 and 1 |
+| Nothing to harvest, could not look, and looked partially are distinguishable | The three conditions carry different exit codes: 0, 1 and 2 |
 | pstore is left with space for the next panic | Every copied record is deleted from `/sys/fs/pstore` |
 | Several panics between harvests are all captured | Every `/var/crash` dump present is taken, oldest first by modification time |
 | A harvest already taken is not re-copied | `harvested_kdumps` recognises the `kdump-` prefixed directories of earlier harvests |
@@ -91,10 +91,18 @@ most that per request. An answer means `ec2` and anything else means
 |---|---|
 | 0 | The command completed, including a harvest that found nothing with every source readable |
 | 1 | A root refusal, a missing GRUB anchor, a failed `verify`, a harvest that read nothing while a source failed, or an unusable command line |
+| 2 | `HARVEST_PARTIAL`: evidence was collected and at least one source was unread or deferred. The harvest directory exists and its path is still the last line on stdout |
+
+2 is separate from 0 because an unattended caller that reads only the exit code
+has no other way to learn the harvest is incomplete, and a partial harvest
+reported as success leaves a panic's only record treated as collected. It is
+separate from 1 because 1 collected nothing and 2 has evidence on disk. A source
+is deferred when kdump is still writing the dump, which a later `harvest` picks
+up.
 
 ## Failure modes
 
-Twelve conditions have a defined behaviour.
+Thirteen conditions have a defined behaviour.
 
 | Condition | Behaviour |
 |---|---|
@@ -108,7 +116,8 @@ Twelve conditions have a defined behaviour.
 | A `/var/crash` dump cannot be copied | Warns naming the directory, records it as a failure and continues |
 | Harvest finds nothing and every source was readable | Prints what was checked and removes the directory it created |
 | Harvest finds nothing and at least one source failed | Names up to five failed sources and states this is not evidence that no crash occurred |
-| Harvest reads some sources and fails on others | Warns naming up to five missing sources, and the partial harvest succeeds |
+| Harvest reads some sources and fails on others | Warns naming up to five missing sources, prints the harvest directory and exits 2 |
+| A `/var/crash` dump is still being written | Warns naming up to five deferred dumps, tells the operator to re-run once they finish, prints the harvest directory and exits 2 |
 | `coverage_ctl` import fails | The disk report drops the free-space figure and the harvest continues |
 
 ## Concurrency and durability
@@ -132,7 +141,7 @@ edit.
 | Never conflate an empty harvest with an unreadable source | The orchestrator runs this unattended after every panic and has to tell them apart |
 | Never leave pstore records in place | It is a small fixed-size backend that frees a record only when the file is deleted |
 | Never take only the newest `/var/crash` dump | Several panics can occur between two harvests |
-| Never abandon a harvest on one unreadable file | Files can vanish mid-harvest; a partial harvest succeeds while naming what is missing |
+| Never abandon a harvest on one unreadable file | Files can vanish mid-harvest. The rest of the harvest is written and the missing sources are named, and the exit code is 2 so the incompleteness reaches a caller that reads nothing else |
 | Never prune automatically | Harvested logs are evidence, and the count that is kept is a stated decision |
 | Never guess a GRUB anchor | With neither anchor present, `setup` stops and prints the line to add by hand |
 

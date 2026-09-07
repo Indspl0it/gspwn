@@ -5,7 +5,7 @@ description: The measurement that confirms the device nodes a container receives
 
 Compares the device nodes a container actually receives against the
 `tenant_surface` field in `surface/entry-points.json`, which
-`python3 tools/ioctl_inventory.py --emit-entry-points` writes. The `provision`
+`python3 tools/ioctl_inventory.py --emit-entry-points <path>` writes. The `provision`
 phase runs it at step 7, before any campaign spend.
 
 Every coverage figure the campaign reports is a fraction whose denominator is

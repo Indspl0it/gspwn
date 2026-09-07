@@ -20,7 +20,7 @@ python3 tools/exec.py --log NAME [--retries N] [--timeout S] -- CMD [ARGS...]
 |---|---|---|
 | `--log NAME` | required | Names the log file. `NAME` is reduced to its basename, and an empty basename becomes `exec` |
 | `--retries N` | `0` | Repeats a failing command up to `N` times, so the run makes at most `N + 1` attempts |
-| `--timeout S` | no limit | Seconds one attempt may take |
+| `--timeout S` | `14400`, four hours, or the value of `GSPWN_EXEC_TIMEOUT_SEC` | Seconds one attempt may take. `0` runs unbounded. The longest command wrapped here is a kernel build, which takes hours on the smaller instances, so four hours is a backstop and not a working limit |
 | `CMD [ARGS...]` | required | The command. A leading `--` separator is dropped before the command is run |
 
 The exit code is the last attempt's exit code.

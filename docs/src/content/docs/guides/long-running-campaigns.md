@@ -175,17 +175,18 @@ launches an agent, so the sequence runs without a human. See
 
 `harvest` copies every pstore record out and then clears it, so the next panic
 has somewhere to write, and it copies every unharvested `/var/crash` dump. Its
-exit status distinguishes two answers that must not be confused.
+exit status distinguishes three answers that must not be confused.
 
 | Exit | Condition |
 |---|---|
-| 0 | something was harvested, or nothing was found and every source was readable |
+| 0 | something was harvested and every source was read, or nothing was found and every source was readable |
 | 1 | nothing was found and at least one source could not be read, which is not evidence that no crash occurred |
 | 1 | the command was not run as root |
+| 2 | something was harvested and at least one source was unread or still being written |
 
-A harvest that collected something and also failed on a source exits 0 and
-prints a `WARN` naming what is missing, so read the output alongside the exit
-status.
+An exit of 2 prints a `WARN` naming what is missing and still ends with the
+harvest directory path, so the partial evidence is reachable and the gap is
+recorded.
 [Disk and crash logs](/gspwn/guides/disk-and-crash-logs/) covers both sources.
 
 ## Re-anchoring a session

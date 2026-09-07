@@ -252,7 +252,8 @@ Token cost is bounded separately, by the orchestrator's circuit breaker
 (`orchestrator.max_same_boot_starts` at 5 and `orchestrator.max_reboots` at 10
 within `orchestrator.window_min`, 60 minutes) and by
 `orchestrator.max_agent_hours`, a wall-clock ceiling on one agent launch that
-ships at 0 and is disabled at that value. None of those is a currency figure.
+ships at 24 hours, with `loop.campaign_hours` added for the `fuzz` launch alone.
+None of those is a currency figure.
 
 ## See also
 

@@ -139,7 +139,7 @@ the installer could not infer.
 
 | Symptom | Cause | Action |
 |---|---|---|
-| The unit stops and is not restarted | `run` exited 78, listed in `RestartPreventExitStatus` | The journal names which of the six causes fired. [Conditions that stop the unit](/gspwn/guides/unattended-operation/#conditions-that-stop-the-unit) lists them |
+| The unit stops and is not restarted | `run` exited 78, listed in `RestartPreventExitStatus` | The journal names which of the eight causes fired. [Conditions that stop the unit](/gspwn/guides/unattended-operation/#conditions-that-stop-the-unit) lists them |
 | `circuit breaker tripped` | Too many same-boot starts, or too many reboots in the window | Read the journal, fix the cause, then `orchestrator_ctl.py reset` |
 | `orchestrator.command is not set` | No agent invocation configured | Set it in `config/campaign.yaml` |
 | `refusing to install: no non-root user to run the agent as` | `install` had no `--user` and no `$SUDO_USER` | Pass `--user`, or install with `sudo` from that user's shell |

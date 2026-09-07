@@ -280,13 +280,16 @@ syzlang programs. A sample that skips the measurement records an empty
 | Iteration body | Breaker check, session resolve, harvest, launch the agent, wait for exit or kill on stall |
 | State carried | `state/orchestrator.json`: the start history, the blocked record, the session id |
 | Exit | Exit 78, which systemd does not restart |
-| Bound | `orchestrator.max_same_boot_starts` (5) and `orchestrator.max_reboots` (10) inside `orchestrator.window_min` (60). `orchestrator.max_agent_hours` per launch, 0 in the shipped configuration and therefore off |
+| Bound | `orchestrator.max_same_boot_starts` (5) and `orchestrator.max_reboots` (10) inside `orchestrator.window_min` (60). `orchestrator.max_agent_hours` per launch, 24 h in the shipped configuration, with `loop.campaign_hours` added for the fuzz launch alone |
 
 ```mermaid
 flowchart TB
-  S["systemd starts the unit<br/>Restart=always, RestartSec=60"] --> CMD{"orchestrator.command set?"}
+  S["systemd starts the unit<br/>Restart=always, RestartSec=60"] --> CFG{"campaign.yaml readable<br/>and valid?"}
+  CFG -->|no| X0["exit 78"]
+  CFG -->|yes| CMD{"orchestrator.command set?"}
   CMD -->|no| X1["exit 78"]
   CMD -->|yes| LK["take the breaker lock,<br/>record this start"]
+  LK -->|"breaker file unreadable"| X5["exit 78"]
   LK --> BRK{"same-boot starts or reboots<br/>over the limit in window_min?"}
   BRK -->|yes| BLK["record blocked; exit 78"]
   BRK -->|no| SESS["resolve the session:<br/>fresh or resume<br/>stored BEFORE launching"]
@@ -295,7 +298,7 @@ flowchart TB
   PIPE -->|"complete"| X3["exit 78"]
   PIPE -->|"state file unreadable"| X4["exit 78"]
   PIPE -->|yes| HAR["crashlog_ctl.py harvest<br/>failure warns, does not stop"]
-  HAR --> LAUNCH["launch the agent,<br/>bounded by max_agent_hours<br/>when it is non-zero"]
+  HAR --> LAUNCH["launch the agent,<br/>bounded by max_agent_hours,<br/>plus campaign_hours for fuzz"]
   LAUNCH --> WAIT{"exited, or stalled?"}
   WAIT -->|exited| RES{"was this a resume<br/>that exited non-zero?"}
   WAIT -->|stalled| KILL["kill the process group:<br/>SIGTERM, then SIGKILL"]

@@ -138,7 +138,7 @@ a specific failure.
 | Exclusive transactions | An `flock` held across the whole read-modify-write cycle | Parallel `describe`, `seeds` and `harness` sub-agents overwrite each other's updates |
 | Process supervision | `gspwn-orchestrator.service`, `Restart=always`, `RestartSec=60` | The pipeline stops at the first panic and waits for a human to log in |
 | Circuit breaker | Same-boot starts and reboots counted separately inside `orchestrator.window_min`, against `orchestrator.max_same_boot_starts` and `orchestrator.max_reboots`. A trip records the block and exits 78, which systemd does not restart | A crash-looping agent restarts forever with no token ceiling. Separate counters keep expected panic reboots from tripping the same limit |
-| Launch cap | `orchestrator.max_agent_hours` kills the process group of a launch that exceeds it. It is 0 in the shipped configuration, which disables it, and a non-zero value has to exceed `loop.campaign_hours` because `fuzz` waits out the whole window inside one launch | A stalled agent holds the pipeline open while the instance bills |
+| Launch cap | `orchestrator.max_agent_hours` kills the process group of a launch that exceeds it. It is 24 in the shipped configuration and may not exceed `loop.campaign_hours`. `fuzz` waits out the whole window inside one launch, so that window is added for the fuzz launch alone. The string `"unbounded"` turns the cap off | A stalled agent holds the pipeline open while the instance bills |
 | Deadline on disk | `artifacts/runs/<run-id>/deadline` holds one absolute epoch second, `fsync`ed at install. `gspwn-deadline@<run-id>.timer` rechecks it every `loop.deadline_check_min` and after each boot. A lost file is reconstructed from the install event in the state file | A one-shot timer dies with the machine and the campaign runs past its window unbounded |
 | Stop plus disable | Deadline enforcement runs `systemctl stop` and `systemctl disable` on both fuzz units | An enabled `Restart=always` unit resumes fuzzing at the next boot, after the campaign was stopped |
 | Idempotent billing | `record_run_hours` overwrites the entry for a run id | A `round-end` retried after an interruption bills the campaign twice against `loop.max_total_run_hours` |
@@ -182,9 +182,10 @@ the launch would already be stale.
 
 A harvest failure warns and does not stop the launch. A blocked phase, a
 complete pipeline or an unreadable state file exits 78, and systemd leaves the
-unit stopped until the breaker is reset. `orchestrator.max_agent_hours` is 0 in
-the shipped configuration, which disables the per-launch wall-clock ceiling and
-leaves the circuit breaker as the only bound on a stalled agent.
+unit stopped until the breaker is reset. `orchestrator.max_agent_hours` is 24 in
+the shipped configuration, so a launch that stalls past 24 h has its process
+group killed, and the fuzz launch gets `loop.campaign_hours` on top of that
+because it waits out the campaign window inside one launch.
 
 The same sequence restores the position by hand after a panic, a reboot, a
 session restart or a compacted context: harvest the crash evidence, read the

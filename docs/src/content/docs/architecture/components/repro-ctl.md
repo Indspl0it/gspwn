@@ -71,9 +71,21 @@ title and the report text registered for the crash.
 | List | Derivation |
 |---|---|
 | `phrases` | The title with the `kernel ` or `NVRM ` prefix stripped, split on volatile fields (hex addresses, `pid=N`, bare numbers of six digits or more, printk timestamps), keeping the parts of at least 12 characters |
-| `funcs` | The top stack frames of the registered report, capped at `triage.signature_frames`, followed by title tokens of at least four characters containing `_` or `.` |
+| `funcs` | The top stack frames of the registered report, with the sanitizer's own machinery frames dropped first, capped at `triage.signature_frames`. Where the report carries no crash-specific frame at all, title tokens of at least four characters containing `_` or `.` stand in |
 
-A window matches when it contains any one element of either list. Generic
+A window matches when it contains every member of `funcs`. Frames 2 to 5 of
+a sanitizer report are the sanitizer's own machinery, so a rule satisfied by any
+one frame scored an unrelated KASAN report as a reproduction of this crash on
+`dump_stack_lvl` alone. `UBIQUITOUS_FRAME_RE` drops those frames by subsystem
+prefix before the `triage.signature_frames` cap is applied, so the cap spends
+its slots on frames that name this crash, and the predicate then requires all of
+them together.
+
+`phrases` is consulted only for a crash whose report carries no frames at all,
+where the title wording is the only evidence there is, and it matches on the
+same all-members rule. A crash with frames never falls back to it: a phrase from
+the title is weaker evidence than the stack that produced it, and admitting it
+as an alternative would restore the single-element match. Generic
 kernel-crash markers (`KASAN:`, `BUG:`, `Kernel panic`,
 `general protection fault`, `Oops`) never score a hit on their own, because the
 fuzzer panics this machine by design and any-crash matching would inflate the
@@ -159,7 +171,7 @@ hang-class hits and voids, and the count of hits resting on
 | `poc.reliable_threshold` | 0.8 | The rate at or above which the classification is `reliable` |
 | `poc.default_runs` | 10 | Counted runs `verify` aims for without `--runs` |
 | `poc.void_retry_factor` | 2 | Attempts allowed per still-needed counted run |
-| `triage.signature_frames` | 5 | Stack frames taken from the registered report into `funcs` |
+| `triage.signature_frames` | 5 | Crash-specific stack frames taken from the registered report into `funcs`, all of which a run must reproduce |
 
 `config/campaign.yaml` carries the four `poc` keys, because a reliable label is
 a research decision. When the config cannot be read at all, the shipped

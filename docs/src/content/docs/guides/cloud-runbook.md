@@ -179,8 +179,8 @@ sources to compare.
 
 | Exit from `check --no-running` | Meaning | Action |
 |---|---|---|
-| 0 | The checkout and `driver_branch` agree | Continue |
-| 3 | They disagree | Blocked gate. Check out the matching release tag |
+| 0 | Every answering source agrees with every other. The line names the source count and the pairwise comparison count | Continue |
+| 3 | A pair disagrees. The line names which two and what each carries | Blocked gate. Check out the matching release tag |
 | 4 | Fewer than two version sources answered | Blocked gate. Fill in `driver_branch` |
 
 `--no-running` skips the loaded-driver comparison, which is correct here

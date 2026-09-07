@@ -190,8 +190,10 @@ Nine conditions halt the loop, and two of them can be overridden with
 | The circuit breaker tripped | `orchestrator_ctl.py run` exits 78 | Reset only, through `orchestrator_ctl.py reset` |
 | The pipeline is `complete` | `orchestrator_ctl.py run` exits 78 | No |
 
-systemd does not restart a unit that exits 78, so all three exit-78 paths leave
-the orchestrator stopped.
+systemd does not restart a unit that exits 78, so these three leave the
+orchestrator stopped. `run` exits 78 on five further conditions, all of them
+faults in the configuration or in a state file, listed under
+[Conditions that stop the unit](/gspwn/guides/unattended-operation/#conditions-that-stop-the-unit).
 
 ## See also
 

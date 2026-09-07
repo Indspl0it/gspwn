@@ -86,7 +86,7 @@ The unattended supervisor and its circuit breaker.
 | `orchestrator.window_min` | The window both breaker limits are counted within | integer | `> 0` | `60` | | `orchestrator_ctl.check` |
 | `orchestrator.max_same_boot_starts` | Agent starts on one boot within the window before the breaker trips. Repeated starts inside the window indicate that the pipeline is making no progress | integer | `> 0` | `5` | | `orchestrator_ctl.check` |
 | `orchestrator.max_reboots` | Distinct boots within the window before the breaker trips. Counted separately because kernel fuzzing panics the box by design | integer | `> 0` | `10` | | `orchestrator_ctl.check` |
-| `orchestrator.max_agent_hours` | The wall-clock ceiling on one agent launch, killed by process group. It bounds a stalled launch; the breaker counts starts | number | `>= 0`. `0` disables it. When non-zero it must exceed `loop.campaign_hours` | `0` | | `orchestrator_ctl.launch_agent` |
+| `orchestrator.max_agent_hours` | The wall-clock headroom one agent launch gets beyond the work it waits on, killed by process group. It bounds a stalled launch; the breaker counts starts. `orchestrator_ctl.launch_hours` adds `loop.campaign_hours` for the `fuzz` launch and for no other | number or string | `> 0`, or the string `"unbounded"` to run with no per-launch bound. A number may not exceed `loop.campaign_hours` | `24` | | `orchestrator_ctl.launch_agent` |
 | `orchestrator.resume_anchor` | The paragraph substituted for `{anchor}`, telling a resumed agent that its last turn predates the interruption and that `brief` is authoritative | string | Non-empty, containing no apostrophe and no double quote | A paragraph pointing the agent at `pipeline_ctl.py brief` | | `orchestrator_ctl.render_command` |
 
 ## agent
@@ -186,10 +186,11 @@ whole configuration.
 - `loop.campaign_hours` does not exceed `loop.max_total_run_hours`. Without it
   a loop spends the whole ceiling on run 1 and stops, because no round could
   finish inside the budget.
-- `orchestrator.max_agent_hours`, when non-zero, exceeds
-  `loop.campaign_hours`. Without it every healthy agent is killed at the same
-  point in every round, because the `fuzz` phase waits out the whole campaign
-  window inside one launch.
+- `orchestrator.max_agent_hours`, when it is a number, does not exceed
+  `loop.campaign_hours`. A bound longer than a whole campaign fires only after
+  the campaign has ended, so it bounds nothing. The `fuzz` launch is the only
+  long one and already gets `loop.campaign_hours` added on top of this value.
+  `"unbounded"` is the way to run with no bound.
 - `loop.plateau_window_min` is at least three `loop.coverage_sample_min`
   intervals. Below that the plateau test never has enough samples, always
   reports `unknown`, and stops the loop.
@@ -287,7 +288,7 @@ dedup: 3 stack frame(s) hashed, 5 frame(s) matched on repro; with no stack at al
 plateau: fit the last 50% of executions (>= 8 samples, R2 >= 0.90); plateaued when another 1000 h is expected to find < 50 new edge(s)
 surface curve: sampled every 60 min, shape read from >= 5 sample(s), corpus unpack capped at 300s
 repro: 10 run(s) by default, 120s per run, reliable at >= 80%
-guards: deadline checked every 2 min, agent launch capped at no limit, warn below 20 GB free
+guards: deadline checked every 2 min, agent launch capped at 24 h (fuzz: 1024 h), warn below 20 GB free
 ```
 
 A tenth line is printed when `coverage.horizon_hours` and

@@ -80,7 +80,7 @@ are each valid alone.
 | Transcript glob placeholder | `orchestrator.session_transcript_glob` is non-empty and holds no `{session}`, which would match every session's transcript and rotate on another run's history |
 | Session id round trip | `orchestrator.resume_command` is set and either it or `orchestrator.command` holds no `{session}`, which would open a new session on every restart while the resume counter believed otherwise |
 | Campaign inside the budget | `loop.campaign_hours` exceeds `loop.max_total_run_hours`, so no round could finish inside the budget |
-| Agent timeout above the campaign window | `orchestrator.max_agent_hours` is non-zero and at most `loop.campaign_hours`. The `fuzz` phase waits out the whole campaign window in one agent launch, so a shorter timeout kills every healthy agent at the same point in every round |
+| Agent timeout above the campaign window | `orchestrator.max_agent_hours` is a number above `loop.campaign_hours`. A bound longer than a whole campaign fires only after the campaign has ended, so it bounds nothing. `orchestrator_ctl.launch_hours` adds the campaign window for the `fuzz` launch alone, so the setting is the headroom a launch gets beyond the work it waits on |
 | Plateau window against the sampling interval | `loop.plateau_window_min` is under three intervals of `loop.coverage_sample_min`. The plateau test needs at least three samples in the window and otherwise always reports `unknown`, which stops the loop |
 
 `{session}` is substituted with `str.replace` and never with `str.format`, and

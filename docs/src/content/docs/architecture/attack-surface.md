@@ -93,8 +93,11 @@ opening file is the current DRM master.
 
 Entry points are counted apart from the command total. The driver registers 42
 entry points across every `file_operations` table it defines, and 24 of those
-belong to the six device nodes the campaign models. An entry point carries no
-method id, no parameter struct and no inventory row.
+belong to the six device nodes whose entry points are modelled. That six counts
+the entry-point surface. The command surface covers seven nodes, and
+`/dev/nvidia-modeset` is the seventh, opened for the modeset command family with
+its own `mmap` and `poll` unmodelled. An entry point carries no method id, no
+parameter struct and no inventory row.
 
 ## Surface by layer
 
