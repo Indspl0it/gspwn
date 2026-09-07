@@ -22,9 +22,13 @@ export default defineConfig({
       autoTheme: true,
       enableLog: false,
       mermaidConfig: {
-        flowchart: { curve: 'basis', useMaxWidth: true, padding: 10 },
-        sequence: { useMaxWidth: true },
-        state: { useMaxWidth: true },
+        // useMaxWidth: false renders each diagram at its natural size instead
+        // of scaling it to the content column. Scaling a 3594px flowchart into
+        // a 668px column puts its 12px type at 2.2px. The card the diagram
+        // sits in scrolls sideways, per the .mermaid rule in custom.css.
+        flowchart: { curve: 'basis', useMaxWidth: false, padding: 10 },
+        sequence: { useMaxWidth: false },
+        state: { useMaxWidth: false },
         themeVariables: {
           fontFamily:
             "ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace",
