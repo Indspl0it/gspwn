@@ -58,7 +58,7 @@ Three counts over the same 531 commands. They differ, and a measurement quoting 
 
 ## Ranked commands
 
-Sorted by rank. The name of a control command in this project is its handler symbol, because the generated `_nvoc.c` export tables carry that symbol and every later stage joins on the syzlang variant `ioctl$NV_ESC_RM_CONTROL_<handler>`. Graph depth is the shallowest depth any external class the owning class exports sits at. Chain length is the number of allocations the chain builder found. The two diverge where a class declares `<any parent>`.
+Sorted by rank. The name of a control command in this project is its handler symbol, because the generated `_nvoc.c` export tables carry that symbol and every later stage joins on the syzlang variant `ioctl$NV_ESC_RM_CONTROL_<handler>`. Graph depth is the shallowest depth any external class the owning class exports reaches. Chain length is the number of allocations the chain builder found. The two diverge where a class declares `<any parent>`.
 
 | Rank | Handler | Class id | Method id | Owning class | Graph depth | Chain length | Parameter struct | Parameter size, bytes | Score | `cve` | `depth` | `size` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|

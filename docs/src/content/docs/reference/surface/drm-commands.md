@@ -24,14 +24,14 @@ nvidia-drm is a DRM driver, so the core owns the request-number encoding and eve
 
 ## Reachability by node
 
-The two nodes do not grant the same set. `drm_ioctl_permit` at `drm_ioctl.c:611` refuses a render client any command whose flag word omits `DRM_RENDER_ALLOW`, and refuses any caller a `DRM_MASTER` command unless it is the current master. A tenant holds both nodes, so the family denominator is the union and counts 24; the per-node figures are carried apart because 24 and 21 are true of different things.
+The two nodes do not grant the same set. `drm_ioctl_permit`, in the Linux DRM core at `drivers/gpu/drm/drm_ioctl.c`, refuses a render client any command whose flag word omits `DRM_RENDER_ALLOW`, and refuses any caller a `DRM_MASTER` command unless it is the current master. A tenant holds both nodes, so the family denominator is the union and counts 24. The per-node figures are carried apart because 24 and 21 are true of different things.
 
 | Node | Reachable | Basis |
 |---|---|---|
 | `/dev/dri/cardN` | 24 | a primary client is subject to neither the render test nor, for 22 of them, the master test |
 | `/dev/dri/renderDN` | 21 | the 21 commands carrying `DRM_RENDER_ALLOW` |
 
-2 command(s) reach a handler on `cardN` only while the opening file is the current DRM master. `drm_master_open` at `drm_auth.c:326` makes the opening file the master when the device has none, which is likely on a host running no display server and is not guaranteed.
+2 command(s) reach a handler on `cardN` only while the opening file is the current DRM master. `drm_master_open`, in the Linux DRM core at `drivers/gpu/drm/drm_auth.c`, makes the opening file the master when the device has none, which is likely on a host running no display server and is not guaranteed.
 
 | Number | Command | Condition |
 |---|---|---|

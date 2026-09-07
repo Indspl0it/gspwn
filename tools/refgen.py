@@ -540,7 +540,7 @@ def page_control(docs):
         "handler symbol, because the generated `_nvoc.c` export tables carry "
         "that symbol and every later stage joins on the syzlang variant "
         "`ioctl$NV_ESC_RM_CONTROL_<handler>`. Graph depth is the shallowest "
-        "depth any external class the owning class exports sits at. Chain "
+        "depth any external class the owning class exports reaches. Chain "
         "length is the number of allocations the chain builder found. The two "
         "diverge where a class declares `<any parent>`.",
         "",
@@ -1140,7 +1140,7 @@ def page_modeset(docs):
         provenance(["surface/nvkms-command-inventory.json"]),
         "",
         "`/dev/nvidia-modeset` is created by default in a GPU container: "
-        "`lookup_devices` at `libnvidia-container/src/nvc_info.c:515` lists "
+        "`lookup_devices` at `libnvidia-container/src/nvc_info.c:517` lists "
         "it beside `/dev/nvidiactl`, `/dev/nvidia-uvm` and "
         "`/dev/nvidia-uvm-tools`, and withholds it only under "
         "`OPT_NO_MODESET`. Its commands are the sixth family of the surface "
@@ -1160,8 +1160,8 @@ def page_modeset(docs):
         "A traced call therefore carries a number that names the family and "
         "not the command. `tools/trace2seed.py` reads a kernel request "
         "number and cannot recover which of the %d commands a trace was, "
-        "because the sub-command lives in a payload the trace format does "
-        "not carry. That limit is accepted for this branch."
+        "because the trace format does not carry the payload the "
+        "sub-command travels in. That limit is accepted for this branch."
         % len(dispatched),
         "",
         table(["Quantity", "Value", "Source"],
@@ -1287,13 +1287,13 @@ def page_drm(docs):
         "",
         "## Reachability by node",
         "",
-        "The two nodes do not grant the same set. `drm_ioctl_permit` at "
-        "`drm_ioctl.c:611` refuses a render client any command whose flag "
-        "word omits `DRM_RENDER_ALLOW`, and refuses any caller a "
-        "`DRM_MASTER` command unless it is the current master. A tenant "
-        "holds both nodes, so the family denominator is the union and counts "
-        "%d; the per-node figures are carried apart because %d and %d are "
-        "true of different things."
+        "The two nodes do not grant the same set. `drm_ioctl_permit`, in "
+        "the Linux DRM core at `drivers/gpu/drm/drm_ioctl.c`, refuses a "
+        "render client any command whose flag word omits "
+        "`DRM_RENDER_ALLOW`, and refuses any caller a `DRM_MASTER` command "
+        "unless it is the current master. A tenant holds both nodes, so the "
+        "family denominator is the union and counts %d. The per-node figures "
+        "are carried apart because %d and %d are true of different things."
         % (summary["dispatched"], summary["reachable_card"],
            summary["reachable_render"]),
         "",
@@ -1307,10 +1307,10 @@ def page_drm(docs):
                 % summary["render_allow"]]]),
         "",
         "%d command(s) reach a handler on `cardN` only while the opening "
-        "file is the current DRM master. `drm_master_open` at "
-        "`drm_auth.c:326` makes the opening file the master when the device "
-        "has none, which is likely on a host running no display server and "
-        "is not guaranteed."
+        "file is the current DRM master. `drm_master_open`, in the Linux "
+        "DRM core at `drivers/gpu/drm/drm_auth.c`, makes the opening file "
+        "the master when the device has none, which is likely on a host "
+        "running no display server and is not guaranteed."
         % summary["reachable_card_conditional"],
         "",
         table(["Number", "Command", "Condition"],
@@ -1498,7 +1498,8 @@ def page_index(docs, rows):
                for name, reason in
                [("control_gsp", "the CPU-side handler is compiled out under "
                                 "GSP offload"),
-                ("uvm_test", "gated behind a build-time test switch"),
+                ("uvm_test", "compiled in and refused unless the module is "
+                             "inserted with `uvm_enable_builtin_tests=1`"),
                 ("escape_mux", "a dispatcher whose leaves are counted in the "
                                "control and allocation families"),
                 ("escape_dead", "declared in a header and dispatched by "
@@ -1532,15 +1533,6 @@ def page_index(docs, rows):
         % (docs["entry"]["counts"]["modelled_entry_points"],
            docs["entry"]["counts"]["modelled_nodes"],
            docs["entry"]["counts"]["entry_points"]),
-        "",
-        "## Staleness",
-        "",
-        "`%s` regenerates all %d pages into a temporary directory and "
-        "compares them against the committed copies, naming the page and the "
-        "first differing line when they disagree. It runs in the same offline "
-        "CI job as the other nine artefact checks, so an artefact "
-        "regenerated against a new driver release without regenerating these "
-        "pages fails the build." % (CHECK, len(BUILDERS) + 1),
         "",
         "## See also",
         "",
