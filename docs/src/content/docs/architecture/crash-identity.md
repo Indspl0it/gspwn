@@ -26,12 +26,15 @@ Track U inputs alias each other through a constant hash.
 
 `canon_title()` applies four transformations in order.
 
-| Step | Transformation | Purpose |
-|---|---|---|
-| 1 | Strip a leading `kernel ` or `NVRM ` prefix | The dmesg scanner adds prefixes that never appear in a syzkaller `description` file |
-| 2 | Collapse whitespace | Line wrapping differs between sources |
-| 3 | Fold `BUG: KASAN: ...` and `BUG: UBSAN: ...` into syzkaller's `KASAN: ...` and `UBSAN: ...` forms | The two sources print the same report with different leaders |
-| 4 | Replace every hex address and every bare run of eight or more hex digits with `0xADDR` | Makes the same ASan report or paging fault at a different address collide |
+1. Strip a leading `kernel ` or `NVRM ` prefix. The dmesg scanner adds
+   prefixes that never appear in a syzkaller `description` file.
+2. Collapse whitespace. Line wrapping differs between sources.
+3. Fold `BUG: KASAN: ...` and `BUG: UBSAN: ...` into syzkaller's
+   `KASAN: ...` and `UBSAN: ...` forms. The two sources print the same
+   report with different leaders.
+4. Replace every hex address and every bare run of eight or more hex digits
+   with `0xADDR`. The same ASan report or paging fault at a different
+   address then collides.
 
 ## Stack hashing
 
@@ -86,7 +89,7 @@ wording around its start line plus the faulting function.
 
 ```mermaid
 flowchart TB
-  B["a report block with no frames"] --> H["take the first<br/>triage.frameless_signature_lines lines"]
+  B["a report block with no frames"] --> H["take the first<br/>triage.frameless_signature_lines lines,<br/>each stripped of its timestamp"]
   H --> V["blank the volatile prologue fields:<br/>pid=, the [#N] oops counter,<br/>CPU:, PID:, Tainted:"]
   V --> CI["strip the executor index:<br/>Comm: syz-executor.4 -> syz-executor"]
   CI --> HX["replace hex and long digit runs<br/>with 0xADDR"]
@@ -97,10 +100,14 @@ flowchart TB
 
 Two ordering constraints apply.
 
-| Constraint | Failure it prevents |
-|---|---|
-| Volatile fields are blanked before hex blanking | An eight-digit PID is otherwise consumed as an address and never recognised as a PID, so the same panic splits on task id alone |
-| The RIP function is appended after the character cut, never inside it | A long prologue otherwise pushes the strongest evidence out of the identity, so two different faulting functions behind the same fault type produce the same signature and the second registers as a duplicate that never reaches `rca` |
+1. Volatile fields are blanked before hex blanking. An eight-digit PID is
+   otherwise consumed as an address, and the same panic splits on task id
+   alone.
+2. The RIP function is appended after the character cut, never inside it. A
+   long prologue otherwise pushes the strongest evidence out of the
+   identity. Two faulting functions behind one fault type then produce the
+   same signature, and the second registers as a duplicate that never
+   reaches `rca`.
 
 The RIP anchor is located by pattern, because the amount of prologue preceding
 it varies with the fault type. Its offset is dropped for the same reason stack
@@ -113,25 +120,36 @@ matches nothing and leaves the signature unchanged.
 A kernel log is split into blocks, so one KASAN report becomes one registry
 entry. Without the split, each matching line registers its own entry.
 
-| Line | Effect |
-|---|---|
-| `BUG:` | Always opens a new block |
-| `KASAN:` | Always opens a new block |
-| `Oops` | Opens a block only when no block is open |
-| `Kernel panic` | Opens a block only when no block is open |
+Four line shapes can start a report: `BUG:`, `KASAN:`, `Kernel panic` and
+`Oops`. Whether one of them closes the block already open depends on which
+shape it is and on how far that block has got. A block is open once its start
+line is read, traced once a stack frame has been read into it, and ended once
+`---[ end ` has been read.
 
-A block runs through the end of its call trace. `Oops` and `Kernel panic` can
-belong to the prologue or the tail of the report already open: a single oops
-prints `BUG:`, then `Oops:`, then `Kernel panic`.
+| Line | State of the open block | Behaviour |
+|---|---|---|
+| A line starting `Kernel panic` | Open, traced or ended | Joins the open block |
+| A line starting `Oops` | Open | Joins the open block |
+| A line starting `Oops` | Traced or ended | Closes it and opens a new block |
+| Any other start line, `BUG:` and `KASAN:` among them | Open, traced or ended | Closes it and opens a new block |
+| Any start line | No block open | Opens the first block |
+
+The two exceptions exist because a single oops prints `BUG:`, then `Oops:`,
+then `Kernel panic`, so both of those lines belong to the report already open
+when no frame has been read yet. A `Kernel panic` trailing a traced report is
+that report's tail. An `Oops` after a traced report is a second fault.
 
 ## Xid identity
 
-Two fields are stripped from an NVRM title before it becomes a key.
+An NVRM line is registered from its own text and carries no call trace, so its
+secondary key is a sha1 of the stripped title body truncated to 16 hex digits,
+where every other Track K entry hashes stack frames. Two stripping steps remove
+three fields before that hash is taken.
 
-| Field stripped | Reason |
-|---|---|
-| `pid=` and the channel number | The same recurring Xid must deduplicate across processes and channels |
-| The PCI bus id | Which card faulted is provenance. On a multi-GPU box the same driver bug on two cards is one bug |
+- `pid=` and the channel number, so the same recurring Xid deduplicates
+  across processes and channels.
+- The PCI bus id. Which card faulted is provenance, and on a multi-GPU box
+  the same driver bug on two cards is one bug.
 
 The bus id is retained in the classification note. Classification runs before
 the bus id is stripped, because `XID_NUM_RE` consumes the parenthesised bus id
@@ -139,14 +157,22 @@ as a group. Skipping that group loosely reads the first field of the bus id as
 the Xid number and classifies every crash as an unknown Xid 0.
 
 `XID_CLASS` in `tools/crash_parse.py` maps 22 known Xid numbers to one of four
-classes. An unlisted number defaults to `review`.
+classes, 6 as `noise`, 11 as `signal`, 4 as `health` and 1 as `review`. An
+unlisted number defaults to `review`.
 
 | Class | Xid numbers | Meaning | Effect |
 |---|---|---|---|
-| `noise` | 8, 13, 31, 43, 45, 69 | Application-caused faults: illegal instruction, illegal GPU address, channel error, preemptive cleanup | The fuzzer causes these by design. Kept as an audit trail and excluded from every derived crash count |
-| `signal` | 32, 38, 48, 61, 62, 92, 94, 95, 119, 120, 140 | Corrupted push buffer, driver firmware error, ECC errors, micro-controller halt, GSP RPC timeout and GSP error | Queued for RCA |
-| `health` | 63, 64, 74, 79 | ECC page retirement and its failure, NVLink error, and the GPU falling off the bus | Not a finding. The measurement path is degraded |
-| `review` | 12, and every unlisted number | Driver error-handling exception | The default, read by a human |
+| `noise` | 8, 13, 31, 43, 45, 69 | Application-caused faults: a stopped video engine, an illegal instruction or address, a page fault on an illegal address, a channel error, preemptive channel cleanup, and a graphics engine class error | The fuzzer causes these by design. Kept as an audit trail and excluded from every derived crash count |
+| `signal` | 32, 38, 48, 61, 62, 92, 94, 95, 119, 120, 140 | A corrupted push buffer stream, a driver firmware error, ECC errors of five kinds (48, 92, 94, 95, 140), a micro-controller breakpoint and halt, a GSP RPC timeout and a GSP error | Queued for RCA |
+| `health` | 63, 64, 74, 79 | ECC page retirement, its failure, an NVLink error, and the GPU falling off the bus | Not a finding. The measurement path is degraded |
+| `review` | 12, and every unlisted number | A driver error-handling exception | The default, read by a human |
+
+The classification note carries the Xid number and its meaning. For a number
+outside the table the note says so, and names the treatment:
+
+```
+Xid 141 is not in the classification table — treated as review, not exhaust, so a new signal is never silently discarded
+```
 
 A wrongly classified `noise` entry drops real crashes from every derived count
 with no warning, which is why an unlisted number defaults to `review`.
@@ -162,8 +188,8 @@ stateDiagram-v2
   flagged --> duplicate: crash-set --duplicate-of
   duplicate --> unique: crash-set --duplicate-of none
   unique --> rca_done: rca finished
-  rca_done --> reliable: verify, rate >= threshold
-  rca_done --> flaky: verify, rate > 0
+  rca_done --> reliable: verify, rate >= poc.reliable_threshold
+  rca_done --> flaky: verify, 0 < rate < poc.reliable_threshold
   rca_done --> unreproducible: verify, rate == 0
   reliable --> reported
   flaky --> reported
@@ -182,7 +208,7 @@ stateDiagram-v2
 | Into `unique`, `flagged` or `duplicate` | `crash_parse.py` | The registry entry and its history trail |
 | `flagged` to `unique` or `duplicate` | `pipeline_ctl.py crash-set` | The same, plus `duplicate_of` |
 | `unique` to `rca_done` | The `rca` sub-agent | `rca_done_at`, stamped once and never cleared |
-| `rca_done` to a reproduction class | `repro_ctl.py verify` | `repro_rate` and the counted-run total |
+| `rca_done` to a reproduction class | `repro_ctl.py verify` | `repro_rate` and the counted-run total. `poc.reliable_threshold` is 0.8, and separates `reliable` from `flaky` |
 | To `reported` | The `report` sub-agent | The disclosure package |
 
 Every status write goes through one function, which appends to the crash's

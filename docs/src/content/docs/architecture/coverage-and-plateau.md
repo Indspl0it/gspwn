@@ -1,6 +1,6 @@
 ---
 title: Coverage and plateau
-description: The species-accumulation model, the Heaps' law fit, the parameters that decide a plateau, the unknown cases, and the two limits the model states.
+description: The species-accumulation model, the Heaps' law fit, the parameters that decide a plateau, the unknown cases, and the three limits the model states.
 ---
 
 Two curves and a ledger decide whether to run another round. The edge curve
@@ -25,7 +25,8 @@ converge.
 ## Model
 
 Coverage growth is a species-discovery process. The framing is Böhme's, from
-*STADS: Software Testing as Species Discovery* (TOSEM, 2018).
+*STADS: Software Testing as Species Discovery* (TOSEM, 2018). Each model term
+maps onto one pipeline quantity.
 
 | Model term | Pipeline quantity |
 |---|---|
@@ -50,10 +51,15 @@ that reset differently.
 | x | Cumulative executions | Sum of per-sample deltas | The delta is the new reading itself, so no negative delta is recorded |
 | y | Distinct edges | Running maximum | The replayed count contributes zero until it passes the previous high-water mark |
 
-| Axis choice | Failure it removes |
-|---|---|
-| Executions on x | A fixed wall-clock window contains widely varying amounts of testing on a machine that panics by design, so a slow hour has the same shape as saturation |
-| Running maximum on y | syzkaller re-executes its corpus after every restart. Taken from the raw reported count, a saturated run reports tens of percent of growth after each panic, and a campaign that has stopped finding edges continues on the strength of its own crashes |
+Each axis choice removes one failure.
+
+- Executions on x. A fixed wall-clock window contains widely varying amounts
+  of testing on a machine that panics by design, so a slow hour has the same
+  shape as saturation.
+- Running maximum on y. syzkaller re-executes its corpus after every restart.
+  Taken from the raw reported count, a saturated run reports tens of percent
+  of growth after each panic, and a campaign that has stopped finding edges
+  continues on the strength of its own crashes.
 
 ## The fit
 
@@ -89,20 +95,22 @@ execution rate.
 
 ## Parameters
 
+Fourteen configuration keys govern the fit and the stop rule.
+
 | Config key | Default | Effect |
 |---|---|---|
 | `coverage.plateau_new_edges` | 50 | Expected new edges below which the run is `plateaued` |
 | `coverage.horizon_hours` | 1000 | How far ahead the extrapolation runs. Matches `loop.campaign_hours`, the unit of spend the decision authorises |
-| `coverage.model_min_r2` | 0.90 | Fit quality below which no extrapolation is reported and the verdict is `unknown` |
-| `coverage.min_fit_samples` | 8 | Points needed inside the tail before extrapolating |
+| `coverage.model_min_r2` | 0.90 | Fit quality below which no extrapolation is reported and the verdict is `unknown`. Validation requires a value strictly between 0 and 1 |
+| `coverage.min_fit_samples` | 8 | Points needed inside the tail before extrapolating. Validation refuses a value below 3, where a least-squares fit of two points is exact and describes nothing |
 | `coverage.fit_tail_fraction` | 0.5 | Fraction of the run's executions fitted. 1.0 fits everything |
-| `coverage.beta_tolerance` | 0.05 | Slack above `beta = 1` absorbing early sampling noise |
+| `coverage.beta_tolerance` | 0.05 | Slack above `beta = 1` absorbing early sampling noise. Accepted from 0 up to but not including 1 |
 | `coverage.gpu_probe_timeout_sec` | 20 | Ceiling on `nvidia-smi` before the driver counts as wedged. Track K only |
 | `coverage.surface_sample_min` | 60 | Minutes between surface samples. 0 measures the surface on every coverage sample |
-| `coverage.surface_min_samples` | 5 | Surface samples needed before the second curve's shape is read. Minimum 2 |
+| `coverage.surface_min_samples` | 5 | Surface samples needed before the second curve's shape is read. Validation refuses a value below 2, where there is nothing to compare against |
 | `coverage.unpack_timeout_sec` | 300 | Ceiling on one `syz-db unpack` of a run's corpus |
 | `loop.stop_on_plateau` | `true` | Whether a `plateaued` verdict stops the loop. A plateau stop is overridable with a reason. The round cap, the run-hour budget and surface completion are not |
-| `loop.plateau_window_min` | 240 | Trailing wall-clock window for the legacy fallback |
+| `loop.plateau_window_min` | 240 | Trailing wall-clock window, used twice. The legacy fallback measures growth over it, and the GPU gate reads the samples that fall inside it |
 | `loop.plateau_min_growth` | 0.02 | Growth threshold for the legacy fallback |
 | `loop.coverage_sample_min` | 10 | Sampling cadence, which sets how many points a run produces |
 
@@ -114,12 +122,14 @@ execution rate.
    A lower reading means the fuzzer is still replaying, and the verdict is
    `unknown`.
 4. Cut the tail to the last `coverage.fit_tail_fraction` of executions, and
-   measure the execution rate.
-5. When the tail holds at least `coverage.min_fit_samples` points, carries an
-   execution axis, and contains exactly one distinct edge value, return
-   `plateaued`. A curve with no variance in `S` cannot be fitted.
-6. When no execution rate is measurable, fall through to the legacy
-   wall-clock window and mark the result a degraded measurement.
+   measure the execution rate over the sampled span.
+5. When an execution rate is measurable and the tail holds at least
+   `coverage.min_fit_samples` points, ends on a non-zero cumulative execution
+   count, and contains exactly one distinct edge value, return `plateaued`
+   without fitting. A curve with no variance in `S` cannot be fitted.
+6. When no execution rate is measurable, or the fit returns no curve, fall
+   through to the legacy wall-clock window and mark the result a degraded
+   measurement.
 7. Fit `S = K n^beta` over the tail. Reject fewer than
    `coverage.min_fit_samples` fitted points, an `R2` below
    `coverage.model_min_r2`, or a `beta` outside
@@ -127,8 +137,15 @@ execution rate.
 8. Extrapolate over `coverage.horizon_hours` at the measured rate. Return
    `growing` at or above `coverage.plateau_new_edges`, and `plateaued` below
    it.
-9. Downgrade a `plateaued` verdict to `unknown` when any Track K sample in the
-   window recorded a GPU state other than `ok`.
+9. Downgrade a `plateaued` verdict to `unknown` when any sample in the
+   trailing `loop.plateau_window_min` window recorded a GPU state other than
+   `ok`. Track U rows record `n/a` and are excluded.
+10. Raise a surviving `plateaued` verdict to `growing` when the surface curve
+    is `growing`. A `flat` or `unknown` surface reading is appended to the
+    detail line and leaves the verdict alone.
+
+Steps 1 to 8 produce the verdict. Steps 9 and 10 apply to `plateaued` only,
+and in that order.
 
 ```mermaid
 flowchart TB
@@ -140,12 +157,14 @@ flowchart TB
   EMPTY -->|yes| REPLAY{"latest reported count<br/>below this run's high-water mark?"}
   REPLAY -->|yes| U3["unknown: still replaying<br/>after a restart"]
   REPLAY -->|no| TAIL["fit_tail: the last<br/>fit_tail_fraction of executions"]
-  TAIL --> FLAT{"no new edge across<br/>the whole tail?"}
-  FLAT -->|yes| P1["plateaued: the clearest case"]
-  FLAT -->|no| RATE{"an execution rate<br/>is measurable?"}
+  TAIL --> RATE{"an execution rate<br/>is measurable?"}
   RATE -->|no| LEG["legacy fallback:<br/>growth over a wall-clock window"]
-  RATE -->|yes| FIT["fit S = K n^beta"]
-  FIT --> PTS{"enough points<br/>for min_fit_samples?"}
+  RATE -->|yes| FLAT{"at least min_fit_samples tail points,<br/>a non-zero execution axis,<br/>and one distinct edge value?"}
+  FLAT -->|yes| P1["plateaued: the clearest case"]
+  FLAT -->|no| FIT["fit S = K n^beta"]
+  FIT --> FITOK{"did the fit return a curve?"}
+  FITOK -->|no| LEG
+  FITOK -->|yes| PTS{"enough points<br/>for min_fit_samples?"}
   PTS -->|no| U4["unknown: too few for a fit"]
   PTS -->|yes| R2{"R2 &gt;= model_min_r2?"}
   R2 -->|no| U5["unknown: the curve does not<br/>fit the model"]
@@ -157,9 +176,14 @@ flowchart TB
   THR -->|no| P2["plateaued"]
   P1 --> GPU{"was the GPU healthy<br/>across the window?"}
   P2 --> GPU
-  LEG --> GPU
+  LEG --> LEGV{"legacy verdict"}
+  LEGV -->|plateaued| GPU
+  LEGV -->|growing| G
+  LEGV -->|unknown| U8["unknown: the window is unfilled,<br/>too sparse, or has no baseline"]
   GPU -->|no| U7["unknown: a dead GPU flattens<br/>the curve the same way"]
-  GPU -->|yes| PLAT["plateaued"]
+  GPU -->|yes| SURF{"is the surface curve<br/>still growing?"}
+  SURF -->|yes| G2["growing: the round is still reaching<br/>commands it had not reached"]
+  SURF -->|no| PLAT["plateaued"]
 ```
 
 A detail line accompanies every verdict:
@@ -175,10 +199,9 @@ machine time, and 2.5% of a run's coverage reads differently from 37%.
 horizon sets a high bar on its own. Against 3.41e+09 executions already done,
 another 1000 h at any productive execution rate multiplies the cumulative
 count many times over, and a power law with a fitted `beta` well above zero
-clears 50 expected new edges easily. A `plateaued` verdict from the fit
-therefore requires a `beta` close to zero, and most real plateaus are caught
-earlier, by the flat-tail case in step 5 that returns `plateaued` without
-fitting anything.
+clears 50 expected new edges. A `plateaued` verdict from the fit therefore
+requires a `beta` close to zero. Most real plateaus are caught before the fit
+runs at all, by the flat-tail case in step 5.
 
 ## Unknown verdicts
 
@@ -194,6 +217,9 @@ sampler cannot authorise more spend.
 | Model mismatch | `the discovery curve does not fit the model well enough to extrapolate from (R2 ...)` | A stuck sampler, a source change mid-run, or a genuine regime change. All three present identically and need different responses |
 | Not an accumulation curve | `discovery exponent beta=... is outside (0, 1]` | No extrapolation from the series is meaningful |
 | GPU gate | `the GPU was not healthy for N of M sample(s) in the window` | See below |
+| Window not yet filled | `N min of samples, shorter than the M min window` | The legacy fallback only. The run is shorter than `loop.plateau_window_min` |
+| Window too sparse | `only N sample(s) inside the window` | The legacy fallback only. Fewer than two samples fall inside the trailing window |
+| No baseline | `no non-zero edge baseline in the window` | The legacy fallback only. The first sample in the window reports zero edges, so no growth fraction can be formed |
 
 ## The GPU gate
 
@@ -201,19 +227,31 @@ A GPU that has fallen off the bus does not stop the fuzzer. syz-manager keeps
 executing, the sampler keeps appending rows, the edge count stops moving, and
 an ungated test reports a plateau that the fuzzer never reached.
 
-Every Track K sample records the GPU state alongside the counters. A
-`plateaued` verdict is downgraded to `unknown` when any sample in the window
-recorded a state other than `ok`:
+Every Track K sample records the GPU state alongside the counters. The window
+is the trailing `loop.plateau_window_min` minutes, or the whole run when no
+sample falls inside it. A `plateaued` verdict is downgraded to `unknown` when
+any sample in that window recorded a state other than `ok`:
 
 ```
 ..., but the GPU was not healthy for 12 of 24 sample(s) in the window (dead x12). A dead GPU flattens the curve the same way a real plateau does, so this is not reported as a plateau. Check `coverage_ctl.py gpu-health` and the run's Xid entries before deciding the round is done.
 ```
 
-| Rule | Reason |
-|---|---|
-| The gate applies to `plateaued` only | Coverage cannot climb on a GPU that is not answering, so a `growing` verdict establishes that the probe result was transient |
-| A row written before the GPU column existed counts as unhealthy | Such a row carries no evidence that the GPU was alive |
-| Track U rows record `n/a` and are excluded | Those harnesses run in a container and never touch the GPU, so gating them would report a genuine Track U plateau as `unknown` |
+`gpu_health()` records one of five statuses: `ok`, `dead` when `nvidia-smi`
+exits non-zero or names no GPU, `hung` when it does not return within
+`coverage.gpu_probe_timeout_sec`, `missing` when it is not on `PATH`, and
+`error` when it could not be run at all. The probe reports and attempts no
+recovery.
+
+Three rules bound the gate.
+
+- The gate applies to `plateaued` only. Coverage cannot climb on a GPU that is
+  not answering, so a `growing` verdict establishes that the probe result was
+  transient.
+- A row written before the GPU column existed counts as unhealthy. Such a row
+  carries no evidence that the GPU was alive.
+- Track U rows record `n/a` and are excluded. Those harnesses run in a
+  container and never touch the GPU, so gating them would report a genuine
+  Track U plateau as `unknown`.
 
 ## Legacy fallback
 
@@ -221,6 +259,11 @@ A source that reports no execution count still has to produce a verdict.
 `_legacy_window_verdict()` measures growth across a trailing wall-clock window
 of `loop.plateau_window_min` against `loop.plateau_min_growth`, on the
 accumulation curve.
+
+Three conditions return `unknown` before a growth fraction can be formed: a run
+shorter than the window, fewer than two samples inside the window, and a zero
+edge count on the window's first sample. Otherwise the verdict is `growing` or
+`plateaued` on the threshold.
 
 The result is reported as a degraded measurement, because a wall-clock window
 cannot distinguish a slow hour from a saturated one:
@@ -230,6 +273,9 @@ no execution counts recorded, so growth is measured over elapsed time with no me
 ```
 
 ## Combining the tracks
+
+Each track produces its own verdict, and the campaign verdict is their
+combination.
 
 | Per-track verdicts | Combined |
 |---|---|
@@ -241,13 +287,18 @@ Stopping because Track K flattened while the container-toolkit harnesses were
 still growing ends the campaign early. A track with no samples at all is
 ignored and does not force `unknown`.
 
-## Stated limits
+The model states three limits.
 
-| Limit | Consequence | Direction of the bias |
-|---|---|---|
-| No Good-Turing or Chao1 estimate | Those estimators need per-species frequency counts, and syz-manager's stats endpoint reports an aggregate edge count with nothing per-edge. No fraction-of-driver-covered figure is computed | None. The figure is absent |
-| `max()` under-reports the union | A post-restart process can cover an edge the earlier one missed while its total is still lower, and that edge is not counted | Under-reports discovery, which ends a campaign early |
-| Kernel-side reachable code only | GSP firmware is uninstrumented, so no coverage number describes it | None. `series` and `plateau` print the statement on every invocation |
+- No Good-Turing or Chao1 estimate. Those estimators need per-species
+  frequency counts, and syz-manager's stats endpoint reports an aggregate edge
+  count with nothing per-edge. No fraction-of-driver-covered figure is
+  computed. The figure is absent and no bias follows.
+- `max()` under-reports the union. A post-restart process can cover an edge
+  the earlier one missed while its total is still lower, and that edge is not
+  counted. The bias under-reports discovery, which ends a campaign early.
+- Kernel-side reachable code only. GSP firmware is uninstrumented, so no
+  coverage number describes it. `series` and `plateau` print the statement on
+  every invocation, and no bias follows.
 
 ## The surface curve
 
@@ -257,14 +308,21 @@ unpacks `artifacts/runs/<id>/workdir/corpus.db` through syz-db and matches
 variant names against the inventories, which is a measurement syz-manager's
 stats endpoint cannot supply: it holds no model of the 852 targets.
 
-| Property | Value |
-|---|---|
-| Cadence | `coverage.surface_sample_min`, default 60 minutes, gated by `surface_due()` |
-| Cadence memory | The CSV itself. The last row carrying a surface value is the last measurement, so the cadence survives a sampler restart and a reboot |
-| Operator escape hatch | `--skip-surface` on `sample`, which the timer's Track U line passes |
-| Track U | Refused. Those harnesses produce no syzlang programs, and a 0 would put an absence of evidence into the curve as a measurement |
-| Failure | A missing syz-db, a `corpus.db` syz-manager is midway through rewriting, and an unpack failure all record an empty value, which `metric_rows` drops |
-| Accumulation | Running maximum, because syzkaller minimises its corpus and a genuine dip must contribute zero |
+Six properties govern the second measurement.
+
+- The cadence is `coverage.surface_sample_min`, default 60 minutes, gated by
+  `surface_due()`.
+- The cadence is remembered in the CSV itself. The last row carrying a surface
+  value is the last measurement, so the cadence survives a sampler restart and
+  a reboot.
+- `--skip-surface` on `sample` is the operator escape hatch, and the timer's
+  Track U line passes it.
+- Track U is refused. Those harnesses produce no syzlang programs, and a 0
+  would put an absence of evidence into the curve as a measurement.
+- A missing syz-db, a `corpus.db` syz-manager is midway through rewriting, and
+  an unpack failure all record an empty value, which `metric_rows` drops.
+- Accumulation is by running maximum, because syzkaller minimises its corpus
+  and a genuine dip must contribute zero.
 
 `surface_growth(rows)` returns `growing`, `flat` or `unknown` and fits nothing.
 Heaps' law is not transferred to this series for three reasons: an unbounded
@@ -273,20 +331,35 @@ remain, the dynamic range makes the `R2` gate close to arbitrary over a
 400-to-410 series, and the question the stop rule asks the second curve is only
 whether it moved, which is subtraction.
 
-`coverage.surface_min_samples` is 5, higher than the edge curve's floor,
-because the surface counter is quantised and a short tail sitting between two
-steps is a common state.
+`coverage.surface_min_samples` is 5. `plateau_verdict` returns a verdict on
+three usable samples, so the surface curve is read from a longer series than
+the edge curve needs, because the surface counter is quantised and a short
+tail sitting between two steps is a common state. Where the tail is shorter
+than that floor, the whole series is read instead, which can only report
+growth a shorter window missed.
 
 The surface reading is applied after the GPU gate. A dead GPU does not flatten
 the surface count the way it flattens the edge count, since programs still
 execute and still enter the corpus, so a climbing surface curve is not evidence
 that the card is alive.
 
-A run started before the `surface` column existed gains no second curve.
-`cmd_sample` appends under the header the file already carries and no
-header-rewrite path exists, so such a run warns on every sample and reads
+A run started before the `surface` column existed gains no second curve until
+its CSV is migrated. `cmd_sample` appends under the header the file already
+carries, so a value measured for such a file would be dropped by the writer.
+`surface_due()` refuses the measurement on that ground, because the unpack and
+the full corpus rescan it costs would buy nothing storable. Such a run warns on
+every sample and reads
 `surface_verdict=unknown`, which stops the loop on the plateau rule and never
 on completion.
+
+`coverage_ctl.py migrate-csv --run-id <id>` is the one operation on a coverage
+CSV that is not an append. It adds the columns the header lacks, pads every
+existing row, keeps the existing columns in their positions and carries the
+file's mode across, so anything reading the file by column index still reads
+the same numbers. It is an operator step: the sampler runs as root and appends
+on a cadence, and a sample landing mid-rewrite would be dropped, so the file's
+size is compared before and after and a change aborts with the file untouched.
+Stop the sampler before running it.
 
 ## The completion check
 
@@ -341,12 +414,14 @@ it on the round, so no flag transcribes it.
 
 ## Reading a plateau against the surface
 
-236 of the non-privileged control commands have their handler compiled out and
-their parameter buffer marshalled across the RPC queue to GSP. A corpus
-drifting onto those raises executions and moves no edge count, so the
-accumulation curve flattens while the fuzzer is still issuing calls it has
-never issued. The GSP subset is a structural ceiling in the edge signal, and an
-edge count alone reads that ceiling and a plateau identically.
+The driver exposes 767 non-privileged control commands. 531 of them carry a
+kernel-side handler and are the control family's contribution to the 852-target
+denominator. The other 236 have their handler compiled out and their parameter
+buffer marshalled across the RPC queue to GSP, and are counted outside the
+denominator. A corpus drifting onto those raises executions and moves no edge
+count, so the accumulation curve flattens while the fuzzer is still issuing
+calls it has never issued. The GSP subset is a structural ceiling in the edge
+signal, and an edge count alone reads that ceiling and a plateau identically.
 
 | Surface reading at a flat edge curve | Diagnosis | Next action |
 |---|---|---|
@@ -358,12 +433,17 @@ See [surface_cov.py](/gspwn/architecture/components/surface-cov/).
 
 ## Verdict consumers
 
-| Consumer | Use |
-|---|---|
-| `pipeline_ctl.py round-end --from-run` | Records the edge verdict and the completion reading on the round, as one write |
-| `pipeline_ctl.py round-decide` | `plateaued` stops the loop when `loop.stop_on_plateau` is set. `unknown` always stops it. A `complete` surface verdict stops it non-overridably, checked ahead of the round cap and the budget |
-| The `refine` sub-agent | The detail line's expected-new-edges figure goes into `gaps.md`, and the unaddressed targets go into the worklist or the ledger |
-| The `eval` sub-agent | The series and the cross-round progression |
+Four consumers read the verdict.
+
+- `pipeline_ctl.py round-end --from-run` records the edge verdict and the
+  completion reading on the round, as one write.
+- `pipeline_ctl.py round-decide` stops the loop on `plateaued` when
+  `loop.stop_on_plateau` is set. `unknown` always stops it. A `complete`
+  surface verdict stops it non-overridably, checked ahead of the round cap and
+  the budget.
+- The `refine` sub-agent takes the detail line's expected-new-edges figure into
+  `gaps.md`, and the unaddressed targets into the worklist or the ledger.
+- The `eval` sub-agent reads the series and the cross-round progression.
 
 A `plateaued` verdict states that this grammar has stopped reaching new code.
 It does not establish that the subsystem is covered.

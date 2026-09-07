@@ -3,7 +3,7 @@ title: Sub-agents
 description: The twelve phases, the dispatch contract and its isolation boundary, the prohibitions and method rules the contracts enforce, and the path by which a finding reaches the next round.
 ---
 
-Twelve sub-agent definitions live in `agents/`, one per phase. Each file is a
+`agents/` holds twelve sub-agent definitions, one per phase. Each file is a
 contract stating what the sub-agent reads, what it does, what it writes, what
 gate evidence it returns, and what it records in `knowledge/`.
 
@@ -22,13 +22,20 @@ gate evidence it returns, and what it records in `knowledge/`.
 | `refine` | Once per round | Both | The gap analysis and the next round's work list |
 | `report` | Once, after the loop stops | Both | The report and the disclosure packages |
 
+The gate each phase must satisfy is tabulated in
+[First campaign](/gspwn/getting-started/first-campaign/), and the gate
+section of `agents/<phase>.md` is the authority on the full evidence list.
+
 ## The dispatch contract
 
-| Direction | Content |
-|---|---|
-| Into the sub-agent | The full contents of `agents/<phase>.md`, `config/machine.yaml`, `config/campaign.yaml`, and the paths of the artifacts the phase reads |
-| Out of the sub-agent | A one-paragraph summary, plus gate evidence naming artifact paths |
-| Never crosses | Another sub-agent's transcript |
+Three clauses fix what crosses the dispatch boundary.
+
+- Into the sub-agent goes the full contents of `agents/<phase>.md`,
+  `config/machine.yaml`, `config/campaign.yaml`, and the paths of the artifacts
+  the phase reads.
+- Out of the sub-agent comes a one-paragraph summary, plus gate evidence naming
+  artifact paths.
+- Another sub-agent's transcript never crosses.
 
 Sub-agents hand off artifact paths. Two properties follow from that boundary.
 
@@ -46,28 +53,53 @@ measurement.
 
 ### Cross-phase state on disk
 
-The work list is recorded in `state/pipeline.json`, so the next sub-agent reads
-the previous run id from the state file. No two sub-agent contracts have to
-agree on a filename convention.
+The handoff between rounds is a field of the round record in
+`state/pipeline.json`, never a filename two contracts agree on. `round-end
+--worklist <path>` writes `round.worklist`, `round-advance` copies it into the
+new round's `round.worklist_in`, and the next round's `describe` and `seeds`
+read it back with `pipeline_ctl.py worklist`. The same record carries the run
+ids a round covers, in `round.run_ids`, so a sub-agent asked for the previous
+run id reads it from there.
 
 ## Prohibitions
 
-| Prohibited action | Reason |
-|---|---|
-| Hand-editing `state/pipeline.json` | The tool validates, locks and writes atomically. Parallel sub-agents editing the file directly lose each other's updates |
-| Typing in a measured number | `round.run_hours` feeds the spend ceiling, and the sampler already wrote every figure to `coverage.csv` |
-| Removing a target because a hypothesis places the bug elsewhere | `rca` holds the only judgement in the loop, so a confident wrong one narrows every remaining round |
-| Working past a `blocked` phase | A blocked gate halts the walk |
-| Widening scope because an ioctl surface looked reachable | Scope is a threat-model decision, recorded in [Threat model](/gspwn/architecture/threat-model/) first |
-| Claiming tenant reachability from the fuzzer's own environment | syzkaller holds a wider capability set than the modelled attacker |
-| Recording a finding in `knowledge/` | Those files are committed to a public repository |
+Seven actions are prohibited across the contracts.
 
-## The two steering signals
+- Never hand-edit `state/pipeline.json`. The tool validates, locks and writes
+  atomically, and parallel sub-agents editing the file directly lose each
+  other's updates.
+- Never type in a measured number. `round.run_hours` feeds the spend ceiling,
+  and the sampler already wrote every figure to `coverage.csv`.
+- Never remove a target because a hypothesis places the bug elsewhere. `rca`
+  holds the only judgement in the loop, so a confident wrong one narrows every
+  remaining round.
+- Never work past a `blocked` phase. A blocked gate halts the walk.
+- Never widen scope because an ioctl surface looked reachable. Scope is a
+  threat-model decision, recorded in
+  [Threat model](/gspwn/architecture/threat-model/) first.
+- Never claim tenant reachability from the fuzzer's own environment. syzkaller
+  holds a wider capability set than the modelled attacker.
+- Never record a finding in `knowledge/`. Those files are committed to a public
+  repository.
+
+## The steering signals
+
+Three signals reach the work list, and they answer different questions.
+Surface names the enumerated commands the corpus has never called. Findings
+name the calls adjacent to a bug that already happened, sharing its object,
+lock, refcount or teardown path. History names the calls whose handlers NVIDIA
+has already patched for a kernel-mode CVE. A fourth reading, the edge curve,
+says whether the fuzzer is still finding code inside the calls it already
+makes. It steers the stop decision, it names no call, and so it produces no
+work-list item.
+
+The diagram below draws the two signals a round measures for itself. History is
+written once, before any campaign has run, and enters the same merge.
 
 ```mermaid
 flowchart LR
-  subgraph COV["Coverage: where the fuzzer has NOT been"]
-    C1["the run's own curve"] --> C2["gaps: unmodeled,<br/>mismodeled,<br/>unreachable-by-construction"]
+  subgraph COV["Surface: which enumerated commands the corpus has NOT named"]
+    C1["surface_cov.py gaps<br/>over the 852 targets"] --> C2["gaps: unmodeled,<br/>mismodeled,<br/>unreachable-by-construction"]
   end
   subgraph FIND["Findings: where the bugs HAVE been"]
     F1["research records"] --> F2["per-subsystem rollup:<br/>which subsystem yields"]
@@ -79,23 +111,26 @@ flowchart LR
   MERGE --> WL["worklist.md<br/>every item tagged<br/>[surface], [finding crash-NNNN]<br/>or [history CVE-YYYY-NNNNN]"]
 ```
 
-| Signal | Produced by | Answers | Consumed by |
+| Signal | Produced by | Answers | Work-list tag |
 |---|---|---|---|
-| Coverage | `coverage_ctl.py series` and `plateau`, `surface_cov.py gaps` | Where the fuzzer has not been | `refine`, into `gaps.md` |
-| Findings | `pipeline_ctl.py finding-list` | Where the bugs have been | `refine`, into `worklist.md` |
-| History | `surface/worklist-round1.md` | Where the vendor has fixed bugs before | The round-1 `describe` and `seeds` phases |
+| Surface | `surface_cov.py gaps --run-id <id>`, by stage | Which enumerated commands the corpus has not named | `[surface]` |
+| Findings | `pipeline_ctl.py finding-list` | Which calls are adjacent to a bug that already happened | `[finding crash-NNNN]` |
+| History | `surface/worklist-round1.md`, from `cve_patch_map.py worklist` | Which handlers NVIDIA has already patched | `[history CVE-YYYY-NNNNN]` |
+| Edge curve | `coverage_ctl.py series` and `plateau` | Whether the fuzzer is still finding code inside the calls it makes | None |
 
-A loop following coverage alone keeps widening the surface and never returns to
-a subsystem that already yielded a bug. Every work-list item carries a
-`[surface]`, `[finding crash-NNNN]` or `[history CVE-YYYY-NNNNN]` tag naming
-which signal produced it, and the `refine` gate reports the split. The tags are
-specified in
+A loop following the surface alone keeps widening it and never returns to a
+subsystem that already yielded a bug. Every work-list item carries the tag of
+the signal that produced it, and the `refine` gate reports the split. A history
+item decays. `refine` carries it into the next round only while
+`surface_cov.py gaps` still reports it unmodelled or unexercised, and an item
+that produced a finding re-enters under its own `[finding crash-NNNN]` tag. The
+tags are specified in
 [Historical targeting](/gspwn/architecture/historical-targeting/).
 
 ## The feedback edge
 
 ```mermaid
-flowchart LR
+flowchart TB
   CR["crash-0001"] --> RCA["rca reads the driver source"]
   RCA --> FS["finding-set:<br/>adjacent, preconditions,<br/>hypothesis, source_refs"]
   FS --> REG[("registry entry<br/>crash.finding")]
@@ -154,14 +189,30 @@ A gate says what a phase must show. Six of the contracts also carry a rule
 about how the work is done, and each exists because the cheap way to satisfy
 the gate produces a wrong number.
 
-| Phase | Rule | Failure it prevents |
-|---|---|---|
-| `describe` | Descriptions are agent-authored and treated as untrusted until measured. Every number and struct layout comes from the driver source | The ABI shifts between branches, and a wrong direction bit produces descriptions that compile, run and never reach the driver |
-| `seeds` | A precondition no available CUDA workload reaches is reported as unreached. A control command reaches a program through the allocation chains and never through a trace | `strace` decodes no NVIDIA parameter struct, so a trace names the escape and never the command behind it |
-| `harness` | Sanitizer settings are explicit per harness. Leak detection is a stated choice, and UBSan runs with `halt_on_error=1` | Without it the process continues past the first error and the crashing input no longer matches the report |
-| `fuzz` | The smoke window is an early abort check. The gate requires the full campaign window | Advancing on the smoke window bills a full campaign for half an hour of measurement |
-| `rca` | Every claim about code behaviour not verified against source is marked `[UNVERIFIED]`, and `eval` samples from exactly that set. `rca` records what the fault is worth, and `poc` establishes who can reach it | An unmarked guess about a fault path reaches a vendor as an asserted mechanism |
-| `report` | Detailed vulnerability sections only, no executive summary. A severity is argued as an explicit chain. A finding whose impact record cannot carry a severity is reported with its mechanism and no severity claim | A severity invented at report time rests on less evidence than the analysis phase had |
+- `describe`. Descriptions are agent-authored and treated as untrusted until
+  measured, and every number and struct layout comes from the driver source.
+  The ABI shifts between branches, and a wrong direction bit produces
+  descriptions that compile, run and never reach the driver.
+- `seeds`. A precondition no available CUDA workload reaches is reported as
+  unreached, and a control command reaches a program through the allocation
+  chains and never through a trace. `strace` decodes no NVIDIA parameter
+  struct, so a trace names the escape and never the command behind it.
+- `harness`. Sanitizer settings are explicit per harness. Leak detection is a
+  stated choice, and UBSan runs with `halt_on_error=1`, without which the
+  process continues past the first error and the crashing input no longer
+  matches the report.
+- `fuzz`. The smoke window is an early abort check, and the gate requires the
+  full campaign window. Advancing on the smoke window bills a full campaign for
+  half an hour of measurement.
+- `rca`. Every claim about code behaviour not verified against source is marked
+  `[UNVERIFIED]`, and `eval` samples from exactly that set. `rca` records what
+  the fault is worth, and `poc` establishes who can reach it. An unmarked guess
+  about a fault path otherwise reaches a vendor as an asserted mechanism.
+- `report`. Detailed vulnerability sections only, no executive summary. A
+  severity is argued as an explicit chain, and a finding whose impact record
+  cannot carry a severity is reported with its mechanism and no severity claim.
+  A severity invented at report time rests on less evidence than the analysis
+  phase had.
 
 `eval` carries two more. Version persistence replays every reliable reproducer
 against one newer driver branch, and its outcome is required: a recorded
@@ -175,10 +226,12 @@ challenges first.
 Every sub-agent reads the accumulated knowledge for its phase before starting,
 and records what it learns as it learns it.
 
-| File | Subject | Example entry |
-|---|---|---|
-| `knowledge/learnings.md` | The target | "UVM has its own ioctl numbering scheme and does not follow the RM escape convention" |
-| `knowledge/mistakes.md` | The process | "A flat coverage curve was reported as a plateau on a card that had stopped answering" |
+- `knowledge/learnings.md` holds what the campaigns learn about the target, as
+  in "UVM has its own ioctl numbering scheme and does not follow the RM escape
+  convention".
+- `knowledge/mistakes.md` holds what they learn about the process, as in "A
+  flat coverage curve was reported as a plateau on a card that had stopped
+  answering".
 
 These files are committed and outlive the box, the campaign and the session.
 They are the only content a rebuilt machine starts with. Entries are appended

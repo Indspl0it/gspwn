@@ -3,23 +3,33 @@ title: Loops
 description: All ten loops in the system, each with its entry condition, iteration body, exit condition, bound and owner.
 ---
 
-Ten loops run in gspwn, nesting three deep in places. Each carries a bound,
-because an unterminated loop on a machine billed by the hour spends without
-limit.
+Ten loops run in gspwn. The agent-owned ones nest four deep at their deepest,
+along the chain L6, L1, L2 and then whichever loop the running phase carries.
+Each loop states a bound, because an unterminated loop on a machine billed by
+the hour spends without limit.
 
 ## Nesting
 
-```
-L6 supervision  (systemd restarts the agent)
- └─ L1 round     (describe .. refine, then decide)
-     └─ L2 phase-gate  (next, dispatch, confirm, record)
-         ├─ L9 rung ladder      (inside the build phase)
-         ├─ L8 wait             (inside the fuzz phase)
-         │   └─ L4 deadline     (a systemd timer, running alongside)
-         ├─ L3 syzkaller inner  (owned by syz-manager, running alongside)
-         ├─ L5 sampling         (a systemd timer, running alongside)
-         ├─ L10 flagged queue   (inside the triage phase)
-         └─ L7 verify           (inside the poc phase)
+```mermaid
+flowchart TB
+  L6["L6 supervision<br/>systemd restarts the agent"]
+  L1["L1 round<br/>describe .. refine, then decide"]
+  L2["L2 phase-gate<br/>next, dispatch, confirm, record"]
+  L9["L9 rung ladder<br/>inside the build phase"]
+  L8["L8 wait<br/>inside the fuzz phase"]
+  L4["L4 deadline<br/>a systemd timer, running alongside"]
+  L3["L3 syzkaller inner<br/>owned by syz-manager, running alongside"]
+  L5["L5 sampling<br/>a systemd timer, running alongside"]
+  L10["L10 flagged queue<br/>inside the triage phase"]
+  L7["L7 verify<br/>inside the poc phase"]
+
+  L6 --> L1 --> L2
+  L2 --> L9
+  L2 --> L8 --> L4
+  L2 --> L3
+  L2 --> L5
+  L2 --> L10
+  L2 --> L7
 ```
 
 L3, L4 and L5 run under systemd and outlive any agent session.
@@ -27,7 +37,7 @@ L3, L4 and L5 run under systemd and outlive any agent session.
 | Loop | Owner | Bound |
 |---|---|---|
 | L1 round | `pipeline_ctl.py` | Surface completion, then `loop.max_rounds`, then `loop.max_total_run_hours` |
-| L2 phase-gate | The orchestrator | Twelve phases; halts on `blocked` |
+| L2 phase-gate | The orchestrator | Twelve phases; a `blocked` phase stops the orchestrator |
 | L3 syzkaller inner | syz-manager | The campaign deadline, enforced by L4 |
 | L4 deadline | systemd | Fires every `loop.deadline_check_min`; disables itself after enforcement |
 | L5 sampling | systemd | Fires every `loop.coverage_sample_min`; skips once the window elapses |
@@ -96,10 +106,11 @@ to produce one. `tools/cve_patch_map.py worklist` fills that position from
 NVIDIA's published kernel-mode CVEs, the one steering signal available before
 any campaign has run. It classifies 61 kernel-mode CVEs, resolves 53 of them to
 a release tag pair and ranks 270 changed functions, 27 of which reach a named
-ioctl target. The current run writes `surface/worklist-round1.md`
-with 14 `describe` items, 4 `seeds` items and 5 targets recorded as outside the
-tenant surface. A `[history CVE-YYYY-NNNNN]` item ranks a place where the
-vendor found a bug and is no evidence that a bug remains there. See
+ioctl target. The committed `surface/worklist-round1.md` carries 31 items: 22
+in its describe section, 4 in its seeds section, and 5 targets recorded as
+outside the tenant surface so that a later round does not rediscover them. A
+`[history CVE-YYYY-NNNNN]` item ranks a place where the vendor found a bug and
+is no evidence that a bug remains there. See
 [Historical targeting](/gspwn/architecture/historical-targeting/).
 
 `describe`, `seeds` and `harness` are declared parallel after the build phase
@@ -114,8 +125,8 @@ input from the describe phase and the three run concurrently.
 | Entry | Any phase is not `done` |
 | Iteration body | Ask `next`, mark `in_progress`, dispatch the sub-agent, confirm the evidence on disk, record `done` or `blocked` |
 | State carried | The phase records in `state/pipeline.json` |
-| Exit | `next` returns `complete`, or a phase is recorded `blocked` |
-| Bound | Twelve phases per pipeline; `blocked` halts the walk immediately |
+| Exit | `next` returns `complete`, or a phase is recorded `blocked` and the orchestrator stops at it |
+| Bound | Twelve phases per pipeline; a `blocked` phase stops the orchestrator before the next dispatch |
 
 ```mermaid
 flowchart TB
@@ -318,7 +329,9 @@ The session id is stored before the launch. See
 
 ```mermaid
 flowchart TB
-  L["acquire state/repro.lock<br/>non-blocking: a second session exits"] --> REC{"a run left in_flight?"}
+  K0{"track K and the fuzzer unit is active?"} -->|"yes, without --allow-live-campaign"| REFUSE["refuse: every panic the fuzzer<br/>causes would score as a hit"]
+  K0 -->|no| L["acquire state/repro.lock<br/>non-blocking: a second session exits"]
+  L --> REC{"a run left in_flight?"}
   REC -->|yes| RESOLVE["resolve it: same boot -> void;<br/>new boot + matching log -> hit;<br/>new boot + other crash -> void;<br/>new boot + no logs -> weak hit (K only)"]
   REC -->|no| CHK
   RESOLVE --> CHK{"counted runs &lt; --runs?"}
@@ -335,7 +348,9 @@ flowchart TB
   V --> PER
   C --> PER
   PER --> CHK
-  GIVE --> RATE
+  GIVE --> ANY{"any run counted?"}
+  ANY -->|no| EX1["exit 1: 0 counted runs,<br/>no rate recorded"]
+  ANY -->|yes| RATE
   RATE --> CLS["reliable / flaky / unreproducible<br/>recorded with the counted-run count"]
 ```
 
@@ -401,15 +416,17 @@ timer exists to prevent.
 
 ```mermaid
 flowchart TB
-  R1["RUNG=1<br/>KASAN+KCOV kernel, KASAN+KCOV modules"] --> G1{"gate: booted into it,<br/>KASAN matches, nvidia-smi works"}
+  R1["RUNG=1<br/>KASAN+KCOV kernel, KASAN+KCOV modules"] --> G1{"gate: booted into it,<br/>KASAN matches, the nvidia modules<br/>are loaded, nvidia-smi works"}
   G1 -->|pass| DONE1["record rung 1, stop"]
+  G1 -->|"fail on a stripped CFLAGS"| RETRY["patch conftest.sh,<br/>retry once per rung"]
+  RETRY --> G1
   G1 -->|fail| H1["harvest crash logs,<br/>write rung-1-failed.md"]
   H1 --> R2["RUNG=2 SKIP_KERNEL=1<br/>KCOV-only modules"]
-  R2 --> G2{"same gate, KASAN state<br/>matching this rung"}
+  R2 --> G2{"same four-condition gate,<br/>KASAN state matching this rung"}
   G2 -->|pass| DONE2["record rung 2, stop"]
   G2 -->|fail| H2["harvest, write rung-2-failed.md"]
   H2 --> R3["RUNG=3 SKIP_KERNEL=1<br/>uninstrumented modules"]
-  R3 --> G3{"same gate, KASAN state<br/>matching this rung"}
+  R3 --> G3{"same four-condition gate,<br/>KASAN state matching this rung"}
   G3 -->|pass| DONE3["record rung 3, stop"]
   G3 -->|fail| BLOCK["write FAILED.md,<br/>mark the phase blocked"]
 ```
