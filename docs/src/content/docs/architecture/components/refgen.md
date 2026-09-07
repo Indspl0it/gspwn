@@ -37,7 +37,7 @@ artefacts.
 |---|---|---|
 | `escapes.md` | 37 | `surface/ioctl-inventory.json`, `tools/ioctl_map.json` |
 | `control-commands.md` | 531 | `surface/rm-control-rank.json`, `rm-control-inventory.json`, `rm-object-graph.json` |
-| `allocation-classes.md` | 253 | `surface/rm-object-graph.json`, `rm-chains.json` |
+| `allocation-classes.md` | 255 | `surface/rm-object-graph.json`, `rm-chains.json` |
 | `driver-cves.md` | 61 | `surface/prior-cves.json`, `cve-hotspots.json` |
 | `modeset-commands.md` | 66 | `surface/nvkms-command-inventory.json` |
 | `drm-commands.md` | 28 | `surface/drm-command-inventory.json` |

@@ -62,6 +62,7 @@ sys.path.insert(0, HERE)
 
 import atomic_write
 import campaign_ctl
+import checkout_meta
 import corpus_ctl
 import coverage_ctl
 import crash_parse
@@ -6398,6 +6399,26 @@ def _fixture_graph():
     return graph, by_ext
 
 
+# The NVOC hierarchy over FIXTURE_ENTRIES, in the shape nvoc_ancestors returns
+# it: base first, the class itself last. object_graph.chain_records requires
+# one and refuses a map that does not cover every RS_ENTRY internal class.
+# MemBase covers DeviceRes and SubdevRes, PrivBase covers only the privileged
+# FaultRes, and TieBase covers two classes whose cheapest chains are the same
+# length.
+FIXTURE_HIERARCHY = {
+    "Object": ["Object"],
+    "MemBase": ["Object", "MemBase"],
+    "PrivBase": ["Object", "PrivBase"],
+    "TieBase": ["Object", "TieBase"],
+    "ClientRes": ["Object", "ClientRes"],
+    "DeviceRes": ["Object", "MemBase", "TieBase", "DeviceRes"],
+    "SubdevRes": ["Object", "MemBase", "SubdevRes"],
+    "FaultRes": ["Object", "PrivBase", "FaultRes"],
+    "ChanRes": ["Object", "ChanRes"],
+    "MultiRes": ["Object", "TieBase", "MultiRes"],
+}
+
+
 def _method(handler, owning_class, method_id, class_id="0x2080",
             param_struct="P", gsp=False):
     """One control inventory method in the shape ctrl_surface.py emits."""
@@ -6661,8 +6682,10 @@ class TestCumulativeReach(unittest.TestCase):
             "ChanRes": [{"method_id": "0x6", "handler": "chanOne"}],
             "FaultRes": [{"method_id": "0x7", "handler": "faultOne"}],
         }
+        # Every owning class here has an RS_ENTRY row, so the hierarchy adds
+        # no borrowed record and the curve is the one the table alone states.
         return object_graph.chain_records(FIXTURE_ENTRIES, graph, alloc_depth,
-                                          depth, commands)
+                                          depth, commands, FIXTURE_HIERARCHY)
 
     def test_the_curve_credits_every_class_allocated_along_the_way(self):
         """Subdevice costs 3 allocations and unlocks 6 commands. The client and
@@ -9699,17 +9722,24 @@ class TestRefgenRendersTheMeasuredCounts(RefgenFixture):
                          if c["owning_class"] in internal)
         with_chain = sum(1 for c in rank["commands"]
                          if c.get("chain_length") is not None)
-        self.assertEqual((named, with_entry, with_chain), (531, 516, 514))
+        self.assertEqual((named, with_entry, with_chain), (531, 516, 529))
         self.assertIn("| Naming an owning class | %d |" % named, text)
         self.assertIn("| Whose owning class has an `RS_ENTRY` row | %d |"
                       % with_entry, text)
         self.assertIn("| With a chain an unprivileged process can build | %d |"
                       % with_chain, text)
+        # 13 commands stand between the second count and the third: the 15
+        # owned by an NVOC base class the table never names, less the 2 whose
+        # every external class requires allocation privilege.
+        self.assertEqual(with_chain - with_entry, 13)
 
     def test_the_control_page_states_the_no_chain_reason_split(self):
+        """The 15 commands owned by an NVOC base class carry no reason at all,
+        because the ancestor edge gives the base a chain borrowed from a class
+        deriving from it."""
         text = self.pages["control-commands.md"]
-        self.assertIn("| `null`, a chain exists | 514 |", text)
-        self.assertIn("| `no RS_ENTRY row for this class` | 15 |", text)
+        self.assertIn("| `null`, a chain exists | 529 |", text)
+        self.assertNotIn("`no RS_ENTRY row for this class`", text)
         self.assertIn("| `every external class requires allocation "
                       "privilege` | 2 |", text)
 
@@ -9795,7 +9825,10 @@ class TestRefgenRendersTheMeasuredCounts(RefgenFixture):
                          if t["family"] == "alloc")
         chains = _read_json(regression_check.CHAINS)
         self.assertEqual(len(classes), 155)
-        self.assertEqual(len(chains["chains"]), 98)
+        # 98 RS_ENTRY internal classes and the 2 NVOC base classes that own
+        # commands and borrow a subclass's chain.
+        self.assertEqual(len(chains["chains"]), 100)
+        self.assertEqual(chains["counts"]["borrowed_chains"], 2)
         for name in classes:
             self.assertIn("| `%s` |" % name, text)
         for chain in chains["chains"]:
@@ -12885,7 +12918,8 @@ class TestProvenanceDigestsEveryInput(unittest.TestCase):
         source = inspect.getsource(syzlang_gen.cmd_emit)
         for key in ("escape_inventory", "control_inventory", "object_graph"):
             self.assertIn('"%s": json_source_record(' % key, source)
-        self.assertIn('"driver_commit": args.commit', source)
+        self.assertIn('"driver_commit": commit,', source)
+        self.assertIn("commit, banner_commit = recorded_commit(args)", source)
 
     def test_json_source_record_digests_and_counts(self):
         directory = tempfile.mkdtemp()
@@ -14223,7 +14257,7 @@ class TestRecordedInputsStillMatch(Phase0Fixtures):
             "ctrl_sizes": [{"path": "surface/ctrl-param-sizes.json",
                             "entries": 1, "sha256": sizes}],
             "driver_version": "610.57.04",
-            "driver_commit": "e4a5faa",
+            "driver_commit": "e4a5faa2",
         }
 
     def test_every_committed_input_matches_its_recorded_digest(self):
@@ -14245,7 +14279,7 @@ class TestRecordedInputsStillMatch(Phase0Fixtures):
         code, out = self.check("stale")
         self.assertEqual(code, 0, out)
         self.assertIn("610.57.04", out)
-        self.assertIn("e4a5faa", out)
+        self.assertIn("e4a5faa2", out)
 
     def test_a_digest_that_moved_names_the_file(self):
         root = self.tempdir()
@@ -21249,6 +21283,144 @@ class TestTheSpendLedgerValidatesItsValues(unittest.TestCase):
 # ANCHOR-PHASE-4-FIGURES
 
 
+# ---------------------------------------------------------------------------
+# The NVOC ancestor edge in object_graph.py chains.
+#
+# resource_list.h names one internal class per allocatable class and never a
+# base, so a control command compiled into a base matches no RS_ENTRY row.
+# chain_records reads the ancestor chain the generated headers state and gives
+# the base the cheapest chain over the classes deriving from it.
+# ---------------------------------------------------------------------------
+
+
+class TestBorrowedChains(unittest.TestCase):
+    """A chain record for an owning class resource_list.h never names."""
+
+    def records(self, commands=None, hierarchy=FIXTURE_HIERARCHY):
+        graph, by_ext = _fixture_graph()
+        alloc_depth = object_graph.allocatable_depths(graph, by_ext)
+        depth = object_graph.depths(graph)
+        return object_graph.chain_records(
+            FIXTURE_ENTRIES, graph, alloc_depth, depth, commands or {},
+            hierarchy)
+
+    def by_class(self, commands=None, hierarchy=FIXTURE_HIERARCHY):
+        return {r["internal_class"]: r
+                for r in self.records(commands, hierarchy)}
+
+    def test_a_base_class_owning_commands_gets_a_chain_record(self):
+        """MemBase has no RS_ENTRY row. DeviceRes derives from it and reaches
+        DEVICE in two allocations, which is cheaper than SubdevRes's three."""
+        recs = self.by_class({"MemBase": [{"method_id": "0x1",
+                                           "handler": "memOne"}]})
+        self.assertIn("MemBase", recs)
+        self.assertEqual(recs["MemBase"]["target_external_class"], "DEVICE")
+        self.assertEqual(recs["MemBase"]["chain_length"], 2)
+        self.assertEqual(
+            [s["external_class"] for s in recs["MemBase"]["chain"]],
+            ["ROOT_A", "DEVICE"])
+        self.assertEqual(recs["MemBase"]["command_count"], 1)
+
+    def test_the_record_names_the_class_the_chain_was_borrowed_from(self):
+        recs = self.by_class({"MemBase": [{"method_id": "0x1",
+                                           "handler": "memOne"}]})
+        self.assertEqual(recs["MemBase"]["chain_borrowed_from"], "DeviceRes")
+
+    def test_a_borrowed_record_lists_every_descendant_external_class(self):
+        """The classes an allocation of which yields an object the base's
+        handler serves, which is the set the chain is chosen over."""
+        recs = self.by_class({"MemBase": []})
+        self.assertEqual(
+            [e["external_class"]
+             for e in recs["MemBase"]["external_classes"]],
+            ["DEVICE", "SUBDEV"])
+
+    def test_an_rs_entry_record_borrows_nothing(self):
+        recs = self.by_class()
+        self.assertIsNone(recs["DeviceRes"]["chain_borrowed_from"])
+
+    def test_every_record_carries_the_borrowed_field(self):
+        """regression_check.py reports a field on part of an array as neither
+        a field of the artefact nor absent from it."""
+        recs = self.records({"MemBase": []})
+        self.assertTrue(all("chain_borrowed_from" in r for r in recs))
+
+    def test_the_tie_breaks_on_the_external_class_name(self):
+        """TieBase covers DeviceRes, reaching DEVICE in two allocations, and
+        MultiRes, reaching MULTI_SHALLOW in two. The name decides."""
+        recs = self.by_class({"TieBase": []})
+        self.assertEqual(recs["TieBase"]["target_external_class"], "DEVICE")
+        self.assertEqual(recs["TieBase"]["chain_borrowed_from"], "DeviceRes")
+
+    def test_the_records_stay_sorted_by_internal_class(self):
+        names = [r["internal_class"] for r in self.records({"MemBase": []})]
+        self.assertEqual(names, sorted(names))
+
+    def test_an_empty_hierarchy_is_refused_by_chain_records(self):
+        """`hierarchy` is required and is read, so no caller reaches the
+        RS_ENTRY-only answer by passing a map that covers nothing."""
+        with self.assertRaises(SystemExit) as caught:
+            self.records({"MemBase": []}, hierarchy={})
+        self.assertIn("tools/object_graph.py extract", str(caught.exception))
+
+
+class TestBorrowedChainsRefuseWherePrivileged(unittest.TestCase):
+    """The privileged refusal the ancestor edge does not weaken."""
+
+    def by_class(self, commands):
+        graph, by_ext = _fixture_graph()
+        alloc_depth = object_graph.allocatable_depths(graph, by_ext)
+        depth = object_graph.depths(graph)
+        return {r["internal_class"]: r for r in object_graph.chain_records(
+            FIXTURE_ENTRIES, graph, alloc_depth, depth, commands,
+            FIXTURE_HIERARCHY)}
+
+    def test_a_class_whose_every_external_class_is_privileged_keeps_its_reason(self):
+        recs = self.by_class({"FaultRes": [{"method_id": "0x7",
+                                            "handler": "faultOne"}]})
+        self.assertIsNone(recs["FaultRes"]["chain"])
+        self.assertIsNone(recs["FaultRes"]["chain_borrowed_from"])
+        self.assertEqual(recs["FaultRes"]["unallocatable_reason"],
+                         "every external class requires allocation privilege")
+
+    def test_a_base_over_privileged_classes_alone_borrows_no_chain(self):
+        """PrivBase covers FaultRes and nothing else, and FAULTBUF carries
+        RS_FLAGS_ALLOC_PRIVILEGED."""
+        recs = self.by_class({"PrivBase": [{"method_id": "0x8",
+                                            "handler": "privOne"}]})
+        self.assertIsNone(recs["PrivBase"]["chain"])
+        self.assertIsNone(recs["PrivBase"]["chain_borrowed_from"])
+        self.assertEqual(recs["PrivBase"]["unallocatable_reason"],
+                         "every external class requires allocation privilege")
+
+    def test_a_base_no_rs_entry_class_derives_from_gets_no_record(self):
+        """cmd_chains reports such a class under unresolved_owning_classes,
+        which is the shape the artefact carried before the ancestor edge."""
+        recs = self.by_class({"Orphan": [{"method_id": "0x9",
+                                          "handler": "orphanOne"}]})
+        self.assertNotIn("Orphan", recs)
+
+
+class TestAncestorDataIsRequired(unittest.TestCase):
+    """chains refuses where the NVOC hierarchy does not cover the table."""
+
+    def test_a_missing_ancestor_chain_is_refused_by_name(self):
+        partial = {k: v for k, v in FIXTURE_HIERARCHY.items()
+                   if k != "ChanRes"}
+        with self.assertRaises(SystemExit) as caught:
+            object_graph.descendants_by_base(FIXTURE_ENTRIES, partial)
+        message = str(caught.exception)
+        self.assertIn("ChanRes", message)
+        self.assertIn("tools/object_graph.py extract", message)
+
+    def test_the_descendant_map_holds_only_classes_the_table_never_names(self):
+        found = object_graph.descendants_by_base(FIXTURE_ENTRIES,
+                                                 FIXTURE_HIERARCHY)
+        named = {e["internal_class"] for e in FIXTURE_ENTRIES}
+        self.assertEqual(set(found) & named, set())
+        self.assertEqual(found["MemBase"], ["DeviceRes", "SubdevRes"])
+
+
 class CheckSetFixtures(unittest.TestCase):
     """A temporary directory and a check runner the check-set cases share."""
 
@@ -24061,6 +24233,236 @@ class TestATruncatedInventoryStopsTheCompletionReading(unittest.TestCase):
         self.assertEqual(st["denominator_version"],
                          ps.DENOMINATOR_VERSIONS[-1][0])
         self.assertEqual(st["total"], ps.DENOMINATOR_VERSIONS[-1][1])
+
+
+class CheckoutCommitCase(GitmineRepoCase):
+    """Base class: a one-commit checkout, and a stub for the git query."""
+
+    def a_checkout(self):
+        """A git tree carrying a version.mk and one commit."""
+        repo = self.new_repo()
+        self.write(repo, "version.mk", "NVIDIA_VERSION = 610.57.04\n")
+        self.run_git(repo, "add", "version.mk")
+        self.run_git(repo, "commit", "-q", "-m", "one file")
+        return repo
+
+    def head_of(self, repo):
+        return self.run_git(repo, "rev-parse", "--short", "HEAD").strip()
+
+    def not_a_checkout(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return holder.name
+
+    def stub_git(self, fake_run):
+        original = checkout_meta.subprocess.run
+        self.addCleanup(setattr, checkout_meta.subprocess, "run", original)
+        checkout_meta.subprocess.run = fake_run
+
+    def quiet(self):
+        """Suppress the WARNING an unresolved commit logs.
+
+        The warning is part of the contract and is asserted through the
+        return value; printed to stderr during a passing run it reads as a
+        failure.
+        """
+        logging.disable(logging.WARNING)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+
+class TestCheckoutCommitHasOneResolver(CheckoutCommitCase):
+    """checkout_meta.checkout_commit, and the callers that used to copy it.
+
+    ioctl_inventory.py and surface_verify.py each carried the same three
+    lines and syzlang_gen.py carried none, so the description banners named
+    the checkout by whatever --commit passed while the inventories named it
+    by a resolved short hash. One tree ended up with two names.
+    """
+
+    def test_a_checkout_answers_with_its_own_short_head(self):
+        repo = self.a_checkout()
+        head = self.head_of(repo)
+        self.assertRegex(head, r"^[0-9a-f]{7,}$")
+        self.assertEqual(checkout_meta.checkout_commit(repo), head)
+
+    def test_a_directory_that_is_not_a_checkout_answers_none(self):
+        self.assertIsNone(checkout_meta.checkout_commit(self.not_a_checkout()))
+
+    def test_a_worktree_resolves_through_its_gitdir_pointer(self):
+        # A worktree and a submodule carry .git as a file holding a gitdir:
+        # pointer. A directory test answers None on one, which puts the
+        # fallback in every banner of a run against a valid checkout.
+        # .claude/worktrees/ holds worktrees of this repository.
+        repo = self.a_checkout()
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        tree = os.path.join(holder.name, "wt")
+        self.run_git(repo, "worktree", "add", "-q", "--detach", tree)
+        try:
+            self.assertTrue(os.path.isfile(os.path.join(tree, ".git")))
+            self.assertEqual(checkout_meta.checkout_commit(tree),
+                             self.head_of(repo))
+        finally:
+            self.run_git(repo, "worktree", "remove", "--force", tree)
+            self.run_git(repo, "worktree", "prune")
+
+    def test_a_non_zero_exit_is_never_trusted(self):
+        # A .git file pointing at a deleted gitdir exists and makes git fail,
+        # so the marker test alone admits a broken tree. Reading stdout on a
+        # failed query would record whatever git printed before giving up.
+        repo = self.a_checkout()
+
+        def fake_run(cmd, **kw):
+            return subprocess.CompletedProcess(
+                cmd, 128, "abc1234\n", "fatal: not a git repository")
+
+        self.stub_git(fake_run)
+        self.quiet()
+        self.assertIsNone(checkout_meta.checkout_commit(repo))
+
+    def test_git_failing_is_a_warning_and_returns_none(self):
+        # The commit is provenance. A generator that has parsed the tree
+        # successfully still has an artefact worth writing, so the failure
+        # never propagates.
+        repo = self.a_checkout()
+
+        def fake_run(cmd, **kw):
+            raise OSError("git is not on PATH")
+
+        self.stub_git(fake_run)
+        self.quiet()
+        self.assertIsNone(checkout_meta.checkout_commit(repo))
+
+    def test_an_empty_answer_is_none_and_never_an_empty_string(self):
+        # A successful query answering with whitespace. A returned "" would
+        # reach a banner as "checkout ." and a JSON field as "".
+        repo = self.a_checkout()
+        self.stub_git(
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "  \n", ""))
+        self.assertIsNone(checkout_meta.checkout_commit(repo))
+
+    def test_the_query_carries_the_timeout_it_was_given(self):
+        repo = self.a_checkout()
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append(kw.get("timeout"))
+            return subprocess.CompletedProcess(cmd, 0, "abc1234\n", "")
+
+        self.stub_git(fake_run)
+        self.assertEqual(checkout_meta.checkout_commit(repo), "abc1234")
+        self.assertEqual(checkout_meta.checkout_commit(repo, timeout=7),
+                         "abc1234")
+        self.assertEqual(seen, [checkout_meta.DEFAULT_TIMEOUT_SEC, 7])
+
+    def test_the_version_guard_resolves_through_the_shared_module(self):
+        source = inspect.getsource(surface_verify.checkout_commit)
+        self.assertIn("checkout_meta.checkout_commit(src", source)
+        # The guard's own bound, which every query `check` makes carries.
+        self.assertIn("QUERY_TIMEOUT_SEC", source)
+
+    def test_the_escape_inventory_resolves_through_the_shared_module(self):
+        self.assertIs(ioctl_inventory.checkout_meta, checkout_meta)
+        self.assertFalse(hasattr(ioctl_inventory, "checkout_commit"))
+
+    def test_no_module_builds_the_query_a_second_time(self):
+        # cve_patch_map.py asks the same question through gitmine.run_git,
+        # whose non-zero exit raises SourceError carrying git's stderr. Routing
+        # it through checkout_meta would turn a failed query into a null
+        # "head" in surface/cve-hotspots.json, so that caller stays strict and
+        # is named here. selftest.py quotes the pattern it searches for.
+        allowed = {"checkout_meta.py", "cve_patch_map.py", "selftest.py"}
+        needle = '"rev-parse", "--short", "HEAD"'
+        offenders = []
+        for name in sorted(os.listdir(HERE)):
+            if not name.endswith(".py") or name in allowed:
+                continue
+            with open(os.path.join(HERE, name), encoding="utf-8") as fh:
+                if needle in fh.read():
+                    offenders.append(name)
+        self.assertEqual(offenders, [],
+                         "resolve the commit through "
+                         "checkout_meta.checkout_commit")
+
+
+class TestEmitRecordsTheResolvedCommit(CheckoutCommitCase):
+    """syzlang_gen.recorded_commit, the emit path's provenance decision.
+
+    `agents/describe.md` step 4 invokes `syzlang_gen.py emit` with no
+    --commit. Before this resolver that run wrote a placeholder into six
+    banners and null into generation.json while every other artefact of the
+    same run named the checkout by its short hash, and
+    `regression_check.py stale` reported a correctly executed pipeline as
+    stale.
+    """
+
+    def args(self, src, commit=None):
+        return types.SimpleNamespace(src=src, commit=commit)
+
+    def test_the_commit_comes_from_the_source_checkout(self):
+        repo = self.a_checkout()
+        head = self.head_of(repo)
+        recorded, banner = syzlang_gen.recorded_commit(self.args(repo))
+        self.assertEqual(recorded, head)
+        self.assertEqual(banner, head)
+
+    def test_an_explicit_commit_overrides_the_checkout(self):
+        # --commit stays the route for a tree git cannot answer for, such as
+        # an unpacked release tarball beside a clone.
+        repo = self.a_checkout()
+        recorded, banner = syzlang_gen.recorded_commit(
+            self.args(repo, "deadbee"))
+        self.assertEqual(recorded, "deadbee")
+        self.assertEqual(banner, "deadbee")
+        self.assertNotEqual(recorded, self.head_of(repo))
+
+    def test_a_tree_that_is_not_a_checkout_says_so_in_the_banner(self):
+        self.quiet()
+        recorded, banner = syzlang_gen.recorded_commit(
+            self.args(self.not_a_checkout()))
+        self.assertIsNone(recorded)
+        self.assertEqual(banner, syzlang_gen.NO_COMMIT)
+        # The previous placeholder read "see version.mk", and version.mk
+        # records a driver release and never a commit.
+        self.assertNotIn("version.mk", banner)
+
+    def test_the_resolved_value_reaches_the_file_header(self):
+        header = syzlang_gen.FILE_HEADER % ("610.57.04", "abc1234", "h.h")
+        self.assertIn("checkout abc1234.", header)
+
+
+class TestTheCommittedSetNamesOneCheckout(unittest.TestCase):
+    """The six committed banners and the provenance record name one commit."""
+
+    DESCRIPTIONS = os.path.join(os.path.dirname(HERE), "descriptions")
+    BANNERED = ("nvidia.txt", "nvidia_ctrl.txt", "nvidia_drm.txt",
+                "nvidia_modeset.txt", "nvidia_structs.txt", "nvidia_uvm.txt")
+
+    def setUp(self):
+        path = os.path.join(self.DESCRIPTIONS, "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed generation record not present")
+        with open(path, encoding="utf-8") as fh:
+            self.recorded = json.load(fh)["generated_from"]["driver_commit"]
+
+    def banner_commit(self, name):
+        with open(os.path.join(self.DESCRIPTIONS, name),
+                  encoding="utf-8") as fh:
+            head = fh.read(2000)
+        match = re.search(r"checkout (\S+)\.", head)
+        self.assertIsNotNone(match,
+                             "%s carries no checkout in its banner" % name)
+        return match.group(1)
+
+    def test_every_banner_names_the_recorded_commit(self):
+        for name in self.BANNERED:
+            self.assertEqual(self.banner_commit(name), self.recorded, name)
+
+    def test_the_recorded_commit_is_the_head_of_the_checkout(self):
+        head = checkout_meta.checkout_commit(syzlang_gen.DEFAULT_SRC)
+        if head is None:
+            self.skipTest("the driver source checkout is not present")
+        self.assertEqual(self.recorded, head)
 
 
 # ANCHOR-PHASE-8-RUNTIME
