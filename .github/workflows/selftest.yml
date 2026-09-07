@@ -131,6 +131,20 @@ jobs:
         # family added to the surface and left out of a brief is reported.
         run: python3 tools/regression_check.py figures
 
+      - name: Source citations resolve
+        # artifacts/ is gitignored, so the vendored trees are absent here and
+        # this step reports that it settled nothing. It is listed so the
+        # check runs wherever the trees do exist, which is the machine that
+        # re-vendors them and moves every line number.
+        run: python3 tools/regression_check.py citations
+
+      - name: Documented commands parse against their tool
+        # The docs are a copy-paste surface. The `agents` step above checks
+        # the phase briefs the same way, and nothing checked the pages: one
+        # told a reader to run crash_ctl.py, a tool that has never existed.
+        # A stale flag reads to a reader as the tool being broken.
+        run: python3 tools/regression_check.py commands
+
       - name: Documentation writing register
         # Question-shaped headings and table column headers scan as labels, so
         # a read-through does not catch them. One reference table carried the
