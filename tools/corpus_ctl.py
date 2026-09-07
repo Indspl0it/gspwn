@@ -30,8 +30,10 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write
 import gspwn_config
 import pipeline_state as ps
+import surface_cov
 
 REPO_ROOT = ps.REPO_ROOT
 SEEDS_DIR = os.path.join(REPO_ROOT, "artifacts", "seeds")
@@ -68,13 +70,26 @@ def load_ledger(seeds):
 
 
 def save_ledger(seeds, ledger):
-    path = os.path.join(seeds, LEDGER)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(ledger, f, indent=2, sort_keys=True)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    """Write the promotion ledger, atomically and durably.
+
+    The serialisation stays here and atomic_write_text owns the rest. Three
+    properties the fixed `promoted.json.tmp` did not have, and the shared
+    writer does:
+
+    - A unique temp name. Two promote runs against one seed bank shared that
+      one path, so the second truncated the first's temp file mid-write and
+      renamed a half-written ledger over the real one. The bank then reads as
+      holding fewer programs than it does and the next promotion writes them
+      all again.
+    - LF line endings, whatever the platform. A bank promoted under WSL and
+      one promoted on the host would otherwise differ in every byte.
+    - A directory fsync. os.replace publishes the name and the file fsync
+      commits the bytes, and neither commits the directory entry, on a host
+      that panics by design.
+    """
+    atomic_write.atomic_write_text(
+        os.path.join(seeds, LEDGER),
+        json.dumps(ledger, indent=2, sort_keys=True) + "\n")
 
 
 def existing_hashes(seeds, ledger):
@@ -96,11 +111,31 @@ def existing_hashes(seeds, ledger):
 
 
 def unpack_corpus(db, dest):
+    """Unpack a corpus.db into `dest` -> the names it wrote.
+
+    Bounded by coverage.unpack_timeout_sec, read through
+    surface_cov.unpack_timeout_sec so the same binary run from two modules
+    takes the same budget from one setting. GSPWN_UNPACK_TIMEOUT_SEC
+    overrides it for one invocation. Without a bound a corrupt corpus.db
+    hangs promote with no diagnostic, and promote runs unattended at the end
+    of every round.
+    """
     if not os.path.exists(SYZ_DB):
         sys.exit("syz-db not found at %s — build syzkaller first (provision "
                  "phase step 6)" % SYZ_DB)
-    r = subprocess.run([SYZ_DB, "unpack", db, dest], capture_output=True,
-                       text=True)
+    try:
+        timeout = surface_cov.unpack_timeout_sec()
+    except surface_cov.SurfaceError as e:
+        sys.exit("error: %s" % e)
+    try:
+        r = subprocess.run([SYZ_DB, "unpack", db, dest], capture_output=True,
+                           text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        sys.exit("syz-db unpack did not finish within %ds on %s. Raise "
+                 "coverage.unpack_timeout_sec in config/campaign.yaml, or set "
+                 "GSPWN_UNPACK_TIMEOUT_SEC, if the corpus is legitimately "
+                 "this large; a corpus.db truncated by a panic mid-write "
+                 "hangs here and never finishes." % (timeout, db))
     if r.returncode != 0:
         sys.exit("syz-db unpack failed: %s" % (r.stderr.strip() or
                                                r.stdout.strip()))
@@ -127,10 +162,13 @@ def cmd_promote(a):
 
     with tempfile.TemporaryDirectory() as tmp:
         names = unpack_corpus(db, tmp)
-        added = skipped = 0
+        added = skipped = considered = 0
         for name in names:
             if a.limit and added >= a.limit:
                 break
+            # Counted before the content filters below, so the figure --limit
+            # reports is the number of entries the loop never reached.
+            considered += 1
             src = os.path.join(tmp, name)
             if not os.path.isfile(src):
                 continue
@@ -144,7 +182,14 @@ def cmd_promote(a):
                 continue
             out_name = "promoted-%s-%s.syz" % (a.run_id, h)
             if not a.dry_run:
-                shutil.copy(src, os.path.join(seeds, out_name))
+                # The same durable path the ledger takes. A plain copy
+                # interrupted part way leaves a truncated program in the bank
+                # with no ledger entry, and existing_hashes then reads it back
+                # as a program of its own on the next promotion. The text
+                # written is the text prog_hash was taken over, so the bank
+                # and its ledger agree by construction.
+                atomic_write.atomic_write_text(
+                    os.path.join(seeds, out_name), text)
                 ledger["hashes"][h] = {"file": out_name, "source": a.run_id}
             known[h] = {"file": out_name, "source": a.run_id}
             added += 1
@@ -155,9 +200,13 @@ def cmd_promote(a):
           % (a.run_id, added, "would be added to" if a.dry_run else "added to",
              seeds, skipped, len(names)))
     if a.limit and added >= a.limit:
+        # len(names) - limit - skipped counted a directory entry and an empty
+        # program as unconsidered, which overstates what --limit left behind:
+        # both were reached and both were rejected on their content. The
+        # entries the loop never reached are the ones it did not count.
         print("NOTE: stopped at --limit %d; %d corpus entries were not "
               "considered. The bank is now a truncated sample of this run, "
-              "not all of it." % (a.limit, len(names) - a.limit - skipped))
+              "not all of it." % (a.limit, len(names) - considered))
     if added == 0:
         print("The run produced nothing the bank did not already have — that "
               "is the corpus-level signal that this round stopped learning.")

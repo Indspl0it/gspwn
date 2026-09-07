@@ -12,6 +12,12 @@ Subcommands:
              when it could not read a source — "nothing to harvest" and
              "could not look" must not be the same answer, because the
              orchestrator runs this unattended after every panic.
+
+Harvest exit codes: 0 nothing to harvest and every source read; 1 nothing
+harvested and at least one source unread; 2 evidence harvested and at least
+one source unread or deferred, with the harvest dir printed on the last line.
+2 is separate from 0 because a partial harvest that reports success is how a
+panic's only record gets treated as collected.
   prune [--keep N]
            - delete the oldest harvest dirs beyond the newest N (default 10).
              Never automatic: harvested logs are evidence. kdump writes
@@ -31,18 +37,84 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TOOLS_DIR = os.path.join(REPO_ROOT, "tools")
+if TOOLS_DIR not in sys.path:
+    sys.path.insert(0, TOOLS_DIR)
+# The crash-durable copy idiom (temp file, fsync, atomic rename) and the
+# environment-override reader, imported from repro_ctl and not restated here,
+# so both copy paths on a machine that panics by design stay one
+# implementation and both modules validate an override the same way.
+from repro_ctl import _atomic_copy, _env_int  # noqa: E402  (path set above)
+import atomic_write                           # noqa: E402
+
 CRASHES_DIR = os.path.join(REPO_ROOT, "artifacts", "crashes")
 GRUB_DEFAULT = "/etc/default/grub"
 IMDS_BASE = "http://169.254.169.254/latest"
 IMDS_TIMEOUT = 2
 
+# Harvest exit code for "evidence collected, at least one source unread or
+# deferred". Separate from 1 ("collected nothing and a source was unread")
+# because the harvest dir exists and is named on stdout, and separate from 0
+# because a partial harvest reported as success is how the only record of a
+# panic gets treated as collected.
+HARVEST_PARTIAL = 2
 
-def sh(cmd, check=True, capture=False):
+# Names kdump-tools and kexec-tools give a dump they are still writing.
+KDUMP_INCOMPLETE_MARKERS = ("vmcore-incomplete", "dump-incomplete")
+KDUMP_INCOMPLETE_SUFFIX = ".incomplete"
+# Suffix on a harvested dump directory while its copy is in progress.
+# harvested_kdumps() reads the finished names only, so a copy interrupted by
+# a second panic is retried on the next harvest.
+PARTIAL_SUFFIX = ".partial"
+
+
+# Seconds a shelled-out command may take before it is killed. The longest
+# thing sh() runs is `apt-get install -y kdump-tools` on a fresh instance,
+# which pulls the crash-kernel tooling; ten minutes covers that on a slow
+# mirror. Without a bound, setup on an instance whose apt mirror hangs never
+# returns and never says why.
+CMD_TIMEOUT_SEC = _env_int("GSPWN_CRASHLOG_CMD_TIMEOUT_SEC", 600)
+
+# `aws ec2 get-console-output` runs on the post-panic path, where
+# orchestrator_ctl.harvest gives the whole harvest 300 seconds. A console
+# fetch that outlives that budget is killed by the caller with the harvest
+# dir half written, so it is bounded here first, at well under the caller's
+# budget, leaving room for the /var/crash copies that follow it.
+CONSOLE_TIMEOUT_SEC = _env_int("GSPWN_CONSOLE_TIMEOUT_SEC", 120)
+
+
+def sh(cmd, check=True, capture=False, timeout=None):
+    """Run `cmd`, bounded by CMD_TIMEOUT_SEC unless `timeout` overrides it.
+
+    Every caller runs a program that can block indefinitely: apt against a
+    hung mirror, update-grub against a stuck device probe, and the AWS CLI
+    against an endpoint the panic just made unreachable. An unbounded call on
+    the unattended post-panic path holds the orchestrator until its own
+    timeout fires, and the evidence is lost with no diagnostic.
+    """
     return subprocess.run(cmd, check=check, text=True,
-                          capture_output=capture)
+                          capture_output=capture,
+                          timeout=CMD_TIMEOUT_SEC if timeout is None
+                          else timeout)
+
+
+def _fsync_dir(path):
+    """Commit a directory's entries to disk.
+
+    os.replace publishes a new name and fsync on the file commits its bytes,
+    and neither commits the directory entry that carries the name. After a
+    panic in that window the record is on disk with nothing pointing at it.
+    Raises OSError, which every caller has to handle before it deletes the
+    only other copy.
+
+    Delegates to the shared writer's implementation, so the harvest commits a
+    directory the same way every artefact writer does.
+    """
+    atomic_write._fsync_directory(path)
 
 
 def _imds_token():
@@ -98,7 +170,9 @@ def cmd_setup(env):
     with open(GRUB_DEFAULT) as f:
         grub = f.read()
     if "crashkernel=" not in grub:
-        shutil.copy(GRUB_DEFAULT, GRUB_DEFAULT + ".bak-gspwn")
+        # The backup is the operator's way back from a bad boot parameter, so
+        # it is on disk durably before the original is replaced.
+        _atomic_copy(GRUB_DEFAULT, GRUB_DEFAULT + ".bak-gspwn")
         anchor = None
         for cand in ('GRUB_CMDLINE_LINUX_DEFAULT="', 'GRUB_CMDLINE_LINUX="'):
             if cand in grub:
@@ -112,8 +186,11 @@ def cmd_setup(env):
                 '  GRUB_CMDLINE_LINUX_DEFAULT="crashkernel=256M"\n'
                 "then run update-grub and reboot." % GRUB_DEFAULT)
         grub = grub.replace(anchor, anchor + "crashkernel=256M ", 1)
-        with open(GRUB_DEFAULT, "w") as f:
-            f.write(grub)
+        # Replaced, never truncated in place: a failure part way through a
+        # direct write leaves /etc/default/grub half a file, and the next
+        # update-grub reads it. The .bak-gspwn copy above is the operator's
+        # way back, not the writer's.
+        atomic_write.atomic_write_text(GRUB_DEFAULT, grub)
         sh(["update-grub"])
         print("added crashkernel=256M to " + anchor.rstrip('"')
               + "; reboot required")
@@ -183,13 +260,23 @@ def report_disk():
     things on the box. A full disk stops the fuzzer, the sampler and every
     state write at once, which is a far worse outcome than losing an old dump.
     """
-    sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
+    free_mb, warning = None, ""
     try:
         import coverage_ctl
+    except ImportError as e:
+        # `except Exception: pass` here hid the one thing this function is
+        # for. coverage_ctl reaches pipeline_state, which imports fcntl, so
+        # the import fails on any host without it and the low-space warning
+        # then never prints on the machine whose disk is filling.
+        print("WARN: free space is not being checked (cannot import "
+              "coverage_ctl: %s). A full disk stops the fuzzer, the sampler "
+              "and every state write at once." % e)
+    else:
         free_mb = coverage_ctl.disk_free_mb()
         warning = coverage_ctl.disk_warning(free_mb)
-    except Exception:
-        free_mb, warning = None, ""
+        if free_mb is None:
+            print("WARN: free space is not being checked: statvfs did not "
+                  "answer for %s." % REPO_ROOT)
     parts = []
     for label, path in (("harvested", CRASHES_DIR), ("/var/crash",
                                                      "/var/crash")):
@@ -234,11 +321,41 @@ def cmd_prune(env, keep):
 
 
 def harvested_kdumps():
-    """Basenames of /var/crash dumps already copied by a previous harvest."""
+    """Basenames of /var/crash dumps already copied by a previous harvest.
+
+    A directory still carrying PARTIAL_SUFFIX is a copy that did not finish,
+    so its name is not reported as harvested and the dump is copied again.
+    """
     seen = set()
     for d in glob.glob(os.path.join(CRASHES_DIR, "*", "kdump-*")):
-        seen.add(os.path.basename(d)[len("kdump-"):])
+        base = os.path.basename(d)
+        if base.endswith(PARTIAL_SUFFIX):
+            continue
+        seen.add(base[len("kdump-"):])
     return seen
+
+
+def kdump_incomplete(src):
+    """The in-progress marker inside a /var/crash dump dir, or None.
+
+    kexec-tools writes vmcore-incomplete and renames it to vmcore once
+    makedumpfile finishes; Debian's kdump-tools writes dump-incomplete and
+    dump.<stamp>.incomplete the same way. A directory holding one of those
+    names is not a dump yet.
+
+    An unreadable directory is reported as in-progress and not as complete:
+    the two are indistinguishable from here, and treating it as complete
+    copies whatever is readable and retires the name.
+    """
+    try:
+        names = os.listdir(src)
+    except OSError as e:
+        return "not readable: %s" % e
+    for name in sorted(names):
+        if name in KDUMP_INCOMPLETE_MARKERS \
+                or name.endswith(KDUMP_INCOMPLETE_SUFFIX):
+            return name
+    return None
 
 
 def cmd_harvest(env):
@@ -260,27 +377,51 @@ def cmd_harvest(env):
     os.makedirs(dest, exist_ok=True)
     found = False
     failures = []
+    deferred = []
     if env == "ec2":
         console_log = os.path.join(dest, "console-output.log")
         try:
             instance_id = get_instance_id()
             r = sh(["aws", "ec2", "get-console-output",
                     "--instance-id", instance_id,
-                    "--latest", "--output", "text"], check=False, capture=True)
+                    "--latest", "--output", "text"], check=False,
+                   capture=True, timeout=CONSOLE_TIMEOUT_SEC)
             if r.returncode == 0 and r.stdout.strip():
-                with open(console_log, "w") as f:
-                    f.write(r.stdout)
+                # On EC2 the console is the only record of a hard hang, so it
+                # goes down the same durable path as every other artefact:
+                # temporary, fsync, rename, directory fsync.
+                atomic_write.atomic_write_text(console_log, r.stdout)
                 found = True
                 print("saved console output: " + console_log)
+            elif r.returncode == 0:
+                # The API answered and the buffer is empty. On a machine that
+                # has not panicked since its console buffer was cleared this
+                # is the normal answer, and it is not an unread source.
+                print("console output is empty; nothing to save")
             else:
-                print("WARN: get-console-output failed: " + r.stderr.strip())
-        except Exception as e:
+                print("WARN: get-console-output exited %d: %s"
+                      % (r.returncode, r.stderr.strip()))
+                failures.append("aws ec2 get-console-output")
+        except (OSError, subprocess.SubprocessError,
+                urllib.error.URLError) as e:
+            # On EC2 the console is the only record of a hard hang, where
+            # pstore never ran and kdump never got a chance. A fetch that
+            # failed is a source that was not read, so it is counted as one
+            # and reaches the exit code.
             print("WARN: console-output harvest failed: %s" % e)
+            failures.append("aws ec2 get-console-output")
     else:
         copied = []
-        for src in glob.glob("/sys/fs/pstore/*"):
+        for src in sorted(glob.glob("/sys/fs/pstore/*")):
             try:
-                shutil.copy(src, dest)
+                # _atomic_copy and not shutil.copy: the record is unlinked
+                # from pstore a few lines below, and between an unflushed
+                # copy and its writeback the only durable copy of the report
+                # is the one about to be deleted. This host panics by design,
+                # so a second panic in that window is expected, not
+                # hypothetical, and it takes the first panic's report with
+                # it.
+                _atomic_copy(src, os.path.join(dest, os.path.basename(src)))
             except (OSError, shutil.Error) as e:
                 print("WARN: could not copy %s (%s); continuing" % (src, e))
                 failures.append(src)
@@ -291,6 +432,23 @@ def cmd_harvest(env):
         # the file is deleted. Leaving records in place means the NEXT panic
         # has nowhere to write — on a machine that panics by design, that is
         # lost findings — and every later harvest re-copies the same records.
+        #
+        # The directory entries are committed before the first unlink. Every
+        # copy is fsynced, and the names pointing at them are not, so a panic
+        # between the two loses records that pstore no longer holds either.
+        # A directory that will not sync keeps its pstore originals: a full
+        # pstore drops later panics, and clearing it here would drop this one.
+        try:
+            if copied:
+                _fsync_dir(dest)
+        except OSError as e:
+            print("WARN: could not commit %s (%s); leaving %d pstore record(s) "
+                  "in place. pstore may fill and drop later panics; re-run "
+                  "harvest once the filesystem is writable."
+                  % (dest, e, len(copied)))
+            failures.append("/sys/fs/pstore (%d record(s) not cleared)"
+                            % len(copied))
+            copied = []
         for src in copied:
             try:
                 os.unlink(src)
@@ -314,9 +472,24 @@ def cmd_harvest(env):
         name = os.path.basename(src)
         if name in already or not os.path.isdir(src):
             continue
+        marker = kdump_incomplete(src)
+        if marker:
+            # A dump still being written is a prefix of a vmcore, and
+            # harvested_kdumps() keys on the name, so copying it now retires
+            # that name for good and the finished dump is never collected.
+            # Deferring costs one more harvest, and copying costs the dump.
+            print("WARN: %s is still being written (%s); left for the next "
+                  "harvest" % (src, marker))
+            deferred.append(src)
+            continue
+        # Copied under a .partial name and renamed on completion, so a
+        # harvest interrupted by a second panic leaves a name
+        # harvested_kdumps() does not count and the dump is copied again.
+        staging = os.path.join(dest, "kdump-" + name + PARTIAL_SUFFIX)
         try:
-            shutil.copytree(src, os.path.join(dest, "kdump-" + name),
-                            dirs_exist_ok=True)
+            shutil.copytree(src, staging, dirs_exist_ok=True)
+            _fsync_dir(staging)
+            os.replace(staging, os.path.join(dest, "kdump-" + name))
         except (OSError, shutil.Error) as e:
             print("WARN: could not copy %s (%s); continuing" % (src, e))
             failures.append(src)
@@ -325,21 +498,32 @@ def cmd_harvest(env):
     report_disk()
     if not found:
         shutil.rmtree(dest, ignore_errors=True)
-        if failures:
+        if failures or deferred:
             # Nothing was harvested AND something could not be read. That is
             # not "no crashes"; it is a harvest that did not work, and the
             # caller has to be able to tell the two apart.
-            sys.exit("harvest read nothing and failed on %d source(s): %s. "
+            sys.exit("harvest read nothing and left %d source(s) unread: %s. "
                      "This is not evidence that no crash occurred — fix the "
                      "cause and re-run before treating the panic as "
-                     "unrecorded." % (len(failures), ", ".join(failures[:5])))
+                     "unrecorded." % (len(failures) + len(deferred),
+                                      ", ".join((failures + deferred)[:5])))
         print("no new crash logs found (checked %s and /var/crash)"
               % ("EC2 console output" if env == "ec2" else "pstore"))
         sys.exit(0)
     if failures:
         print("WARN: %d source(s) could not be read and are missing from this "
               "harvest: %s" % (len(failures), ", ".join(failures[:5])))
+    if deferred:
+        print("WARN: %d dump(s) were still being written and are missing from "
+              "this harvest: %s. Re-run harvest once they finish."
+              % (len(deferred), ", ".join(deferred[:5])))
     print(dest)  # last line = artifact path, consumed by callers
+    if failures or deferred:
+        # Evidence was collected and a source was not read. The docstring
+        # promises non-zero for that, and an unattended caller that reads
+        # only the exit code has no other way to learn the harvest is
+        # incomplete. The path is on the last line either way.
+        sys.exit(HARVEST_PARTIAL)
 
 
 def main():
