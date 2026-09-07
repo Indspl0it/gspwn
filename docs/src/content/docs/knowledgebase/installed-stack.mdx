@@ -5,19 +5,20 @@ description: "Every artefact a driver and toolkit installation leaves on the mac
 
 import StackInventory from '../../../components/StackInventory.astro';
 
-A driver installation leaves four kinds of artefact: processes, userspace
-libraries, device nodes and kernel modules. How each one is supplied decides
-what can be learned about it.
+A driver installation leaves five kinds of artefact: command line programs and
+daemons, userspace libraries, device nodes, kernel modules, and signed GSP
+firmware images. How each one is supplied decides what can be learned about it.
 
-| Supplied as | Inspection available |
-| --- | --- |
-| Open source | The source itself, plus anything a build permits |
-| Closed source binary | Exported symbols, its documented API, and its observable behaviour |
-| Signed firmware | The version string reported through NVML |
+- Open source yields the source itself, plus anything a build permits.
+- A closed source binary yields its exported symbols, its documented API and its
+  observable behaviour.
+- Signed firmware yields the version string reported through NVML.
 
 <StackInventory />
 
 ## Kernel modules
+
+Four of the five installed modules create device nodes.
 
 | Module | Provides | Depends on | Device nodes created |
 | --- | --- | --- | --- |
@@ -31,28 +32,38 @@ what can be learned about it.
 the same relation in its `Used by` column, and `rmmod nvidia` fails while any
 dependant is resident.
 
-All five build from `open-gpu-kernel-modules` on Turing and newer. On older
-parts only the proprietary modules are available.
+All five have a source directory in `open-gpu-kernel-modules` under
+`kernel-open/`, and build from it on Turing and newer. On older parts only the
+proprietary modules are available.
 
 ## Device nodes
 
-| Node | Created by | Carries | Present in a default container |
-| --- | --- | --- | --- |
-| `/dev/nvidiactl` | `nvidia.ko` | Client and object allocation, control calls | Yes |
-| `/dev/nvidia0` through `/dev/nvidiaN` | `nvidia.ko` | Per-GPU operations and memory mapping | Yes |
-| `/dev/nvidia-uvm` | `nvidia-uvm.ko` | Unified memory operations | Yes |
-| `/dev/nvidia-uvm-tools` | `nvidia-uvm.ko` | The tooling interface to UVM | Yes |
-| `/dev/nvidia-modeset` | `nvidia-modeset.ko` | Mode setting | No. Requires the display capability. |
-| `/dev/nvidia-caps/` | `nvidia.ko` | MIG capability files | Only on a MIG system |
+Seven node families appear under `/dev`. Which of them a container receives
+depends on the injection mechanism, and the two mechanisms disagree.
 
-"Default container" means the `compute,utility` capability set, which the
-container toolkit grants when nothing else is requested.
+| Node | Created by | Carries | Default installation | Legacy hook, `utility,compute` |
+| --- | --- | --- | --- | --- |
+| `/dev/nvidiactl` | `nvidia.ko` | Client and object allocation, control calls | Yes | Yes |
+| `/dev/nvidia0` through `/dev/nvidiaN` | `nvidia.ko` | Per-GPU operations and memory mapping | Yes | Yes |
+| `/dev/nvidia-uvm` | `nvidia-uvm.ko` | Unified memory operations | Yes | Yes |
+| `/dev/nvidia-uvm-tools` | `nvidia-uvm.ko` | The tooling interface to UVM | Yes | Yes |
+| `/dev/nvidia-modeset` | `nvidia-modeset.ko` | Mode setting | Yes | No. Requires the `display` capability. |
+| `/dev/dri/card*`, `/dev/dri/renderD*` | `nvidia-drm.ko` | The DRM and KMS interface | Yes | No. Requires `graphics` or `display`. |
+| `/dev/nvidia-caps/` | `nvidia.ko` | MIG capability files | Only on a MIG system | Only on a MIG system |
+
+"Default installation" is the container toolkit shipped with `mode = "auto"`,
+which resolves to the CDI path on any host where NVML loads. That path reads
+no capability value.
+[Container device access](/gspwn/knowledgebase/container-device-access/) states
+the two device sets and the code that decides each.
 
 There is one `/dev/nvidiaN` per GPU and exactly one `/dev/nvidiactl` per
-machine. Control operations that are not addressed to a specific GPU go to
-`nvidiactl`.
+machine, at minor 255. Control operations that are not addressed to a specific
+GPU go to `nvidiactl`.
 
 ## Userspace libraries
+
+`libnvidia-container.so` is the only open source library of the six.
 
 | Library | Provides | Ships with | Source |
 | --- | --- | --- | --- |
@@ -69,6 +80,8 @@ means the driver is absent. A missing `libcudart.so.12` means the toolkit is.
 
 ## Command line and daemons
 
+Four of the six programs are open source.
+
 | Program | Provides | Source |
 | --- | --- | --- |
 | `nvidia-smi` | An NVML client for query and device configuration | Closed |
@@ -84,6 +97,8 @@ the first call of every process.
 
 ## Filesystem locations
 
+An installation writes to six locations.
+
 | Artefact | Path |
 | --- | --- |
 | Kernel modules | `/lib/modules/$(uname -r)/kernel/drivers/video/`, or `updates/dkms/` when DKMS built them |
@@ -95,7 +110,8 @@ the first call of every process.
 
 ## Kernel interfaces outside /dev
 
-The driver exposes read-only status through `/proc` and `/sys`.
+The driver exposes read-only status through five paths under `/proc` and
+`/sys`.
 
 | Path | Reports |
 | --- | --- |
@@ -105,28 +121,13 @@ The driver exposes read-only status through `/proc` and `/sys`.
 | `/sys/module/nvidia/version` | The version of the loaded module |
 | `/sys/module/nvidia/parameters/` | One file per module parameter |
 
-## Worked example: nvidia-smi to the ioctl
-
-1. The process starts and links `libnvidia-ml.so`.
-2. NVML opens `/dev/nvidiactl` and allocates a root client handle over it.
-3. Each field the tool queries becomes a Resource Manager control call on that
-   handle, issued as an `ioctl()`.
-4. `nvidia.ko` dispatches it from the character device's `unlocked_ioctl` entry
-   point into the handler for that command.
-5. Fields the kernel side owns are answered there. Fields the GSP owns go out
-   on the RPC queue and return as replies.
-6. NVML formats the values and `nvidia-smi` prints the table.
-
-Every CUDA process follows the same first three steps, with `libcuda.so` in the
-place `libnvidia-ml.so` holds here. The device node, the handle model and the
-call mechanism are shared. The object classes allocated over them differ.
-
-The escapes and parameter structs behind step 3 are on
-[Resource Manager object model](/gspwn/knowledgebase/rm-object-model/).
+`/proc/driver/nvidia/params` is the file the container toolkit copies into a
+container with `ModifyDeviceFiles` rewritten to `0`, which stops the driver
+adjusting device node permissions from inside the namespace.
 
 ## See also
 
 - [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/)
+- [Container device access](/gspwn/knowledgebase/container-device-access/)
 - [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/)
-- [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/)
 - [Product lines](/gspwn/knowledgebase/product-lines/)

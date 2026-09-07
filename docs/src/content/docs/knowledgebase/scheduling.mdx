@@ -1,12 +1,13 @@
 ---
 title: Scheduling and preemption
-description: "How work reaches an engine through channels and runlists, the three preemption granularities, what a context switch saves, and one time slice traced from expiry to resumption."
+description: "How work reaches an engine through channels and runlists, the three preemption granularities, what a context switch saves, and what takes a channel off the runlist."
 ---
 
 Work reaches a GPU engine through a queue the process writes into directly. The
-submission path contains no system call: the pushbuffer and the doorbell are
-memory the process has already mapped. Scheduling between queues is therefore
-performed by hardware and firmware, with no host involvement per launch.
+submission path contains no system call, because the pushbuffer and the
+doorbell are memory the process has already mapped. Scheduling between queues
+is therefore performed by hardware and firmware, with no host involvement per
+launch.
 
 ```mermaid
 flowchart LR
@@ -22,6 +23,9 @@ flowchart LR
 ```
 
 ## The path
+
+Six elements separate a process writing a command from an engine executing
+it.
 
 | Element | Holds |
 | --- | --- |
@@ -55,6 +59,8 @@ The alternatives are covered in [partitioning modes](/gspwn/knowledgebase/partit
 
 ## Preemption granularity
 
+Three granularities exist, and the finer the switch point the higher the cost.
+
 | Granularity | Available from | Switch point | Cost |
 | --- | --- | --- | --- |
 | Draw or launch boundary | Early architectures | Between kernels | Low, and the latency is unbounded because a long kernel cannot be interrupted |
@@ -68,6 +74,9 @@ and a preemption is measured in tens of microseconds.
 
 ## Context switch state
 
+A switch saves five kinds of state, most of it into one save area in device
+memory.
+
 | State | Location |
 | --- | --- |
 | Register file contents for resident warps | A context save area in device memory |
@@ -76,21 +85,24 @@ and a preemption is measured in tens of microseconds.
 | Channel and engine configuration | Instance memory belonging to the channel |
 | Page table pointers | The channel's address space binding |
 
-The save area is allocated when the channel is created, which is part of why
-context creation is expensive and why the number of simultaneously resident
-contexts is bounded by memory.
+The save area is allocated when the channel is created, so channel creation
+pays for it and the number of simultaneously resident contexts is bounded by
+device memory.
 
 ## Faults and channel termination
 
-| Condition | Result |
-| --- | --- |
-| An illegal memory access by a kernel | The channel faults. The scheduler removes it from the runlist and reports an Xid. |
-| A kernel exceeding the launch timeout on a display-attached GPU | The channel is killed by the watchdog |
-| A non-replayable fault from a copy engine | The channel is faulted off with no replay |
-| Robust channel recovery | Neighbouring channels continue. The faulting context is left in an error state and every later call on it returns an error. |
+Three conditions take a channel off the runlist.
 
-A context that has faulted is not recoverable. `cudaDeviceReset` destroys it
-and builds a new one.
+| Condition | Behaviour | Rationale |
+| --- | --- | --- |
+| An illegal memory access by a kernel | The scheduler removes the channel from the runlist and the driver reports an Xid | The access cannot be completed and the engine cannot proceed past it |
+| A kernel exceeding the launch timeout on a display-attached GPU | The watchdog kills it | A kernel holding the display engine indefinitely leaves the desktop frozen |
+| A non-replayable fault from a copy engine | The channel is faulted off with no replay | The engine cannot re-issue the access |
+
+Robust channel recovery decides what happens to the rest. Neighbouring channels
+continue. The faulting context is left in an error state and every later call
+on it returns an error. A context that has faulted stays faulted, and
+`cudaDeviceReset` destroys it and builds a new one.
 
 ## Multi-Process Service
 
@@ -104,32 +116,8 @@ MPS replaces time slicing between processes with a single shared context.
 | Failure containment | A faulting context affects itself | A fatal fault can affect other clients on pre-Volta parts |
 | Resource control | None | `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` caps a client's SM share |
 
-MPS suits many small kernels from many processes, where each alone leaves most
-of the device idle. It provides no memory bandwidth or capacity isolation.
-
-## Worked example: a slice expiring
-
-Two processes each running long compute kernels on one GPU without MPS.
-
-1. Process A's context holds the compute engine. Its timeslice group is at the
-   head of the runlist and its kernels are executing on all SMs.
-2. The host scheduler's slice timer expires.
-3. The scheduler signals a preemption request to the compute engine.
-4. The engine reaches a preemption point. With instruction-level preemption
-   this is the next instruction boundary, so it does not wait for a kernel or
-   even a thread block to complete.
-5. Every SM writes its resident warp state, register file contents and shared
-   memory into context A's save area in device memory.
-6. The channel's instance memory is updated with the resume point.
-7. The scheduler binds context B's channel: its page tables become active and
-   its save area is read back into the SMs.
-8. Execution resumes inside B's kernels at the instruction each warp had
-   reached on its previous slice.
-9. At the next expiry the process reverses.
-
-Steps 5 and 7 move the same data twice per switch. The device is doing no
-useful work throughout, which is the cost that MIG and MPS avoid by not
-switching at all.
+MPS raises utilisation where many processes each launch kernels too small to
+fill the device. It provides no memory bandwidth or capacity isolation.
 
 ## See also
 

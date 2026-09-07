@@ -48,9 +48,9 @@ author, so it identifies a coordinated security fix without depending on
 anyone's commit message discipline.
 
 `libnvidia-container` holds 2 of these merges. `nvidia-container-toolkit` holds
-8, four of which are pairs: the same fix merged once to `main` and once to a
-maintenance branch, producing two merges with the same subject and different
-first release tags.
+8. Six of the 8 form three pairs, each pair being one fix merged once to `main`
+and once to a maintenance branch, so the two merges carry the same change and
+different first release tags.
 
 | Repository | Merge | Date | Fix carried | First release tag |
 | --- | --- | --- | --- | --- |
@@ -62,8 +62,8 @@ first release tags.
 | nvidia-container-toolkit | `ac8f190c` | 2025-05-16 | Run update-ldcache in isolated namespaces | v1.18.0 |
 | nvidia-container-toolkit | `d6f61079` | 2025-05-30 | Add `NVIDIA_CTK_DEBUG=false` to hook envs | v1.17.8 |
 | nvidia-container-toolkit | `450f73a0` | 2025-05-30 | Add `NVIDIA_CTK_DEBUG=false` to hook envs | v1.18.0 |
-| nvidia-container-toolkit | `3e9bab5e` | 2026-05-21 | Use `filepath-securejoin/pathrs-lite` in cudacompat hook | v1.19.1 |
-| nvidia-container-toolkit | `ae297839` | 2026-05-21 | Use `filepath-securejoin/pathrs-lite` in cudacompat hook | v1.20.0 |
+| nvidia-container-toolkit | `3e9bab5e` | 2026-05-21 | Use `filepath-securejoin/pathrs-lite` in the cudacompat and create-symlinks hooks | v1.19.1 |
+| nvidia-container-toolkit | `ae297839` | 2026-05-21 | Use `filepath-securejoin/pathrs-lite` in the cudacompat and create-symlinks hooks | v1.20.0 |
 
 `7ae5c290` first appears in v1.18.0 because it was merged to `main`. The same
 change reached v1.17.4 through the maintenance branch as the plain commit
@@ -117,10 +117,10 @@ Seven of the ten disclosures map to a commit with stated evidence. Three do not.
 
 ## C-library fix commits
 
-The commits `patch_mine.py` identifies in `libnvidia-container`, with the
-function each one touched. Fix commits that only adjust the seccomp allowlist
-are grouped, because there are nine of them and each adds one syscall after a
-real image failed.
+The fix commits in `libnvidia-container` over the whole history, with the
+function each one touched. Commits that only widen the seccomp allowlist are
+grouped into the last row, because there are ten of them and each adds the
+syscalls `ldconfig` needed after a real image failed under the previous list.
 
 | Commit | Date | Function | Bug class | First release |
 | --- | --- | --- | --- | --- |
@@ -134,7 +134,7 @@ real image failed.
 | `ff83efb` | 2024-10-02 | `nvc_ldcache_update`, new `open_as_memfd` | Execution path. Copies the host `ldconfig` into a sealed `memfd` before `fexecve`, so the binary executed inside the container cannot be the host file | v1.17.3 |
 | `f23e5e5` | 2025-01-23 | `nvc_container_new`, `find_compat_library_paths`, `configure_parser`, `list_parser` | Containment. Gates the container's CUDA compat directory behind an opt-in | v1.17.4 |
 | `9e08681` | 2025-05-27 | `nvc_ldcache_update` | Pointer to an object outside its lifetime. The `argv` array was a compound literal declared inside two conditional blocks, and a C11-conforming compiler ends its lifetime at the closing brace | v1.17.8 |
-| Nine commits between 2018 and 2025 | | `limit_syscalls` | Seccomp allowlist completeness. Each adds one syscall `ldconfig` needed on some image | v1.0.0 to v1.18.0 |
+| Ten commits, two of them branch merges | 2018-03-09 to 2025-10-01 | `limit_syscalls` | Seccomp allowlist completeness. Each widens the list `ldconfig` runs under | v1.0.0 to v1.18.0 |
 
 `ff83efb` is the fix carried by the `16f37fc` security-fork merge, and no
 bulletin names v1.17.3 as an updated version. It is a coordinated security fix
@@ -142,26 +142,31 @@ whose disclosure is not identifiable from public sources.
 
 ## Fix frequency by file
 
-Counted over commits dated 2019-01-01 and later, excluding packaging and
-vendored trees. A file touched by more fix commits has held more defects.
+Counted over `libnvidia-container` commits dated 2019-01-01 and later,
+excluding packaging and vendored trees. A file touched by more fix commits has
+held more defects. Every source file touched by two or more:
 
 | File | Fix commits | Language |
 | --- | --- | --- |
 | `src/nvc_ldcache.c` | 18 | C |
 | `src/nvc_mount.c` | 9 | C |
 | `src/nvc_container.c` | 4 | C |
-| `src/utils.c` | 2 | C |
 | `src/cli/configure.c` | 2 | C |
 | `src/dxcore.c` | 2 | C |
+| `src/utils.c` | 2 | C |
+| `src/utils.h` | 2 | C header |
+| `src/xfuncs.h` | 2 | C header |
+
+Every function touched by three or more over the same window:
 
 | Function | Fix commits |
 | --- | --- |
 | `nvc_ldcache_update` | 10 |
 | `limit_syscalls` | 9 |
-| `nvc_driver_mount` | 3 |
+| `change_rootfs` | 3 |
 | `mount_directory` | 3 |
 | `mount_files` | 3 |
-| `change_rootfs` | 3 |
+| `nvc_driver_mount` | 3 |
 
 The same count over `nvidia-container-toolkit` since 2024-01-01 puts
 `internal/ldconfig/ldconfig.go` first with 26, `create-symlinks.go` second with
@@ -192,20 +197,20 @@ An Orin library's note padding drove the expression past the end of the section
 data. Go bounds-checks, so the fault is a panic, and the regression input is
 committed as `testdata/compat/libcuda.orin.13.2.1.so.1.1`.
 
-## Reproducing this record
+## Strength of the mappings
 
-`tools/patch_mine.py` performs the commit identification and the frequency
-counts mechanically against a checkout of either repository.
-It marks a commit as a fork merge or as a keyword hit and reports the
-earliest release tag containing it. It never asserts a CVE mapping. The mappings
-on this page were made by reading each diff against the bulletin's own
-description of the fault.
+The commit identification, the first-release tags and the frequency counts on
+this page are mechanical readings of the two git histories, reproducible from a
+checkout. Every disclosure-to-commit mapping is a human reading of the diff
+against the bulletin's own description of the fault, and no mechanical step
+asserts one. [`patch_mine.py`](/gspwn/architecture/components/patch-mine/)
+states how the mechanical half is produced.
 
 ## See also
 
 - [Prior vulnerabilities](/gspwn/knowledgebase/prior-vulnerabilities/): the
   disclosed record for the GPU driver and the Container Toolkit.
 - [Container admission path](/gspwn/knowledgebase/container-admission/): the
-  stages these fixes sit in.
+  stages these fixes belong to.
 - [Container device access](/gspwn/knowledgebase/container-device-access/): the
   environment variables the image controls.

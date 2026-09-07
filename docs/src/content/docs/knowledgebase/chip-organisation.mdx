@@ -1,6 +1,6 @@
 ---
 title: Chip organisation
-description: "The containment chain from die to processing block, what one SM holds, what changes per architecture, and one launch traced onto the hardware."
+description: "The containment chain from die to processing block, what one SM holds, the per-SM scheduling caps, and what changes per architecture."
 ---
 
 import ChipFloorplan from '../../../components/ChipFloorplan.astro';
@@ -13,6 +13,8 @@ behaviour, and `cudaGetDeviceProperties` reports both.
 <ChipFloorplan />
 
 ## The containment chain
+
+Five levels run from the die down to the unit a warp issues from.
 
 | Level | Contains | Role |
 | --- | --- | --- |
@@ -29,6 +31,9 @@ processing block's register file.
 
 ## Inside one SM
 
+An H100 SM and an A100 SM differ in cache and shared-memory capacity and agree
+on every scheduling cap.
+
 | Resource | Per SM on an H100 | Per SM on an A100 |
 | --- | --- | --- |
 | Warp schedulers | 4, one per processing block | 4 |
@@ -40,11 +45,12 @@ processing block's register file.
 | Tensor cores | 4, one per processing block | 4 |
 
 The caps interact, and occupancy is the minimum across all of them. The
-register file binds most often and appears nowhere in the source. 65,536
-registers per SM divided by threads-per-block times registers-per-thread gives
-a block count the launch configuration never states.
-`ptxas -v` reports the register count the compiler chose, and
-`cudaOccupancyMaxActiveBlocksPerMultiprocessor` computes the resulting figure.
+register file binds most often, and no source line states its effect. 65,536
+registers per SM, the 256 KB register file in 4-byte registers, divided by
+threads-per-block times registers-per-thread gives a resident block count the
+launch configuration never names. `ptxas -v` reports the register count the
+compiler chose, and `cudaOccupancyMaxActiveBlocksPerMultiprocessor` computes
+the resulting figure.
 
 ## Warps
 
@@ -52,19 +58,26 @@ The hardware scheduling unit is 32 threads. A block of 250 threads occupies 8
 warps, and the last warp runs with 6 lanes masked off for its whole lifetime.
 Block sizes that are not multiples of 32 waste lanes for that reason.
 
-| Property | Behaviour |
-| --- | --- |
-| Issue | One instruction per warp per cycle, from one warp scheduler |
-| Divergence | Threads taking different branches are executed in separate passes with lanes masked |
-| Reconvergence | Independent thread scheduling, from Volta onward, gives each thread its own program counter, so divergent threads can make forward progress independently |
-| Latency hiding | A stalled warp is set aside and another resident warp issues in its place. This is why occupancy matters. |
+Four properties govern how a warp executes.
+
+- Issue. One instruction per warp per cycle, from one warp scheduler.
+- Divergence. Threads taking different branches are executed in separate passes
+  with lanes masked.
+- Reconvergence. Independent thread scheduling, from Volta onward, gives each
+  thread its own program counter, so divergent threads can make forward
+  progress independently.
+- Latency hiding. A stalled warp is set aside and another resident warp issues
+  in its place. An SM with more resident warps has more candidates to issue
+  from, which is the effect occupancy measures.
 
 Independent thread scheduling broke implicit warp synchronisation. Code written
-before Volta that relied on lockstep execution
-within a warp requires `__syncwarp` to remain correct, and the `_sync` suffixed
-intrinsics exist for that purpose.
+before Volta that relied on lockstep execution within a warp requires
+`__syncwarp` to remain correct, and the `_sync` suffixed intrinsics carry the
+same requirement for the shuffle, vote and match operations.
 
 ## Variation by architecture
+
+Six architectures span compute capability 7.0 to 12.x.
 
 | Architecture | Compute capability | Notable change at the SM |
 | --- | --- | --- |
@@ -82,40 +95,17 @@ same per-SM limits, whatever their SM count.
 ## Partial dies
 
 A shipping part rarely uses the whole die. Manufacturing defects are handled by
-disabling the affected units and selling the result as a lower SKU, which is
-why the SM count on a product page is smaller than the count in the
-architecture whitepaper, and why two SKUs from one die differ in SM count,
-memory bus width and clock.
+disabling the affected units and selling the result as a lower SKU, so the SM
+count on a product page is smaller than the count in the architecture
+whitepaper, and two SKUs cut from one die differ in SM count, memory bus width
+and clock. A full GH100 die carries 8 GPCs of 9 TPCs of 2 SMs, 144 in total,
+and the H100 SXM part ships 132 of them enabled.
 
 | Quantity | Query |
 | --- | --- |
 | SM count | `cudaDeviceProp.multiProcessorCount` |
 | Compute capability | `cudaDeviceProp.major` and `.minor` |
 | Both, from the command line | `nvidia-smi --query-gpu=name,compute_cap --format=csv` |
-
-## Worked example: a launch placed on hardware
-
-A kernel launched with 4096 blocks of 256 threads, using 24 registers per
-thread and 16 KB of shared memory per block, on an A100 with 108 SMs.
-
-1. Each block is 256 threads, so 8 warps. The register demand is
-   256 × 24 = 6144 registers per block. The 65,536 an SM holds admit 10 blocks.
-2. Shared memory on this part allows 163 KB per block at most, and the SM has
-   164 KB to give out. At 16 KB per block that admits 10 blocks.
-3. The warp cap is 64 per SM, so 8 blocks of 8 warps each. That is the smallest
-   of the three, so it binds, and the occupancy is 8 blocks per SM.
-4. The GigaThread engine distributes blocks across the 108 SMs. The first wave
-   places 108 × 8 = 864 blocks.
-5. Each SM's four warp schedulers hold 16 warps each. On every cycle, each
-   scheduler picks one eligible warp and issues one instruction from it.
-6. A warp issuing a global load stalls for hundreds of cycles. Its scheduler
-   issues from another of its 16 warps in the meantime, which is the entire
-   mechanism by which the memory latency is absorbed.
-7. As blocks retire, the GigaThread engine places waiting blocks onto the freed
-   slots. 4096 blocks over 864 slots is roughly five waves.
-8. The last wave is partial. 4096 is not a multiple of 864, so some SMs finish
-   early and idle, which is the tail effect that makes grid sizes near a
-   multiple of the wave size run faster than slightly larger ones.
 
 ## See also
 

@@ -5,16 +5,18 @@ description: "How NVIDIA segments its GPUs, how parts are named, and which capab
 
 import SegmentGrid from '../../../components/SegmentGrid.astro';
 
-NVIDIA sells the same architecture into three segments. Two independent axes
-decide what a given part can do. The architecture generation sets the compute
-feature set. The segment sets partitioning, reliability and support terms.
+NVIDIA sells the same architecture into three segments: GeForce for consumers,
+workstation cards, and data centre parts. Two independent axes decide what a
+given part can do. The architecture generation sets the compute feature set.
+The segment sets partitioning, reliability and support terms.
 
 <SegmentGrid />
 
 ## Naming
 
-Data centre parts are named by a letter and a number. The letter is the initial
-of the architecture, which makes the generation readable from the part name.
+Data centre parts are named by a letter and a number. The letter is the
+initial of the surname the architecture is named for, which makes the
+generation readable from the part name.
 
 | Letter | Architecture | Named after | Examples |
 | --- | --- | --- | --- |
@@ -33,9 +35,9 @@ the RTX 20 series is Turing, 30 is Ampere, 40 is Ada Lovelace, 50 is Blackwell.
 Workstation parts were `Quadro` through Turing and are now `RTX A`, `RTX Ada`
 or `RTX PRO`.
 
-`Tesla` was the data centre brand name through Volta and is no longer used:
-the A100 shipped as `NVIDIA A100`. `nvidia-smi` still reports older parts under
-the old brand, as `Tesla T4`.
+`Tesla` was the data centre brand name through Volta and has been dropped: the
+A100 shipped as `NVIDIA A100`. `nvidia-smi` still reports older parts under the
+old brand, as `Tesla T4`.
 
 ## Architecture generations
 
@@ -50,7 +52,7 @@ gates language and hardware features, so it appears in `nvcc` flags as
 | Ampere | 8.0, 8.6 | A100 at 8.0; A10G, A40 and RTX 30 series at 8.6 | TF32, BF16, structured sparsity, asynchronous copy, MIG |
 | Ada Lovelace | 8.9 | L4, L40S, RTX 40 series | FP8 tensor operations, shader execution reordering |
 | Hopper | 9.0 | H100, H200 | Thread block clusters, the tensor memory accelerator, transformer engine |
-| Blackwell | 10.x, 12.x | B200 at 10.x; RTX 50 series at 12.x | FP4 and FP6 tensor operations, second generation transformer engine |
+| Blackwell | 10.x, 12.x | B200 at 10.x, RTX 50 series at 12.x | FP4 and FP6 tensor operations, second generation transformer engine |
 
 Compiled device code carries the capability it was built for. The rules
 deciding which parts then accept it are on
@@ -68,15 +70,16 @@ segment more than from the generation.
 | PCIe card, workstation | PCIe | GDDR with ECC on some parts | Active blower | RTX A6000, RTX PRO |
 | PCIe card, consumer | PCIe | GDDR | Active, multi-fan | GeForce RTX |
 
-HBM is stacked beside the die on the same package and carries far higher
-bandwidth per watt than GDDR. Its power and thermal envelope puts the
+HBM is high bandwidth memory, stacked beside the die on the same package. It
+carries far higher bandwidth per watt than GDDR, which is placed as discrete
+packages around the die. The HBM power and thermal envelope puts the
 highest-bandwidth parts on chassis-cooled modules and keeps them off
 self-cooled cards.
 
 ## Instance families
 
-Rented instances are advertised by family. The GPU each family carries is
-fixed.
+Rented instances are advertised by family. The names below are the AWS EC2
+families. The GPU each family carries is fixed.
 
 | Instance family | GPU | Generation | Form factor |
 | --- | --- | --- | --- |
@@ -94,5 +97,4 @@ training parts on SXM modules with NVLink between them.
 
 - [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/)
 - [Compilation pipeline](/gspwn/knowledgebase/compilation/)
-- [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/)
 - [Installed stack](/gspwn/knowledgebase/installed-stack/)
