@@ -94,20 +94,20 @@ call.
    The last line is the account:
 
    ```
-   531 control command(s) accounted for: 514 emitted, 0 dropped before emission, 17 with no chain
+   531 control command(s) accounted for: 529 emitted, 0 dropped before emission, 2 with no chain
    ```
 
    All three numbers belong in the gate, and they close on the whole control
    surface at any `--max-calls`. The middle number counts commands a reduced
    budget dropped before emission, each named individually in the lines above
    it, so a run at a lower budget states what it lost and the surface it
-   reports stays 531. The 17 are named with a reason, taken from
-   `unresolved_owning_classes` in the chain artefact: 15 are owned by `Memory`
-   or `ProfilerBase`, NVOC base classes with no `RS_ENTRY` row, so no external
-   class exists to allocate and the inherited handler is reached only through a
-   concrete subclass the flat `owning_class` field cannot name, and 2 are owned
-   by `MmuFaultBuffer` and `NvDispApi`, whose every external class carries
-   `RS_FLAGS_ALLOC_PRIVILEGED`. Record them and do not trace for them. A
+   reports stays 531. The 2 are named with a reason, taken from
+   `unresolved_owning_classes` in the chain artefact: both are owned by
+   `MmuFaultBuffer` and `NvDispApi`, whose every external class carries
+   `RS_FLAGS_ALLOC_PRIVILEGED`. The 15 commands owned by `Memory` and
+   `ProfilerBase`, NVOC base classes with no `RS_ENTRY` row, are reached
+   through the chain of a class deriving from them, which the chain artefact
+   names on `chain_borrowed_from`. Record the 2 and do not trace for them. A
    command reported under "call name(s) the chains need are declared by no
    description" is a describe gap. Report it and name the variant.
 

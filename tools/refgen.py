@@ -537,6 +537,13 @@ def page_control(docs):
                ["With a chain an unprivileged process can build", with_chain,
                 "`no_chain_reason` is null"]]),
         "",
+        "The second count is lower than the third because `resource_list.h` "
+        "names one internal class per allocatable class and never a base. A "
+        "command compiled into a base class reaches an object allocated as "
+        "any class deriving from that base, so `rm-chains.json` gives the "
+        "base a chain borrowed from one of them and the command carries a "
+        "chain length.",
+        "",
         table(["`no_chain_reason`", "Commands"],
               [[code(reason) if reason else "`null`, a chain exists",
                 count]
@@ -656,10 +663,11 @@ def page_alloc(docs):
 
     parts = [
         frontmatter("Allocation classes",
-                    "The 155 classes an unprivileged process can allocate, "
-                    "their legal parents and depth, the 98 allocation chains "
+                    "The %d classes an unprivileged process can allocate, "
+                    "their legal parents and depth, the %d allocation chains "
                     "with the commands each unlocks, and the cumulative reach "
-                    "curve over the control surface."),
+                    "curve over the control surface."
+                    % (len(alloc), len(chains["chains"]))),
         "",
         provenance(["surface/rm-object-graph.json",
                     "surface/rm-chains.json"]),
@@ -706,14 +714,22 @@ def page_alloc(docs):
         "`tools/object_graph.py chains` groups the control surface by owning "
         "internal class and builds the shortest allocation sequence that "
         "reaches one. Sorted by internal class. The prologue column is that "
-        "sequence, root first.",
+        "sequence, root first. `resource_list.h` names one internal class per "
+        "allocatable class and never a base, so a command compiled into a "
+        "base class matches no row of its own. The borrowed column names the "
+        "class deriving from it whose chain reaches an object the base's "
+        "handler serves, and %d of the %d rows carry one."
+        % (counts.get("borrowed_chains", 0), len(chains["chains"])),
         "",
         table(["Internal class", "Target external class", "Chain length",
-               "Prologue", "Commands unlocked", "Unallocatable reason"],
+               "Prologue", "Borrowed from", "Commands unlocked",
+               "Unallocatable reason"],
               [[code(c["internal_class"]), code(c.get("target_external_class")),
                 num(c.get("chain_length")),
                 " > ".join(code(step["external_class"])
                            for step in c.get("chain") or []) or "(none)",
+                code(c.get("chain_borrowed_from"))
+                if c.get("chain_borrowed_from") else "(own)",
                 num(c.get("command_count")),
                 code(c.get("unallocatable_reason"))
                 if c.get("unallocatable_reason") else "(none)"]

@@ -199,7 +199,7 @@ coverage alone.
 
    `object_graph.py chains` writes `surface/rm-chains.json`, one
    record per NVOC internal class holding the allocation chain that reaches it,
-   the control commands that class owns, and the cumulative-reach curve. 514 of
+   the control commands that class owns, and the cumulative-reach curve. 529 of
    the 531 targetable control commands resolve to a chain. `ctrl_rank.py rank`
    writes `surface/rm-control-rank.json`, the same 531 ordered by
    chain length, CVE hot-spot history and parameter struct size, with all three

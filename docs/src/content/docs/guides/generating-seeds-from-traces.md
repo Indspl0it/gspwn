@@ -8,7 +8,7 @@ A seed bank is built from two sources, and neither half works alone.
 - `trace2seed.py convert` reads an strace of a CUDA workload, and supplies a
   real file-descriptor lifecycle and the order a workload issues escapes in.
 - `trace2seed.py chains` reads `rm-chains.json` and `rm-control-rank.json`, and
-  supplies a program naming each of 514 of the 531 control commands, each
+  supplies a program naming each of 529 of the 531 control commands, each
   behind an allocation prologue built once.
 
 The trace half exists because random generation rarely produces valid Resource
@@ -203,12 +203,10 @@ python3 tools/trace2seed.py chains --out-dir artifacts/seeds/
 ```
 
 ```
-wrote 44 chain-shaped program(s) to artifacts/seeds: 36 prologue(s) over 38 distinct chain(s), carrying 514 control command(s)
-no chain for Memory, so its 6 command(s) reach no program: no RS_ENTRY row for this class
+wrote 45 chain-shaped program(s) to artifacts/seeds: 37 prologue(s) over 40 distinct chain(s), carrying 529 control command(s)
 no chain for MmuFaultBuffer, so its 1 command(s) reach no program: every external class requires allocation privilege
 no chain for NvDispApi, so its 1 command(s) reach no program: every external class requires allocation privilege
-no chain for ProfilerBase, so its 9 command(s) reach no program: no RS_ENTRY row for this class
-531 control command(s) accounted for: 514 emitted, 0 dropped before emission, 17 with no chain
+531 control command(s) accounted for: 529 emitted, 0 dropped before emission, 2 with no chain
 ```
 
 The exit status is part of the result, and the gate reads it beside the account
@@ -230,8 +228,8 @@ absent is exit 2, because the caller asked for that ordering. `--rank` and
 The closing line accounts for the whole control surface at any `--max-calls`.
 Every chained command is emitted or dropped before emission, and every
 unchained one is counted under the third number. At `--max-calls 5` the same
-line reads `531 control command(s) accounted for: 418 emitted, 96 dropped
-before emission, 17 with no chain`.
+line reads `531 control command(s) accounted for: 424 emitted, 105 dropped
+before emission, 2 with no chain`.
 
 Each program opens one device node, builds an allocation prologue once, and
 then issues every control command that prologue reaches, ordered by
@@ -242,13 +240,13 @@ the 531 commands behind three allocations.
 `--max-calls` bounds the calls in one program, defaults to 40, and reads
 `GSPWN_SEED_MAX_CALLS` for that default. The bound is syzkaller's
 `prog.MaxCalls`, taken from memory and not read from a syzkaller tree. It
-decides how often a prologue is repeated across a split: 58 programs at 20, 44
-at 40, 41 at 60. Values below 3 are exit 2, because the shortest chain-shaped
+decides how often a prologue is repeated across a split: 59 programs at 20, 45
+at 40, 42 at 60. Values below 3 are exit 2, because the shortest chain-shaped
 program is one `openat`, one allocation and one control command, and below that
 floor the run would write an empty bank while exiting 0.
 
-Counted in allocation calls the fuzzer issues to reach the same 514 commands,
-the chain shape costs 142 against 1365 for one program per command, each
+Counted in allocation calls the fuzzer issues to reach the same 529 commands,
+the chain shape costs 145 against 1413 for one program per command, each
 rebuilding its own chain. That comparison counts calls issued. Whether the
 chain shape finds more was not measured, and no chain-shaped program has been
 parsed by `syz-db` or executed.
@@ -279,11 +277,10 @@ python3 tools/object_graph.py chains
 python3 tools/ctrl_rank.py rank
 ```
 
-The 17 commands with no chain are reported per owning class with the reason.
-`Memory` and `ProfilerBase` are NVOC base classes with no `RS_ENTRY` row, and
+The 2 commands with no chain are reported per owning class with the reason.
 `MmuFaultBuffer` and `NvDispApi` have every external class marked
 `RS_FLAGS_ALLOC_PRIVILEGED`. Those belong in the completion ledger under
-`chain-unbuildable` or `needs-privilege`, and not in the next round's worklist.
+`needs-privilege`, and not in the next round's worklist.
 
 ## 6. Validate against syz-manager
 
