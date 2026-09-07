@@ -92,6 +92,13 @@ MemoryMax={memory_max}
 WantedBy=multi-user.target
 """
 
+# The container command names /bin/bash explicitly. A bare
+# /harnesses/run_all.sh runs only when the file carries the execute bit, and
+# the bit survives neither a Windows checkout with core.fileMode=false nor a
+# bind mount from a filesystem that carries none. docker run exits 126 there,
+# Restart=always with RestartSec=30 retries to the campaign deadline, and the
+# track produces nothing. The index mode is set as well, and
+# regression_check.py harnesses holds it.
 UNIT_U_TMPL = """[Unit]
 Description=gspwn Track U (NCT userspace fuzzers) run {run_id}
 After=docker.service
@@ -105,7 +112,7 @@ ExecStart=/usr/bin/docker run --rm --name gspwn-u \\
   -v {root}/artifacts:/artifacts \\
   -v {root}/harnesses:/harnesses \\
   -e RUN_ID={run_id} {image} \\
-  /harnesses/run_all.sh
+  /bin/bash /harnesses/run_all.sh
 Restart=always
 RestartSec=30
 MemoryMax={memory_max}

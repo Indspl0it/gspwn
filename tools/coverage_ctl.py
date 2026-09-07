@@ -51,7 +51,7 @@ Subcommands:
 TWO CURVES, NOT ONE. The edge curve answers whether the fuzzer is still
 finding code. It cannot answer whether the commands it was told about have
 been tried, because the driver's edge space has no known size. The surface
-curve does: `tools/surface_cov.py` counts how many of the 764 enumerated
+curve does: `tools/surface_cov.py` counts how many of the 852 enumerated
 targets a corpus names, and that denominator is counted rather than estimated.
 Both are sampled here, and the loop's stop rule reads them together with the
 completion ledger:
@@ -65,7 +65,7 @@ completion ledger:
 
 The surface column carries no fitted curve. Heaps' law is fitted to the edge
 series because the edge space has no known asymptote; the surface series has
-a counted one, at 764, and an unbounded power law fitted to a bounded quantity
+a counted one, at 852, and an unbounded power law fitted to a bounded quantity
 predicts more new targets than remain. The surface reading is subtraction.
 
 Coverage is kernel-side reachable code only. GSP firmware is not instrumented;
@@ -167,6 +167,58 @@ def parse_fuzzer_stats(text):
     return out
 
 
+def afl_output_root(harness_dir):
+    """-> the directory under `harness_dir` holding fuzzer_stats, or None.
+
+    `afl-fuzz -o <harness_dir>` writes its state one level down, under
+    <harness_dir>/default, which is the layout run_all.sh:173 already harvests
+    crashes from. A harness whose fuzzer_stats sits at the top level is read
+    there, which covers a single-instance layout written by an older AFL++ and
+    a fixture built by hand.
+    """
+    nested = os.path.join(harness_dir, "default")
+    if os.path.isfile(os.path.join(nested, "fuzzer_stats")):
+        return nested
+    if os.path.isfile(os.path.join(harness_dir, "fuzzer_stats")):
+        return harness_dir
+    return None
+
+
+def _corpus_candidates(harness_dir, root):
+    """-> the directories that may hold one harness's evolved corpus.
+
+    An AFL++ harness keeps its queue beside its fuzzer_stats. A libFuzzer
+    harness writes <harness>/corpus and no stats file at all, which is the
+    layout run_all.sh creates for that mode. A harness that wrote no stats is
+    read at both, because an AFL++ instance killed before its first stats
+    write still leaves default/queue behind.
+    """
+    if root is not None:
+        return (os.path.join(root, "queue"),)
+    return (os.path.join(harness_dir, "corpus"),
+            os.path.join(harness_dir, "queue"),
+            os.path.join(harness_dir, "default", "queue"))
+
+
+def u_harnesses_without_stats(run_id):
+    """-> the run's Track U harness names that wrote no fuzzer_stats.
+
+    A harness that started and produced no stats file is a different condition
+    from a track that never ran, and the two need different operator actions:
+    the first is a build in libFuzzer mode or a target that died at startup,
+    the second is an absent mount. `sample` names these in its warning, so the
+    directory is walked again on the warning path only.
+    """
+    base = track_u_dir(run_id)
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return []
+    return [name for name in names
+            if os.path.isdir(os.path.join(base, name))
+            and afl_output_root(os.path.join(base, name)) is None]
+
+
 def collect_u(run_id):
     """-> (row, source) for Track U, summed across the run's harnesses.
 
@@ -185,8 +237,9 @@ def collect_u(run_id):
             continue
         harnesses += 1
         counted_corpus = False
-        stats_path = os.path.join(d, "fuzzer_stats")
-        if os.path.exists(stats_path):
+        root = afl_output_root(d)
+        if root is not None:
+            stats_path = os.path.join(root, "fuzzer_stats")
             try:
                 with open(stats_path, errors="replace") as f:
                     st = parse_fuzzer_stats(f.read())
@@ -203,13 +256,14 @@ def collect_u(run_id):
         # libFuzzer harnesses write no fuzzer_stats; the corpus dir is then the
         # only signal, and it gives no edge count. AFL++ keeps its queue in the
         # same directory it writes fuzzer_stats to, so counting both would
-        # double every AFL++ harness's corpus.
+        # double every AFL++ harness's corpus. One directory is counted per
+        # harness for that reason, the first that exists.
         if not counted_corpus:
-            for sub in ("queue", "corpus"):
-                p = os.path.join(d, sub)
+            for p in _corpus_candidates(d, root):
                 if os.path.isdir(p):
                     corpus += len([f for f in os.listdir(p)
                                    if os.path.isfile(os.path.join(p, f))])
+                    break
     if not harnesses:
         return {}, "unreachable"
     row = {"corpus": corpus or None, "crashes": crashes or None,
@@ -333,7 +387,7 @@ def collect_surface(run_id):
     a fall to zero.
 
     syz-manager's stats endpoint cannot answer this. It holds no model of the
-    764 targets, so the count comes from the corpus text itself: unpack the
+    852 targets, so the count comes from the corpus text itself: unpack the
     run's corpus.db and match variant names against the inventories.
     """
     try:
@@ -606,6 +660,19 @@ def cmd_sample(a):
                   "was recorded empty. Check the unit is running and the http "
                   "address in the campaign config." % a.url)
         return 1
+    if source == "corpus-count-only" and a.track == "u":
+        # The sample is recorded and the exit status stays 0, because the row
+        # holds a real corpus and exec count. What it holds no edge count for
+        # is the plateau rule, which reads `unknown` for every window over
+        # these rows, so the condition is stated here and named per harness.
+        silent = u_harnesses_without_stats(a.run_id)
+        print("WARN: no AFL++ fuzzer_stats under %s, so this sample records "
+              "no edge count and plateau reads 'unknown' for every window "
+              "holding it. Harnesses that wrote none: %s. afl-fuzz writes "
+              "fuzzer_stats to <harness>/default; a target built in libFuzzer "
+              "mode writes none at all, so check HARNESS_MODE on the build "
+              "before reading the corpus figure as coverage."
+              % (track_u_dir(a.run_id), ", ".join(silent) or "none named"))
     return 0
 
 
@@ -1010,7 +1077,7 @@ def surface_growth(rows, cov=None, min_samples=None):
 
     No fit and no threshold. heaps_fit is deliberately not reused: it fits an
     unbounded power law, which is right for an edge space whose size is
-    unknown and wrong for a counter bounded at 764, where it would predict
+    unknown and wrong for a counter bounded at 852, where it would predict
     more new targets than exist. The dynamic range makes the fit worse still —
     a 400-to-410 series has one target as a full percent of its spread, so the
     R2 gate would accept or reject it close to arbitrarily.
@@ -1341,7 +1408,7 @@ def completion_status(run_ids=None, corpus=None, ledger_path=None):
         # The denominator is recounted from the inventories on every call, and
         # a truncated one is not an error anywhere upstream: an
         # rm-control-inventory.json whose `methods` list is empty loads
-        # cleanly and yields 233 instead of 764, which a corpus already naming
+        # cleanly and yields 321 instead of 852, which a corpus already naming
         # the escape, UVM and alloc families closes outright. Requiring every
         # family to contribute puts a floor under it that needs no expected
         # count and no constant to drift.
@@ -1359,9 +1426,18 @@ def completion_status(run_ids=None, corpus=None, ledger_path=None):
         keys = {t["abi_key"] for t in targets.values()}
         # The generation of the surface this reading counted against. It rides
         # with the counts, so a round stamping it from this record stamps the
-        # denominator its own numbers came from and never a later one.
-        out["denominator_version"] = ps.denominator_version_for_total(
-            len(keys))
+        # denominator its own numbers came from and never a later one. A count
+        # landing back on a retired total is refused for the reason the empty
+        # family above is refused, and reported the same way: the inventories
+        # enumerate fewer targets than they hold, and the retired label would
+        # date the round to a surface nobody counted.
+        try:
+            out["denominator_version"] = ps.denominator_version_for_total(
+                len(keys))
+        except ValueError as exc:
+            raise surface_cov.SurfaceError(
+                "%s. Regenerate the inventories, then re-run "
+                "surface_verify.py check" % exc)
         exercised_keys = {targets[v]["abi_key"] for v in reached}
         accounted, deferred = ps.surface_ledger_keys(out["ledger"],
                                                      out["driver_version"])
