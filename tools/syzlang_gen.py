@@ -79,6 +79,7 @@ does not compile, 2 strict-mode size mismatch, 3 `compile` found no Go
 toolchain and no syzkaller checkout.
 """
 import argparse
+import ast
 import collections
 import hashlib
 import json
@@ -234,6 +235,10 @@ BASE_TYPES = {
 }
 
 SYZ_INT = {1: "int8", 2: "int16", 4: "int32", 8: "int64"}
+# The rendered types a scalar integer field carries. A field rendering as
+# anything else is an array, a nested struct or a resource, whose byte count is
+# a total over several values and never one field's width.
+SYZ_INT_TYPES = frozenset(SYZ_INT.values())
 
 # The escape whose parameter struct selects a further command number.
 CONTROL_ESCAPE = "NV_ESC_RM_CONTROL"
@@ -645,6 +650,93 @@ def parse_member_statement(stmt):
     return members
 
 
+# The widest shift a driver constant can carry. Every integer the headers
+# declare is at most NvU64, so a shift count of 64 or more is undefined in C
+# and the evaluator refuses the expression carrying it.
+# The bound also caps the work one macro can ask for: `1<<(1<<30)` builds a
+# 134 MB integer under an unbounded evaluator.
+MAX_SHIFT_WIDTH = 63
+
+# Division stays true division, so `4/2` evaluates to 2.0 and the caller's
+# `type(value) is int` test refuses it. C integer division would give 2, and
+# adopting it here would newly accept expressions the emitted set has never
+# carried a value for.
+CONST_BINARY_OPS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Div: lambda a, b: a / b,
+    ast.BitOr: lambda a, b: a | b,
+    ast.BitAnd: lambda a, b: a & b,
+    ast.BitXor: lambda a, b: a ^ b,
+}
+
+CONST_UNARY_OPS = {
+    ast.UAdd: lambda a: +a,
+    ast.USub: lambda a: -a,
+    ast.Invert: lambda a: ~a,
+}
+
+
+class ConstantError(Exception):
+    """An expression the constant evaluator refuses."""
+
+
+def _eval_const_node(node):
+    if isinstance(node, ast.Constant):
+        if type(node.value) is not int:
+            raise ConstantError("literal %r is not an integer" % (node.value,))
+        return node.value
+    if isinstance(node, ast.UnaryOp):
+        handler = CONST_UNARY_OPS.get(type(node.op))
+        if handler is None:
+            raise ConstantError("unary operator %s"
+                                % type(node.op).__name__)
+        return handler(_eval_const_node(node.operand))
+    if isinstance(node, ast.BinOp):
+        left = _eval_const_node(node.left)
+        right = _eval_const_node(node.right)
+        if isinstance(node.op, (ast.LShift, ast.RShift)):
+            if not 0 <= right <= MAX_SHIFT_WIDTH:
+                raise ConstantError(
+                    "shift count %d is outside 0 to %d, so the expression is "
+                    "not a constant any driver integer can hold"
+                    % (right, MAX_SHIFT_WIDTH))
+            return left << right if isinstance(node.op, ast.LShift) \
+                else left >> right
+        handler = CONST_BINARY_OPS.get(type(node.op))
+        if handler is None:
+            raise ConstantError("binary operator %s"
+                                % type(node.op).__name__)
+        return handler(left, right)
+    raise ConstantError("expression node %s" % type(node).__name__)
+
+
+def eval_c_constant(expr):
+    """-> the integer an arithmetic macro expression evaluates to, or None.
+
+    Refuses a comparison. `(A > B)` parses as a Compare node, which this
+    evaluator has no handler for, so it returns None where a Python `eval`
+    would return a bool and the caller would record it as 1. Refuses a shift
+    wider than MAX_SHIFT_WIDTH for the reason stated beside that constant.
+
+    The expression reaching here carries no identifier: the caller has already
+    substituted every macro name it could resolve and returned None for any it
+    could not.
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except (SyntaxError, ValueError, MemoryError):
+        return None
+    try:
+        return _eval_const_node(tree.body)
+    except ConstantError as exc:
+        logger.debug("refused constant expression %r: %s", expr, exc)
+        return None
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+
+
 class TypeIndex:
     """Struct definitions, typedef aliases and macro constants from headers.
 
@@ -659,6 +751,9 @@ class TypeIndex:
         self.defines = {}       # macro name -> expression text
         self.enums = set()      # enumeration type names
         self.parse_failures = collections.Counter()
+        # (enumerator, initialiser) for each enum whose recording stopped on
+        # an initialiser that did not evaluate. Reported by scan_headers.
+        self.unevaluated_enums = []
 
     def scan_file(self, path, rel_path):
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -758,6 +853,15 @@ class TypeIndex:
         `NvU64 vMemPtrs[NV2080_CTRL_CMD_GR_CTXSW_PREEMPTION_BIND_BUFFERS_END]`.
         Without the enumerator's value the bound does not evaluate and the
         whole containing struct falls back to an opaque array.
+
+        An initialiser that does not evaluate ends the enum. C continues its
+        implicit numbering from the value the initialiser produced, so every
+        enumerator after an unevaluated one has an unknown value, and
+        recording it from a counter that skipped the initialiser states a
+        number the compiler never assigns. Recording nothing leaves the array
+        bound unevaluated and the containing struct opaque, which is the
+        outcome the emitter already handles. 0 enums stop early across the
+        headers scanned for the committed set.
         """
         counter = 0
         depth = 0
@@ -785,8 +889,12 @@ class TypeIndex:
             if expr.strip():
                 value = self.const(expr)
                 if value is None:
-                    counter += 1
-                    continue
+                    logger.debug(
+                        "enumerator %s has an initialiser %r that did not "
+                        "evaluate; the rest of this enum is not recorded",
+                        name, expr.strip())
+                    self.unevaluated_enums.append((name, expr.strip()))
+                    return
                 counter = value
             self.defines.setdefault(name, str(counter))
             counter += 1
@@ -835,12 +943,11 @@ class TypeIndex:
                           "(%d)" % value, expr)
         if not re.fullmatch(r"[0-9xXa-fA-F()+\-*/ <>|&]*", expr):
             return None
-        try:
-            value = eval(expr, {"__builtins__": {}}, {})  # noqa: S307
-        except (SyntaxError, NameError, TypeError, ZeroDivisionError,
-                ValueError):
-            return None
-        return value if isinstance(value, int) else None
+        value = eval_c_constant(expr)
+        # A comparison is refused by eval_c_constant and never reaches here.
+        # bool is a subclass of int, so an isinstance check alone would record
+        # a comparison as 1 and pin a field to a value the driver never uses.
+        return value if type(value) is int else None
 
     # -- layout -------------------------------------------------------------
 
@@ -1046,6 +1153,13 @@ def scan_headers(src):
                 "constants, %d definitions rejected by the member parser",
                 scanned, len(index.structs), len(index.defines),
                 len(index.parse_failures))
+    if index.unevaluated_enums:
+        logger.info(
+            "%d enum(s) stopped recording at an initialiser that did not "
+            "evaluate, so their later enumerators carry no value: %s",
+            len(index.unevaluated_enums),
+            ", ".join("%s = %s" % pair
+                      for pair in index.unevaluated_enums[:6]))
     return index
 
 
@@ -1139,6 +1253,24 @@ def render_struct(name, layout, overrides=None):
     difference no compile gate would catch.
     """
     overrides = overrides or {}
+    # An override the layout cannot carry is refused here and never dropped.
+    # require_pinned and require_pointer cover cmd, paramsSize, hClass, size
+    # and ptr; every other override names a handle, a descriptor or a value
+    # family and has no such check, so a field renamed in the driver header
+    # would leave hObject, hClient, params, status, hRoot, hObjectParent,
+    # hObjectNew or pAllocParms rendering as a plain integer and every control
+    # call would lose its handle chaining with nothing downstream reporting it.
+    declared = {field.name for field in layout.fields if field.syz is not None}
+    undeclared = sorted(set(overrides) - declared)
+    if undeclared:
+        raise SystemExit(
+            "%s declares no field named %s, so the override(s) for %s cannot "
+            "be applied. The struct carries %s. A driver header that renamed "
+            "the field is the usual cause: correct the override to the new "
+            "name, or the emitted struct types that field as a plain integer "
+            "and the call loses whatever the override carried."
+            % (name, ", ".join(undeclared), ", ".join(undeclared),
+               ", ".join(sorted(declared))))
     lines = ["%s {" % name]
     width = max([len(f.name) for f in layout.fields] + [4])
     for field in layout.fields:
@@ -1196,16 +1328,30 @@ def value_overrides(struct, layout, families):
     size.
 
     The second member holds the records the layout cannot carry: a field name
-    the struct no longer declares, a field that renders as padding, or a width
+    the struct no longer declares, a field that renders as padding, a field
+    the layout renders as an array, a nested struct or a resource, or a width
     with no syzlang integer. Each is a family the audit accepted and the
-    emitter did not bind, which the caller reports.
+    emitter did not bind, which the caller reports, and each carries a null
+    width.
+
+    Only a field the layout renders as int8, int16, int32 or int64 is bound.
+    field.size is the whole-array byte count for an array member and the total
+    for a nested struct, so a size test alone would bind an array of four
+    NvU8, or a four-byte nested struct, to one flags[set, int32], rebinding
+    several members to one value at a width that still matches. 0 of the 53
+    accepted families reach an array or a nested struct today.
     """
     sizes = {field.name: field.size for field in layout.fields
-             if field.syz is not None}
+             if field.syz in SYZ_INT_TYPES}
+    rendered = {field.name: field.syz for field in layout.fields}
     overrides, unbound = {}, []
     for record in families.get(struct, ()):
         size = sizes.get(record["field"])
         if size not in SYZ_INT:
+            logger.debug("%s.%s renders as %r, which carries no scalar "
+                         "integer width, so its value family is unbound",
+                         struct, record["field"],
+                         rendered.get(record["field"]))
             unbound.append((record, size))
             continue
         overrides[record["field"]] = "flags[%s, %s]" % (record["set_name"],
@@ -1728,7 +1874,11 @@ HANDLE_FIELDS = {
                           "hObject": "nv_handle"},
     "NVOS39_PARAMETERS": {"hObjectParent": "nv_handle",
                           "hSubDevice": "nv_handle"},
-    "NVOS41_PARAMETERS": {"hClient": "nvh_nv01_root"},
+    # NVOS41_PARAMETERS carried an hClient override and has no such field.
+    # nvos.h:1941 declares pEvent, MoreEvents and status alone, so the
+    # override named nothing and render_struct dropped it. It is deleted
+    # and not corrected: NV_ESC_RM_GET_EVENT_DATA reads the event queue the
+    # file descriptor already identifies and passes no client handle.
     "NVOS46_PARAMETERS": {"hClient": "nvh_nv01_root",
                           "hDevice": "nv_handle",
                           "hMemory": "nv_handle",
@@ -1921,7 +2071,14 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
         logger.warning("%s reported %d request numbers; the ABI defines two, "
                        "one per parameter struct size", ALLOC_ESCAPE,
                        len(requests))
-    request64 = requests[0] if requests else None
+    if not requests:
+        raise SystemExit(
+            "%s carries no computed request number in the inventory, so no "
+            "allocation ioctl line can be written and every class would be "
+            "recorded as emitted with no call to reach it. Regenerate the "
+            "inventory with --sizes so the parameter size is measured."
+            % ALLOC_ESCAPE)
+    request64 = requests[0]
     request21 = requests[1] if len(requests) > 1 else None
 
     by_class = {r["external_class"]: r for r in graph["records"]}
@@ -2031,10 +2188,9 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
             variant_struct(emitter, "NVOS64_PARAMETERS", variant, overrides)
             require_pinned(emitter, variant, "hClass",
                            "the allocation variant for %s" % name)
-            if request64:
-                blocks.append(
-                    "ioctl$NV_ESC_RM_ALLOC_%s(fd fd_nv, cmd const[%s], "
-                    "arg ptr[inout, %s])" % (name, request64, variant))
+            blocks.append(
+                "ioctl$NV_ESC_RM_ALLOC_%s(fd fd_nv, cmd const[%s], "
+                "arg ptr[inout, %s])" % (name, request64, variant))
             records.append({"class": cls, "emitted": True,
                             "variant_name": "NV_ESC_RM_ALLOC_%s" % name,
                             "class_level_name": not option["suffix"],
@@ -2052,11 +2208,22 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
     # untouched. NV01_ROOT carries it because the client allocation is the
     # call every chain starts from.
     if request21:
+        root_number = class_map.get(ROOT_CLASS)
+        if root_number is None:
+            # require_pinned below passes on const[0x0, int32], 0 being a
+            # constant, so a missing class number would emit a variant that
+            # allocates class 0 and reaches no constructor.
+            raise SystemExit(
+                "no class number was found in the headers for %s, so the "
+                "32-bit-parameter allocation variant would pin hClass to 0 "
+                "and allocate nothing. Check that --src points at an "
+                "open-gpu-kernel-modules checkout declaring %s."
+                % (ROOT_CLASS, ROOT_CLASS))
         overrides21 = {
             "hRoot": "nvh_nv01_root",
             "hObjectParent": "const[0, int32]",
             "hObjectNew": resource_name(ROOT_CLASS),
-            "hClass": "const[0x%x, int32]" % class_map.get(ROOT_CLASS, 0),
+            "hClass": "const[0x%x, int32]" % root_number,
             "pAllocParms": "const[0, int64]",
             "paramsSize": "const[0, int32]",
             "status": "int32",
@@ -2083,15 +2250,41 @@ def emit_alloc(emitter, inventory, graph, class_map, limit_privilege):
     return "\n".join(blocks), records, dict(skipped)
 
 
-def control_object_resource(class_id_int, number_to_class):
-    cls = number_to_class.get(class_id_int)
-    if cls is None:
+def control_object_resource(owning_class, covered, families):
+    """-> (the resource hObject takes, the external class it names or None).
+
+    Typed from the command's owning class, which is the NVOC class its handler
+    is compiled into and the class of the object the call operates on.
+
+    The earlier route typed hObject from class_id, the SDK namespace number in
+    the command id. The two agree for most commands and disagree wherever a
+    namespace is shared: NV9010 and NV0090 are exported by kchannel, kchangrpapi
+    and kgrctx alike, so all three rendered the same resource, fifteen control
+    variants came out byte-identical and ten named a handler no object of that
+    resource's class reaches. class_id names an SDK namespace and never a
+    class, so the route is deleted and kept as no fallback: a fallback
+    producing the wrong handle silently is the defect.
+
+    An owning class covering several external classes takes its family
+    resource, so a handle from any of them satisfies the field. An owning class
+    the object graph declares no allocatable external class under takes
+    nv_handle: no description allocates such an object, so no resource for it
+    is declared and naming one would not compile. Two owning classes are in
+    that state and both are correct there. MMU_FAULT_BUFFER is
+    alloc_privilege kernel and all eight NVC*70_DISPLAY are
+    alloc_privilege privileged, so no unprivileged process allocates an object
+    of either, and a handle type would state a chain that cannot be built.
+    """
+    classes = covered.get(owning_class) or []
+    if not classes:
         return "nv_handle", None
-    return resource_name(cls), cls
+    if len(classes) > 1:
+        return families[owning_class], None
+    return resource_name(classes[0]), classes[0]
 
 
-def emit_control(emitter, inventory, control, number_to_class, graph,
-                 ranking, max_commands, order):
+def emit_control(emitter, inventory, control, class_coverage, families,
+                 graph, ranking, max_commands, order):
     """One NV_ESC_RM_CONTROL variant per covered command."""
     node = inventory["nodes"][0]
     command = next((c for c in node["commands"]
@@ -2125,6 +2318,11 @@ def emit_control(emitter, inventory, control, number_to_class, graph,
     # ioctl lines under one name. Handler names are unique across all exported
     # control methods in this release, so this cannot fire today.
     control_variant_names = set()
+    # Owning classes whose hObject falls back to nv_handle, with the command
+    # count each carries. The object graph declares no allocatable external
+    # class for them, so no chain builds an object of that class and the
+    # command runs against whatever handle syzkaller carries.
+    untyped = collections.Counter()
 
     for method in ranked:
         if max_commands and covered >= max_commands:
@@ -2156,8 +2354,10 @@ def emit_control(emitter, inventory, control, number_to_class, graph,
             skipped["no parameter struct named"] += 1
             continue
 
-        object_res, _cls = control_object_resource(int(method["class_id"], 16),
-                                                   number_to_class)
+        object_res, _cls = control_object_resource(
+            method["owning_class"], class_coverage, families)
+        if object_res == "nv_handle":
+            untyped[method["owning_class"]] += 1
         overrides = {
             "hClient": "nvh_nv01_root",
             "hObject": object_res,
@@ -2200,7 +2400,15 @@ def emit_control(emitter, inventory, control, number_to_class, graph,
 
     for reason, count in sorted(skipped.items()):
         logger.info("control commands skipped, %s: %d", reason, count)
-    return "\n".join(blocks), records, dict(skipped), len(reachable)
+    if untyped:
+        logger.warning(
+            "%d control command(s) over %d owning class(es) render hObject as "
+            "nv_handle, because the object graph declares no allocatable "
+            "external class for the owning class: %s",
+            sum(untyped.values()), len(untyped),
+            ", ".join("%s %d" % (cls, n) for cls, n in sorted(untyped.items())))
+    return "\n".join(blocks), records, dict(skipped), len(reachable), \
+        dict(untyped)
 
 
 def nvkms_request(index, envelope_size):
@@ -2278,10 +2486,17 @@ def emit_modeset(emitter, nvkms):
                             "reason": "no layout and no measured size for %s"
                                       % struct})
             continue
-        try:
-            params_size = index.layout(emitted).size
-        except LayoutError:
-            params_size = emitter.measured(emitted)
+        # Measured first, parsed layout second, the order emit_control and
+        # emit_alloc already use. Emitter.ensure renders the struct opaque at
+        # the measured size wherever the two disagree, so a size taken from
+        # the parsed layout would pin a length the emitted struct does not
+        # have and the kernel's own sizeof check would refuse every execution.
+        params_size = emitter.measured(emitted)
+        if params_size is None:
+            try:
+                params_size = index.layout(emitted).size
+            except LayoutError:
+                params_size = None
         if params_size is None:
             skipped["parameter size unknown"] += 1
             continue
@@ -2399,10 +2614,15 @@ def emit_drm(emitter, drm):
                             "reason": "no layout and no measured size for %s"
                                       % struct})
             continue
-        try:
-            params_size = emitter.index.layout(emitted).size
-        except LayoutError:
-            params_size = emitter.measured(emitted)
+        # Measured first, for the reason stated in emit_modeset: the request
+        # number carries _IOC_SIZE and Emitter.ensure decides the emitted
+        # length from the measured size.
+        params_size = emitter.measured(emitted)
+        if params_size is None:
+            try:
+                params_size = emitter.index.layout(emitted).size
+            except LayoutError:
+                params_size = None
         if params_size is None:
             skipped["parameter size unknown"] += 1
             records.append({"command": name, "nr": command["nr"],
@@ -2703,9 +2923,16 @@ def count_entry_point_structs(text):
 def emit_entry_points():
     """-> (the mmap and poll block, [record per emitted call]).
 
-    The five calls the driver's file_operations tables register on the four
-    device nodes the description set opens. surface/entry-points.json carries
-    the whole census, including the six tables no description opens.
+    Ten calls, five mmap and five poll, over six of the seven device nodes
+    build_openat_block opens. /dev/nvidia-modeset is the seventh: it is opened
+    for the modeset command family and nvkms_fops registers an mmap and a poll
+    that no description models. surface/entry-points.json carries the whole
+    census, including the tables no description opens.
+
+    Four file_operations tables contribute. nvidia_fops registers poll and
+    mmap on both /dev/nvidiactl and /dev/nvidiaN, uvm_fops registers mmap,
+    uvm_tools_fops registers poll, and nv_drm_fops registers both on both DRM
+    nodes, which is four of the ten.
 
     An entry point is not a command: it carries no method id, no parameter
     struct and no inventory row, so none of these calls enters the command
@@ -2889,11 +3116,18 @@ def emit_uvm(emitter, inventory, include_test):
                     arg = "ptr[inout, %s]" % emitted
                 elif command["param_size"]:
                     opaque = syz_ident(name.lower()) + "_arg"
+                    # add_raw returns the existing struct unchanged on a name
+                    # it already holds, so the opaque record is appended only
+                    # where the struct was newly rendered. Appending it either
+                    # way counts one opaque struct twice in generation.json,
+                    # which escape_param_type already guards against.
+                    first = opaque not in emitter.rendered
                     emitter.add_raw(
                         opaque, render_opaque(opaque, command["param_size"]))
-                    emitter.opaque.append(
-                        (opaque, command["param_size"],
-                         "no header definition found for %s" % struct))
+                    if first:
+                        emitter.opaque.append(
+                            (opaque, command["param_size"],
+                             "no header definition found for %s" % struct))
                     arg = "ptr[inout, %s]" % opaque
                 else:
                     records.append({"command": name, "group": group,
@@ -2908,16 +3142,139 @@ def emit_uvm(emitter, inventory, include_test):
     return "\n".join(blocks), records
 
 
-def emit_resources(graph, class_map, limit_privilege):
-    lines = ["resource nv_handle[int32]"]
+def family_resource_name(internal_class):
+    return "nvh_any_" + internal_class.lower()
+
+
+def emit_resources(graph, class_map, limit_privilege, owning_classes):
+    """-> (the resource declarations, {class: external classes}, {class: family}).
+
+    One resource per external class, and a family resource for each NVOC class
+    that covers more than one of them. An external class resource derives from
+    the most derived family above it, and a family from the most derived
+    family above itself, so the declarations mirror the driver's own class
+    hierarchy.
+
+    The families exist for the control side. A control command names the NVOC
+    class its handler is compiled into, and every external class deriving from
+    that class allocates an object the handler serves: kchannel commands reach
+    an object allocated as any of the eleven CHANNEL_GPFIFO classes, and the
+    six memCtrlCmd commands reach any of the eighteen Memory subclasses.
+    syzkaller satisfies a field typed on a resource from any descendant
+    resource, so hObject typed on the family accepts a handle from any class in
+    the set and accepts nothing outside it. Typing it on one chosen external
+    class would refuse the rest.
+
+    A class covering exactly one external class needs no family: that class's
+    own resource already names the one class, and a tier above it would widen
+    nothing.
+
+    Coverage runs over `internal_ancestors`, which object_graph.py derives from
+    the NVOC hierarchy the generated headers state. resource_list.h names one
+    internal class per allocatable class and never a base, so without the
+    ancestor edge Memory and ProfilerBase cover nothing and their fifteen
+    commands fall back to nv_handle.
+    """
+    covered = collections.OrderedDict()
+    rs_entry_classes = set()
     for record in sorted(graph["records"], key=lambda r: r["external_class"]):
         cls = record["external_class"]
         if cls not in class_map:
             continue
         if limit_privilege and record["alloc_privilege"] in PRIVILEGED_ALLOC:
             continue
-        lines.append("resource %s[nv_handle]" % resource_name(cls))
-    return "\n".join(lines)
+        ancestors = record.get("internal_ancestors")
+        if ancestors is None:
+            raise SystemExit(
+                "%s carries no internal_ancestors, so the NVOC class "
+                "hierarchy cannot be read and every control command whose "
+                "owning class is a base would lose its handle type. "
+                "Regenerate the object graph with "
+                "`python3 tools/object_graph.py extract`." % cls)
+        rs_entry_classes.add(record["internal_class"])
+        for name in list(ancestors) + [record["internal_class"]]:
+            covered.setdefault(name, []).append(cls)
+
+    # A family is emitted for a class the control side can name and for an
+    # RS_ENTRY internal class, and never for a shared base no command names.
+    # Object, RsResource and RmResource sit above almost every class, and a
+    # family for each would re-base all 155 external resources to express a
+    # relation nothing reads.
+    families = {name: family_resource_name(name)
+                for name, classes in covered.items()
+                if len(classes) > 1
+                and (name in rs_entry_classes or name in owning_classes)}
+    taken = {resource_name(cls) for classes in covered.values()
+             for cls in classes}
+    collisions = sorted(set(families.values()) & taken)
+    if collisions:
+        raise SystemExit(
+            "the family resource name(s) %s collide with an external class "
+            "resource of the same name, so one declaration would shadow the "
+            "other and a control command would take a handle from the wrong "
+            "class. Rename family_resource_name's prefix."
+            % ", ".join(collisions))
+
+    # The resource hierarchy is derived from what each family covers and never
+    # from the ancestor chain's shape. NVOC lets an interface class sit at two
+    # different depths, so a class does not reach every descendant through one
+    # chain: INotifier is reached both under GpuResource and directly under
+    # RmResource. Containment answers the question syzkaller asks, which is
+    # whether every handle of one resource also satisfies another.
+    sets = {name: frozenset(classes) for name, classes in covered.items()}
+
+    def enclosing(members, exclude=None):
+        """-> the family resource whose set is the tightest one strictly
+        containing members, or nv_handle where no family contains it."""
+        candidates = [name for name in families
+                      if name != exclude and members < sets[name]]
+        if not candidates:
+            return "nv_handle"
+        best = min(candidates, key=lambda n: (len(sets[n]), n))
+        tied = [n for n in candidates
+                if len(sets[n]) == len(sets[best]) and sets[n] != sets[best]]
+        if tied:
+            raise SystemExit(
+                "the class set %s is contained in two families of equal size "
+                "that hold different classes, %s and %s, so no single "
+                "resource declaration expresses which one a handle of it "
+                "satisfies."
+                % (", ".join(sorted(members)), families[best],
+                   families[tied[0]]))
+        return families[best]
+
+    equal = collections.defaultdict(list)
+    for name in families:
+        equal[sets[name]].append(name)
+    duplicated = {k: v for k, v in equal.items() if len(v) > 1}
+    if duplicated:
+        raise SystemExit(
+            "%d family/families cover exactly the same external classes as "
+            "another, so a handle typed on one would not satisfy the other "
+            "though the two describe the same set: %s. Collapse them to one "
+            "resource before emitting."
+            % (len(duplicated),
+               "; ".join(", ".join(sorted(v)) for v in duplicated.values())))
+
+    base_of = {}
+    for name, classes in covered.items():
+        if name not in rs_entry_classes:
+            continue
+        for cls in classes:
+            base_of[cls] = enclosing(frozenset([cls]))
+    family_base = {name: enclosing(sets[name], exclude=name)
+                   for name in families}
+
+    lines = ["resource nv_handle[int32]"]
+    # Widest first, so every family is declared above the ones deriving from it.
+    for name in sorted(families, key=lambda n: (-len(sets[n]), n)):
+        lines.append("resource %s[%s]" % (families[name], family_base[name]))
+    for cls in sorted(base_of):
+        lines.append("resource %s[%s]" % (resource_name(cls), base_of[cls]))
+    logger.info("%d class resource(s) over %d NVOC class(es), %d of which "
+                "cover more than one external class and carry a family "
+                "resource", len(base_of), len(covered), len(families))
+    return "\n".join(lines), covered, families
 
 
 def emit_flags_sets(index):
@@ -3347,6 +3704,23 @@ def json_source_record(path, count_key=None):
     return record
 
 
+def generated_records(out_dir, written):
+    """-> {repository-relative path: {sha256, bytes}} for the files a run wrote.
+
+    Digested over the bytes write_file puts on disk, which it writes with
+    newline="\\n", so a Windows regeneration and a Linux one produce the same
+    digest for the same content.
+    """
+    records = {}
+    for name, text in written:
+        blob = text.encode("utf-8")
+        records[rel(os.path.join(out_dir, name))] = {
+            "sha256": hashlib.sha256(blob).hexdigest(),
+            "bytes": len(blob),
+        }
+    return records
+
+
 def size_source_record(path):
     """The path, digest and entry count of one measured-size input."""
     with open(path, "rb") as fh:
@@ -3357,12 +3731,38 @@ def size_source_record(path):
 
 
 def merged_sizes(inventory, extra_paths):
-    """Measured sizes from the inventory plus any probe output."""
+    """Measured sizes from the inventory plus any probe output.
+
+    Emitter.ensure treats every entry here as ground truth and renders a
+    struct opaque wherever the parsed layout disagrees, so every entry comes
+    from a measurement. One taken from anywhere else would silently override a
+    layout derived from the driver's own headers.
+
+    The alternate parameter struct takes the command's own size_source. The
+    inventory records no size_source_alt, and the alternate size is produced
+    by the same measurement pass as the primary one on the one command
+    carrying it, NV_ESC_RM_ALLOC with NVOS21_PARAMETERS.
+    """
+    unsourced = []
+    for node in inventory["nodes"]:
+        for command in node["commands"]:
+            if command.get("param_struct_alt") \
+                    and command.get("param_size_alt") is not None \
+                    and command.get("size_source") != "measured":
+                unsourced.append((command["name"],
+                                  command["param_struct_alt"],
+                                  command.get("size_source")))
+    if unsourced:
+        logger.warning(
+            "%d alternate parameter size(s) carry a size_source that is not "
+            "a measurement and are not used: %s", len(unsourced),
+            ", ".join("%s %s (%s)" % entry for entry in unsourced))
     sizes = {}
     for node in inventory["nodes"]:
         for command in node["commands"]:
-            if command["param_struct"] and command["param_size"] is not None \
-                    and command.get("size_source") == "measured":
+            if command.get("size_source") != "measured":
+                continue
+            if command["param_struct"] and command["param_size"] is not None:
                 sizes[command["param_struct"]] = command["param_size"]
             if command.get("param_struct_alt") \
                     and command.get("param_size_alt") is not None:
@@ -3398,11 +3798,6 @@ def build(args):
     ranking = resolve_ctrl_rank(args)
     class_map = class_numbers(
         index, {r["external_class"] for r in graph["records"]})
-    number_to_class = {}
-    for record in graph["records"]:
-        cls = record["external_class"]
-        if cls in class_map:
-            number_to_class.setdefault(class_map[cls], cls)
     missing = [r["external_class"] for r in graph["records"]
                if r["external_class"] not in class_map]
     if missing:
@@ -3418,13 +3813,19 @@ def build(args):
     emitter = Emitter(index, sizes,
                       load_value_families(args.value_families,
                                           args.value_audit))
-    resources = emit_resources(graph, class_map, not args.all_classes)
+    # The owning classes the control side can name. A family resource exists
+    # for a base class only where a command names it, so the set is read from
+    # the inventory and never from the graph.
+    owning_classes = {m["owning_class"] for m in control["methods"]}
+    resources, class_coverage, class_families = emit_resources(
+        graph, class_map, not args.all_classes, owning_classes)
     flags = emit_flags_sets(index)
     alloc_text, alloc_records, alloc_skipped = emit_alloc(
         emitter, inventory, graph, class_map, not args.all_classes)
-    ctrl_text, ctrl_records, ctrl_skipped, ctrl_reachable = emit_control(
-        emitter, inventory, control, number_to_class, graph, ranking,
-        args.max_control, args.control_order)
+    ctrl_text, ctrl_records, ctrl_skipped, ctrl_reachable, ctrl_untyped = \
+        emit_control(emitter, inventory, control, class_coverage,
+                     class_families, graph, ranking, args.max_control,
+                     args.control_order)
     escape_text, escape_records = emit_escapes(
         emitter, inventory, class_map, graph, True, True)
     xfer_text, xfer_records = emit_xfer(emitter, inventory)
@@ -3475,6 +3876,8 @@ def build(args):
         "alloc_skipped": alloc_skipped,
         "ctrl_text": ctrl_text, "ctrl_records": ctrl_records,
         "ctrl_skipped": ctrl_skipped, "ctrl_reachable": ctrl_reachable,
+        "ctrl_untyped_object": ctrl_untyped,
+        "class_families": class_families,
         "escape_text": escape_text, "escape_records": escape_records,
         "uvm_text": uvm_text, "uvm_records": uvm_records,
     }
@@ -3536,16 +3939,19 @@ def cmd_emit(args):
         "# set is chip-gated carries one call taking nv_handle, because at\n"
         "# most one of those parents exists on any given GPU.\n"
         + result["alloc_text"],
-        "# Entry points other than ioctl, from the file_operations tables the\n"
-        "# driver registers on the four nodes opened above. nvidia_fops at\n"
-        "# kernel-open/nvidia/nv.c:250 registers poll and mmap, uvm_fops at\n"
-        "# kernel-open/nvidia-uvm/uvm.c:1070 registers mmap, and\n"
-        "# uvm_tools_fops at kernel-open/nvidia-uvm/uvm_tools.c:2744\n"
-        "# registers poll. surface/entry-points.json carries the whole\n"
-        "# census, including the six tables no description opens. An entry\n"
-        "# point carries no method id, no parameter struct and no inventory\n"
-        "# row, so none of these calls is a command and none enters the\n"
-        "# command denominator.\n"
+        "# Entry points other than ioctl: ten calls over six of the seven\n"
+        "# nodes opened above, from four file_operations tables. nvidia_fops\n"
+        "# at kernel-open/nvidia/nv.c:250 registers poll and mmap and serves\n"
+        "# both /dev/nvidiactl and /dev/nvidiaN, uvm_fops at\n"
+        "# kernel-open/nvidia-uvm/uvm.c:1070 registers mmap, uvm_tools_fops\n"
+        "# at kernel-open/nvidia-uvm/uvm_tools.c:2744 registers poll, and\n"
+        "# nv_drm_fops registers both on both DRM nodes, which is four of the\n"
+        "# ten. /dev/nvidia-modeset is the seventh node: nvkms_fops registers\n"
+        "# an mmap and a poll that no description models.\n"
+        "# surface/entry-points.json carries the whole census, including the\n"
+        "# six tables no description opens. An entry point carries no method\n"
+        "# id, no parameter struct and no inventory row, so none of these\n"
+        "# calls is a command and none enters the command denominator.\n"
         + result["entry_text"],
     ]) + "\n"
 
@@ -3640,14 +4046,16 @@ def cmd_emit(args):
     ]) + "\n"
 
     out = args.out_dir
-    write_file(os.path.join(out, "nvidia.txt"), core)
-    write_file(os.path.join(out, "nvidia_structs.txt"), structs)
-    write_file(os.path.join(out, "nvidia_ctrl.txt"), ctrl)
-    write_file(os.path.join(out, "nvidia_uvm.txt"), uvm)
-    write_file(os.path.join(out, "nvidia_modeset.txt"), modeset)
-    write_file(os.path.join(out, "nvidia_drm.txt"), drm_text)
-    write_file(os.path.join(out, args.header_name),
-               emit_header(inventory, result["modeset_request"]))
+    written = [("nvidia.txt", core),
+               ("nvidia_structs.txt", structs),
+               ("nvidia_ctrl.txt", ctrl),
+               ("nvidia_uvm.txt", uvm),
+               ("nvidia_modeset.txt", modeset),
+               ("nvidia_drm.txt", drm_text),
+               (args.header_name,
+                emit_header(inventory, result["modeset_request"]))]
+    for name, text in written:
+        write_file(os.path.join(out, name), text)
 
     manifest = {
         "schema": SCHEMA,
@@ -3697,6 +4105,18 @@ def cmd_emit(args):
             "control_variants": sum(1 for r in result["ctrl_records"]
                                     if r["emitted"]),
             "control_reachable": result["ctrl_reachable"],
+            # hObject is typed from the command's owning class. These are the
+            # commands whose owning class the object graph declares no
+            # allocatable external class for, so the field falls back to
+            # nv_handle and no chain builds the object the handler expects.
+            "control_untyped_object": sum(
+                result["ctrl_untyped_object"].values()),
+            "control_untyped_object_classes":
+                result["ctrl_untyped_object"],
+            # An internal class exporting several external classes. Its
+            # control commands take the family resource, which any of those
+            # classes' handles satisfies.
+            "class_families": len(result["class_families"]),
             "uvm_emitted": sum(1 for r in result["uvm_records"]
                                if r["emitted"]),
             "uvm_total": len(result["uvm_records"]),
@@ -3782,6 +4202,12 @@ def cmd_emit(args):
             },
         },
     }
+    # The digest of every file this run wrote, beside the digests of the files
+    # it read. Without it a hand edit to any descriptions/*.txt leaves all the
+    # recorded inputs matching and every artefact check green, and the fuzzer
+    # then drives whatever the edit put there. generation.json itself is
+    # excluded, because it carries the record.
+    manifest["generated"] = generated_records(out, written)
     write_file(os.path.join(out, "generation.json"),
                json.dumps(manifest, indent=1, sort_keys=True) + "\n")
 
@@ -3957,11 +4383,34 @@ DEFAULT_SYZKALLER_DIR = os.environ.get("GSPWN_SYZKALLER_DIR") or os.path.join(
 SYZ_STUB_DIR = os.path.join(REPO_ROOT, "tools", "syz-stub")
 GSPWN_CHECK_SRC = os.path.join(REPO_ROOT, "tools", "gspwn-check", "main.go")
 
-GIT_TIMEOUT_SECONDS = int(os.environ.get("GSPWN_GIT_TIMEOUT_SECONDS", "900"))
-GO_BUILD_TIMEOUT_SECONDS = int(
-    os.environ.get("GSPWN_GO_BUILD_TIMEOUT_SECONDS", "900"))
-SYZ_COMPILE_TIMEOUT_SECONDS = int(
-    os.environ.get("GSPWN_SYZ_COMPILE_TIMEOUT_SECONDS", "300"))
+def _timeout_from_env(name, default):
+    """-> a positive timeout in seconds from an environment variable.
+
+    Read at import, so a bare int() here would raise ValueError before any
+    subcommand parses, naming neither the variable nor its value, and would
+    take down every importer including tools/selftest.py with a traceback.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SystemExit(
+            "%s is %r, which is not an integer. It sets a timeout in seconds; "
+            "unset it to use the default of %d." % (name, raw, default))
+    if value <= 0:
+        raise SystemExit(
+            "%s is %d. A timeout in seconds must be positive; unset it to use "
+            "the default of %d." % (name, value, default))
+    return value
+
+
+GIT_TIMEOUT_SECONDS = _timeout_from_env("GSPWN_GIT_TIMEOUT_SECONDS", 900)
+GO_BUILD_TIMEOUT_SECONDS = _timeout_from_env(
+    "GSPWN_GO_BUILD_TIMEOUT_SECONDS", 900)
+SYZ_COMPILE_TIMEOUT_SECONDS = _timeout_from_env(
+    "GSPWN_SYZ_COMPILE_TIMEOUT_SECONDS", 300)
 
 # A toolchain the gate needs and cannot obtain. Kept apart from exit 1, which
 # reports a description set that does not compile: without the split, a runner
