@@ -22,7 +22,6 @@
 set -euo pipefail
 
 HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-: "${SRC:=$(cd "${HARNESS_ROOT}/../src/libnvidia-container" 2>/dev/null && pwd || true)}"
 : "${HARNESS_MODE:=auto}"
 : "${AFL_DRIVER:=/usr/local/lib/afl/libAFLDriver.a}"
 : "${SANITIZERS:=address,undefined}"
@@ -32,10 +31,53 @@ harness_die() {
     exit 1
 }
 
+# The checkout sits at a different absolute path in each of the two contexts
+# this file builds in, so one relative default satisfies neither:
+#
+#   host build       HARNESS_ROOT=<repo>/harnesses, checkout at
+#                    <repo>/artifacts/src/<name>
+#   container run    HARNESS_ROOT=/harnesses on its own bind mount, checkout
+#                    at /artifacts/src/<name> on the artifact mount
+#
+# harness_find_src <name> echoes the first candidate carrying a src/ directory
+# and echoes nothing when none does. The caller reports the paths it tried.
+HARNESS_SRC_CANDIDATES=(
+    "${HARNESS_ROOT}/../artifacts/src"
+    "/artifacts/src"
+    "${HARNESS_ROOT}/../src"
+)
+
+harness_find_src() {
+    local name="$1"
+    local base
+    for base in "${HARNESS_SRC_CANDIDATES[@]}"; do
+        if [ -d "${base}/${name}/src" ]; then
+            (cd "${base}/${name}" && pwd)
+            return 0
+        fi
+    done
+    return 1
+}
+
+harness_src_candidates() {
+    local name="$1"
+    local base
+    for base in "${HARNESS_SRC_CANDIDATES[@]}"; do
+        echo "  ${base}/${name}"
+    done
+}
+
+# An explicit SRC is the operator's answer and is never searched over.
+: "${SRC:=$(harness_find_src libnvidia-container || true)}"
+
 harness_prepare_src() {
-    [ -n "${SRC}" ] || harness_die \
-        "libnvidia-container checkout not found. Set SRC to a checkout, for \
-example SRC=/artifacts/src/libnvidia-container"
+    if [ -z "${SRC}" ]; then
+        harness_die "libnvidia-container checkout not found. Tried, in order:
+$(harness_src_candidates libnvidia-container)
+Each is accepted only when it carries a src/ directory. Clone the library \
+under artifacts/src/, or set SRC to a checkout, for example \
+SRC=/artifacts/src/libnvidia-container"
+    fi
     [ -d "${SRC}/src" ] || harness_die "no src/ directory under SRC=${SRC}"
 
     # The Makefile generates src/nvc.h from src/nvc.h.template by substituting
@@ -55,6 +97,41 @@ example SRC=/artifacts/src/libnvidia-container"
             "${SRC}/src/nvc.h.template" > "${SRC}/src/nvc.h"
         echo "generated ${SRC}/src/nvc.h from the template"
     fi
+}
+
+# The library's src/utils.h includes <sys/capability.h> and every target links
+# -lcap, and the AFL++ image config/campaign.yaml names carries neither the
+# header nor the archive. The build is the first thing a fresh instance runs
+# and it runs as root inside that image, so the dependency is resolved here:
+# this file is sourced by every C target's build.sh, which is the one path
+# build_all.sh, a single target's build.sh and the container all take.
+: "${HARNESS_CAP_PACKAGE:=libcap-dev}"
+
+harness_have_header() {
+    printf '#include <%s>\nint main(void) { return 0; }\n' "$1" \
+        | "${HARNESS_CC}" -fsyntax-only -x c - >/dev/null 2>&1
+}
+
+harness_prepare_deps() {
+    if harness_have_header sys/capability.h; then
+        return 0
+    fi
+    if [ "$(id -u)" != 0 ] || ! command -v apt-get >/dev/null 2>&1; then
+        harness_die "<sys/capability.h> is absent and this build cannot \
+install it: apt-get needs root and was run as uid $(id -u). Install \
+${HARNESS_CAP_PACKAGE} (libcap-devel on rpm distributions) and build again."
+    fi
+    echo "installing ${HARNESS_CAP_PACKAGE}: <sys/capability.h> is absent \
+and every target includes it"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq || harness_die "apt-get update failed. The build \
+needs ${HARNESS_CAP_PACKAGE} and the container reaches no package index; \
+check the instance's egress."
+    apt-get install -y -qq "${HARNESS_CAP_PACKAGE}" || harness_die \
+        "apt-get install ${HARNESS_CAP_PACKAGE} failed."
+    harness_have_header sys/capability.h || harness_die \
+        "${HARNESS_CAP_PACKAGE} installed and <sys/capability.h> is still \
+absent. The package name differs on this image; set HARNESS_CAP_PACKAGE."
 }
 
 harness_select_mode() {
@@ -97,6 +174,7 @@ harness_build() {
 
     harness_prepare_src
     harness_select_mode
+    harness_prepare_deps
     mkdir -p "${dir}/build"
 
     local srcs=()
