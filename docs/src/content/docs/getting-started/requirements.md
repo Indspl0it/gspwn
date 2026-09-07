@@ -40,10 +40,13 @@ For instance selection on AWS, see
 
 ## Firmware and boot
 
-| Requirement | Value | Verified by |
-|---|---|---|
-| Secure Boot, bare metal | disabled, or a Machine Owner Key enrolled and every `nvidia*.ko` signed | `mokutil --sb-state`, run by `tools/build_kernel.sh` |
-| Secure Boot, EC2 Nitro | absent by default. The `provision` sub-agent skips the check there. | no check |
+Secure Boot handling depends on where the machine runs.
+
+- Bare metal needs Secure Boot disabled, or a Machine Owner Key enrolled and
+  every `nvidia*.ko` signed. `tools/build_kernel.sh` reads the state with
+  `mokutil --sb-state`.
+- EC2 Nitro carries no Secure Boot by default, and the `provision` sub-agent
+  skips the check there.
 
 The out-of-tree NVIDIA modules are unsigned and refuse to load on a Secure Boot
 machine. `build_kernel.sh` stops with a signing error. Without that check the
@@ -55,10 +58,11 @@ about signing.
 Findings arrive as kernel panics. An uncaptured panic leaves no evidence on
 disk.
 
-| Environment | Capture path | Also required |
-|---|---|---|
-| Bare metal | ramoops/pstore plus kdump | `pstore-tools`, `kdump-tools` |
-| EC2 | kdump plus `aws ec2 get-console-output` | `awscli`, and an IAM instance profile granting `ec2:GetConsoleOutput` and nothing else, attached at launch |
+- Bare metal captures through ramoops/pstore plus kdump, which needs
+  `pstore-tools` and `kdump-tools`.
+- EC2 captures through kdump plus `aws ec2 get-console-output`, which needs
+  `awscli` and an IAM instance profile granting `ec2:GetConsoleOutput` and
+  nothing else, attached at launch.
 
 EC2 has no pstore. A hard hang that never reaches kdump leaves nothing on disk,
 and the serial console holds the only record.
@@ -74,32 +78,61 @@ Install through `apt`, never through a PPA:
 ```
 build-essential bc flex bison libssl-dev libelf-dev dwarves rsync git
 python3-yaml docker.io kdump-tools pstore-tools mokutil
+ca-certificates curl gnupg2
 ```
 
-| Package | Needed on | Purpose |
+The last three add NVIDIA's package repository in
+[Installation](/gspwn/getting-started/installation/) step 5. `awscli` is a
+fourth package, needed on EC2 alone, where hard-hang capture reads the console
+output and `crashlog_ctl.py verify` fails without it.
+
+Two packages carry a requirement that is not obvious from the name.
+
+- `mokutil` reports Secure Boot state to the `build` phase, and applies to bare
+  metal alone.
+- `docker.io` is needed on every machine. The Track U harnesses run in a
+  container, and the tenant-surface measurement starts one.
+
+## Host binaries
+
+`orchestrator_ctl.py preflight` resolves eight binaries on `PATH` and names the
+phase that stops without each. Six are needed on every deployment. A binary
+reached only inside a container is absent from this list, so the Track U
+toolchain is the image's problem.
+
+| Binary | Needed on | Stops without it |
 |---|---|---|
-| `awscli` | EC2 | hard-hang capture reads the console output, and `crashlog_ctl.py verify` fails without it |
-| `mokutil` | bare metal | reports Secure Boot state to the `build` phase |
-| `docker.io` | every machine | the Track U harnesses run in a container, and the tenant-surface measurement starts one |
+| `go` | every machine | `describe` builds syzkaller and runs `syzlang_gen.py compile`, which exits 3 when `go` is absent |
+| `docker` | every machine | the Track U harnesses, and `verify_tenant_surface.py measure` |
+| `gcc` | every machine | `repro_ctl.py extract` compiles `repro.c` |
+| `make` | every machine | the instrumented kernel build and the syzkaller build |
+| `git` | every machine | the inventories record the checkout revision they derived from |
+| `nvidia-smi` | every machine | `surface_verify.py` reads the running driver version through it |
+| `nvidia-ctk` | hosts starting GPU containers | `provision` registers the `nvidia` runtime with Docker through it |
+| `aws` | EC2 | hard-hang capture reads the serial console, and `crashlog_ctl.py verify` fails without it |
+
+`preflight` reports the two non-universal binaries as absent without failing,
+because an absent one is a fact the operator reads differently on EC2 than on
+bare metal.
 
 ## Go toolchain
 
-syzkaller builds on the host, and its pinned revision declares `go 1.26.0` in
-`go.mod`. That is not the version the machine must carry. Go 1.21 and later
+syzkaller builds on the host. Its pinned revision declares `go 1.26.0` in
+`go.mod`, which is not the version the machine must carry: Go 1.21 and later
 read the directive and fetch the named toolchain on demand, because
-`GOTOOLCHAIN` defaults to `auto`, so a distribution package at 1.21 or later
-satisfies the build wherever `proxy.golang.org` is reachable.
+`GOTOOLCHAIN` defaults to `auto`. A distribution package at 1.21 or later
+therefore satisfies the build wherever `proxy.golang.org` is reachable.
 
-| Consumer | Requirement |
+| Condition | Result |
 |---|---|
-| `make` in the syzkaller tree | Go 1.21 or later. The build stops on the `go.mod` directive below that, under `GOTOOLCHAIN=local`, or with no route to `proxy.golang.org`, and `bin/syz-manager` is never produced |
-| `syzlang_gen.py compile` | `go` on `PATH` in the phase's own shell. Exit 3 means no verdict was reached, which is distinct from a description set that fails to compile |
+| Go 1.21 or later, `proxy.golang.org` reachable | `make` fetches the 1.26 toolchain on first build, which adds minutes |
+| Go 1.21 or later, `GOTOOLCHAIN=local` or no proxy route | `make` stops on the `go.mod` directive and `bin/syz-manager` is never produced |
+| Go below 1.21 | no download mechanism, and `make` stops on the same directive |
+| `go` absent from the phase's own shell | `syzlang_gen.py compile` exits 3, which is no verdict reached and distinct from a description set that fails to compile |
 
-The upstream tarball is the recommended route even where an `apt` package would
-serve. It installs the declared version directly, keeps a multi-minute download
-off the build's critical path, and assumes no proxy access.
-[Installation](/gspwn/getting-started/installation/) step 7 carries the
-commands.
+[Installation](/gspwn/getting-started/installation/) step 7 installs the
+declared version from the upstream tarball, which keeps the download off the
+build's critical path and assumes no proxy access.
 
 ## Container runtime
 
@@ -122,10 +155,12 @@ carries the commands.
 Two consequences follow for the campaign, both from
 [Threat model](/gspwn/architecture/threat-model/):
 
-| Consequence | Effect |
-|---|---|
-| The toolkit resolves `mode = auto` to jit-cdi from 1.18.0 onward | The container receives `/dev/nvidia-modeset` and every `/dev/dri` node for the GPU, with no capability check |
-| Docker 29.1.x and older inject the legacy hook for `--gpus` | That path withholds both, so a measurement taken with `--gpus all` on such a host reports a device set the deployment will not see |
+- The toolkit resolves `mode = auto` to jit-cdi from 1.18.0 onward. The
+  container receives `/dev/nvidia-modeset` and every `/dev/dri` node for the
+  GPU, with no capability check.
+- Docker 29.1.x and older inject the legacy hook for `--gpus`. That path
+  withholds both, so a measurement taken with `--gpus all` on such a host
+  reports a device set the deployment will not see.
 
 `verify_tenant_surface.py runtime-mode` reports which path this machine is
 configured for and reads files only, so it answers before a GPU is present.
@@ -175,9 +210,9 @@ host binaries and disk headroom. It exits non-zero and lists what is missing.
 
 ## Disk
 
-| Requirement | Value | Verified by |
-|---|---|---|
-| Free space floor | `loop.min_free_disk_gb`, default 20 GB | `orchestrator_ctl.py preflight`, and every coverage sample records free space |
+The free space floor is `loop.min_free_disk_gb`, default 20 GB.
+`orchestrator_ctl.py preflight` verifies it, and every coverage sample records
+free space.
 
 One filesystem holds the kernel dumps copied out of `/var/crash`, the corpus,
 the coverage CSVs and the agent transcript. A full disk stops the fuzzer and

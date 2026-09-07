@@ -35,6 +35,8 @@ On EC2, add the AWS CLI, which captures a hard hang there:
 sudo apt-get install -y awscli
 ```
 
+This list carries no Go toolchain. Step 7 installs it.
+
 ## 3. Set up persistent crash capture
 
 ```
@@ -73,10 +75,9 @@ sudo python3 tools/crashlog_ctl.py harvest
 The last line of `harvest` is the path of the harvest directory. That directory
 must hold the panic:
 
-| Environment | Required contents |
-|---|---|
-| Bare metal | a dmesg or ramoops dump holding the panic |
-| EC2 | a `/var/crash` kdump dump, with hard hangs captured in `console-output.log` |
+- On bare metal, a dmesg or ramoops dump holding the panic.
+- On EC2, a `/var/crash` kdump dump, with hard hangs captured in
+  `console-output.log`.
 
 An empty harvest directory means the panic was not captured. Return to step 3.
 
@@ -116,8 +117,9 @@ sudo apt-get install -y \
     libnvidia-container1=${NVIDIA_CONTAINER_TOOLKIT_VERSION}
 ```
 
-Record the version. The injection path depends on it, and the `report` phase
-cites the toolkit version beside the driver branch.
+Record the version in `config/machine.yaml` under `container_toolkit_version`.
+The injection path depends on it, and the `report` phase cites the toolkit
+version beside the driver branch.
 
 Register the runtime with Docker and restart the daemon:
 
@@ -168,21 +170,12 @@ versions from there.
 
 ## 7. Install the Go toolchain
 
-syzkaller is written in Go and its build runs on the host. Nothing earlier on
-this page installs a toolchain.
+syzkaller is written in Go and its build runs on the host. The floor is Go
+1.21, and [Requirements](/gspwn/getting-started/requirements/) has the table of
+what each toolchain state does to the build.
 
-The pinned revision declares `go 1.26.0` in `go.mod`. Go 1.21 and later read
-that directive and download the named toolchain on demand, because
-`GOTOOLCHAIN` defaults to `auto`, so a distribution package at 1.21 or later
-satisfies the build on a machine that can reach the Go module proxy.
-
-| Method | Requires | Behaviour |
-|---|---|---|
-| `sudo apt-get install -y golang-go` | Go 1.21 or later in the distribution, and access to `proxy.golang.org` | The first build downloads the 1.26 toolchain, which adds minutes to a metered instance |
-| The upstream tarball below | Nothing beyond the download | The declared version is present before the build starts |
-
-The tarball is the method used here, following syzkaller's own setup
-documentation.
+The upstream tarball installs the declared version directly, which is the
+method syzkaller's own setup documentation uses:
 
 ```
 GO_VERSION=1.26.2
@@ -196,13 +189,13 @@ export PATH=/usr/local/go/bin:${PATH}
 go version
 ```
 
+`sudo apt-get install -y golang-go` also works where the distribution carries
+1.21 or later and `proxy.golang.org` is reachable, at the cost of a
+multi-minute toolchain download on the first build.
+
 The `export` covers the current shell alone. Add the same line to the campaign
 user's shell profile, because the `describe` phase runs `syzlang_gen.py compile`
 in a later session and that command exits 3 when `go` is absent from `PATH`.
-
-A toolchain below 1.21 has no download mechanism and stops the next step on the
-`go.mod` directive, and the error names the version required. `GOTOOLCHAIN=local`
-produces the same stop on any version below the floor.
 
 ## 8. Build syzkaller
 
@@ -212,12 +205,12 @@ make
 cd ../../..
 ```
 
-Three binaries must exist afterwards, because other tools invoke them by path:
+Three binaries must exist afterwards, because other tools invoke them by path.
 
-| Binary | Used by |
+| Binary | Invoked by |
 |---|---|
 | `bin/syz-manager` | the Track K campaign unit |
-| `bin/syz-db` | `corpus_ctl.py` and the seed packing in `campaign_ctl.py` |
+| `bin/syz-db` | `corpus_ctl.py`, and the seed packing in `campaign_ctl.py` |
 | `bin/syz-prog2c` | `repro_ctl.py extract`, to generate `repro.c` from `repro.prog` |
 
 A missing binary blocks the `fuzz` phase. Re-run `make` and read its error.
