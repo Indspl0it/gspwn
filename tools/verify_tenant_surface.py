@@ -24,6 +24,16 @@ Two kinds of disagreement matter, and they are not symmetric.
 The first is a correctness failure of the threat model. The second wastes
 effort. Both exit non-zero.
 
+Measured nodes are canonical paths. The CDI `create-symlinks` hook creates
+`/dev/dri/by-path` inside the container and fills it with symlinks onto
+`/dev/dri/card*` and `/dev/dri/renderD*`, so the same node is reachable under
+two names. The container script resolves every entry with `readlink -f` before
+printing it, and `/dev/dri/by-path/pci-0000:00:1e.0-card` is therefore measured
+as the `/dev/dri/card0` it points at. An alias never counts twice, and the
+artefact declares no pattern for an alias path: declaring one would record a
+second attack surface where one node exists and would double the count of
+reachable nodes.
+
 Subcommands:
 
   expected      print the tenant surface the artefact records. Reads files
@@ -93,6 +103,40 @@ DOCKER_CDI_BOUNDARY = (29, 2, 0)
 # a cold instance is slower than the listing, and is timed separately.
 RUN_TIMEOUT_SECONDS = int(os.getenv("GSPWN_VERIFY_RUN_TIMEOUT", "120"))
 PULL_TIMEOUT_SECONDS = int(os.getenv("GSPWN_VERIFY_PULL_TIMEOUT", "600"))
+
+# How long to wait for a probe container to be removed. The removal runs in a
+# `finally` after a failure the caller is already reporting, so it is bounded
+# separately and never becomes the reason the gate hangs.
+REMOVE_TIMEOUT_SECONDS = int(os.getenv("GSPWN_VERIFY_REMOVE_TIMEOUT", "30"))
+
+# The last line the container script prints, and the only evidence that the
+# listing ran to the end. The device listing cannot signal completion through
+# an exit status: the candidate directory list ends with
+# /dev/nvidia-caps-imex-channels, which is absent on a host with no IMEX
+# domain, so the loop's own status is the status of a false `[ -d ]` test and
+# a valid reading exits 1. An unconditional `exit 0` would answer that by
+# hiding a container that was killed or lacks a shell, which is the condition
+# the exit-status check exists to catch. The two signals are separated: the
+# script exits 0 and states completion in its output. The token carries no
+# leading slash and no `/dev` prefix, so it cannot collide with a device path.
+LISTING_SENTINEL = "__GSPWN_LISTING_COMPLETE__"
+
+# The name given to the probe container. `docker run --rm` removes it on a
+# normal exit, and the name reaches it when the Python side times out first
+# and the container is still running.
+CONTAINER_NAME_PREFIX = "gspwn-tenant-probe-"
+
+# The directories a tenant's NVIDIA device nodes appear in. Two of them are
+# absent on a host that is correctly configured: /dev/nvidia-caps exists only
+# where MIG capabilities are exposed, and /dev/nvidia-caps-imex-channels only
+# where an IMEX domain is configured. Their absence is a valid reading, not a
+# failed one.
+CANDIDATE_DIRECTORIES = ("/dev", "/dev/dri", "/dev/nvidia-caps",
+                         "/dev/nvidia-caps-imex-channels")
+
+# A candidate directory reaches a shell command line, so it is checked before
+# it is interpolated. Absolute path, no whitespace, no shell metacharacter.
+_SAFE_DIRECTORY = re.compile(r"^/[A-Za-z0-9_./-]*$")
 
 # Paths in the artefact carry a trailing N where the driver creates one node
 # per device: /dev/nvidiaN, /dev/nvidia-nvswitchN, /dev/dri/cardN. A measured
@@ -257,6 +301,82 @@ def gpus_flag_path(version):
             "/dev/dri" % ".".join(str(p) for p in version))
 
 
+def listing_script(directories=CANDIDATE_DIRECTORIES):
+    """-> the shell program the probe container runs, as a single line.
+
+    The program prints one canonical device path per line and the sentinel
+    last, and it exits 0 on every reading a correctly configured host can
+    produce.
+
+    Three constructs carry the measurement.
+
+    The `[ -d "$d" ]` test skips a candidate directory with `continue`, so an
+    absent or empty directory contributes nothing and decides no exit status.
+    The old form ended the loop body on a false test, and the loop's status
+    was that test's, so a valid reading exited 1.
+
+    The `[ -c "$f" ]` and `[ -b "$f" ]` tests admit character and block
+    devices alone. Both follow a symlink, so an entry under /dev/dri/by-path
+    is listed while the by-path directory itself is dropped.
+
+    `readlink -f` prints the node an entry names, so an alias and its target
+    arrive as one path and the caller's set counts them once.
+
+    Raises VerifyError naming the value where a directory is not an absolute
+    path built from characters a shell reads literally, because the value is
+    interpolated into a command line.
+    """
+    for directory in directories:
+        if not _SAFE_DIRECTORY.match(directory):
+            raise VerifyError(
+                "%r is not a candidate directory this tool will list. A "
+                "candidate is an absolute path of letters, digits, and the "
+                "characters _ . / and -, because it is interpolated into the "
+                "container's shell command line" % (directory,))
+    return (
+        "for d in " + " ".join(directories) + "; do "
+        "  [ -d \"$d\" ] || continue; "
+        "  for f in \"$d\"/*; do "
+        "    if [ -c \"$f\" ] || [ -b \"$f\" ]; then "
+        "      readlink -f \"$f\" 2>/dev/null || echo \"$f\"; "
+        "    fi; "
+        "  done; "
+        "done; "
+        "echo " + LISTING_SENTINEL)
+
+
+def remove_container(runtime, name):
+    """Remove a probe container by name. Never raises.
+
+    Called from a `finally`, where an exception would replace the failure the
+    caller is already reporting with one about cleanup. The removal is bounded
+    by its own timeout, and it does not go through `run` because `run` raises
+    on a timeout.
+
+    `docker run --rm` removes the container itself on a normal exit, so a
+    non-zero status here usually means the container was already gone. That is
+    logged at debug level. A timeout or a runtime that cannot start is logged
+    as a warning, because it leaves a container behind on the instance.
+    """
+    argv = [runtime, "rm", "-f", name]
+    logger.debug("running %s", " ".join(argv))
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=REMOVE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "removing probe container %s did not finish within %ds, so it may "
+            "still be running on this host", name, REMOVE_TIMEOUT_SECONDS)
+        return
+    except OSError as exc:
+        logger.warning("could not run %s to remove probe container %s: %s",
+                       runtime, name, exc)
+        return
+    if proc.returncode != 0:
+        logger.debug("probe container %s was already removed: %s", name,
+                     (proc.stderr or "").strip()[:200])
+
+
 def measure_nodes(runtime, image, capabilities, pull, via):
     """-> the NVIDIA device node paths visible inside a container.
 
@@ -275,30 +395,42 @@ def measure_nodes(runtime, image, capabilities, pull, via):
         if code != 0:
             raise VerifyError("could not pull %s: %s" % (image, err.strip()))
 
-    script = (
-        "for d in /dev /dev/dri /dev/nvidia-caps /dev/nvidia-caps-imex-channels; do "
-        "  [ -d \"$d\" ] && for f in \"$d\"/*; do [ -e \"$f\" ] && echo \"$f\"; done; "
-        "done")
+    script = listing_script()
     if via == VIA_RUNTIME:
         gpu_args = ["--runtime=nvidia", "-e", "NVIDIA_VISIBLE_DEVICES=all"]
     else:
         gpu_args = ["--gpus", "all"]
-    argv = ([runtime, "run", "--rm"] + gpu_args +
+    name = CONTAINER_NAME_PREFIX + str(os.getpid())
+    argv = ([runtime, "run", "--rm", "--name", name] + gpu_args +
             ["-e", "NVIDIA_DRIVER_CAPABILITIES=" + capabilities,
              image, "sh", "-c", script])
-    code, out, err = run(argv, RUN_TIMEOUT_SECONDS, "container run")
+    try:
+        code, out, err = run(argv, RUN_TIMEOUT_SECONDS, "container run")
+    finally:
+        remove_container(runtime, name)
     if code != 0:
         raise VerifyError(
             "the container did not run, so nothing was measured. %s exited "
             "%d: %s" % (runtime, code, err.strip()[:600]))
 
+    lines = [line.strip() for line in out.splitlines()]
+    if LISTING_SENTINEL not in lines:
+        raise VerifyError(
+            "the device listing was truncated. The container exited 0 and "
+            "printed %d line(s), and none of them is the %s line the listing "
+            "script prints last, so the reading is partial and nothing can be "
+            "compared against it. A container that was killed, that lacks a "
+            "shell, or that died part way through the listing produces this"
+            % (len([line for line in lines if line]), LISTING_SENTINEL))
+
     nodes = []
-    for line in out.splitlines():
-        line = line.strip()
-        if not line:
+    for line in lines:
+        if not line or line == LISTING_SENTINEL:
             continue
         if line.startswith("/dev/nvidia") or line.startswith("/dev/dri/"):
             nodes.append(line)
+    # The script prints canonical paths, so an alias and the node it points at
+    # arrive as the same string and the set collapses them into one node.
     return sorted(set(nodes))
 
 
