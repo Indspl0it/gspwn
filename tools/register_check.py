@@ -161,6 +161,75 @@ PATTERNS = [
                          r"\bturns out\b|\bis the one that\b|"
                          r"\bmeans something other than\b|\bthe (trick|catch) is\b|"
                          r"\bis where the .{0,30}happens\b"),
+    # A clause hung off a comma asserting a consequence it never measures.
+    # "the flag is set, ensuring the campaign completes" states no mechanism.
+    # These are the fake-depth verbs. "enabling" and "providing" are absent
+    # because each carries a literal technical sense often enough that the
+    # pattern would report ordinary prose.
+    ("trailing -ing clause",
+     r",\s+(ensuring|highlighting|reflecting|underscoring|demonstrating|"
+     r"showcasing|emphasi[sz]ing|illustrating|signall?ing|paving|"
+     r"allowing for|making it (possible|easier|clear|simple))\b"),
+    # A datasheet states a magnitude. An intensifier is the substitute for
+    # one and carries no quantity.
+    # "the very next start" is a determiner and stays. "very different
+    # amounts" is the intensifier standing in for the difference.
+    ("hollow intensifier",
+     r"\bvery (?!next|first|last|same|least|most|thing)\w|"
+     r"\b(extremely|incredibly|remarkably|truly|utterly|vastly|"
+     r"immensely|highly)\b"),
+    # Telling a reader an operation is easy. Where it is, saying so adds
+    # nothing. Where it is not, the reader is now wrong and blames themselves.
+    ("dismissive qualifier",
+     r"\b(simply|easily|obviously|trivially|straightforward|of course|"
+     r"needless to say)\b"),
+    # Marketing superlatives. None of them is a measurement.
+    ("significance inflation",
+     r"\b(game.?chang\w+|revolutionar\w+|cutting.edge|state.of.the.art|"
+     r"best.in.class|world.class|unparalleled|unprecedented|"
+     r"paradigm shift|next.generation)\b"),
+    # A claim with no source. Cite the source or state the fact.
+    ("vague attribution",
+     r"\b(experts? (say|agree|believe)|studies show|research shows|"
+     r"it is (widely|generally) (known|accepted|considered)|"
+     r"many believe|is often regarded|some would argue)\b"),
+    # A quantity the writer did not look up. The inventories carry the number.
+    ("vague quantity",
+     r"\ba (wide|broad|vast|large) (range|variety|array|number) of\b|"
+     r"\ba number of\b|\bnumerous\b|\bmyriad\b|\bplethora\b"),
+    # A closing that restates the section without adding a fact. Anchored to
+    # a line opening with an explicit newline alternative, because check_file
+    # compiles with re.I alone and a bare ^ would match the file start only.
+    ("generic conclusion",
+     r"(?:^|\n)\s*[>*+-]*\s*(In (conclusion|summary|short)|To summari[sz]e|"
+     r"Overall|Ultimately|At its core|All in all|In essence)\b"),
+    # Two hedges on one claim. A specification states the condition under
+    # which the behaviour holds.
+    ("hedge stack",
+     r"\b(may|might|could|can) (potentially|possibly|perhaps|sometimes|"
+     r"occasionally)\b|\b(generally|typically|usually) tends? to\b|"
+     r"\bit (may|might) be (possible|worth)\b"),
+    # Latin abbreviations. Write the English.
+    ("latin abbreviation", r"\b(e\.g\.|i\.e\.|etc\.|viz\.|cf\.)"),
+    # Winding up before the fact, or addressing the reader to introduce it.
+    ("throat clearing",
+     r"\bIn today's\b|\bIn the world of\b|\bIn the realm of\b|"
+     r"\bWhen it comes to\b|\bAt the heart of\b|"
+     r"\bIt goes without saying\b|\bKeep in mind\b|\bBear in mind\b|"
+     # Anchored to a sentence opening. Unanchored, "note that" matches inside
+     # "with the note that NVIDIA backfilled only to 2022", which is a noun.
+     r"(?:^|[.!?:]\s|\n)(Note|Remember) that\b"),
+    # Spatial verbs standing in for a relation the writer did not name. A
+    # record is written to a path, a field is at an offset, a gate is a module
+    # parameter. None of them sits, lands or lives anywhere.
+    ("spatial verb",
+     r"\b(sits?|sat|lands?|landed|lives?|resides?|nestles?)\s+"
+     r"(in|on|at|under|inside|beside|within|beneath|next to)\b"),
+    # A question in body prose sets up an answer the sentence could have
+    # stated. A genuine question-and-answer page declares an exemption.
+    ("body question",
+     r"(?<![\w`])(So|But|And|Why|What|How|Ever wonder)\b"
+     r"[^.?!\n]{5,120}\?"),
 ]
 
 QUESTION_START = re.compile(r"^(what|why|how|where|when|who|which)\b", re.I)
@@ -336,7 +405,7 @@ def main():
 
     print("register_check: %d file(s), %d hit(s)" % (len(files), total))
     if total:
-        print("See ~/.claude/rules/technical-writing-register.md. If a hit is "
+        print("See ~/.claude/output-styles/technical.md. If a hit is "
               "a verbatim reproduction, add it to EXEMPT with its reason.")
     return 1 if total else 0
 
