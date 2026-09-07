@@ -27,11 +27,13 @@ fd tracking in `convert`:
              openat("/dev/nvidiaX") = N  ->  resource r<k>
              ioctl(N, 0x....)            ->  ioctl$NAME(r<k>, 0x...., ...)
 
-The prescribed trace command is `strace -v -f` (agents/seeds.md), so both
+The prescribed trace command is `strace -v -f` (agents/seeds.md), so all three
 of its output quirks are handled here: `[pid N]` prefixes are stripped and
-fd state is tracked per process (fds are per-process namespaces), and the
+fd state is tracked per process (fds are per-process namespaces), the
 symbolic `_IOC(dir, type, nr, size)` form strace -v prints for requests it
-does not know is decoded back into the request number before lookup.
+does not know is decoded back into the request number before lookup, and a
+syscall split across `<unfinished ...>` and `<... resumed>` lines by a
+concurrent thread is rejoined before either matcher runs.
 """
 import argparse
 import json
@@ -48,6 +50,17 @@ OPEN_RE = re.compile(r'openat\([^,]+,\s*"((?:/dev/nvidia|/dev/dri)[^"]*)"[^)]*\)
 IOCTL_RE = re.compile(r"ioctl\((\d+),\s*(0x[0-9a-fA-F]+|_IOC\([^)]*\)|\w+)")
 IOCTL_SYM_RE = re.compile(r"_IOC\(([^,]+),([^,]+),([^,]+),([^)]+)\)")
 CLOSE_RE = re.compile(r"close\((\d+)")
+
+# strace -f interleaves the threads it follows. A syscall that blocks while
+# another thread prints is written as two lines: a head ending in
+# `<unfinished ...>` and, after any number of other lines, a tail opening with
+# `<... name resumed>` carrying the remaining arguments and the return value.
+# OPEN_RE requires the path and `= N` on one line, so a split openat binds no
+# fd and every later ioctl on that fd is dropped. reassemble() joins the two
+# halves before the matchers run.
+UNFINISHED_RE = re.compile(r"^(.*?)\s*<unfinished \.\.\.>\s*$")
+RESUMED_RE = re.compile(r"^<\.\.\.\s+(\w+)\s+resumed>(.*)$")
+SYSCALL_NAME_RE = re.compile(r"^\s*(\w+)\(")
 
 # Device node to the openat variant the description set declares for it. Every
 # value here has to be a declared call: a seed naming one no description
@@ -254,11 +267,56 @@ def load_map(path):
             raw = json.load(handle)
     except (OSError, ValueError) as exc:
         raise SeedError("cannot read the ioctl map %s: %s" % (path, exc))
-    names = {k.lower(): v for k, v in raw.items()
-             if not k.startswith("comment")}
+    # Shape checked here and not at the point of use: every field below is
+    # indexed or lowercased, and a map holding a list or a null where an
+    # object belongs otherwise fails as an AttributeError from inside a
+    # comprehension, naming neither the file nor the field.
+    if not isinstance(raw, dict):
+        raise SeedError(
+            "the ioctl map %s holds a %s at the top level, and the whole file "
+            "is one object mapping a request number to a call name. "
+            "Regenerate it with `python3 tools/ioctl_inventory.py map`."
+            % (path, type(raw).__name__))
+    names = {}
+    for key, value in raw.items():
+        if key.startswith("comment"):
+            continue
+        if not isinstance(value, str):
+            raise SeedError(
+                "the ioctl map %s gives request number %s a %s, and every "
+                "entry outside the comment sections is a call name string."
+                % (path, key, type(value).__name__))
+        names[key.lower()] = value
     section = raw.get(MULTIPLEXER_KEY) or {}
-    multiplexers = {k.lower(): v
-                    for k, v in (section.get("requests") or {}).items()}
+    if not isinstance(section, dict):
+        raise SeedError(
+            "the ioctl map %s holds a %s under `%s`, and that section is an "
+            "object carrying a `requests` object."
+            % (path, type(section).__name__, MULTIPLEXER_KEY))
+    requests = section.get("requests") or {}
+    if not isinstance(requests, dict):
+        raise SeedError(
+            "the ioctl map %s holds a %s under `%s.requests`, and that field "
+            "maps a request number to a multiplexer record."
+            % (path, type(requests).__name__, MULTIPLEXER_KEY))
+    multiplexers = {}
+    for key, record in requests.items():
+        if not isinstance(record, dict):
+            raise SeedError(
+                "the ioctl map %s gives multiplexer request number %s a %s, "
+                "and each record is an object."
+                % (path, key, type(record).__name__))
+        # The four fields multiplexer_note() prints. Checked on load so a
+        # record missing one fails naming the file and the field, and not as
+        # a KeyError raised while a seed is half written.
+        missing = [f for f in ("escape", "param_struct", "selector_field",
+                               "variant_prefix") if f not in record]
+        if missing:
+            raise SeedError(
+                "the multiplexer record for request number %s in %s omits %s. "
+                "Regenerate the map with `python3 tools/ioctl_inventory.py "
+                "map`." % (key, path, ", ".join("`%s`" % f for f in missing)))
+        multiplexers[key.lower()] = record
     overlap = sorted(set(names) & set(multiplexers))
     if overlap:
         raise SeedError(
@@ -299,6 +357,63 @@ def request_size(request):
         return 0
 
 
+def reassemble(trace_text):
+    """-> (trace lines, joined count, dangling count).
+
+    Joins each `<unfinished ...>` head to its `<... name resumed>` tail, keyed
+    on pid, and leaves every other line as it was read. The joined line keeps
+    the head's `[pid N]` prefix, so the per-line loop below strips pids and
+    matches requests exactly as it does on an unsplit trace.
+
+    A half that finds no partner is dropped and counted as dangling. A head
+    carries no return value, so an openat head names no fd and an ioctl head
+    records a call the trace never shows completing, and a tail carries no
+    syscall arguments. A trace truncated mid-syscall ends on an unpaired head,
+    which is normal and is counted, never raised. A tail naming a different
+    syscall than the head held for that pid
+    leaves both halves dangling, because strace has one syscall in flight per
+    thread and a disagreement means the two lines describe different calls.
+    """
+    lines = []
+    held = {}          # pid -> (pid prefix, head text, syscall name)
+    joined = 0
+    dangling = 0
+    for raw in trace_text.splitlines():
+        pid, prefix, body = "", "", raw
+        pm = PID_RE.match(raw)
+        if pm:
+            pid = pm.group(1)
+            prefix = raw[:pm.end()]
+            body = raw[pm.end():]
+        m = UNFINISHED_RE.match(body)
+        if m:
+            head = m.group(1)
+            nm = SYSCALL_NAME_RE.match(head)
+            if pid in held:
+                dangling += 1
+            held[pid] = (prefix, head, nm.group(1) if nm else None)
+            continue
+        m = RESUMED_RE.match(body)
+        if m:
+            name, tail = m.group(1), m.group(2)
+            entry = held.pop(pid, None)
+            if entry is None:
+                dangling += 1
+                continue
+            if entry[2] is not None and entry[2] != name:
+                dangling += 2
+                continue
+            lines.append(entry[0] + entry[1] + tail)
+            joined += 1
+            continue
+        lines.append(raw)
+    dangling += len(held)
+    if joined or dangling:
+        logger.info("trace reassembly: %d split syscall(s) joined, %d "
+                    "dangling half/halves dropped", joined, dangling)
+    return lines, joined, dangling
+
+
 def convert(trace_text, ioctl_map, multiplexers=None):
     """-> the seed program text for one strace file.
 
@@ -306,12 +421,25 @@ def convert(trace_text, ioctl_map, multiplexers=None):
     number. Omitted, every request number is looked up in `ioctl_map` alone,
     which is what a caller passing a hand-built map wants.
     """
+    text, _counts = convert_report(trace_text, ioctl_map, multiplexers)
+    return text
+
+
+def convert_report(trace_text, ioctl_map, multiplexers=None):
+    """-> (seed program text, {"reassembled": n, "dangling": n}).
+
+    The counts describe the reassembly stage and are reported on the account
+    line, because a split syscall the parser drops changes no other figure the
+    tool prints: the mapped-to-unmapped ratio counts the ioctls it matched, so
+    an fd that was never bound removes its ioctls from both sides of it.
+    """
     multiplexers = multiplexers or {}
     lines = []
     seen_multiplexers = {}
     fd_res = {}        # (pid, fd) -> resource var name; fds are per-process
     res_n = 0
-    for raw in trace_text.splitlines():
+    trace_lines, reassembled, dangling = reassemble(trace_text)
+    for raw in trace_lines:
         pid = ""
         pm = PID_RE.match(raw)
         if pm:
@@ -363,7 +491,8 @@ def convert(trace_text, ioctl_map, multiplexers=None):
             lines.append("close(%s)" % fd_res.pop((pid, m.group(1))))
     if seen_multiplexers:
         lines = multiplexer_header(seen_multiplexers, multiplexers) + lines
-    return "\n".join(lines) + "\n"
+    return ("\n".join(lines) + "\n",
+            {"reassembled": reassembled, "dangling": dangling})
 
 
 def multiplexer_header(counts, multiplexers):
@@ -441,11 +570,24 @@ def declared_calls(desc_dir):
 
 
 def load_json(path, what):
+    """-> the artefact at `path` as an object.
+
+    Both callers index the result by name. A file holding a list or a bare
+    number parses as valid JSON and then fails as an AttributeError inside
+    whichever comprehension reaches it first, so the top-level shape is
+    checked here where the path is still in hand.
+    """
     try:
         with open(path, encoding="utf-8") as handle:
-            return json.load(handle)
+            doc = json.load(handle)
     except (OSError, ValueError) as exc:
         raise SeedError("cannot read %s (%s): %s" % (what, path, exc))
+    if not isinstance(doc, dict):
+        raise SeedError(
+            "%s (%s) holds a %s at the top level, and this tool reads it as "
+            "an object with named fields."
+            % (what, path, type(doc).__name__))
+    return doc
 
 
 def chain_paths(chains):
@@ -715,7 +857,7 @@ def cmd_convert(args):
             text = handle.read()
     except OSError as exc:
         raise SeedError("cannot read the trace %s: %s" % (args.trace, exc))
-    prog = convert(text, names, multiplexers)
+    prog, counts = convert_report(text, names, multiplexers)
     os.makedirs(args.out_dir, exist_ok=True)
     # Lowest unused index: a count-based name overwrites an existing seed
     # when the bank has gaps (seed-0000,0001,0003 -> count names 0003).
@@ -735,7 +877,15 @@ def cmd_convert(args):
     mux = sum(1 for ln in prog.splitlines()
               if re.match(r"^# \w+ on r\d+, request ", ln))
     print("wrote %s (%d mapped ioctls, %d unmapped, %d multiplexer calls "
-          "carrying no decodable command)" % (out, mapped, unmapped, mux))
+          "carrying no decodable command, %d split syscall(s) reassembled, "
+          "%d dangling half/halves dropped)"
+          % (out, mapped, unmapped, mux,
+             counts["reassembled"], counts["dangling"]))
+    if counts["dangling"]:
+        print("the %d dangling half/halves are syscalls whose two strace "
+              "lines did not pair. One at the end of the file is a trace cut "
+              "mid-syscall, and more than that means lines were lost."
+              % counts["dangling"])
     if mux:
         print("the %d multiplexer call(s) are control or allocation commands "
               "this trace cannot identify. Run `chains` for those." % mux)
@@ -770,7 +920,23 @@ def cmd_chains(args):
         rank_path = None
     if rank_path:
         rank_doc = load_json(rank_path, "the control ranking")
-        ranks = {c["handler"]: c["rank"] for c in rank_doc.get("commands", [])}
+        rows = rank_doc.get("commands") or []
+        if not isinstance(rows, list):
+            raise SeedError(
+                "%s holds a %s under `commands`, and that field is the list "
+                "of ranked commands. Regenerate it with `python3 "
+                "tools/ctrl_rank.py rank`."
+                % (rank_path, type(rows).__name__))
+        ranks = {}
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict) or "handler" not in row \
+                    or "rank" not in row:
+                raise SeedError(
+                    "%s: entry %d of `commands` carries no `handler` and "
+                    "`rank` pair, and both are read to order the commands "
+                    "inside a program. Regenerate it with `python3 "
+                    "tools/ctrl_rank.py rank`." % (rank_path, index))
+            ranks[row["handler"]] = row["rank"]
         if not ranks:
             raise SeedError(
                 "%s holds no `commands` with a `rank`. Regenerate it with "

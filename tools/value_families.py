@@ -69,10 +69,13 @@ with that reason, so a later reader finds a decision and not an omission.
         --audit-out surface/value-families-audit.json
 
 The audit verdicts come from two places. The rejection rules named above are
-mechanical and the tool applies them. Every remaining family was read against
-its SDK header by hand, and a verdict recorded by hand overrides the
-mechanical one through MANUAL_VERDICTS below. A rejection reason names what
-the defines actually belong to; "not a match" is not a reason.
+mechanical, the tool applies them, and acceptance is the branch a family
+reaches when none of them fires. A verdict recorded by hand overrides the
+mechanical one through MANUAL_VERDICTS below and carries
+`verdict_source: "read"`, which is the only place the record claims a header
+was read for that family. MANUAL_VERDICTS holds two entries, both rejections,
+against 53 families accepted mechanically. A rejection reason names what the
+defines actually belong to, and "not a match" is not a reason.
 """
 import argparse
 import bisect
@@ -88,6 +91,7 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
 
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
 import syzlang_gen  # noqa: E402
 
 SCHEMA = "gspwn.value-families/1"
@@ -456,18 +460,32 @@ def _load_fields(descriptions_dir, bare_only):
 
 
 def load_json(path, what):
+    """-> the artefact at `path` as an object.
+
+    Every caller inside this module and every caller outside it indexes the
+    result by name. A file holding a list or a bare number is valid JSON and
+    fails later as an AttributeError or a TypeError from inside a
+    comprehension, naming neither the file nor the field, so the top-level
+    shape is checked here where the path is still in hand.
+    """
     if not os.path.isfile(path):
         raise SourceError(
             "%s not found at %s\nRegenerate it first; this tool never falls "
             "back to a stale or built-in copy." % (what, path))
     try:
         with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
+            doc = json.load(fh)
     except OSError as exc:
         raise SourceError("cannot read %s: %s" % (path, exc))
     except ValueError as exc:
         raise SourceError("%s at %s is not valid JSON: %s"
                           % (what, path, exc))
+    if not isinstance(doc, dict):
+        raise SourceError(
+            "%s at %s holds a %s at the top level, and this tool reads it as "
+            "an object with named fields."
+            % (what, path, type(doc).__name__))
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -842,6 +860,23 @@ def derive(src, descriptions_dir, control_inventory_path):
     bare = load_bare_int_fields(descriptions_dir)
     declared = load_struct_fields(descriptions_dir)
     inventory = load_json(control_inventory_path, "RM control inventory")
+    # `methods` is read by name three lines down and every row is indexed by
+    # name. Checked here, where the path is still in hand, so a truncated or
+    # hand-edited inventory names itself.
+    methods = inventory.get("methods")
+    if not isinstance(methods, list):
+        raise SourceError(
+            "the RM control inventory at %s holds a %s under `methods`, and "
+            "that field is the list of control methods. Regenerate it with "
+            "`python3 tools/ioctl_inventory.py control`."
+            % (control_inventory_path, type(methods).__name__))
+    for index_of_row, row in enumerate(methods):
+        if not isinstance(row, dict):
+            raise SourceError(
+                "the RM control inventory at %s holds a %s at `methods[%d]`, "
+                "and each row is an object carrying `handler` and "
+                "`param_struct`."
+                % (control_inventory_path, type(row).__name__, index_of_row))
     handler_structs = handler_param_structs(inventory)
     switches, switch_counters = scan_switches(src, handler_structs)
 
@@ -942,7 +977,20 @@ def derive(src, descriptions_dir, control_inventory_path):
 # ---------------------------------------------------------------------------
 
 def mechanical_verdict(record):
-    """-> (verdict, reason) from the rules that need no header read."""
+    """-> (verdict, reason) from the rules that need no header read.
+
+    The reason states what these rules establish and no more. Acceptance is
+    this function's default branch, so every accepted family reaches it, and a
+    reason claiming a header read would put that claim on all of them: the
+    audit records 53 accepted families and every one carries
+    `verdict_source: "mechanical"`. A header read is recorded only under
+    `verdict_source: "read"`, which MANUAL_VERDICTS supplies.
+
+    The grounds differ by rule. The switch rule reads a handler comparing the
+    field, and is_bitfield_family declines to run on a family it derived, so
+    an accepted switch family has passed one mechanical test and an accepted
+    anchored family has passed two.
+    """
     if is_bitfield_family(record):
         return ("rejected",
                 "Every define in this set is a state of the bit range "
@@ -955,10 +1003,27 @@ def mechanical_verdict(record):
                 "The set is a _FALSE and _TRUE pair resolving to 0 and 1. It "
                 "states one boolean, and the field it sits on holds more than "
                 "that boolean.")
+    rule = record.get("rule") or ""
+    grounds = []
+    if RULE_ANCHORED in rule:
+        grounds.append("the define names are anchored on the struct name or "
+                       "a stem of it")
+    if RULE_SWITCH in rule:
+        grounds.append("a control handler switches on this field and "
+                       "compares it against these defines")
+    ground = ", and ".join(grounds) or "the field carries this define set"
+    if RULE_SWITCH in rule:
+        tests = ("The set passes the boolean-pair test. The bit-range "
+                 "decomposition test is not applied to a family the switch "
+                 "rule derived, because the handler compares the field "
+                 "itself.")
+    else:
+        tests = ("The set passes the bit-range decomposition test and the "
+                 "boolean-pair test.")
     return ("accepted",
-            "The defines are the enumerated values of this field, anchored on "
-            "the struct name and read against the header named in the "
-            "evidence.")
+            "%s%s. %s No header was read for this family, and the verdict "
+            "rests on those mechanical tests."
+            % (ground[0].upper(), ground[1:], tests))
 
 
 def audit(derivation):
@@ -1064,22 +1129,24 @@ def accepted_families(derivation, audit_doc):
 # ---------------------------------------------------------------------------
 
 def write_json(document, out_path):
-    """Write a document, creating the parent directory if needed."""
+    """Serialise a document and hand the text to the shared durable writer.
+
+    indent=2, sort_keys=False and the trailing newline are the committed shape
+    of both family artefacts and regression_check.py stale hashes each one, so
+    all three stay here where the document is serialised. atomic_write_text
+    owns the temporary file, the LF line endings, the two fsyncs and the
+    rename.
+    """
     parent = os.path.dirname(os.path.abspath(out_path))
     try:
         os.makedirs(parent, exist_ok=True)
     except OSError as exc:
         raise SourceError("cannot create output directory %s: %s"
                           % (parent, exc))
-    tmp = out_path + ".tmp"
+    text = json.dumps(document, indent=2, sort_keys=False) + "\n"
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(document, fh, indent=2, sort_keys=False)
-            fh.write("\n")
-        os.replace(tmp, out_path)
+        atomic_write.atomic_write_text(out_path, text)
     except OSError as exc:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         raise SourceError("cannot write %s: %s" % (out_path, exc))
     logger.info("wrote %s", out_path)
 
