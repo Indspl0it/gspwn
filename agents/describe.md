@@ -228,6 +228,9 @@ coverage alone.
    | `stale` | every surface artefact `descriptions/generation.json` records still hashes to the recorded digest |
    | `harnesses` | the four Track U target lists still name the same harnesses |
    | `agents` | every command line in `agents/*.md` resolves against the tool it names |
+   | `figures` | every surface figure stated in prose matches the measured inventories |
+   | `citations` | every file and line the documentation cites resolves in a vendored source tree |
+   | `commands` | every tool invocation the documentation shows parses against the tool |
 
    `derived` fails when the regeneration stopped before `object_graph.py
    chains` or `ctrl_rank.py rank`, and `pages` fails when it stopped before
