@@ -54,6 +54,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -99,9 +102,14 @@ EXPECTED_DECLARED = 28
 EXPECTED_DISPATCHED = 24
 
 # The flag split, asserted beside the totals. These decide the per-node
-# denominator, so a change in them is a change in a published figure.
+# denominator, so a change in them is a change in a published figure. All four
+# permission flags drm_ioctl_permit() reads are asserted, including the two the
+# 610.57.04 table sets on no entry: an entry gaining either gates a node, and a
+# total nothing pins moves without a check firing.
 EXPECTED_RENDER_ALLOW = 21
 EXPECTED_MASTER = 2
+EXPECTED_ROOT_ONLY = 0
+EXPECTED_AUTH = 0
 
 # The ioctl encoding the DRM core applies to a driver command. Both come from
 # the kernel's include/uapi/drm/drm.h, which this repository does not vendor:
@@ -124,6 +132,20 @@ UNDISPATCHED_REASON = "no entry in nv_drm_ioctls[]"
 # and is recorded on the record without entering any reachability decision.
 RENDER_ALLOW_FLAG = "DRM_RENDER_ALLOW"
 MASTER_FLAG = "DRM_MASTER"
+ROOT_ONLY_FLAG = "DRM_ROOT_ONLY"
+AUTH_FLAG = "DRM_AUTH"
+PERMISSION_FLAGS = (RENDER_ALLOW_FLAG, MASTER_FLAG, ROOT_ONLY_FLAG, AUTH_FLAG)
+
+# What a client has to hold for each gate, worded as a condition on the host at
+# the moment of the call. None of the three is a property of the command.
+MASTER_CONDITION = ("the opening file must be the current DRM master, which "
+                    "drm_master_open grants only when the device has none")
+ROOT_ONLY_CONDITION = ("the calling process must hold CAP_SYS_ADMIN, which "
+                       "drm_ioctl_permit tests first and an unprivileged "
+                       "container does not hold")
+AUTH_CONDITION = ("the opening file must be authenticated, which a "
+                  "primary-node client becomes on holding DRM master or "
+                  "through DRM_IOCTL_AUTH_MAGIC")
 
 # A declared command number. The trailing comment some of them carry is
 # stripped by blank_comments before this runs.
@@ -255,6 +277,31 @@ def parse_declared(text):
     return records
 
 
+def direction_macro_span(text, open_paren, direction, name):
+    """Return the index of the parenthesis closing a direction macro.
+
+    The parameter struct is an argument of DRM_IOWR, DRM_IOW or DRM_IOR, so
+    the argument list is the whole of what names it. Reading past the closing
+    parenthesis reaches the next declaration and reports its struct against
+    this command, which is why the span is matched here and the search is
+    bounded by it.
+    """
+    depth = 0
+    for index in range(open_paren, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise SourceError(
+        "the %s argument list of DRM_IOCTL_%s at line %d in %s never closes: "
+        "the parameter struct is an argument of that macro, and an unbalanced "
+        "span gives no bound for reading it"
+        % (direction, name, line_of(text, open_paren), IOCTL_HEADER))
+
+
 def parse_request_macros(text):
     """Return {command name: (direction macro, parameter struct or None)}.
 
@@ -272,11 +319,12 @@ def parse_request_macros(text):
                 "%d and %d: the request number this tool reports would depend "
                 "on which one the compiler took"
                 % (name, macros[name][2], line_of(stripped, m.start())))
-        # The struct, when there is one, sits between this macro's opening
-        # parenthesis and the start of the next directive.
-        tail_end = stripped.find("\n#define", m.end())
-        tail = stripped[m.end():tail_end if tail_end > 0 else len(stripped)]
-        struct = REQUEST_STRUCT_RE.search(tail)
+        # The struct, when there is one, is an argument of the direction
+        # macro, so the search runs over that macro's own parenthesis span.
+        # DRM_IO takes no struct and its span holds none.
+        open_paren = m.end() - 1
+        close = direction_macro_span(stripped, open_paren, m.group(2), name)
+        struct = REQUEST_STRUCT_RE.search(stripped[open_paren + 1:close])
         macros[name] = (m.group(2), struct.group(1) if struct else None,
                         line_of(stripped, m.start()))
     if not macros:
@@ -347,12 +395,22 @@ def parse_table(text):
 def reachability(flags):
     """-> what each device node grants a command carrying `flags`.
 
-    Derived from drm_ioctl_permit() in the DRM core, drm_ioctl.c:611-633:
+    Derived from drm_ioctl_permit() in the DRM core, drm_ioctl.c:611-633,
+    which applies four tests in this order:
 
-      * a render client is refused any command whose flag word omits
-        DRM_RENDER_ALLOW, which is the last of the four tests
+      * a DRM_ROOT_ONLY command is refused to a caller without CAP_SYS_ADMIN,
+        on either node type
+      * a DRM_AUTH command is refused to a primary-node client that is not
+        authenticated, and a render client passes the test unconditionally
+        because drm_is_render_client() satisfies it
       * a DRM_MASTER command is refused unless the caller is current master,
         and a render client is never one
+      * a render client is refused any command whose flag word omits
+        DRM_RENDER_ALLOW, which is the last of the four tests
+
+    All four are read here. A command gaining DRM_ROOT_ONLY or DRM_AUTH on a
+    driver release carries a condition on the node it gates, and cross_check()
+    asserts the total carrying each of the four.
 
     A primary node client is subject to neither the render test nor, unless
     the command sets DRM_MASTER, the master test. drm_master_open() at
@@ -361,34 +419,58 @@ def reachability(flags):
     display server holds master and reaches the DRM_MASTER commands. That is
     a property of the host at the moment of the open and never a guarantee,
     so the condition is recorded and the command is not counted as plainly
-    reachable.
+    reachable. CAP_SYS_ADMIN and the authenticated bit are host properties of
+    the same kind and are recorded the same way.
     """
     render_allow = RENDER_ALLOW_FLAG in flags
     master = MASTER_FLAG in flags
+    root_only = ROOT_ONLY_FLAG in flags
+    auth = AUTH_FLAG in flags
+
+    render_conditions = []
+    if root_only:
+        render_conditions.append(ROOT_ONLY_CONDITION)
     render = {
         "reachable": render_allow,
-        "condition": None,
+        "condition": " and ".join(render_conditions) or None,
         "reason": None if render_allow else
                   "drm_ioctl_permit refuses a render client any command whose "
                   "flag word omits %s" % RENDER_ALLOW_FLAG,
     }
+
+    card_conditions = []
+    if root_only:
+        card_conditions.append(ROOT_ONLY_CONDITION)
+    if auth:
+        card_conditions.append(AUTH_CONDITION)
+    if master:
+        card_conditions.append(MASTER_CONDITION)
     card = {
         "reachable": True,
-        "condition": "the opening file must be the current DRM master, which "
-                     "drm_master_open grants only when the device has none"
-                     if master else None,
+        "condition": " and ".join(card_conditions) or None,
         "reason": None,
     }
     return {"card": card, "render": render}
 
 
-def cross_check(declared, entries, expect_declared, expect_dispatched):
+def default_flag_expectations():
+    """-> the flag totals the 610.57.04 table carries, keyed by flag name."""
+    return {RENDER_ALLOW_FLAG: EXPECTED_RENDER_ALLOW,
+            MASTER_FLAG: EXPECTED_MASTER,
+            ROOT_ONLY_FLAG: EXPECTED_ROOT_ONLY,
+            AUTH_FLAG: EXPECTED_AUTH}
+
+
+def cross_check(declared, entries, expect_declared, expect_dispatched,
+                expect_flags=None):
     """Reconcile the header against the table, or fail naming the difference.
 
     Six conditions, in the order a defect is easiest to read from:
     a command dispatched twice, a command dispatched without being declared,
     the declared total, the dispatched total, every number inside the range
-    the DRM core reserves for a driver, and the flag split.
+    the DRM core reserves for a driver, and the split across the four
+    permission flags. `expect_flags` maps flag name to the expected total and
+    defaults to the committed one; a flag it omits is expected on no entry.
     """
     declared_set = {d["command"] for d in declared}
     numbers = {d["command"]: d["nr"] for d in declared}
@@ -435,8 +517,10 @@ def cross_check(declared, entries, expect_declared, expect_dispatched):
             "sees it" % (len(out_of_range), DRM_COMMAND_END - DRM_COMMAND_BASE,
                          ", ".join(out_of_range)))
 
-    render_allow = sum(1 for e in entries if RENDER_ALLOW_FLAG in e["flags"])
-    master = sum(1 for e in entries if MASTER_FLAG in e["flags"])
+    carried = {flag: sum(1 for e in entries if flag in e["flags"])
+               for flag in PERMISSION_FLAGS}
+    render_allow = carried[RENDER_ALLOW_FLAG]
+    master = carried[MASTER_FLAG]
     both = [e["command"] for e in entries
             if RENDER_ALLOW_FLAG in e["flags"] and MASTER_FLAG in e["flags"]]
     if both:
@@ -444,20 +528,36 @@ def cross_check(declared, entries, expect_declared, expect_dispatched):
             "%d command(s) set both %s and %s: %s. The per-node denominator "
             "reads the two as exclusive and would count them twice"
             % (len(both), RENDER_ALLOW_FLAG, MASTER_FLAG, ", ".join(both)))
-    if render_allow != EXPECTED_RENDER_ALLOW or master != EXPECTED_MASTER:
+    expected = default_flag_expectations() if expect_flags is None \
+        else dict(expect_flags)
+    unknown = sorted(set(expected) - set(PERMISSION_FLAGS))
+    if unknown:
         raise SourceError(
-            "the flag split reads %d %s and %d %s, expected %d and %d. The "
-            "flags decide which device node reaches a command and the "
-            "denominator is stated per node type, so a change in them is a "
-            "change in a published figure"
-            % (render_allow, RENDER_ALLOW_FLAG, master, MASTER_FLAG,
-               EXPECTED_RENDER_ALLOW, EXPECTED_MASTER))
+            "expect_flags names %d flag(s) drm_ioctl_permit does not read: "
+            "%s. The four it reads are %s"
+            % (len(unknown), ", ".join(unknown), ", ".join(PERMISSION_FLAGS)))
+    moved = [flag for flag in PERMISSION_FLAGS
+             if carried[flag] != expected.get(flag, 0)]
+    if moved:
+        raise SourceError(
+            "the flag split reads %s, expected %s. The flags decide which "
+            "device node reaches a command and under what condition, and the "
+            "denominator is stated per node type, so a change in any of them "
+            "is a change in a published figure"
+            % ("; ".join("%d %s" % (carried[f], f) for f in moved),
+               "; ".join("%d %s" % (expected.get(f, 0), f) for f in moved)))
 
-    logger.info("cross-check passed: %d dispatched of %d declared, "
-                "%d %s and %d %s", len(entries), len(declared),
-                render_allow, RENDER_ALLOW_FLAG, master, MASTER_FLAG)
+    # Every entry the four permission flags leave untouched. Subtracting the
+    # render and master totals would report the same number today and count a
+    # DRM_ROOT_ONLY or DRM_AUTH entry as carrying no permission at all.
+    flagless = sum(1 for e in entries
+                   if not any(f in e["flags"] for f in PERMISSION_FLAGS))
+    logger.info("cross-check passed: %d dispatched of %d declared, %s",
+                len(entries), len(declared),
+                ", ".join("%d %s" % (carried[f], f) for f in PERMISSION_FLAGS))
     return {"render_allow": render_allow, "master": master,
-            "flagless": len(entries) - render_allow - master}
+            "root_only": carried[ROOT_ONLY_FLAG], "auth": carried[AUTH_FLAG],
+            "flagless": flagless}
 
 
 def unused_numbers(declared):
@@ -526,6 +626,11 @@ def summarise(records, checked, declared):
         "declared": len(records),
         "dispatched": len(dispatched),
         "undispatched": len(records) - len(dispatched),
+        # The DRM_ROOT_ONLY and DRM_AUTH totals cross_check() measures are
+        # asserted and logged, and are absent here on purpose. Adding a key
+        # moves the artefact's digest, which descriptions/generation.json
+        # records and `regression_check.py stale` compares, and only
+        # `syzlang_gen.py emit` rewrites that record.
         "render_allow": checked["render_allow"],
         "master": checked["master"],
         "flagless": checked["flagless"],
@@ -551,7 +656,7 @@ def summarise(records, checked, declared):
 
 
 def collect(src_root, expect_declared=EXPECTED_DECLARED,
-            expect_dispatched=EXPECTED_DISPATCHED):
+            expect_dispatched=EXPECTED_DISPATCHED, expect_flags=None):
     """Read both sources, reconcile them, and build the inventory."""
     header_path = os.path.join(src_root, IOCTL_HEADER)
     source_path = os.path.join(src_root, DISPATCH_SOURCE)
@@ -562,7 +667,7 @@ def collect(src_root, expect_declared=EXPECTED_DECLARED,
     macros = parse_request_macros(header_text)
     entries = parse_table(source_text)
     checked = cross_check(declared, entries, expect_declared,
-                          expect_dispatched)
+                          expect_dispatched, expect_flags)
 
     missing_macro = sorted(d["command"] for d in declared
                            if d["command"] not in macros)
@@ -608,15 +713,12 @@ def write_json(inventory, out_path):
     except OSError as e:
         raise SourceError("cannot create output directory %s: %s"
                           % (parent, e))
-    tmp = out_path + ".tmp"
+    # indent=2, sort_keys=False and the trailing newline are this artefact's
+    # committed shape, which regression_check.py stale hashes.
+    text = json.dumps(inventory, indent=2, sort_keys=False) + "\n"
     try:
-        with open(tmp, "w") as f:
-            json.dump(inventory, f, indent=2, sort_keys=False)
-            f.write("\n")
-        os.replace(tmp, out_path)
+        atomic_write.atomic_write_text(out_path, text)
     except OSError as e:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         raise SourceError("cannot write %s: %s" % (out_path, e))
     logger.info("wrote %s", out_path)
 
