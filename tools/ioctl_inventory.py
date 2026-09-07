@@ -1413,7 +1413,7 @@ NV_DRM_C = "kernel-open/nvidia-drm/nvidia-drm-drv.c"
 # nvidia-uvm, nvidia-uvm-tools and nvidia-modeset, and the per-GPU
 # /dev/nvidiaN nodes alongside them. A node absent from that function is
 # absent from a default container and therefore outside the tenant surface.
-TENANT_DEVICE_SOURCE = "libnvidia-container/src/nvc_info.c:515"
+TENANT_DEVICE_SOURCE = "libnvidia-container/src/nvc_info.c:517"
 
 OUTSIDE_TENANT_SURFACE = (
     "lookup_devices at %s creates /dev/nvidiactl, /dev/nvidia-uvm, "
