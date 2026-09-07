@@ -3,19 +3,60 @@ title: gitmine.py
 description: The git-mining mechanism the two patch miners share, the deletion rule that a naive parser gets wrong, and the diff-format pinning that stops a silent empty result.
 ---
 
-Holds the git mechanics both patch miners need, in one implementation.
-`patch_mine.py` mines the container stack for Track U and `cve_patch_map.py`
-mines the driver for Track K. The two miners stay separate because their
-repositories, their fix signals and their output schemas all differ. Both need
-a git wrapper, hunk-header parsing, function attribution from a `-U0` diff, and
-release-tag mapping.
+`gitmine.py` holds the git mechanics both patch miners need, in one
+implementation. `patch_mine.py` mines the container stack for Track U and
+`cve_patch_map.py` mines the driver for Track K. The two miners stay separate
+because their repositories, their fix signals and their output schemas all
+differ. Both need a git wrapper, hunk-header parsing, function attribution from
+a `-U0` diff, and release-tag mapping.
 
-This is a library. It has no subcommands and no entry point.
+The module is a library. It declares no argument parser and no `main`.
+
+## Public functions
+
+| Function | Returns |
+|---|---|
+| `run_git(repo, args, error=GitError, timeout=None)` | git's standard output as text, decoded UTF-8 with undecodable bytes replaced |
+| `list_tags(repo, error=GitError)` | Every tag in the checkout, in git's order, with blank lines dropped |
+| `version_key(tag)` | A numeric sort key per dot-separated component, placing `v1.9.0` below `v1.17.0` |
+| `first_release_tag(repo, sha, pattern=RELEASE_TAG_RE, error=GitError)` | The earliest release tag containing `sha`, or `None` when it is unreleased |
+| `previous_tag(repo, ref, error=GitError)` | The nearest tag reachable from `ref`, from `git describe --tags --abbrev=0` |
+| `parse_hunk_header(line)` | One `@@` line as a `Hunk` with empty `added` and `removed`, or `None` |
+| `parse_unified_diff(text)` | Every file entry in one unified diff, as a list of `DiffFile` |
+| `context_function(context)` | The last identifier before an open parenthesis in a hunk header's trailing context, or `None` |
+| `function_ranges(text)` | `[(name, first_line, last_line)]` for one C translation unit, 1-based and inclusive |
+| `declarator_name(lines, brace_index)` | The function name in the declarator above a column-0 opening brace, or `None` |
+| `enclosing(ranges, line)` | The innermost function range holding a 1-based line, or `None` |
+
+`GSPWN_GIT_TIMEOUT_SECONDS` sets the ceiling on one git invocation, and
+defaults to 300. `run_git` raises the caller's `error` class on a non-zero exit
+or a timeout, so no failure returns an empty string.
+
+## Record shapes
+
+`Hunk` is a namedtuple of seven fields, and `DiffFile` one of four.
+
+| `Hunk` field | Content |
+|---|---|
+| `old_start`, `old_count` | Pre-image line span, 1-based. A count of 0 means the hunk adds lines and removes none, and git then writes `old_start` as the line the addition follows |
+| `new_start`, `new_count` | Post-image line span, 1-based. A count of 0 means the hunk only removes lines, and `new_start` can be 0 when the removal covers the head of the file |
+| `context` | The hunk header's trailing text, stripped. Git fills it with its own function heuristic |
+| `added`, `removed` | The line texts, with the leading `+` or `-` removed |
+
+| `DiffFile` field | Content |
+|---|---|
+| `old_path` | Pre-image path, `None` when the file is added |
+| `new_path` | Post-image path, `None` when the file is deleted |
+| `status` | `added`, `deleted` or `modified`. A rename is `modified` with `old_path` and `new_path` differing |
+| `hunks` | The file's hunks, in file order |
+
+An absent count in a hunk header is read as 1, per the unified diff format.
 
 ## Responsibility
 
-The module owns four operations. It holds no path filter, no keyword table and
-no output schema, so nothing in it is specific to a repository.
+The module owns four operations: the git wrapper, hunk parsing, function
+attribution and tag mapping. It holds no path filter, no keyword table and no
+output schema, so nothing in it is specific to a repository.
 
 | Invariant | Enforced by |
 |---|---|
@@ -25,24 +66,27 @@ no output schema, so nothing in it is specific to a repository.
 | A deleted file is reported as deleted | `/dev/null` on either side maps to `None`, and `status` carries `added`, `deleted` or `modified` |
 | A hunk body ends where its header says it ends | The body consumes exactly `old_count` removed and `new_count` added lines, so a body line beginning `++` is never read as a file header |
 | One git invocation cannot hang the miner | `timeout` defaults to `GIT_TIMEOUT_SECONDS`, 300 seconds |
-| A release-candidate tag is not a release | `RELEASE_TAG_RE` matches three dot-separated numbers, optionally `v`-prefixed, and nothing else |
+| A release tag is three dot-separated numbers | `RELEASE_TAG_RE` matches that form, optionally `v`-prefixed, so a release-candidate or dated tag is skipped |
 
 ## Callers
 
-| Direction | Modules |
-|---|---|
-| Imports this module | `tools/patch_mine.py`, `tools/cve_patch_map.py` |
-| This module imports | Nothing in `tools/`. It uses `collections`, `logging`, `os`, `re` and `subprocess` |
+Two production modules import it, `tools/patch_mine.py` and
+`tools/cve_patch_map.py`, and `tools/selftest.py` imports it as well. It
+imports no module in `tools/` and uses `collections`, `logging`, `os`, `re`
+and `subprocess`.
 
 `cve_patch_map` binds `function_ranges`, `declarator_name` and `enclosing` as
-module-level names, so the existing tests that call
-`cve_patch_map.function_ranges(...)` still resolve.
+module-level names, because that module is where the three are called and
+tested from.
 
 The module imports neither `fcntl` nor `pipeline_state`, so it runs on the
 Windows workstation. `surface_cov.py` documents the same choice at its own
 import block.
 
 ## Failure modes
+
+Three conditions raise the caller's error class, and three more continue with
+a record or an attribution missing.
 
 | Condition | Behaviour | Raises |
 |---|---|---|
@@ -60,6 +104,9 @@ git repository or a pure parse, so concurrent callers do not interact.
 
 ## Prohibited behaviour
 
+Six rules cover file-header handling, the diff-format overrides, the timeout
+and the split of responsibility with the miners.
+
 | Rule | Rationale |
 |---|---|
 | Never test for `+++ b//dev/null` | Git writes a deleted file's post-image as the bare string `/dev/null` with no prefix, so that test never matches and the deletion's hunks accumulate against the file named before it |
@@ -72,15 +119,15 @@ git repository or a pure parse, so concurrent callers do not interact.
 ## Combined diffs
 
 A merge commit shown against both parents produces a combined diff, which uses
-the `@@@` hunk form. `gitmine` does not parse it. Diff a merge against one
-parent.
+the `@@@` hunk form. `gitmine` parses no combined diff. Diff a merge against
+one parent.
 
 Two markers name a combined entry, and both are checked.
 
-| Marker | Pattern | Input it catches |
-|---|---|---|
-| Entry header | `^diff --(cc\|combined) ` | A whole `git show -c`, recognised on the way in, because git writes this line above the entry |
-| Hunk header | `^@@@+ ` | Hunks fed on their own, with no entry header above them |
+- The entry header, `^diff --(cc|combined) `, catches a whole `git show -c` on
+  the way in, because git writes this line above the entry.
+- The hunk header, `^@@@+ `, catches hunks fed on their own, with no entry
+  header above them.
 
 Recognition at the entry header resets the file name, the hunk list and the
 line budget, and every subsequent line of the entry is skipped, including its
@@ -88,45 +135,24 @@ line budget, and every subsequent line of the entry is skipped, including its
 header has already produced a record, so that record is popped. Either route
 drops the whole entry.
 
-## Design notes
+## Attribution and the timeout ceiling
 
-Both defects the extraction closed were in file-header handling.
-`patch_mine.changed_functions` tested `line.startswith("+++ b/")` before
-comparing the remainder against `/dev/null`, so the guard branch was
-unreachable and the current file name kept pointing at the previous entry.
+Both miners diff with `-U0`, so a hunk carries no context line and the function
+name comes from one of two places. `context_function` reads the trailing text
+git writes on the `@@` line, which finds C and Go definitions and misses a
+definition that opens its brace on a line of its own, so a count taken that way
+is a floor. `function_ranges` and `enclosing` scan the file itself, pairing
+each column-0 opening brace with the declarator above it, over a lookback of
+30 lines.
 
-The deletion fix moves no mined number on either container repository. A
-whole-file deletion hunk starts at pre-image line 1, and git derives a hunk
+A whole-file deletion hunk starts at pre-image line 1, and git derives a hunk
 header's trailing context by scanning backwards from the line above the hunk,
-so every deletion hunk carries an empty context. The old loop skipped an empty
-context before it reached the function regex, so the wrong file name was in
-hand and no function name was derived from it. All 11 fix candidates across the
-two repositories that delete a file were run through both attribution rules,
-and no file list and no function map differs.
+so every deletion hunk carries an empty context and yields no name through
+`context_function`.
 
-Neither old parser tracked where a hunk body ends. `patch_mine` treated any
-line beginning `+++ b/` as a file header, and `cve_patch_map` dropped any body
-line beginning `+++` or `---` from its added and removed lists. A test fixture
-committing a line whose own text is `++ b/injected.c` produced a file list
-holding `injected.c`, a path the commit never touched, ranked as a hot spot.
-
-The timeout default is 300 seconds, where `surface_verify.py` uses 30.
-`open-gpu-kernel-modules` carries 216 tags and `git tag --contains` runs once
-per fix candidate, so a lower ceiling turns a working run into a failure.
-
-## Verified against the miners
-
-Every subcommand of both tools was run against the committed checkouts before
-and after the extraction.
-
-| Command | Scale | Result |
-|---|---|---|
-| `patch_mine --repo artifacts/src/libnvidia-container` | 963 commits, 46 fix candidates | stdout identical, JSON identical record by record |
-| `patch_mine --repo artifacts/src/nvidia-container-toolkit` | 247 fix candidates | stdout identical, JSON identical record by record |
-| `cve_patch_map resolve` | 61 kernel-mode CVEs, 53 bracketed | stdout and stderr identical |
-| `cve_patch_map map` | 32 tag pairs, 270 functions | JSON identical key by key |
-| `cve_patch_map hotspots` | 30 rows | Identical |
-| `cve_patch_map diff` on three release pairs | 122, 288 and 685 output lines | Identical |
+The timeout ceiling is 300 seconds, where `surface_verify.py` uses 30.
+`open-gpu-kernel-modules` carries 216 tags, `git tag --contains` is
+O(tags x history), and it runs once per fix candidate.
 
 ## See also
 

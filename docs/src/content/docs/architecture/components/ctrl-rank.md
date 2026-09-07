@@ -4,12 +4,13 @@ description: The measured ordering of the 531 targetable control commands, the t
 ---
 
 Ranks the 531 targetable RM control commands on allocation chain length, fix
-history and parameter size. `syzlang_gen.py --max-control N` emits the first N
-commands of an ordering, and the describe phase's work order asks for the same
-ordering.
+history and parameter size. A command is targetable when its reachability is
+`non_privileged` and its handler is compiled in, which is 531 of the 1372
+exported commands. `syzlang_gen.py --max-control N` emits the first N commands
+of an ordering, and the describe phase's work order asks for the same ordering.
 
 The ordering this module replaced was a four-value ladder on the SDK class id,
-hardcoded in the generator. It read no measurement and put 216 of the 531
+hardcoded in the generator. It read no measurement and put 337 of the 531
 commands in one bucket.
 
 The module runs off the driver source tree and the committed artefacts. It
@@ -32,34 +33,71 @@ It writes only that file.
 | A handler with more than one definition resolves the same way every run | `SUFFIX_RANK` orders `IMPL`, `KERNEL`, `PHYSICAL`, `VF`, then sorted path, then line number. 8 of the 531 carry more than one candidate |
 | A null `impl_file` is distinguishable from a scan that failed | `impl_state` reads `resolved` or `no hand-written definition`, and `impl_suffix` names the suffix that won |
 
-## Operations
+## Subcommands
 
-| Subcommand | Output |
+| Subcommand | Arguments | Purpose |
+|---|---|---|
+| `rank` | `--src`, `--control`, `--chains`, `--hotspots`, `--sizes`, `--out` | Write the ranked records |
+| `report` | `--rank`, `--top` | Print the head of the ranking and the chain-length spread |
+
+`-v` raises the log level to DEBUG. Every path argument defaults to the
+repository-anchored location of the artefact it names, so the tool produces the
+same paths whatever directory it runs from.
+
+| Argument | Default |
 |---|---|
-| `rank` | `rm-control-rank.json`: one record per targetable command, the counts block, the source block and the weighting |
-| `report` | The head of the ranking as a table |
+| `--src` | `artifacts/src/open-gpu-kernel-modules` |
+| `--control` | `surface/rm-control-inventory.json` |
+| `--chains` | `surface/rm-chains.json` |
+| `--hotspots` | `surface/cve-hotspots.json` |
+| `--sizes` | `surface/ctrl-param-sizes.json` |
+| `--out`, `--rank` | `surface/rm-control-rank.json` |
+| `--top` | `25` |
+
+Exit code 0 on success, 1 on a bad input or a missing artefact.
+
+## Output file
+
+`rm-control-rank.json` carries five top-level keys.
+
+| Key | Contents |
+|---|---|
+| `schema` | `gspwn.rm-control-rank/1` |
+| `source` | The five input paths, repository-relative |
+| `weighting` | `depth` 0.50, `cve` 0.30, `size` 0.20, `function_match_weight` 1.5 |
+| `counts` | `ranked` 531, `handlers_resolved_to_an_implementation` 518, `handlers_in_a_hot_file` 245, `handlers_matching_a_hot_function` 11, `commands_without_a_chain` 17, `impl_definitions_scanned` 3191 |
+| `commands` | The ranked records, ordered |
 
 ## Record fields
+
+Each record carries 22 fields in seven groups.
 
 | Field | Contents |
 |---|---|
 | `handler`, `owning_class`, `sdk_prefix`, `method_id`, `class_id` | The command's identity, from the control inventory |
-| `param_struct`, `param_size`, `param_size_state` | The parameter struct, its measured size, and whether a size was found |
+| `param_struct`, `param_size`, `param_size_state` | The parameter struct, its measured size, and one of `measured`, `unmeasured` or `no parameter struct` |
 | `chain_length`, `chain_target_class`, `no_chain_reason` | The allocation prologue, from `rm-chains.json` |
 | `impl_file`, `impl_line`, `impl_suffix`, `impl_state` | Where the handler is defined, from the definition scan, which suffix won, and whether the scan resolved it or found no hand-written definition |
-| `cve_file_releases`, `cve_function`, `cve_function_releases` | The fix history behind the two CVE readings |
+| `cve_file_releases`, `cve_function`, `cve_function_releases` | The file's release count, the whole matching `by_function` record, and its release count |
 | `rank_components`, `rank_score`, `rank` | The three normalised components, the weighted score, and the dense ordinal |
 | `routed_to_physical` | Whether the parameter buffer crosses the RPC queue to GSP |
 
+Of the 531, 513 carry a measured parameter size and 18 have no parameter struct
+at all.
+
 ## Callers
 
-| Direction | Modules |
-|---|---|
-| Imports this module | Nothing at run time |
-| Reads this module's output | `tools/syzlang_gen.py`, as the default for `--ctrl-rank`. `tools/trace2seed.py chains`, to order the commands inside a program |
-| This module imports | Nothing in `tools/`. It reads four JSON artefacts and the driver source |
+- Nothing imports this module at run time.
+- Two modules read its output: `tools/syzlang_gen.py`, as the default for
+  `--ctrl-rank`, and `tools/trace2seed.py chains`, to order the commands inside
+  a program.
+- The module imports nothing in `tools/`. It reads four JSON artefacts and the
+  driver source.
 
 ## Failure modes
+
+Seven conditions have a defined behaviour. Five exit 1 naming the file or path
+involved, and two leave a score component at zero.
 
 | Condition | Behaviour |
 |---|---|
@@ -71,6 +109,9 @@ It writes only that file.
 | A handler resolves to no implementation file | `impl_file` and `impl_line` are null, `impl_state` reads `no hand-written definition`, and the CVE component scores zero |
 | A parameter struct has no measured size | `param_size_state` is `unmeasured` and the size component scores zero |
 
+A source file that cannot be read is logged as a warning and skipped, and the
+scan continues.
+
 ## Concurrency and durability
 
 One invocation reads four JSON files and the source tree, then writes one file
@@ -79,6 +120,8 @@ taken. Two concurrent invocations sharing an output path race for it, and the
 phase invokes it once.
 
 ## Prohibited behaviour
+
+Eight rules constrain the score, the definition scan and the CVE join.
 
 | Rule | Rationale |
 |---|---|
@@ -99,9 +142,22 @@ rank_score = 0.50 * depth + 0.30 * cve + 0.20 * size
 
 | Component | Measurement | Normalisation |
 |---|---|---|
-| `depth` | Allocations an unprivileged process makes before the owning object exists, from `rm-chains.json` | `(max - length) / (max - 1)`, and 0 for a command with no chain |
-| `cve` | Driver releases that changed the handler's function, or the file holding it | `log2(releases + 1) / log2(max + 1)`, with a function-level match scaled by 1.5 |
+| `depth` | Allocations an unprivileged process makes before the owning object exists, from `rm-chains.json` | `(max - length) / (max - 1)`, capped at 1.0, and 0 for a command with no chain |
+| `cve` | Driver releases that changed the handler's function, or the file holding it | `log2(releases + 1) / log2(max + 1)`, with a function-level match scaled by 1.5 and capped at 1.0 |
 | `size` | Bytes of attacker-controlled parameter struct, from `ctrl-param-sizes.json` | `log2(bytes + 1) / log2(max + 1)` |
+
+Every ceiling is derived from the joined data on each run, so the depth range
+follows whatever chain lengths the join produced. On this release the chain
+lengths spread as follows, which puts the maximum at 5.
+
+| Chain length | Commands |
+|---|---|
+| 1 | 91 |
+| 2 | 92 |
+| 3 | 235 |
+| 4 | 95 |
+| 5 | 1 |
+| none | 17 |
 
 A consumer that disagrees with the weights re-sorts on `rank_components`
 without re-running the scan.
@@ -129,25 +185,32 @@ The 13 that resolve to nothing have no hand-written definition anywhere in the
 tree. Each dispatches to an NVOC generated inline under `src/nvidia/generated/`:
 `kchannelCtrlGetTpcPartitionMode_a094e1` at `g_kernel_channel_nvoc.h:1315`
 forwards to `kgrctxCtrlHandle`. A null `impl_file` is the correct reading for
-them, `impl_state` says so, and their `cve_file_releases` of 0 is not a scan
-failure.
+them, `impl_state` says so, and their `cve_file_releases` of 0 records a real
+absence of fix history.
 
 With no `--max-control` cap the ordering decides the order of the emitted
 blocks and nothing else, so `nvidia_ctrl.txt` and `nvidia_structs.txt` are
 permutations of the pre-change files with identical line multisets.
 
-`impl_file` and `impl_line` are provenance for the inventory and sit on the
-rank record. Merging them into `rm-control-inventory.json` belongs with
+`impl_file` and `impl_line` are provenance for the inventory and are recorded on
+the rank record. Merging them into `rm-control-inventory.json` belongs with
 `ctrl_surface.py`, which writes that file.
 
 ## Stated limits
 
-| Limit | Consequence |
-|---|---|
-| Regenerating `cve-hotspots.json` needs the network | The file is committed, at 4.4 MB, so a clean checkout scores the CVE component without rebuilding it. Rebuilding it after a driver bump goes through `cve_patch_map.py`, which reads the PSIRT bulletins over the network |
-| Nothing in CI runs `rank` | The artefact goes stale against a driver bump, and the describe phase's extractor block is the only thing that reruns it. `regression_check.py derived` reports the drift and does not repair it |
-| The breadth-first graph depth and the chain length are different numbers | `rm-object-graph.json` records depth over every edge, and `rm-chains.json` records the length of a walk an unprivileged process can make. They would disagree wherever the shallowest parent is privileged. On this release they agree on all 514 chained commands |
-| The weighting is untuned | No campaign result has been measured against it |
+- Regenerating `cve-hotspots.json` needs the network. The file is committed, at
+  4.2 MB, so a clean checkout scores the CVE component without rebuilding it.
+  Rebuilding it after a driver bump goes through `cve_patch_map.py`, which reads
+  the PSIRT bulletins over the network.
+- Nothing in CI runs `rank`. The artefact goes stale against a driver bump, and
+  the describe phase's extractor block is the only thing that reruns it.
+  `regression_check.py derived` reports the drift and does not repair it.
+- The breadth-first graph depth and the chain length are different numbers.
+  `rm-object-graph.json` records depth over every edge, and `rm-chains.json`
+  records the length of a walk an unprivileged process can make. They would
+  disagree wherever the shallowest parent is privileged. On this release they
+  agree on all 514 chained commands.
+- The weighting is untuned. No campaign result has been measured against it.
 
 ## See also
 
