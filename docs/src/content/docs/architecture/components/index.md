@@ -3,24 +3,22 @@ title: Components
 description: The modules in tools/, what each owns, and the dependencies between them.
 ---
 
-`tools/` holds two libraries, one test runner, two data files and the
-commands below.
+`tools/` holds 31 Python modules, one shell script, one Go program, two JSON
+data files and two data directories. `syz-patches/` carries the one patch
+applied to the pinned syzkaller checkout before syzkaller is built, and
+`syz-stub/` carries the stub description file and its constant sidecar that
+`syzlang_gen.py compile` compiles the description set alongside.
 
-Fourteen of the commands read source trees and committed artefacts and never
-touch a device. `ioctl_inventory.py`, `ctrl_surface.py`, `object_graph.py`,
-`nvkms_inventory.py` and `drm_inventory.py` derive the ioctl surface, the
-control command space, the object allocation DAG, the NVKMS command space and
-the `/dev/dri` command space from a driver checkout, `value_families.py`
-derives the value families that bind bare integer parameter fields, and
-`syzlang_gen.py` turns them into a first description set. `ctrl_rank.py` orders the control commands on chain length,
-fix history and parameter size. `surface_verify.py` confirms the artefacts
-describe the driver actually under test, `surface_cov.py` counts how much of
-the enumerated surface a description set and a corpus reach, `refgen.py`
-renders the artefacts as the reference pages under `reference/surface/`, and
-`regression_check.py` compares the committed artefacts against each other and
-against those pages in CI. `cve_patch_map.py` and `patch_mine.py` read the fix
-history of the driver and of the two container repositories, the only empirical
-signal available before a campaign has run.
+Fourteen of the Python modules read source trees and committed artefacts and
+never touch a device: `ioctl_inventory.py`, `ctrl_surface.py`,
+`object_graph.py`, `nvkms_inventory.py`, `drm_inventory.py`,
+`value_families.py`, `syzlang_gen.py`, `ctrl_rank.py`, `surface_verify.py`,
+`surface_cov.py`, `refgen.py`, `regression_check.py`, `cve_patch_map.py` and
+`patch_mine.py`. The `Owns` column below states what each derives.
+
+`cve_patch_map.py` and `patch_mine.py` read the fix history of the driver and
+of the two container repositories, the only empirical signal available before a
+campaign has run.
 
 | Module | Kind | Owns |
 |---|---|---|
@@ -51,14 +49,19 @@ signal available before a campaign has run.
 | [`patch_mine.py`](/gspwn/architecture/components/patch-mine/) | Command | The container-stack fix history, and the Track U target ranking |
 | [`gitmine.py`](/gspwn/architecture/components/gitmine/) | Library | The git wrapper, the diff parser, the function attribution and the release-tag mapping both miners share |
 | [`refgen.py`](/gspwn/architecture/components/refgen/) | Command and library | The six generated reference pages under `reference/surface/` and the index over them |
-| [`regression_check.py`](/gspwn/architecture/components/regression-check/) | Command | The ten CI checks over the committed surface artefacts, the pages generated from them, and the phase briefs' command lines and figures |
 | [`exec.py`](/gspwn/architecture/components/exec/) | Command | Logged command execution with retries |
-| [`build_kernel.sh`](/gspwn/architecture/components/build-kernel/) | Script | The instrumented kernel build |
+| [`build_kernel.sh`](/gspwn/architecture/components/build-kernel/) | Shell script | The instrumented kernel build |
 | [`selftest.py`](/gspwn/architecture/components/selftest/) | Test runner | The offline suite |
+| `regression_check.py` | Command | The comparison of the committed artefacts against each other and against the generated reference pages |
+| `register_check.py` | Command | The mechanical check over the documentation's writing register |
+| `gspwn-check/main.go` | Go program | The syzlang parse and compile gate, built by `syzlang_gen.py compile` against a pinned syzkaller checkout |
 
-Two files in `tools/` are data. `ioctl_map.json` maps ioctl request
-numbers to syzlang description names. `cve_fix_verdicts.json` records the
-curated per-CVE fix verdict and the evidence behind each one.
+`drm_inventory.py`, `value_families.py`, `regression_check.py`,
+`register_check.py` and `gspwn-check/main.go` have no page of their own.
+
+Two files in `tools/` are data. `ioctl_map.json` maps ioctl request numbers to
+syzlang description names. `cve_fix_verdicts.json` records the curated per-CVE
+fix verdict and the evidence behind each one.
 
 ## Dependencies
 
@@ -136,36 +139,51 @@ run on the Windows workstation and in CI, where no GPU and no kernel exist.
 `exec.py` is stdlib-only by design because it wraps builds that may run before
 anything else is installed.
 
-Nine imports are performed inside a function. `syzlang_gen.py` defers
-`value_families.py` because that module imports `syzlang_gen` back at module
-scope. Elsewhere the deferral keeps a caller running where the dependency may
-be missing or unusable, as `pipeline_ctl.py` does for a surface count on a box
-where the inventories were never generated, `crashlog_ctl.py` for the disk
-report on the post-panic path, and `surface_cov.py` for the unpack timeout when
-the configuration cannot be read.
+Twelve import statements are performed inside a function, and they cover the nine dashed
+edges above. `syzlang_gen.py` defers `value_families.py` because that module
+imports `syzlang_gen` back at module scope. Elsewhere the deferral keeps a
+caller running where the dependency may be missing or unusable, as
+`pipeline_ctl.py` does for a surface count on a box where the inventories were
+never generated, `crashlog_ctl.py` for the disk report on the post-panic path,
+and `surface_cov.py` for the unpack timeout when the configuration cannot be
+read.
 
-`selftest.py` imports almost every module in `tools/` and is left out of the
-diagram.
+Ten modules are left out of the diagram. `selftest.py` imports almost every
+module in `tools/`. The other nine import no module in `tools/` and no module
+imports them: `ioctl_inventory.py`, `ctrl_surface.py`, `object_graph.py`,
+`nvkms_inventory.py`, `drm_inventory.py`, `ctrl_rank.py`, `surface_verify.py`,
+`verify_tenant_surface.py` and `register_check.py`.
 
 ## Layering rules
 
-| Rule | Reason |
-|---|---|
-| `pipeline_state.py` imports no other module in `tools/` | It is the root. It does not read configuration; the caller that has a setting passes it in |
-| Only `pipeline_state.py` writes the state file | The atomic write, the backup and the lock live in one place |
-| Every tunable comes from `gspwn_config.py` | A value cannot drift between the file and the code that uses it |
-| No tool holds a copy of a derived address | `manager_url()` is derived from `track_k.http`, so a port change cannot leave the sampler polling a stale address |
-| A tool that spends money reads the ledger, never the state file's own total | The ledger is the authority, and it is machine-global |
+Five rules govern what a module may import and what it may write.
+
+- `pipeline_state.py` imports no other module in `tools/`. It is the root, it
+  reads no configuration, and the caller that has a setting passes it in.
+- Only `pipeline_state.py` writes the state file, so one module holds the
+  atomic write, the backup and the lock.
+- Every tunable comes from `gspwn_config.py`, so a value cannot drift between
+  the file and the code that uses it.
+- No tool holds a copy of a derived address. `manager_url()` is derived from
+  `track_k.http`, so a port change cannot leave the sampler polling a stale
+  address.
+- A tool that spends money reads the ledger, never the state file's own total.
+  The ledger is the authority, and it is machine-global.
 
 ## Behaviour on invalid configuration
 
-| Module | Behaviour |
+A tool whose whole run depends on a cap exits. A tool that can proceed with the
+shipped defaults falls back and continues.
+
+| Module and path | Behaviour |
 |---|---|
-| `pipeline_ctl.py` loop and agent settings | Exits. An unattended loop spends machine time, so the cap must come from the configuration |
+| `pipeline_ctl.py` loop and agent settings | Exits 1. An unattended loop spends machine time, so the cap must come from the configuration |
 | `pipeline_ctl.py validate` drift check | Skips the check and still reports on the registry |
-| `coverage_ctl.py` | Falls back to the shipped defaults, because several tools call the verdict path |
-| `repro_ctl.py` | Falls back to the shipped defaults, so verification runs on a box mid-edit |
+| `coverage_ctl.py` command form | Exits 1 while building its parser, because the syz-manager URL default is derived from `track_k.http` |
+| `coverage_ctl.py` verdict path and disk warning | Falls back to the shipped defaults, because several tools call the verdict path |
+| `orchestrator_ctl.py` command form | Exits 1 |
 | `orchestrator_ctl.py` resume anchor | Falls back to the module default, because this runs on the post-panic recovery path |
+| `repro_ctl.py` | Falls back to the shipped defaults, so verification runs on a box mid-edit |
 
 ## See also
 

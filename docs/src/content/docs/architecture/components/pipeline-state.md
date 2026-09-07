@@ -25,6 +25,47 @@ research and impact records, and the spend ledger.
 | A newer writer's top-level keys survive an older reader | `normalize` keeps unknown top-level keys |
 | A crash status change carries its history and its analysis stamp | `set_crash_status` is the single write path for `status` |
 
+## Records and vocabularies
+
+Every closed vocabulary the pipeline writes is defined here, and every other
+tool imports it from this module. A value outside one is refused at the write,
+so a misspelling never reaches the state file.
+[Concepts](/gspwn/getting-started/concepts/) gives the field meanings.
+
+| Record | Constant | Fields |
+|---|---|---|
+| Registry entry | `DEFAULT_CRASH`, plus the `id` that keys it | 14 |
+| Research record | `DEFAULT_FINDING` | 10 |
+| Impact record | `DEFAULT_IMPACT` | 18 |
+| Round | `DEFAULT_ROUND` | 24 |
+| Completion-ledger row | `DEFAULT_ACCOUNT` | 9 |
+
+| Vocabulary | Constant | Values |
+|---|---|---|
+| Phase name | `PHASES`, from `SETUP_PHASES` 2, `ROUND_PHASES` 9 and `FINAL_PHASES` 1 | 12 |
+| Phase status | `PHASE_STATUS` | 5 |
+| Track | `TRACKS` | 2 |
+| Crash signal | `CRASH_SIGNAL` | 5 |
+| Crash status | `CRASH_STATUS` | 8 |
+| Disclosure status | `DISCLOSURE_STATUS` | 4 |
+| Bug class | `BUG_CLASS` | 13 |
+| Trigger | `TRIGGER` | 6 |
+| Confidence | `CONFIDENCE` | 3 |
+| Memory-safety primitive | `PRIMITIVE` | 8 |
+| Consequence | `CONSEQUENCE` | 5 |
+| Access type | `ACCESS_TYPE` | 4 |
+| Overwrite target | `OVERWRITE_TARGET` | 9 |
+| Attacker control | `ATTACKER_CONTROL` | 9 |
+| Coverage verdict | `COVERAGE_VERDICT` | 3 |
+| Round decision | `ROUND_DECISION` | 2 |
+| Accounting reason | `SURFACE_REASON` | 8 |
+| Completion verdict | `SURFACE_VERDICT` | 3 |
+
+`DENOMINATOR_VERSIONS` pairs a sequence number with the surface target total it
+names, so a round measured on one surface is never re-read against another. It
+holds `v1-764`, `v2-828` and `v3-852`, and a round record carrying no
+`denominator_version` is dated to `v1-764`.
+
 ## The spend model
 
 Recorded spend is authoritative and machine-global. The ledger
@@ -47,26 +88,40 @@ already spent one.
 
 ## Failure modes
 
+The module refuses wherever proceeding would put a wrong number on record or
+lose one already there. Every refusal names the file and the command that
+repairs it. A transaction body that raises leaves the state file unchanged.
+
 | Condition | Behaviour |
 |---|---|
-| The state file holds invalid JSON, or its top level is not an object | Refused, naming the file and the parse error, with the instruction to restore from the backup |
-| The ledger is absent while billed hours are recorded | Refused, carrying its own remediation |
+| The state file holds invalid JSON, or its top level is not an object | Refused, naming the file and the parse error, with the instruction to restore from `<path>.bak` |
+| The spend ledger is absent while billed hours are recorded | `SpendLedgerMissing`, carrying `pipeline_ctl.py spend-init` as its remediation |
+| The completion ledger holds invalid JSON | Refused, naming `<path>.bak` and stating that re-creating it empty reopens every closed target |
+| The completion ledger holds an accounted row that is not a JSON object | Refused, counting the bad rows and naming the first five keys |
+| The completion ledger was built for a different driver release | `SurfaceLedgerMismatch`, naming both releases |
 | A round phase is unfinished when the round is asked to advance | Refused, naming the two ways to satisfy the check. Marking a phase blocked does not satisfy it |
+| A round is asked to advance with no recorded `round-end` | Refused, naming `pipeline_ctl.py round-end --from-run <run-id>` |
 | A finding or impact record carries an unknown key | Refused. The key is never dropped, because a misspelled field would leave the real one empty while the write reported success |
+| A denominator version label is not `v<n>-<total>` | Refused, because the round's counts would name a surface size nothing can recover |
 | The body of a transaction raises | The state file is left unchanged |
 
 ## Concurrency and durability
 
-| Property | Mechanism |
-|---|---|
-| State mutual exclusion | `flock(LOCK_EX)` on `.pipeline.lock` in the state directory, held across the whole read-modify-write |
-| Ledger mutual exclusion | A separate lock, so a state transaction and a billing write do not block each other |
-| Write atomicity | Temporary file, `fsync`, `os.replace`, `fsync` of the parent directory |
-| Panic durability | A backup file alongside the state file |
-| Idempotency | Billing is idempotent per run id, seeding the ledger is a no-op when it exists, and the triage-settings stamp is written once |
-| Root handovers | `_fix_root_ownership` returns files to `$SUDO_USER` after a write performed as root |
+- State mutual exclusion comes from `flock(LOCK_EX)` on `.pipeline.lock` in the
+  state directory, held across the whole read-modify-write.
+- The ledger takes a separate lock, so a state transaction and a billing write
+  do not block each other.
+- A write is made atomic by a temporary file, an `fsync`, an `os.replace` and an
+  `fsync` of the parent directory.
+- Panic durability comes from a backup file alongside the state file.
+- Billing is idempotent per run id, seeding the ledger is a no-op when it
+  already exists, and the triage-settings stamp is written once.
+- `_fix_root_ownership` returns files to `$SUDO_USER` after a write performed as
+  root.
 
 ## Prohibited behaviour
+
+Five rules cover the transaction discipline and the completion ledger.
 
 | Rule | Rationale |
 |---|---|
@@ -143,3 +198,5 @@ stop is non-overridable, so its evidence has to be auditable afterwards.
 ## See also
 
 - [Durability](/gspwn/architecture/durability/)
+- [pipeline_ctl.py](/gspwn/architecture/components/pipeline-ctl/)
+- [Concepts](/gspwn/getting-started/concepts/)
