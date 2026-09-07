@@ -184,6 +184,34 @@ def canon_title(t):
     return norm_title(HEX_RE.sub("0xADDR", t))
 
 
+def title_signature(title):
+    """Secondary key for a report that carries no stack: sha1 of its title
+    under canon_title, the same canonicalisation register() applies.
+
+    A line with no call trace has only its wording to be identified by, so
+    the title and the secondary key have to be derived under one policy. An
+    NVRM Xid line hashed with its hex intact and titled with its hex blanked
+    gives two Xid 13 lines differing only in their ESR value one title and
+    two hashes, which register() reads as "same title, different stack" and
+    records as `flagged`. Xid 13 is classified noise, the fuzzer's own
+    exhaust, and every flagged entry blocks the triage gate, so one long
+    dmesg blocks triage once per distinct ESR value.
+
+    The hash follows the title and not the other way round because the ESR
+    value is a per-occurrence field of exactly the kind XID_VOLATILE_RE and
+    XID_BUSID_RE already strip. Keeping it in the identity registers one
+    recurring exception as a new bug per occurrence, which is the direction
+    that buries the real findings: triage and rca both run per registered
+    crash.
+
+    `title` is the raw line, not a canonicalised one. canon_title is not
+    idempotent, because HEX_RE reads the leading `0xAD` of its own `0xADDR`
+    replacement, so the caller passes the raw title here and to register(),
+    and both arrive at the same string.
+    """
+    return hashlib.sha1(canon_title(title).encode()).hexdigest()[:16]
+
+
 def stack_frames(text):
     """Function names in log order, addresses/offsets/modules stripped.
 
@@ -631,8 +659,8 @@ def scan_dmesg(state, path):
             why = "; ".join(x for x in (why, "on %s" % bus.group(0).strip(" ()"))
                             if x)
         body = norm_title(XID_BUSID_RE.sub("", body)).strip(" ,")
-        register(state, "K", "NVRM " + body,
-                 hashlib.sha1(body.encode()).hexdigest()[:16], path,
+        title = "NVRM " + body
+        register(state, "K", title, title_signature(title), path,
                  signal=cls, signal_note=why)
     for start_line, block in report_blocks(text):
         shash = stack_hash(block) or block_signature(block)
