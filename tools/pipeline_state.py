@@ -9,12 +9,13 @@ Concurrency: AGENTS.md allows parallel subagents (describe/seeds/harness) and
 a background fuzz monitor, all of which touch this file. Every
 read-modify-write must go through transaction(), which holds an exclusive
 flock for the whole cycle. Bare load()/save() pairs lose updates and are a bug.
+A writer that replaces the file wholesale, and so reads nothing, takes the same
+lock through state_lock().
 """
 import fcntl
 import json
 import os
 import re
-import shutil
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -35,7 +36,7 @@ SPEND_PATH = os.environ.get("GSPWN_SPEND") or os.path.join(STATE_DIR,
 # The completion ledger: one row per command-surface target that will not be
 # exercised, each carrying a written reason. Its own artefact rather than a key
 # in this file, because save() below rewrites the whole state under a lock on
-# every phase transition and every crash registration, and the surface has 764
+# every phase transition and every crash registration, and the surface has 852
 # targets against a state file of about 1200 bytes. It records the driver
 # release of the inventories it is counted against, so a driver bump
 # invalidates it. Campaign progress, so it sits beside pipeline.json and is
@@ -75,14 +76,14 @@ COVERAGE_VERDICT = {"growing", "plateaued", "unknown"}
 ROUND_DECISION = {"continue", "stop"}
 
 # ------------------------------------------------- the completion ledger ---
-# Termination is `exercised + accounted-for = 764`: every target the corpus
+# Termination is `exercised + accounted-for = 852`: every target the corpus
 # never named carries a written reason, and no percentage threshold appears
 # anywhere. The reason is a closed vocabulary so the completion count can group
 # by it; free text would make "GSP" and "runs on gsp" two categories.
 #
 # The first four are the exclusion categories surface_cov already reports
 # outside the denominator, spelled identically so the two group together. They
-# apply to a target *inside* the 764 whose inventory classification turns out
+# apply to a target *inside* the 852 whose inventory classification turns out
 # too generous: surface_cov states its own limits, and 16 control commands are
 # already known to carry a capability check the RMCTRL flag word does not show.
 SURFACE_REASON = {
@@ -275,11 +276,17 @@ PRIMITIVE_NEEDS_EVIDENCE = tuple(p for p in PRIMITIVE
 # against another.
 DENOMINATOR_VERSIONS = (("v1-764", 764), ("v2-828", 828),
                         ("v3-852", 852))
+# The denominator in force. Taken off the end of the table, so adding a fourth
+# entry moves it and no caller states a label of its own. A round closing
+# without a completion reading ran against this surface and is stamped with
+# this version.
+DEFAULT_DENOMINATOR_VERSION = DENOMINATOR_VERSIONS[-1][0]
 # The version a round record carrying no denominator_version was measured on.
 # end_round writes the field from the release that introduced it onward, so an
 # absent field dates the record to the five-family surface. The absence is
-# never an error and never reads forward to a later version.
-DEFAULT_DENOMINATOR_VERSION = DENOMINATOR_VERSIONS[0][0]
+# never an error and never reads forward to a later version, which is why this
+# is the first entry and DEFAULT_DENOMINATOR_VERSION above is the last.
+LEGACY_DENOMINATOR_VERSION = DENOMINATOR_VERSIONS[0][0]
 DENOMINATOR_VERSION_RE = re.compile(r"^v(\d+)-(\d+)$")
 
 DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
@@ -304,7 +311,7 @@ DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  # driver version it was built for, and reading it against a
                  # different one is refused rather than compared.
                  "surface_ledger": None,
-                 # The completion reading: complete when every one of the 764
+                 # The completion reading: complete when every one of the 852
                  # targets is either exercised or accounted for. See
                  # SURFACE_VERDICT and surface_stop_reason.
                  "surface_verdict": "unknown",
@@ -323,11 +330,15 @@ DEFAULT_ROUND = {"round": 1, "status": "in_progress", "started": None,
                  "surface_deferred": None,
                  # The denominator generation the surface_* counts above were
                  # measured against, written by end_round when the round
-                 # closes. normalize() fills the default in for a record
-                 # written before the field existed, and for a round
-                 # still in progress, whose surface_* counts are all None and
-                 # so describe no denominator yet. See DENOMINATOR_VERSIONS.
-                 "denominator_version": DEFAULT_DENOMINATOR_VERSION,
+                 # closes. This entry is the fill-in normalize() applies to a
+                 # record written before the field existed, so it is
+                 # LEGACY_DENOMINATOR_VERSION and not the current one: reading
+                 # an old record forward would restate its counts against a
+                 # surface nobody measured them on. A round still in progress
+                 # carries it too, and its surface_* counts are all None, so
+                 # every reader guards on surface_total before quoting a
+                 # denominator. See DENOMINATOR_VERSIONS.
+                 "denominator_version": LEGACY_DENOMINATOR_VERSION,
                  "notes": ""}
 
 
@@ -462,20 +473,19 @@ def _fix_root_ownership(paths):
             pass
 
 
-def save(state, path=None):
-    """Atomic, panic-durable write."""
-    path = path or STATE_PATH
+def _atomic_write(path, data):
+    """Write `data` bytes to `path` so a panic leaves one whole file or none.
+
+    mkstemp in the destination directory keeps the rename on one filesystem,
+    fsync puts the bytes on the platter before the rename, and _fsync_dir puts
+    the rename itself there. A failure removes the temporary file and
+    re-raises, leaving the previous content in place.
+    """
     d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    # Keep the previous good file as <path>.bak: the corrupt-state error
-    # message in load() tells the operator to restore from it, so it has to
-    # actually exist.
-    if os.path.exists(path):
-        shutil.copyfile(path, path + ".bak")
     fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(state, f, indent=2, sort_keys=True)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -484,11 +494,102 @@ def save(state, path=None):
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
-    _fix_root_ownership([path, path + ".bak"])
+
+
+def _parses(data):
+    """True when `data` holds JSON this module could load back."""
+    try:
+        json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return False
+    return True
+
+
+def _may_replace_backup(previous, backup):
+    """True when `previous` may be written over the backup at `backup`.
+
+    load()'s corrupt-state message offers two remedies, restoring from the
+    backup and re-initialising. A writer that replaces a file it never read
+    performs the second while destroying the first: it copies the corrupt
+    bytes over the last loadable ones. `pipeline_ctl.py init --force` is one
+    such writer and `orchestrator_ctl.py reset` is another, so the rule lives
+    here, next to the invariant it protects, and every future writer inherits
+    it. The rule is that a backup which loads is never replaced by bytes that
+    do not, so it also covers a state file a panic tore, where no operator is
+    involved at any point.
+    """
+    if _parses(previous):
+        return True
+    if not os.path.exists(backup):
+        # Nothing is lost, and nothing is gained by recording garbage under
+        # the name the recovery path names.
+        return False
+    try:
+        with open(backup, "rb") as f:
+            return not _parses(f.read())
+    except OSError:
+        return False
+
+
+def save(state, path=None):
+    """Atomic, panic-durable write of the state file and of its backup."""
+    path = path or STATE_PATH
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    # Keep the previous good file as <path>.bak: the corrupt-state message in
+    # load() tells the operator to restore from it, so it has to exist and it
+    # has to load. shutil.copyfile is neither atomic nor fsynced, and this runs
+    # on a machine that panics by design, so a panic inside the copy left a
+    # torn file under the name the recovery path names. The backup goes through
+    # the same write path as the file it backs up, from one read of the old
+    # bytes taken before the new file replaces them.
+    backup = path + ".bak"
+    try:
+        with open(path, "rb") as f:
+            previous = f.read()
+    except FileNotFoundError:
+        previous = None
+    if previous is not None:
+        if _may_replace_backup(previous, backup):
+            _atomic_write(backup, previous)
+        elif os.path.exists(backup):
+            sys.stderr.write(
+                "note: %s is unchanged. The file it backs up does not parse "
+                "and the backup does, so replacing it would destroy the only "
+                "loadable copy.\n" % backup)
+    _atomic_write(path, json.dumps(state, indent=2,
+                                   sort_keys=True).encode("utf-8"))
+    _fix_root_ownership([path, backup])
 
 
 def _lock_path(path):
     return os.path.join(os.path.dirname(path) or ".", ".pipeline.lock")
+
+
+@contextmanager
+def state_lock(path=None):
+    """Hold the state file's exclusive lock, yielding the resolved path.
+
+        with ps.state_lock() as path:
+            ps.save(ps.default_state(), path)
+
+    transaction() is the entry point for a read-modify-write and takes this
+    lock itself. This one is for the writer that replaces the file wholesale,
+    `pipeline_ctl.py init`, where reading the old state first would make a
+    corrupt file unrecoverable: load() raises on it, and --force is the
+    documented way out.
+    """
+    path = path or STATE_PATH
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    lock = _lock_path(path)
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield path
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    _fix_root_ownership([lock])
 
 
 @contextmanager
@@ -501,19 +602,10 @@ def transaction(path=None):
     The state is saved on clean exit; an exception inside the block aborts
     the write, leaving the file untouched.
     """
-    path = path or STATE_PATH
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    lock = _lock_path(path)
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        state = load(path)
+    with state_lock(path) as p:
+        state = load(p)
         yield state
-        save(state, path)
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-    _fix_root_ownership([lock])
+        save(state, p)
 
 
 @contextmanager
@@ -545,7 +637,28 @@ def _read_ledger(path):
     if not isinstance(raw, dict):
         raise ValueError("%s must contain a JSON object mapping run id to "
                          "billed hours" % path)
-    return {str(k): float(v) for k, v in raw.items()}
+    # Shape check at the load boundary. float() alone raised TypeError on a
+    # null or a list and a ValueError naming nothing on a string, and this
+    # file is the spend authority: a value it cannot read is refused by name,
+    # never rounded into something plausible. bool is excluded explicitly,
+    # because it is an int subclass and `true` would otherwise bill one hour.
+    entries = {}
+    for key, value in raw.items():
+        run_id = str(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                "%s: run id %r bills %r. Each entry holds a number of hours. "
+                "Fix the entry, or delete the file to re-seed it from the "
+                "state file with `pipeline_ctl.py spend-init`."
+                % (path, run_id, value))
+        if value < 0:
+            raise ValueError(
+                "%s: run id %r bills %r hours. Negative spend raises the "
+                "remaining budget, so it is refused at both boundaries: "
+                "record_run_hours refuses to write one."
+                % (path, run_id, value))
+        entries[run_id] = float(value)
+    return entries
 
 
 def _seed_spend_ledger(path):
@@ -936,18 +1049,38 @@ def surface_completion(exercised_keys, accounted, targets_total,
 
 
 def denominator_version_for_total(total):
-    """-> the version label naming a surface target total.
+    """-> the version label naming a surface target total, counted now.
 
-    A total with no entry in DENOMINATOR_VERSIONS still gets a label, built
-    from the next sequence number, so a denominator that moves before the
-    table does records a total a reader can take back out of the label.
+    The current total gets the current label. A total with no entry at all
+    gets a label built from the next sequence number, so a denominator that
+    moves before the table does records a total a reader can take back out of
+    the label.
+
+    A total matching a retired entry is refused. Every retired total was left
+    behind by a family being added, so a fresh count landing back on one means
+    the inventories no longer enumerate the families they hold: they are
+    truncated, and the smaller surface a corpus can close is not the command
+    surface. Stamping the count with the retired label would put a round's
+    figures on record against a denominator two revisions old, and no reader
+    downstream could tell that round from one that genuinely closed on the
+    smaller surface. This is the condition
+    coverage_ctl.completion_status already refuses for a family that
+    enumerates no target.
     """
     if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
         raise ValueError("denominator total must be a positive count, got %r"
                          % (total,))
-    for label, count in DENOMINATOR_VERSIONS:
+    current_label, current_total = DENOMINATOR_VERSIONS[-1]
+    if total == current_total:
+        return current_label
+    for label, count in DENOMINATOR_VERSIONS[:-1]:
         if count == total:
-            return label
+            raise ValueError(
+                "a fresh count of %d target(s) matches retired denominator "
+                "%s, and the surface has enumerated %d target(s) since %s. "
+                "The inventories are truncated, and a truncated inventory "
+                "reads as a smaller surface a corpus can close"
+                % (total, label, current_total, current_label))
     return "v%d-%d" % (len(DENOMINATOR_VERSIONS) + 1, total)
 
 
@@ -969,11 +1102,11 @@ def round_denominator_version(r):
     """-> the version label a round record was measured on.
 
     Absence is a record predating the field, which dates it to
-    DEFAULT_DENOMINATOR_VERSION. It is never read forward to a later version:
+    LEGACY_DENOMINATOR_VERSION. It is never read forward to a later version:
     the round's counts were taken against the smaller surface, and restating
     them against a larger one would report a measurement nobody made.
     """
-    return (r or {}).get("denominator_version") or DEFAULT_DENOMINATOR_VERSION
+    return (r or {}).get("denominator_version") or LEGACY_DENOMINATOR_VERSION
 
 
 def round_of_run(state, run_id):
@@ -1102,7 +1235,11 @@ def end_round(state, verdict=None, new_crashes=None, edges_start=None,
     `denominator_version` is the surface generation that reading counted
     against, and it is stamped on the round beside the counts themselves.
     Omitting it leaves the round on whatever version it already carried, which
-    for a round closing for the first time is DEFAULT_DENOMINATOR_VERSION.
+    for a round closing for the first time is the LEGACY_DENOMINATOR_VERSION
+    fill-in normalize() applies to every round record. A caller closing a
+    round measured now passes DEFAULT_DENOMINATOR_VERSION where the reading
+    named no version of its own, which is what pipeline_ctl.cmd_round_end
+    does.
     """
     r = current_round(state)
     if denominator_version is not None:
@@ -1202,7 +1339,7 @@ def hard_cap_reason(state, max_rounds, max_total_run_hours=None):
     permitted round records why it finished rather than which limit it hit.
 
     The round cap is a backstop against a runaway loop and no longer the
-    expected termination: against 764 targets from an empty corpus, a campaign
+    expected termination: against 852 targets from an empty corpus, a campaign
     that reaches it has failed to converge, and the reason says so.
     """
     r = current_round(state)

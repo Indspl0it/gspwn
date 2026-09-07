@@ -150,10 +150,25 @@ orchestrator:
   max_reboots: 10
   # Wall-clock ceiling on one agent launch. The breaker counts starts, not
   # stalls, so without this an agent blocked on a prompt or a wedged tool
-  # holds the pipeline open indefinitely while the instance bills. It must
-  # exceed loop.campaign_hours, because the fuzz phase waits out the whole
-  # campaign window inside a single launch. 0 disables the timeout.
-  max_agent_hours: 0
+  # holds the pipeline open indefinitely while the instance bills.
+  #
+  # The fuzz launch is the only long one: it blocks on `campaign_ctl.py wait`
+  # for the whole of loop.campaign_hours. orchestrator_ctl.py `launch_hours`
+  # adds that window for that launch and for no other, so this value is the
+  # headroom one launch gets beyond the work it is waiting on. At 24 that is
+  # 24 h for every phase and 1024 h for fuzz. Validation caps it at
+  # loop.campaign_hours, because a bound longer than a whole campaign never
+  # fires. Set it to "unbounded" to run with no bound at all.
+  #
+  # 24 comes from the only agent session this repository has measured, the
+  # 20-hour one recorded above: a session spans one or more launches, so no
+  # launch in it ran longer than 20 h. The four hours on top are
+  # plateau_window_min, the shortest window this config already trusts to
+  # show a trend. Nothing here records a per-phase duration, and the longest
+  # non-fuzz phase is build, which agents/build.md describes as hours per
+  # rung without giving a number. n=1, like max_session_mb above it; revisit
+  # once real campaigns have recorded per-phase times.
+  max_agent_hours: 24
   # Substituted for {anchor} in resume_command. The first thing a resumed
   # agent reads after a panic, and what stops it from continuing a
   # half-finished tool call issued at the moment the kernel died.
