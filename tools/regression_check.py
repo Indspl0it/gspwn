@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ten CI checks over the committed surface artefacts.
+"""Twelve CI checks over the committed surface artefacts.
 
 Each one catches a class of defect that reached the repository unnoticed
 because nothing compared two artefacts that have to agree:
@@ -90,8 +90,26 @@ because nothing compared two artefacts that have to agree:
                 which is the rule that catches a family added to the surface
                 and left out of a brief, because the sum moves even when
                 every listed figure is right.
+    citations   every file and line number the documentation cites resolves
+                in a vendored source tree, and the cited line is not blank.
+                A citation reads as evidence, so one naming the wrong line
+                sends a reader to unrelated code. Line numbers drift whenever
+                a tree is re-vendored, and two had: `nv.c:2412` and
+                `nv.c:2439` both pointed at blank lines, and
+                `nvc_info.c:515` pointed at the blank line above the function
+                it named. artifacts/ is gitignored, so this check settles
+                nothing in a clean checkout and reports so. It runs on a
+                provisioned machine, which is where the trees exist and where
+                re-vendoring moves the numbers.
+    commands    every tool invocation a page shows parses against the tool's
+                own argparse parser, subcommand and flags alike. `agents`
+                does this for the phase briefs, and the documentation is the
+                other copy-paste surface: a reader following a stale command
+                gets an argparse error, which reads as the tool being broken.
+                One page told a reader to run `crash_ctl.py`, a tool that has
+                never existed.
 
-Run one, or all ten:
+Run one, or all twelve:
 
     python3 tools/regression_check.py names
     python3 tools/regression_check.py pins
@@ -103,6 +121,8 @@ Run one, or all ten:
     python3 tools/regression_check.py harnesses
     python3 tools/regression_check.py agents
     python3 tools/regression_check.py figures
+    python3 tools/regression_check.py citations
+    python3 tools/regression_check.py commands
     python3 tools/regression_check.py all
 
 `-v` logs what each artefact read contributed, and is accepted on either side
@@ -2628,6 +2648,279 @@ def check_figures():
     return 1
 
 
+# --------------------------------------------------------------------------
+# Documentation checks: citations and command lines
+# --------------------------------------------------------------------------
+
+DOC_ROOT = os.path.join(REPO_ROOT, "docs", "src", "content", "docs")
+VENDOR_DIR = os.path.join(REPO_ROOT, "artifacts", "src")
+VENDOR_EXT = (".c", ".h", ".go", ".py", ".sh", ".mk")
+
+# A fenced block, so a citation or a command inside one is read as the
+# reproduction it is and not as a claim this check can settle.
+DOC_FENCE_RE = re.compile(r"^```.*?^```", re.S | re.M)
+
+# `path/file.c:120` or `file.go:25-35`, inside an inline code span. The docs
+# write every citation that way, and prose naming a file without a span is a
+# mention rather than a citation.
+DOC_CITE_RE = re.compile(
+    r"`([A-Za-z0-9_./+-]+\.(?:c|h|go|py|sh|mk))(?::(\d+)(?:-(\d+))?)?`")
+
+# A documented invocation. Only a line that opens with the command counts: a
+# command quoted inside a verbatim error message is a reproduction, and the
+# flags later in that sentence belong to a different subcommand.
+DOC_INVOKE_RE = re.compile(
+    r"^[ \t]*(?:\$[ \t]*)?(?:sudo[ \t]+(?:-\S+[ \t]+)*)?"
+    r"python3?[ \t]+(?:-\S+[ \t]+)*"
+    r"(tools/[a-z_0-9]+\.py)([^\n|;&]*)$", re.M)
+
+# A cited path that resolves in no tree, with the reason it never will. Each
+# one is a real reference and none of them is a defect, so leaving them
+# unlisted would make this check report twenty offenders on a clean run and
+# train a reader to ignore it.
+CITATION_EXCLUSIONS = {
+    "repro.c":
+        "a reproducer the poc phase generates per crash under "
+        "artifacts/pocs/, so no checkout carries it",
+    "run_all.sh":
+        "generated into harnesses/ by the harness phase",
+    "build_all.sh":
+        "generated into harnesses/ by the harness phase",
+    "measure_sizes.sh":
+        "a probe script ioctl_inventory.py generates beside its own output",
+    "injected.c":
+        "a path a test fixture fabricates, named to show what the old hunk "
+        "parser attributed it to",
+    "_nvoc.c":
+        "the suffix NVOC gives every generated class file, written as a "
+        "pattern and not as one file",
+    "kernel/kcov.c":
+        "Linux, which this repository does not vendor",
+    "drivers/gpu/drm/drm_ioctl.c":
+        "Linux, which this repository does not vendor",
+    "drivers/gpu/drm/drm_auth.c":
+        "Linux, which this repository does not vendor",
+}
+
+
+# A tool the docs invoke that declares no argparse parser, with the reason.
+# Kept apart from AGENT_TOOL_EXCLUSIONS so the two checks state their own
+# surface: a brief and a page do not invoke the same set of tools.
+DOC_TOOL_EXCLUSIONS = {
+    "tools/selftest.py":
+        "a unittest module. It is run by `python3 tools/selftest.py` with no "
+        "argument of its own, and unittest.main() takes the parsing",
+    "tools/gspwn_config.py":
+        "takes no argument. Run bare it prints the effective configuration, "
+        "and it declares no parser for a surface to be checked against",
+}
+
+
+def doc_files():
+    """-> every documentation page, generated pages included.
+
+    A generated page carries citations its generator wrote, and a stale one
+    there is the same defect as a stale one in a hand-written page.
+    """
+    out = []
+    for base, _dirs, names in os.walk(DOC_ROOT):
+        out.extend(os.path.join(base, name) for name in sorted(names)
+                   if name.endswith((".md", ".mdx")))
+    return sorted(out)
+
+
+def _blank_fences(text):
+    """-> the text with fenced blocks blanked to the same line count."""
+    return DOC_FENCE_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+
+
+def _vendored_trees():
+    """-> every vendored source tree present, by path."""
+    if not os.path.isdir(VENDOR_DIR):
+        return []
+    return [os.path.join(VENDOR_DIR, name)
+            for name in sorted(os.listdir(VENDOR_DIR))
+            if os.path.isdir(os.path.join(VENDOR_DIR, name))]
+
+
+def _index_sources(trees):
+    """-> ({tree-relative path: full path}, {basename: [full path]})."""
+    by_path, by_base = {}, {}
+    roots = list(trees) + [REPO_ROOT]
+    skip = {".git", "node_modules", "__pycache__", ".claude", "artifacts",
+            "dist", ".astro", "tmp", "thoughts", ".github"}
+    for top in roots:
+        for base, dirs, names in os.walk(top):
+            dirs[:] = [d for d in dirs if d not in skip]
+            for name in names:
+                if not name.endswith(VENDOR_EXT):
+                    continue
+                full = os.path.join(base, name)
+                rel = os.path.relpath(full, top).replace(os.sep, "/")
+                by_path.setdefault(rel, full)
+                by_base.setdefault(name, []).append(full)
+    return by_path, by_base
+
+
+def _resolve_citation(cited, by_path, by_base):
+    """-> [full path] a cited path can mean, most specific first."""
+    if cited in by_path:
+        return [by_path[cited]]
+    suffix = [v for k, v in by_path.items() if k.endswith("/" + cited)]
+    if suffix:
+        return suffix
+    return list(by_base.get(os.path.basename(cited), []))
+
+
+def _cited_line(path, number):
+    """-> the cited line, or None when the file is shorter than that."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for index, line in enumerate(handle, 1):
+                if index == number:
+                    return line.rstrip()
+    except OSError:
+        return None
+    return None
+
+
+def check_citations():
+    """Every file and line the docs cite resolves in a vendored source tree."""
+    trees = _vendored_trees()
+    if not trees:
+        print("citations: no vendored source tree under %s. artifacts/ is "
+              "gitignored, so a clean checkout carries none and this check "
+              "settles nothing. It runs on a provisioned machine, which is "
+              "where a re-vendored tree moves the line numbers."
+              % os.path.relpath(VENDOR_DIR, REPO_ROOT))
+        return 0
+
+    by_path, by_base = _index_sources(trees)
+    pages = doc_files()
+    offenders = []
+    files_cited = lines_cited = excluded = 0
+
+    for path in pages:
+        rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+        with open(path, encoding="utf-8") as handle:
+            text = _blank_fences(handle.read())
+        for match in DOC_CITE_RE.finditer(text):
+            cited, start, end = match.group(1), match.group(2), match.group(3)
+            number = text[:match.start()].count("\n") + 1
+            key = cited if cited in CITATION_EXCLUSIONS else os.path.basename(
+                cited)
+            if key in CITATION_EXCLUSIONS:
+                excluded += 1
+                continue
+            hits = _resolve_citation(cited, by_path, by_base)
+            if not hits:
+                offenders.append((rel, number, match.group(0),
+                                  "resolves in no tree, and no exclusion "
+                                  "declares why"))
+                continue
+            if start is None:
+                files_cited += 1
+                continue
+            if len(hits) > 1:
+                offenders.append((rel, number, match.group(0),
+                                  "names %d files, so the line number is "
+                                  "ambiguous. Qualify the path"
+                                  % len(hits)))
+                continue
+            lines_cited += 1
+            last = int(end) if end else int(start)
+            body = _cited_line(hits[0], last)
+            if body is None:
+                offenders.append((rel, number, match.group(0),
+                                  "the file has fewer than %d lines" % last))
+                continue
+            if not _cited_line(hits[0], int(start)).strip():
+                offenders.append((rel, number, match.group(0),
+                                  "line %s is blank, so the citation has "
+                                  "drifted" % start))
+
+    print("citations: %d page(s), %d file citation(s) and %d line "
+          "citation(s) over %d vendored tree(s), %d declared exclusion(s)"
+          % (len(pages), files_cited, lines_cited, len(trees), excluded))
+    print()
+    print("  %-34s %s" % ("excluded", "reason"))
+    print("  %-34s %s" % ("-" * 34, "-" * 6))
+    for name in sorted(CITATION_EXCLUSIONS):
+        print("  %-34s %s" % (name, CITATION_EXCLUSIONS[name]))
+    print()
+
+    if not offenders:
+        print("citations: OK")
+        return 0
+    for rel, number, cite, fault in offenders:
+        print("%s:%d: %s %s" % (rel, number, cite, fault), file=sys.stderr)
+    print("citations: %d offending citation(s)" % len(offenders),
+          file=sys.stderr)
+    return 1
+
+
+def check_commands():
+    """Every tool invocation the docs show parses against the tool."""
+    pages = doc_files()
+    parsers = {}
+    offenders = []
+    counted = 0
+    tools = set()
+
+    for path in pages:
+        rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        for fence in DOC_FENCE_RE.finditer(text):
+            body = fence.group(0)
+            if body.splitlines()[0].strip("`").strip() not in (
+                    "", "sh", "bash", "console", "shell"):
+                continue
+            at = text[:fence.start()].count("\n") + 1
+            joined = re.sub(r"\\\n[ \t]*", " ", body)
+            for match in DOC_INVOKE_RE.finditer(joined):
+                tool, rest = match.group(1), match.group(2)
+                number = at + joined[:match.start()].count("\n")
+                try:
+                    words = shlex.split(rest, comments=False, posix=False)
+                except ValueError:
+                    words = rest.split()
+                counted += 1
+                tools.add(tool)
+                if tool in DOC_TOOL_EXCLUSIONS:
+                    continue
+                for fault in _resolve_command(tool, words, parsers):
+                    offenders.append((rel, number, match.group(0).strip(),
+                                      fault))
+
+    if not counted:
+        raise CheckInput(
+            "no tool invocation in any page under %s. A documentation set "
+            "showing no command makes every tool agree with it vacuously, "
+            "and the extractor is then the thing to fix."
+            % os.path.relpath(DOC_ROOT, REPO_ROOT))
+
+    print("commands: %d page(s), %d invocation(s) over %d tool(s), "
+          "%d declared exclusion(s)"
+          % (len(pages), counted, len(tools), len(DOC_TOOL_EXCLUSIONS)))
+    print()
+    print("  %-24s %s" % ("excluded", "reason"))
+    print("  %-24s %s" % ("-" * 24, "-" * 6))
+    for name in sorted(DOC_TOOL_EXCLUSIONS):
+        print("  %-24s %s" % (name, DOC_TOOL_EXCLUSIONS[name]))
+    print()
+
+    if not offenders:
+        print("commands: OK")
+        return 0
+    for rel, number, command, fault in offenders:
+        print("%s:%d: %s: %s" % (rel, number, command, fault),
+              file=sys.stderr)
+    print("commands: %d offending invocation(s)" % len(offenders),
+          file=sys.stderr)
+    return 1
+
+
 CHECKS = {
     "names": check_names,
     "pins": check_pins,
@@ -2639,6 +2932,8 @@ CHECKS = {
     "harnesses": check_harnesses,
     "agents": check_agents,
     "figures": check_figures,
+    "citations": check_citations,
+    "commands": check_commands,
 }
 
 # The order `all` runs them in, and the order the module docstring and the CI
@@ -2650,7 +2945,8 @@ CHECKS = {
 # artefacts the first six compare, and harnesses reads the Track U seam, which
 # the first seven never touch.
 CHECK_ORDER = ("names", "pins", "coverage", "derived", "families", "pages",
-               "stale", "harnesses", "agents", "figures")
+               "stale", "harnesses", "agents", "figures",
+               "citations", "commands")
 
 
 def check_order():

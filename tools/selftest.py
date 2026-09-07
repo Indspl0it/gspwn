@@ -13497,7 +13497,7 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
         self.assertEqual(regression_check.check_order(),
                          ["names", "pins", "coverage", "derived",
                           "families", "pages", "stale", "harnesses",
-                          "agents", "figures"])
+                          "agents", "figures", "citations", "commands"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -14164,16 +14164,16 @@ class TestHarnessTargetListsAgree(Phase0Fixtures):
 class TestTheTwoGuardsAreRegistered(unittest.TestCase):
     """Both guards run under `regression_check.py all`."""
 
-    def test_the_registry_holds_ten_checks(self):
-        self.assertEqual(len(regression_check.check_order()), 10)
+    def test_the_registry_holds_twelve_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 12)
 
     def test_both_guards_are_registered_and_ordered(self):
         for name in ("stale", "harnesses", "agents", "figures"):
             self.assertIn(name, regression_check.CHECKS, name)
             self.assertIn(name, regression_check.CHECK_ORDER, name)
 
-    def test_the_module_docstring_names_ten_checks(self):
-        self.assertIn("Ten CI checks", regression_check.__doc__)
+    def test_the_module_docstring_names_twelve_checks(self):
+        self.assertIn("Twelve CI checks", regression_check.__doc__)
 
     def test_the_workflow_runs_both_guards(self):
         with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
