@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Five CI checks over the committed surface artefacts.
+"""Seven CI checks over the committed surface artefacts.
 
 Each one catches a class of defect that reached the repository unnoticed
 because nothing compared two artefacts that have to agree:
@@ -37,14 +37,31 @@ because nothing compared two artefacts that have to agree:
                 alongside the pages would not: whoever edits the page is
                 positioned to update the digest, and the digest of a stale
                 page still matches itself.
+    stale       every input descriptions/generation.json records still hashes
+                to the digest the record carries, and the recorded driver
+                version and commit are reported beside them. Five sha256
+                values sat in that record with no reader. A surface artefact
+                regenerated without regenerating the description set leaves
+                the record naming bytes that no longer exist, and every tool
+                that reads either one still reports success.
+    harnesses   the four Track U target lists still name the same harnesses:
+                track_u.targets in config/campaign.yaml, the C_TARGETS array
+                in harnesses/run_all.sh, the Harness column in
+                harnesses/TARGETS.md, and the directories under harnesses/
+                that hold a build.sh. A target added to one and not the others
+                is built and never run, or run and never built, and the fuzz
+                phase reports the skip as a per-target note hours into a
+                campaign.
 
-Run one, or all five:
+Run one, or all seven:
 
     python3 tools/regression_check.py names
     python3 tools/regression_check.py pins
     python3 tools/regression_check.py coverage
     python3 tools/regression_check.py derived
     python3 tools/regression_check.py pages
+    python3 tools/regression_check.py stale
+    python3 tools/regression_check.py harnesses
     python3 tools/regression_check.py all
 
 `-v` logs what each artefact read contributed, and is accepted on either side
@@ -70,6 +87,7 @@ running on a Windows workstation. Everything here reads committed files only,
 so it needs no GPU, no kernel and no network.
 """
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -80,7 +98,8 @@ import tempfile
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import refgen  # noqa: E402  (path set above so the tool runs from anywhere)
+import gspwn_config  # noqa: E402  (path set above so the tool runs from anywhere)
+import refgen  # noqa: E402
 import surface_cov  # noqa: E402
 
 logger = logging.getLogger("regression_check")
@@ -92,6 +111,12 @@ CHAINS = os.path.join(surface_cov.SURFACE_DIR, "rm-chains.json")
 CTRL_RANK = os.path.join(surface_cov.SURFACE_DIR, "rm-control-rank.json")
 PAGES_DIR = refgen.DEFAULT_OUT
 PAGES_REMEDY = "python3 tools/refgen.py"
+GENERATION = os.path.join(DESC_DIR, "generation.json")
+GENERATION_REMEDY = "python3 tools/syzlang_gen.py emit"
+CAMPAIGN_CONFIG = os.path.join(REPO_ROOT, "config", "campaign.yaml")
+HARNESS_DIR = os.path.join(REPO_ROOT, "harnesses")
+RUN_ALL = os.path.join(HARNESS_DIR, "run_all.sh")
+TARGETS_DOC = os.path.join(HARNESS_DIR, "TARGETS.md")
 # The line separator every committed file in the repository carries, declared
 # by .gitattributes. Named so the byte comparison below reads as a comparison
 # and not as an escape sequence buried in a split call.
@@ -124,16 +149,31 @@ SELECTORS = ("cmd", "hClass")
 # over, because an unreadable value is the same blind spot as a free field.
 CONST_VALUE_RE = re.compile(r"^const\[\s*(0[xX][0-9a-fA-F]+|\d+)\s*[,\]]")
 
-# Only the control `cmd` is compared against a value. Its authority is
+# The families whose selector is compared against a committed authority, as
+# (reporting group, field, lookup). A lookup returns {variant name: expected
+# integer} and is called once per run.
+#
+# Two families have such an authority. A control `cmd` is checked against
 # rm-control-inventory.json, where every method row pairs the handler symbol
-# the variant is named for with the method id. An allocation `hClass` has no
-# such authority in any committed artefact: the object graph names the
-# allocation class and carries no number for it, and the class id
-# surface_cov.load_targets joins onto an alloc target is the owning class's
-# SDK class id, which differs from the allocation class number on 17 of the
-# 62 alloc targets that carry one. Comparing against it would report those 17
-# as defects. The XFER inner cmd has no committed authority either.
-VALUE_CHECKED = ("cmd", surface_cov.CONTROL_PREFIX)
+# the variant is named for with the method id. A modeset `cmd` is checked
+# against nvkms-command-inventory.json, where the dispatch ordinal is the
+# array index itself and needs no name join at all.
+#
+# Two do not. An allocation `hClass` has no authority in any committed
+# artefact: the object graph names the allocation class and carries no number
+# for it, and the class id surface_cov.load_targets joins onto an alloc target
+# is the owning class's SDK class id, which differs from the allocation class
+# number on 17 of the 62 alloc targets that carry one. Comparing against it
+# would report those 17 as defects. The XFER inner cmd has no committed
+# authority either.
+#
+# Declared as a list so a third family joins by adding a row. This was one
+# hardcoded tuple naming the control prefix, and a second hardcoded branch
+# beside it would have left the same gap for the fourth.
+VALUE_CHECKED = [
+    ("control", "cmd", lambda: control_method_ids()),
+    ("modeset", "cmd", lambda: modeset_ordinals()),
+]
 
 # The denominator the committed inventories carry, per family, measured on
 # driver 610.57.04. `coverage` compares the description set against whatever
@@ -148,16 +188,20 @@ TARGET_FLOOR = {
     "uvm_tools": 7,
     "control": 531,
     "alloc": 155,
+    "modeset": 64,
 }
 
 # Variant name prefix -> reporting group. A group with no members at all means
 # the emitter stopped producing that family or the parser stopped matching the
 # emitted form, and either way the check has gone silent, so `pins` fails on an
 # empty group instead of reporting a clean run over nothing.
+# Each row is (reporting group, variant name prefix, the surface_cov family
+# it reports on, or None where the group is a calling form and not a family).
 GROUPS = [
-    ("control", "NV_ESC_RM_CONTROL_"),
-    ("alloc", "NV_ESC_RM_ALLOC_"),
-    ("xfer", "NV_ESC_IOCTL_XFER_CMD_"),
+    ("control", "NV_ESC_RM_CONTROL_", "control"),
+    ("alloc", "NV_ESC_RM_ALLOC_", "alloc"),
+    ("xfer", "NV_ESC_IOCTL_XFER_CMD_", None),
+    ("modeset", surface_cov.MODESET_PREFIX, "modeset"),
 ]
 
 # Calls whose selector field is free on purpose, keyed by (variant, struct,
@@ -175,6 +219,53 @@ UNPINNED_BY_DESIGN = {
     ("NV_ESC_RM_ALLOC_CONTEXT_DMA2", "NVOS39_PARAMETERS", "hClass"):
         "the escape is one target; the alloc family decomposes NV_ESC_RM_ALLOC",
 }
+
+
+# The keys under generated_from that record the driver checkout and not an
+# input file. `stale` reports them in its header, so a reader sees which
+# checkout the description set was generated from without opening the JSON.
+CHECKOUT_KEYS = ("driver_version", "driver_commit")
+
+# The count key an input record carries. tools/syzlang_gen.py names it after
+# the array it counted, so the column reads the artefact's own word for a
+# record. An input carrying none reports no count.
+COUNT_KEYS = ("records", "commands", "entries")
+
+# The four sources that carry the Track U target list, keyed by the name the
+# reader uses and labelled by the file and the construct inside it. The label
+# is what an offender line names, so a disagreement points at the line to edit
+# and not merely at a difference between two lists.
+HARNESS_SOURCES = (
+    ("config", "config/campaign.yaml track_u.targets"),
+    ("run", "harnesses/run_all.sh C_TARGETS"),
+    ("doc", "harnesses/TARGETS.md"),
+    ("build", "harnesses/<name>/build.sh"),
+)
+
+# Directories under harnesses/ that carry no Track U target, and the reason.
+# A name here is dropped from all four sources before they are compared. The
+# Go reason is the one config/campaign.yaml already records against
+# track_u.targets, so the two texts state one fact. A directory holding no
+# build.sh and named nowhere here is reported: the exclusions are the whole of
+# what the check accepts as a known absence.
+HARNESS_EXCLUSIONS = {
+    "common":
+        "a shared helper tree. It holds build_common.sh, which every harness "
+        "build.sh sources, and builds no target of its own",
+    "go_cudacompat_elf":
+        "go test -fuzz writes no fuzzer_stats, so it produces no coverage "
+        "output for the sampler to read",
+}
+
+# The bash array run_all.sh iterates. Anchored on the opening and closing
+# lines so a later array in the same file cannot be read in its place.
+C_TARGETS_RE = re.compile(r"^C_TARGETS=\(\s*$(?P<body>.*?)^\)\s*$",
+                          re.M | re.S)
+
+# A markdown table row, and the cells it holds. TARGETS.md writes every
+# harness name in a column headed Harness.
+HARNESS_COLUMN = "Harness"
+TABLE_RULE = set("-: ")
 
 
 class CheckInput(Exception):
@@ -300,7 +391,7 @@ def const_value(rendered):
 
 def _group_of(variant):
     """-> the reporting group a variant name falls in, or None."""
-    for group, prefix in GROUPS:
+    for group, prefix, _family in GROUPS:
         if variant.startswith(prefix):
             return group
     return None
@@ -328,15 +419,41 @@ def control_method_ids():
     return ids
 
 
-def check_pins():
-    """Every emitted leaf selector renders as a const, and a control cmd
-    renders as the method id the control inventory carries for its handler."""
-    calls, structs = read_descriptions()
-    method_ids = control_method_ids()
+def modeset_ordinals():
+    """-> {modeset variant name: the dispatch ordinal the inventory carries}.
 
-    examined, free, group_counts = 0, [], {name: 0 for name, _p in GROUPS}
+    No join is needed. The ordinal is the index into the dispatch array that
+    nvKmsIoctl reads NvKmsIoctlParams.cmd as, and the variant is named for the
+    enumeration constant sitting at that index.
+    """
+    try:
+        targets, excluded, _meta = surface_cov.load_targets()
+    except surface_cov.SurfaceError as exc:
+        raise CheckInput(str(exc))
+    ordinals = {}
+    for record in list(excluded.values()) + list(targets.values()):
+        if not record["variant"].startswith(surface_cov.MODESET_PREFIX):
+            continue
+        if record.get("nr") is not None:
+            ordinals[record["variant"]] = record["nr"]
+    return ordinals
+
+
+def check_pins():
+    """Every emitted leaf selector renders as a const, and a checked family's
+    cmd renders as the value its own inventory carries for that variant."""
+    calls, structs = read_descriptions()
+    # (group, field) -> {variant: expected}. Read once, so a family whose
+    # authority is unreadable fails the check and never passes it silently.
+    expected_by = {(group, field): lookup()
+                   for group, field, lookup in VALUE_CHECKED}
+
+    examined, free = 0, []
+    group_counts = {name: 0 for name, _p, _f in GROUPS}
     used_allowlist = set()
-    unresolved, wrong, unmatched, values = [], [], 0, {}
+    unresolved, wrong = [], []
+    unmatched = {group: 0 for group, _f, _l in VALUE_CHECKED}
+    values = {group: {} for group, _f, _l in VALUE_CHECKED}
     for variant in sorted(calls):
         struct = calls[variant]
         fields = structs.get(struct)
@@ -359,14 +476,16 @@ def check_pins():
                 group_counts[group] += 1
             rendered = fields[field]
             if rendered.startswith("const["):
-                if (field == VALUE_CHECKED[0]
-                        and variant.startswith(VALUE_CHECKED[1])):
+                authority = expected_by.get((group, field))
+                if authority is not None:
                     value = const_value(rendered)
-                    values.setdefault(value, []).append(variant)
-                    expected = method_ids.get(variant)
+                    values[group].setdefault(value, []).append(variant)
+                    expected = authority.get(variant)
                     if expected is None:
-                        unmatched += 1
-                    elif value is None or value != int(expected, 0):
+                        unmatched[group] += 1
+                    elif value is None or value != (
+                            expected if isinstance(expected, int)
+                            else int(expected, 0)):
                         wrong.append((variant, struct, rendered, expected))
                 continue
             key = (variant, struct, field)
@@ -392,10 +511,13 @@ def check_pins():
           "outside every group %d)"
           % (examined, len(calls),
              ", ".join("%s %d" % (name, group_counts[name])
-                       for name, _p in GROUPS), examined - grouped))
-    print("pins: %d control cmd(s) checked against the inventory's method id "
-          "over %d distinct value(s), %d call(s) the inventory does not carry"
-          % (sum(len(v) for v in values.values()), len(values), unmatched))
+                       for name, _p, _f in GROUPS), examined - grouped))
+    for group, field, _lookup in VALUE_CHECKED:
+        seen = values[group]
+        print("pins: %d %s %s(s) checked against the inventory over %d "
+              "distinct value(s), %d call(s) the inventory does not carry"
+              % (sum(len(v) for v in seen.values()), group, field, len(seen),
+                 unmatched[group]))
     print("pins: %d call(s) whose arg resolves to no declared struct, %d of "
           "them inside a reported group" % (len(unresolved), len(blind)))
     if not free and not stale and not empty and not wrong and not blind:
@@ -404,11 +526,11 @@ def check_pins():
         return 0
 
     if wrong:
-        print("pins: %d control cmd(s) pinned to a value the control "
-              "inventory does not carry for that handler" % len(wrong))
+        print("pins: %d selector(s) pinned to a value their own inventory "
+              "does not carry for that variant" % len(wrong))
         print()
         print("  %-46s %-34s %-24s %s"
-              % ("variant", "struct", "rendered as", "inventory method id"))
+              % ("variant", "struct", "rendered as", "inventory value"))
         print("  %-46s %-34s %-24s %s"
               % ("-" * 46, "-" * 34, "-" * 24, "-" * 19))
         for variant, struct, rendered, expected in wrong:
@@ -419,7 +541,7 @@ def check_pins():
               "leaf than the one the variant is named for, and every later "
               "measurement joins on the name. Regenerate the description set "
               "with tools/syzlang_gen.py emit against the same checkout the "
-              "control inventory was built from.")
+              "inventories were built from.")
     for variant, struct, group in blind:
         print("pins: %s is in the %s group and its arg resolves to %r, which "
               "no description declares as a struct. No field of it is "
@@ -485,6 +607,28 @@ def check_coverage():
         print("  %-12s %10d %10d %8d" % (family, targetable, covered, gap))
     print()
 
+    # The entry points the driver registers on the modelled nodes, counted
+    # apart from the command denominator above. A driver release that adds an
+    # mmap or a poll to one of those tables fails here rather than leaving an
+    # entry point with no description and nothing to say so.
+    try:
+        surface_cov.assert_outside_denominator(targets)
+        ep_modelled, ep_registered, ep_tables = surface_cov.load_entry_points()
+        ep_expected = surface_cov.entry_point_calls(ep_tables)
+    except surface_cov.SurfaceError as exc:
+        raise CheckInput(str(exc))
+    ep_declared = set(surface_cov.scan_call_names(_description_files()))
+    ep_missing = sorted(ep_expected - ep_declared)
+    print("coverage: %d entry point(s) on the %d device node(s) whose entry "
+          "points are modelled, of %d the driver registers in total. Counted "
+          "apart from the command denominator above and never inside it. "
+          "/dev/nvidia-modeset is opened for the modeset command family and "
+          "its own mmap and poll are not modelled."
+          % (ep_modelled, sum(len(t.get("paths") or []) for t in ep_tables),
+             ep_registered))
+    print("coverage: %d entry-point call(s) required, %d declared"
+          % (len(ep_expected), len(ep_expected) - len(ep_missing)))
+
     extra = sorted(n for n in modelled
                    if n not in targets and n not in excluded)
     print("coverage: %d declared variant(s) outside the denominator "
@@ -493,9 +637,17 @@ def check_coverage():
     print("coverage: denominator floor %d target(s) across %d family/families"
           % (sum(TARGET_FLOOR.values()), len(TARGET_FLOOR)))
 
-    if not missing and not shrunk:
+    if not missing and not shrunk and not ep_missing:
         print("coverage: OK")
         return 0
+
+    for name in ep_missing:
+        print("coverage: the driver registers an entry point the description "
+              "set does not declare: %s. Either a file_operations table "
+              "gained a member, or the emitter stopped writing the call."
+              % name)
+    if ep_missing:
+        print()
 
     for family, counted, floor in shrunk:
         print("coverage: the %s family enumerates %d target(s) against a "
@@ -1012,19 +1164,300 @@ def check_pages():
     return 1
 
 
+def read_generation():
+    """-> (the generated_from record, the root its paths resolve against).
+
+    Recorded paths are repository-relative and the record sits at
+    descriptions/generation.json, so the root is the parent of the directory
+    holding it. Deriving the root from the record's own location leaves the
+    check pointable at a scratch tree through GENERATION alone.
+    """
+    try:
+        with open(GENERATION, encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise CheckInput("%s: %s" % (GENERATION, exc))
+    record = raw.get("generated_from")
+    if not isinstance(record, dict):
+        raise CheckInput(
+            "%s carries no generated_from mapping. `%s` writes it, and "
+            "without it nothing records which artefacts the description set "
+            "was generated from." % (GENERATION, GENERATION_REMEDY))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(GENERATION)))
+    return record, root
+
+
+def recorded_inputs(record):
+    """-> [(key, path, sha256, count)] over every input generated_from names.
+
+    ctrl_sizes is a list holding one member today. Reading a list member the
+    same way as a mapping covers a second measured-size file from the run it
+    is added in.
+    """
+    inputs = []
+    for key in sorted(record):
+        if key in CHECKOUT_KEYS:
+            continue
+        value = record[key]
+        for member in (value if isinstance(value, list) else [value]):
+            if (not isinstance(member, dict) or "path" not in member
+                    or "sha256" not in member):
+                raise CheckInput(
+                    "%s: generated_from[%r] is not an input record. Every "
+                    "entry outside %s carries a path and a sha256, either "
+                    "directly or as a list member, and this one renders as "
+                    "%.120r" % (GENERATION, key, " and ".join(CHECKOUT_KEYS),
+                                member))
+            count = None
+            for name in COUNT_KEYS:
+                if name in member:
+                    count = member[name]
+                    break
+            inputs.append((key, member["path"], member["sha256"], count))
+    return inputs
+
+
+def check_stale():
+    """Every input generation.json records still matches its digest."""
+    record, root = read_generation()
+    inputs = recorded_inputs(record)
+    if not inputs:
+        raise CheckInput(
+            "%s records no input file. The description set is generated from "
+            "the artefacts under surface/ and `%s` digests each one, so a "
+            "record naming none has lost its provenance."
+            % (GENERATION, GENERATION_REMEDY))
+
+    table, offenders = [], []
+    for key, path, digest, count in inputs:
+        on_disk = os.path.join(root, *path.split("/"))
+        if not os.path.isfile(on_disk):
+            state = "absent"
+            offenders.append((path, "no file at this path", digest, None))
+        else:
+            with open(on_disk, "rb") as handle:
+                measured = hashlib.sha256(handle.read()).hexdigest()
+            if measured == digest:
+                state = "OK"
+            else:
+                state = "differs"
+                offenders.append((path, "the file on disk hashes to another "
+                                        "digest", digest, measured))
+        table.append((key, path, count, state))
+
+    checkout = {name: record.get(name) for name in CHECKOUT_KEYS}
+    print("stale: %d recorded input(s) in %s, driver %s at commit %s"
+          % (len(inputs),
+             os.path.relpath(GENERATION, root).replace(os.sep, "/"),
+             checkout["driver_version"] or "(not recorded)",
+             checkout["driver_commit"] or "(not recorded)"))
+    print()
+    print("  %-20s %-40s %8s %9s"
+          % ("input", "path", "records", "state"))
+    print("  %-20s %-40s %8s %9s"
+          % ("-" * 20, "-" * 40, "-" * 8, "-" * 9))
+    for key, path, count, state in table:
+        print("  %-20s %-40s %8s %9s"
+              % (key, path, "" if count is None else count, state))
+    print()
+
+    if not offenders:
+        print("stale: %d of %d recorded input(s) match the digest "
+              "generation.json carries" % (len(inputs), len(inputs)))
+        print("stale: OK")
+        return 0
+
+    for path, problem, recorded, measured in offenders:
+        print("stale: %s: %s" % (path, problem))
+        print("    recorded  %s" % recorded)
+        print("    measured  %s" % (measured or "(no file to hash)"))
+        print()
+    print("The description set under %s was generated from these files and "
+          "carries their digests. A digest that moved means one side was "
+          "regenerated and the other was not. Regenerate the set with `%s` "
+          "against the same driver checkout, or restore the artefact."
+          % (os.path.relpath(os.path.dirname(os.path.abspath(GENERATION)),
+                             root).replace(os.sep, "/"),
+             GENERATION_REMEDY))
+    return 1
+
+
+def harness_config_targets():
+    """-> track_u.targets from config/campaign.yaml."""
+    try:
+        config = gspwn_config.load(CAMPAIGN_CONFIG)
+    except (gspwn_config.ConfigError, OSError) as exc:
+        raise CheckInput("%s: %s" % (CAMPAIGN_CONFIG, exc))
+    return list(config["track_u"]["targets"])
+
+
+def harness_run_targets():
+    """-> the C_TARGETS array in harnesses/run_all.sh."""
+    try:
+        with open(RUN_ALL, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as exc:
+        raise CheckInput("%s: %s" % (RUN_ALL, exc))
+    match = C_TARGETS_RE.search(text)
+    if not match:
+        raise CheckInput(
+            "%s declares no C_TARGETS=( ... ) array. The script iterates that "
+            "array to run each harness, and this check reads the same one."
+            % RUN_ALL)
+    names = []
+    for line in match.group("body").splitlines():
+        names.extend(line.split("#", 1)[0].split())
+    return names
+
+
+def harness_doc_targets():
+    """-> every name in a Harness column of harnesses/TARGETS.md.
+
+    Three tables in that file carry the column: the ranked entry points, the
+    sanitizer policy and the replay commands. The union of the three covers a
+    harness dropped from the file. A harness carried by one table and absent
+    from another is outside what this check reads.
+    """
+    try:
+        with open(TARGETS_DOC, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as exc:
+        raise CheckInput("%s: %s" % (TARGETS_DOC, exc))
+    names, column = [], None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            column = None
+            continue
+        cells = [cell.strip().strip("`")
+                 for cell in stripped.strip("|").split("|")]
+        if column is None:
+            column = (cells.index(HARNESS_COLUMN)
+                      if HARNESS_COLUMN in cells else -1)
+            continue
+        if column < 0 or set("".join(cells)) <= TABLE_RULE:
+            continue
+        if column < len(cells) and cells[column]:
+            names.append(cells[column])
+    if column is None and not names:
+        raise CheckInput(
+            "%s holds no table with a %s column. Every harness name in that "
+            "file sits in one." % (TARGETS_DOC, HARNESS_COLUMN))
+    return names
+
+
+def harness_directories():
+    """-> (directories under harnesses/ holding a build.sh, those holding none)."""
+    try:
+        entries = sorted(os.listdir(HARNESS_DIR))
+    except OSError as exc:
+        raise CheckInput("%s: %s" % (HARNESS_DIR, exc))
+    built, bare = [], []
+    for name in entries:
+        path = os.path.join(HARNESS_DIR, name)
+        if not os.path.isdir(path):
+            continue
+        if os.path.isfile(os.path.join(path, "build.sh")):
+            built.append(name)
+        else:
+            bare.append(name)
+    return built, bare
+
+
+def check_harnesses():
+    """The four Track U target lists still name the same harnesses."""
+    built, bare = harness_directories()
+    carried = {
+        "config": harness_config_targets(),
+        "run": harness_run_targets(),
+        "doc": harness_doc_targets(),
+        "build": built,
+    }
+    labels = dict(HARNESS_SOURCES)
+    excluded = set(HARNESS_EXCLUSIONS)
+    sets = {key: set(names) - excluded for key, names in carried.items()}
+    for key, label in HARNESS_SOURCES:
+        if not sets[key]:
+            raise CheckInput(
+                "%s carries no target name. A source that reads as empty "
+                "makes every other source disagree with it, and the reader "
+                "for it is the thing to fix." % label)
+
+    targets = sorted(set().union(*sets.values()))
+    offenders = []
+    for name in targets:
+        absent = [labels[key] for key, _ in HARNESS_SOURCES
+                  if name not in sets[key]]
+        if absent:
+            present = [labels[key] for key, _ in HARNESS_SOURCES
+                       if name in sets[key]]
+            offenders.append((name, absent, present))
+    stray = sorted(set(bare) - excluded)
+
+    print("harnesses: %d target(s) across %d source(s), %d declared "
+          "exclusion(s)" % (len(targets), len(HARNESS_SOURCES),
+                            len(HARNESS_EXCLUSIONS)))
+    print()
+    print("  %-22s %-14s %-11s %-11s %s"
+          % ("target", "campaign.yaml", "run_all.sh", "TARGETS.md",
+             "build.sh"))
+    print("  %-22s %-14s %-11s %-11s %s"
+          % ("-" * 22, "-" * 14, "-" * 11, "-" * 11, "-" * 8))
+    for name in targets:
+        print("  %-22s %-14s %-11s %-11s %s"
+              % ((name,) + tuple("yes" if name in sets[key] else "NO"
+                                 for key, _ in HARNESS_SOURCES)))
+    print()
+    print("  %-22s %s" % ("excluded", "reason"))
+    print("  %-22s %s" % ("-" * 22, "-" * 6))
+    for name in sorted(HARNESS_EXCLUSIONS):
+        print("  %-22s %s" % (name, HARNESS_EXCLUSIONS[name]))
+    print()
+
+    if not offenders and not stray:
+        print("harnesses: OK")
+        return 0
+
+    for name, absent, present in offenders:
+        for label in absent:
+            print("harnesses: %s: %s does not carry it" % (name, label))
+        print("    carried by  %s" % (", ".join(present) or "no source"))
+        print()
+    for name in stray:
+        print("harnesses: %s: a directory under harnesses/ with no build.sh "
+              "and no declared exclusion" % name)
+        print("    a directory that builds no target belongs in "
+              "HARNESS_EXCLUSIONS with the reason it holds none")
+        print()
+    print("The four lists drive four separate steps: the fuzz phase reads "
+          "config/campaign.yaml, run_all.sh runs the binaries, TARGETS.md "
+          "carries the entry point and the replay command, and build_all.sh "
+          "compiles what the directories hold. A target named by fewer than "
+          "all four is built and never run, or run and never built, and the "
+          "campaign reports the skip hours in.")
+    return 1
+
+
 CHECKS = {
     "names": check_names,
     "pins": check_pins,
     "coverage": check_coverage,
     "derived": check_derived,
     "pages": check_pages,
+    "stale": check_stale,
+    "harnesses": check_harnesses,
 }
 
 # The order `all` runs them in, and the order the module docstring and the CI
 # steps present them in. It follows the dependency between them: names and
 # pins read the description set alone, coverage and derived join it against
 # the inventories, and pages renders the artefacts the other four compare.
-CHECK_ORDER = ("names", "pins", "coverage", "derived", "pages")
+# stale and harnesses close the order because neither reads the description
+# set: stale reads the provenance record against the artefacts the first five
+# compare, and harnesses reads the Track U seam, which the first six never
+# touch.
+CHECK_ORDER = ("names", "pins", "coverage", "derived", "pages", "stale",
+               "harnesses")
 
 
 def check_order():

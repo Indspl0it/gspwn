@@ -66,6 +66,8 @@ beyond failure.
 | `replay_crashes.sh` | | 2 | The crash root does not exist, or a bound is not numeric |
 | `syzlang_gen.py` | `emit` | 1 | An input is absent, two flags contradict each other, or an emitted selector renders free |
 | `syzlang_gen.py` | `emit --strict` | 2 | A derived struct layout disagrees with its measured size |
+| `syzlang_gen.py` | `compile` | 1 | The description set does not parse or does not compile. The driver's own diagnostics are reproduced unchanged, naming the file and the line |
+| `syzlang_gen.py` | `compile` | 3 | No verdict was reached: Go is not on `PATH`, the pinned syzkaller checkout could not be obtained, or the driver failed to build. Distinct from 1, which is a description set that really fails to compile |
 
 ## Code assignments
 

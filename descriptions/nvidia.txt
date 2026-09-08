@@ -8,18 +8,41 @@
 # the same numbers as _IOWR macros for syz-extract to consume on the SUT.
 
 
-# Device nodes. nvidia-drm, nvidia-modeset and /dev/dri/* are out of
-# scope in the threat model, so nothing here opens them.
+# Device nodes. nvidia-drm and /dev/dri/* are out of scope in the
+# threat model, so nothing here opens them. /dev/nvidia-modeset is
+# in scope: libnvidia-container creates it by default
+# (src/nvc.c:317) and withholds it only under OPT_NO_MODESET.
 resource fd_nv[fd]
 resource fd_nvidiactl[fd_nv]
 resource fd_nvidia[fd_nv]
 resource fd_nvidia_uvm[fd]
 resource fd_nvidia_uvm_tools[fd]
+resource fd_nvidia_modeset[fd]
+resource fd_nvidia_uvm_vaspace[fd_nvidia_uvm]
 
 openat$nvidiactl(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidiactl"]], flags const[0x2], mode const[0]) fd_nvidiactl
 openat$nvidia(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia#"]], flags const[0x2], mode const[0]) fd_nvidia
 openat$nvidia_uvm(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-uvm"]], flags const[0x2], mode const[0]) fd_nvidia_uvm
 openat$nvidia_uvm_tools(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-uvm-tools"]], flags const[0x2], mode const[0]) fd_nvidia_uvm_tools
+openat$nvidia_modeset(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-modeset"]], flags const[0x2], mode const[0]) fd_nvidia_modeset
+
+# The initialised UVM descriptor. 36 of the 39 uvm commands and
+# uvm_mmap refuse a descriptor that has not been through
+# uvm_api_initialize (kernel-open/nvidia-uvm/uvm.c:927), which sets
+# UVM_FD_VA_SPACE at uvm.c:959. The producer is a pseudo-syscall and
+# not ioctl$UVM_INITIALIZE: __UVM_ROUTE_CMD_STACK at
+# kernel-open/nvidia-uvm/uvm_api.h:45 returns 0 on success and on
+# failure alike, carrying the real status in params.rmStatus, and
+# syzkaller takes a resource's value from the raw syscall return.
+# A resource produced by that ioctl would hold 0 on every execution
+# and every consumer would receive file descriptor 0.
+#
+# The implementation opens /dev/nvidia-uvm, issues UVM_INITIALIZE,
+# and returns the descriptor. It lives in a patch this repository
+# carries against the pinned syzkaller checkout; the declaration
+# alone compiles, because pkg/compiler/consts.go:250 assigns no
+# syscall number to a call whose name starts with syz_.
+syz_nvidia_uvm_init(flags flags[uvm_init_flags]) fd_nvidia_uvm_vaspace
 
 # One resource per RM object class. Every handle derives from
 # nv_handle, so a field typed nv_handle accepts any of them and a
@@ -182,6 +205,7 @@ resource nvh_volta_channel_gpfifo_a[nv_handle]
 resource nvh_volta_usermode_a[nv_handle]
 
 nvos64_alloc_flags = 0x0, 0x1
+uvm_init_flags = 0x1, 0x2, 0x4
 
 # Escapes other than the two multiplexers.
 ioctl$NV_ESC_RM_ALLOC_MEMORY(fd fd_nvidia, cmd const[0xc0384627], arg ptr[inout, nv_ioctl_nvos02_parameters_with_fd])
@@ -474,3 +498,65 @@ ioctl$NV_ESC_RM_ALLOC_VOLTA_CHANNEL_GPFIFO_A(fd fd_nv, cmd const[0xc030462b], ar
 ioctl$NV_ESC_RM_ALLOC_VOLTA_CHANNEL_GPFIFO_A_UNDER_KEPLER_CHANNEL_GROUP_A(fd fd_nv, cmd const[0xc030462b], arg ptr[inout, nvos64_alloc_volta_channel_gpfifo_a_under_kepler_channel_group_a])
 ioctl$NV_ESC_RM_ALLOC_VOLTA_USERMODE_A(fd fd_nv, cmd const[0xc030462b], arg ptr[inout, nvos64_alloc_volta_usermode_a])
 ioctl$NV_ESC_RM_ALLOC_NVOS21(fd fd_nv, cmd const[0xc020462b], arg ptr[inout, nvos21_alloc_nv01_root])
+
+# Entry points other than ioctl, from the file_operations tables the
+# driver registers on the four nodes opened above. nvidia_fops at
+# kernel-open/nvidia/nv.c:250 registers poll and mmap, uvm_fops at
+# kernel-open/nvidia-uvm/uvm.c:1070 registers mmap, and
+# uvm_tools_fops at kernel-open/nvidia-uvm/uvm_tools.c:2744
+# registers poll. surface/entry-points.json carries the whole
+# census, including the six tables no description opens. An entry
+# point carries no method id, no parameter struct and no inventory
+# row, so none of these calls is a command and none enters the
+# command denominator.
+nv_mmap_prot = 0x1, 0x2, 0x4
+nv_mmap_flags = 0x1, 0x2, 0x10, 0x20
+nv_poll_events = 0x1, 0x2, 0x4, 0x8, 0x10, 0x20
+
+nv_pollfd_nvidiactl {
+	fd	fd_nvidiactl
+	events	flags[nv_poll_events, int16]
+	revents	const[0, int16]
+}
+
+nv_pollfd_nvidia {
+	fd	fd_nvidia
+	events	flags[nv_poll_events, int16]
+	revents	const[0, int16]
+}
+
+nv_pollfd_uvm_tools {
+	fd	fd_nvidia_uvm_tools
+	events	flags[nv_poll_events, int16]
+	revents	const[0, int16]
+}
+
+# nvidia_mmap at kernel-open/nvidia/nv-mmap.c:770 reaches
+# nvidia_mmap_helper, which consumes a mapping context a prior ioctl
+# established. That helper abandons the mapping for any non-zero
+# vm_pgoff at nv-mmap.c:554, so zero is the only offset that reaches
+# the body and the offset is pinned to it.
+mmap$nvidiactl(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[nv_mmap_flags], fd fd_nvidiactl, offset const[0])
+mmap$nvidia(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[nv_mmap_flags], fd fd_nvidia, offset const[0])
+
+# uvm_mmap at kernel-open/nvidia-uvm/uvm.c:759 returns -EBADFD at
+# uvm.c:779 until a prior ioctl has made the descriptor a VA space,
+# which is why this one takes the initialised subtype. Its offset is
+# left free: uvm.c:793 requires vm_start == (vm_pgoff << PAGE_SHIFT),
+# so the only legal offset is the mapping address the kernel selects
+# at run time and no fixed value satisfies it. uvm.c:801 further
+# requires VM_SHARED, VM_READ and VM_WRITE together, which one member
+# of nv_mmap_flags and two of nv_mmap_prot give.
+mmap$nvidia_uvm(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[nv_mmap_flags], fd fd_nvidia_uvm_vaspace, offset intptr[0:0xffffffff, 0x1000])
+
+# nvidia_poll at kernel-open/nvidia/nv.c:2280 and uvm_tools_poll at
+# kernel-open/nvidia-uvm/uvm_tools.c:692. nvidia_fops serves both
+# /dev/nvidiactl and /dev/nvidiaN, so both carry a poll call:
+# nv.c:2292 branches on nv_is_control_device and skips the
+# open-complete check that returns POLLERR for the actual device, so
+# the control node is a reachable path of its own. uvm_fops
+# registers no poll and uvm_tools_fops registers no mmap, so neither
+# carries the other call.
+poll$nvidiactl(fds ptr[in, array[nv_pollfd_nvidiactl]], nfds len[fds], timeout int32)
+poll$nvidia(fds ptr[in, array[nv_pollfd_nvidia]], nfds len[fds], timeout int32)
+poll$nvidia_uvm_tools(fds ptr[in, array[nv_pollfd_uvm_tools]], nfds len[fds], timeout int32)

@@ -8,8 +8,12 @@ is downstream of this phase.
 
 ## Inputs
 - artifacts/src/open-gpu-kernel-modules (headers + ioctl handlers)
-- artifacts/src/syzkaller (toolchain: syz-extract, syz-compile)
-- artifacts/src/linux (syz-extract needs the kernel tree it was built against)
+- A Go toolchain, for `syzlang_gen.py compile`. It builds
+  `tools/gspwn-check` against a pinned syzkaller checkout, and clones that
+  checkout itself when `--syzkaller` names none. syzkaller ships no
+  `syz-compile` binary: compiling a description set is `ast.ParseGlob`
+  followed by `compiler.Compile`, and the driver calls those two
+  functions directly
 - The modeling approach below: nv_handle / client_nv_handle resources,
   root-client allocation, the RM object hierarchy, flags and constraints
 
@@ -121,7 +125,8 @@ coverage alone.
 
    ```
    python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules \
-     --emit-map tools/ioctl_map.json
+     --emit-map tools/ioctl_map.json \
+     --emit-entry-points surface/entry-points.json
    python3 tools/ctrl_surface.py    --src artifacts/src/open-gpu-kernel-modules
    python3 tools/object_graph.py extract --src artifacts/src/open-gpu-kernel-modules
    python3 tools/object_graph.py chains --src artifacts/src/open-gpu-kernel-modules
@@ -192,16 +197,18 @@ coverage alone.
    against what is committed, so a commit that carries the artefacts and not
    the pages fails.
 
-   `python3 tools/regression_check.py all` runs the five checks CI runs, and
+   `python3 tools/regression_check.py all` runs the seven checks CI runs, and
    each one reads a different pair of artefacts that have to agree:
 
    | Check | Artefact pair compared |
    |---|---|
-   | `coverage` | the description set declares a variant for every enumerated target, and no family has fallen below its floor |
+   | `coverage` | the description set declares a variant for every enumerated target, no family has fallen below its floor, and every `mmap` and `poll` the driver registers on a modelled node carries a call |
    | `names` | every name in `tools/ioctl_map.json` is declared by the descriptions |
    | `pins` | every emitted leaf selector renders as a const, including the `NV_ESC_IOCTL_XFER_CMD` inner `cmd` |
    | `derived` | the chain and ranking artefacts still match the control inventory |
    | `pages` | the generated reference pages still match the surface artefacts |
+   | `stale` | every surface artefact `descriptions/generation.json` records still hashes to the recorded digest |
+   | `harnesses` | the four Track U target lists still name the same harnesses |
 
    `derived` fails when the regeneration stopped before `object_graph.py
    chains` or `ctrl_rank.py rank`, and `pages` fails when it stopped before
@@ -209,11 +216,53 @@ coverage alone.
    above and commit its output. Run `all` before the commit, not after.
 
    `syzlang_gen.py` emits a first-cut description set into
-   descriptions/. It is generated and unverified: it has never been
-   through syz-compile, and any struct whose derived layout did not match the
-   measured size is marked in its output. Compiling it is the first gate, and
-   correcting it is the work. Record which descriptions were corrected and
-   which were authored, because the eval phase reports that split.
+   descriptions/. Any struct whose derived layout did not match its
+   measured size is marked in its output. Compiling it is the first gate:
+
+   ```
+   python3 tools/syzlang_gen.py compile
+   ```
+
+   It builds `tools/gspwn-check` against a pinned syzkaller checkout and
+   runs syzkaller's own compiler over `descriptions/*.txt` together with
+   `tools/syz-stub/*`. Exit 0 prints the verdict line, of the form
+   `compile: OK, 4 const(s) loaded, 862 syscall(s), ...`. 862 is the 856
+   the description set declares plus the 6 `syz_builtinN` pseudo-syscalls
+   `pkg/compiler` prepends to every compile. The 856 is 845 `ioctl`
+   variants, 4 `openat`, 6 entry-point calls and `syz_nvidia_uvm_init`.
+   That last one needs no `__NR_` constant: `pkg/compiler/consts.go:250`
+   assigns no syscall number to a call whose name begins `syz_`, so the
+   set compiles against an unpatched checkout while the executor half
+   lives in `tools/syz-patches/`. Exit 1 reproduces the
+   compiler's own diagnostics, each naming a file and a line. Exit 3 means
+   no verdict was reached at all, because Go is absent or the checkout
+   could not be obtained, and it is no evidence that the set compiles.
+   Quote the command's own output in the gate. A hand-produced result is
+   not evidence.
+
+   The set models four syscalls: `ioctl`, `openat`, `mmap` and `poll`. The
+   driver's `file_operations` tables are the authority for the last two,
+   and `surface/entry-points.json` records every table it defines with the
+   entry points each registers. Entry points are counted beside the command
+   denominator and never inside it: an `mmap` or a `poll` carries no method
+   id, no parameter struct and no inventory row, so the 828 counts commands
+   alone.
+
+   The set also declares one pseudo-syscall, `syz_nvidia_uvm_init`. The
+   campaign therefore runs the pinned syzkaller revision **plus**
+   `tools/syz-patches/0001-syz_nvidia_uvm_init.patch`, applied to the
+   checkout before syzkaller is built. Without that patch the descriptions
+   still compile and `syz-executor` does not build. The patch exists
+   because 36 of the 39 UVM commands and `uvm_mmap` refuse a descriptor
+   that has not been through `uvm_api_initialize`, and
+   `ioctl$UVM_INITIALIZE` cannot produce the initialised descriptor as a
+   resource: the driver returns 0 from it whether initialisation succeeded
+   or failed, carrying the real status in `params.rmStatus`, and syzkaller
+   takes a resource's value from the raw syscall return.
+
+   Correcting the set is the work. Record which descriptions were
+   corrected and which were authored, because the eval phase reports that
+   split.
 
    `surface_cov.py` measures how much of the enumerated command surface the
    descriptions now declare:
@@ -223,16 +272,25 @@ coverage alone.
    python3 tools/surface_cov.py gaps --stage model --top 40
    ```
 
-   `modelled` reports the share of the 764 targetable commands that have a
-   syzlang variant. The generated baseline already reaches 764 of 764, so this
+   `modelled` reports the share of the 828 targetable commands that have a
+   syzlang variant. The generated baseline already reaches 828 of 828, so this
    number is a regression check. It counts variants declared, never variants
    correct, and a lower number means a variant was lost or renamed. The
-   denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control and 155 alloc
-   targets. It excludes the 236 control commands routed to GSP, the 104
-   uvm_test commands behind `uvm_enable_builtin_tests=1`, the 3 escapes
-   declared with no dispatch case, and the 2 multiplexer escapes whose leaves
-   already count in the control and alloc families. `gaps --stage model` names
-   the targets no description declares.
+   denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc and
+   64 modeset targets. It excludes the 236 control commands routed to GSP, the
+   104 uvm_test commands behind `uvm_enable_builtin_tests=1`, the 3 escapes
+   declared with no dispatch case, the 2 multiplexer escapes whose leaves
+   already count in the control and alloc families, and the 2 modeset commands
+   the dispatch table leaves empty. `gaps --stage model` names the targets no
+   description declares.
+
+   The modeset family carries a limitation the other five do not. All 64
+   commands reach the kernel through one request number, `0xc0106d00`, and
+   the leaf lives in `NvKmsIoctlParams.cmd`, which a strace-shaped trace does
+   not carry. `tools/trace2seed.py` therefore names the family and never the
+   command for a traced modeset call. Correct a modeset description against
+   `surface/nvkms-command-inventory.json` and the header, never against a
+   trace.
 
    The corpus stage measures this round: the count of targets that go from
    declared-but-never-emitted to emitted after the corrections. It is a delta
@@ -244,7 +302,7 @@ coverage alone.
    | after | `python3 tools/surface_cov.py gaps --stage corpus --run-id <smoke run id>` | the smoke run's own `workdir/corpus.db`, unpacked through syz-db |
 
    One smoke run answers both, and the "before" reading needs no run at all.
-   In round 1 the bank is empty, so the before reading is 764 by construction
+   In round 1 the bank is empty, so the before reading is 828 by construction
    and the delta measures the smoke run alone. The smoke run takes a run id of
    the form `r<round>-<n>` from the same namespace the fuzz phase allocates
    from, recorded with `pipeline_ctl.py round-add-run`, and the round's
@@ -276,15 +334,19 @@ coverage alone.
    theirs, so there is nothing to import from them. The only public NVIDIA
    syzlang is Moneta's, at github.com/yonsei-sslab/moneta, whose payloads are
    untyped byte arrays. It carries the escape numbering and no parameter
-   structure, and it models /dev/nvidia-modeset, which is out of scope here.
+   structure, and its /dev/nvidia-modeset descriptions carry no parameter
+   structure either, so they import nothing this set does not already type.
    A crash found only in imported descriptions is not this campaign's finding
    to claim. (Round 1 only, because later rounds start from the worklist.)
-2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools].
-   Skip nvidia-drm, nvidia-modeset and /dev/dri/*, which are out of scope.
-   Those nodes exist only when the container asks for the `graphics` or
+2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools]
+   and /dev/nvidia-modeset. Skip nvidia-drm and /dev/dri/*, which are out of
+   scope. Those two exist only when the container asks for the `graphics` or
    `display` capability, and the threat model is a default tenant
    (`compute,utility`), which gets neither. A crash found there could not be
    claimed under the model, so the descriptions are not worth the round.
+   /dev/nvidia-modeset is inside the model: `lookup_devices` at
+   `libnvidia-container/src/nvc_info.c:515` creates it beside the other four
+   and withholds it only under `OPT_NO_MODESET`.
    Widening scope is a decision recorded in the threat model first. This phase
    does not widen it because the ioctls looked reachable.
 
@@ -301,8 +363,10 @@ coverage alone.
    before modelling them.
 
 3. Create a header defining the NV_* ioctl command numbers via _IOWR
-   macros, extract constants with syz-extract, then compile with
-   syz-compile.
+   macros, then run `python3 tools/syzlang_gen.py compile`. The two
+   syscall numbers the set needs are committed in
+   `tools/syz-stub/gspwn_stub.txt.const`, so no constant extraction and
+   no kernel tree are involved.
 4. Correct and exercise in this priority order. The baseline is generated and
    already declares every target, so this phase's work is correction and
    constraint. From round 2 on, the worklist's `[finding ...]` items come ahead
@@ -413,7 +477,8 @@ coverage alone.
 Descriptions are agent-authored, so they are treated as untrusted until
 measured. All four checks are required, and their evidence goes in the gate:
 
-1. Every description compiles under syz-compile.
+1. `python3 tools/syzlang_gen.py compile` exits 0, with its verdict line
+   quoted.
 2. Smoke campaign (5 min minimum). Confirm via dmesg that programs reach the
    driver, and that they do more than execute. Record the excerpt.
 3. Reachability check. If the smoke run shows ioctls returning immediately
@@ -441,18 +506,18 @@ Record progress with the state tool, never by editing pipeline.json:
  --notes "<one line>"`
 
 ## Gate evidence
-- syz-compile success output.
+- `syzlang_gen.py compile` output, quoted verbatim. Exit 3 is not a pass.
 - Smoke-run dmesg excerpt showing driver contact.
 - The two `surface_cov.py gaps --stage corpus` counts: the before reading over
   `artifacts/seeds`, and the after reading with `--run-id <smoke run id>`
   against the smoke run's own corpus, with the smoke run id named. That delta
   is this round's measured output.
-- Where a regeneration ran, `regression_check.py all` output with all five
+- Where a regeneration ran, `regression_check.py all` output with all seven
   checks passing, and the reference pages under
   `docs/src/content/docs/reference/surface/` regenerated and committed with the
   artefacts.
 - The `surface_cov.py modelled` line, which is a regression check and still
-  reads 764/764.
+  reads 828/828.
 - The `NV_ESC_IOCTL_XFER_CMD` `cmd` constraint set quoted from the
   description, with `regression_check.py pins` output beside it.
 - Audit file path with the sampled verdicts and any in-handler capability

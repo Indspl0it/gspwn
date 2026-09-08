@@ -8298,17 +8298,106 @@
   "alloc_variants": 204,
   "control_reachable": 531,
   "control_variants": 531,
+  "entry_point_calls": 6,
+  "entry_point_structs": 3,
   "escapes_emitted": 32,
   "escapes_total": 32,
+  "modeset_declared": 66,
+  "modeset_dispatched": 64,
+  "modeset_handle_resources": 10,
+  "modeset_variants": 64,
   "opaque": 0,
+  "pseudo_syscalls": 1,
   "size_match": 595,
   "size_mismatch": 0,
-  "structs_emitted": 1540,
+  "structs_emitted": 1923,
   "unresolved": 0,
   "uvm_emitted": 46,
   "uvm_total": 46,
   "xfer_declined": 2,
   "xfer_variants": 31
+ },
+ "entry_points": {
+  "calls": [
+   {
+    "call": "mmap$nvidiactl",
+    "offset_authority": "kernel-open/nvidia/nv-mmap.c:554",
+    "offset_pinned": true,
+    "offset_value": 0,
+    "operation": "mmap",
+    "resource": "fd_nvidiactl"
+   },
+   {
+    "call": "mmap$nvidia",
+    "offset_authority": "kernel-open/nvidia/nv-mmap.c:554",
+    "offset_pinned": true,
+    "offset_value": 0,
+    "operation": "mmap",
+    "resource": "fd_nvidia"
+   },
+   {
+    "call": "mmap$nvidia_uvm",
+    "offset_authority": "kernel-open/nvidia-uvm/uvm.c:793",
+    "offset_pinned": false,
+    "offset_value": null,
+    "operation": "mmap",
+    "resource": "fd_nvidia_uvm_vaspace"
+   },
+   {
+    "call": "poll$nvidiactl",
+    "offset_authority": null,
+    "offset_pinned": null,
+    "offset_value": null,
+    "operation": "poll",
+    "resource": "fd_nvidiactl"
+   },
+   {
+    "call": "poll$nvidia",
+    "offset_authority": null,
+    "offset_pinned": null,
+    "offset_value": null,
+    "operation": "poll",
+    "resource": "fd_nvidia"
+   },
+   {
+    "call": "poll$nvidia_uvm_tools",
+    "offset_authority": null,
+    "offset_pinned": null,
+    "offset_value": null,
+    "operation": "poll",
+    "resource": "fd_nvidia_uvm_tools"
+   }
+  ],
+  "pseudo_syscall": {
+   "call": "syz_nvidia_uvm_init",
+   "implementation": "tools/syz-patches/0001-syz_nvidia_uvm_init.patch",
+   "params": {
+    "fields": [
+     {
+      "name": "flags",
+      "offset": 0,
+      "size": 8,
+      "syzlang": "int64"
+     },
+     {
+      "name": "rmStatus",
+      "offset": 8,
+      "size": 4,
+      "syzlang": "int32"
+     },
+     {
+      "name": "pad_tail",
+      "offset": 12,
+      "size": 4,
+      "syzlang": null
+     }
+    ],
+    "size": 16,
+    "struct": "UVM_INITIALIZE_PARAMS"
+   },
+   "produces": "fd_nvidia_uvm_vaspace",
+   "reason": "ioctl$UVM_INITIALIZE returns 0 on success and on failure alike (uvm_api.h:45), and syzkaller takes a resource's value from the raw syscall return (executor.cc:1355), so that ioctl cannot produce the initialised descriptor"
+  }
  },
  "escapes": [
   {
@@ -8567,6 +8656,11 @@
    "records": 4,
    "sha256": "6aaf3c45c69e3473106adc61c5893171137294e0b95034102bc98a58d78ba116"
   },
+  "nvkms_inventory": {
+   "path": "surface/nvkms-command-inventory.json",
+   "records": 66,
+   "sha256": "411f140c2a94de9d45668518d1129189f41ea5399f4cb04103d627c98c21a24f"
+  },
   "object_graph": {
    "path": "surface/rm-object-graph.json",
    "records": 222,
@@ -8574,6 +8668,584 @@
   }
  },
  "missing_class_numbers": [],
+ "modeset": [
+  {
+   "command": "NVKMS_IOCTL_ALLOC_DEVICE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 0,
+   "param_size": 1440,
+   "param_struct": "NvKmsAllocDeviceParams",
+   "proc": "AllocDevice"
+  },
+  {
+   "command": "NVKMS_IOCTL_FREE_DEVICE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 1,
+   "param_size": 8,
+   "param_struct": "NvKmsFreeDeviceParams",
+   "proc": "FreeDevice"
+  },
+  {
+   "command": "NVKMS_IOCTL_QUERY_DISP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 2,
+   "param_size": 172,
+   "param_struct": "NvKmsQueryDispParams",
+   "proc": "QueryDisp"
+  },
+  {
+   "command": "NVKMS_IOCTL_QUERY_CONNECTOR_STATIC_DATA",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 3,
+   "param_size": 44,
+   "param_struct": "NvKmsQueryConnectorStaticDataParams",
+   "proc": "QueryConnectorStaticData"
+  },
+  {
+   "command": "NVKMS_IOCTL_QUERY_CONNECTOR_DYNAMIC_DATA",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 4,
+   "param_size": 20,
+   "param_struct": "NvKmsQueryConnectorDynamicDataParams",
+   "proc": "QueryConnectorDynamicData"
+  },
+  {
+   "command": "NVKMS_IOCTL_QUERY_DPY_STATIC_DATA",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 5,
+   "param_size": 96,
+   "param_struct": "NvKmsQueryDpyStaticDataParams",
+   "proc": "QueryDpyStaticData"
+  },
+  {
+   "command": "NVKMS_IOCTL_QUERY_DPY_DYNAMIC_DATA",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 6,
+   "param_size": 37168,
+   "param_struct": "NvKmsQueryDpyDynamicDataParams",
+   "proc": "QueryDpyDynamicData"
+  },
+  {
+   "command": "NVKMS_IOCTL_VALIDATE_MODE_INDEX",
+   "custom_user": true,
+   "emitted": true,
+   "ordinal": 7,
+   "param_size": 736,
+   "param_struct": "NvKmsValidateModeIndexParams",
+   "proc": "ValidateModeIndex"
+  },
+  {
+   "command": "NVKMS_IOCTL_VALIDATE_MODE",
+   "custom_user": true,
+   "emitted": true,
+   "ordinal": 8,
+   "param_size": 656,
+   "param_struct": "NvKmsValidateModeParams",
+   "proc": "ValidateMode"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_MODE",
+   "custom_user": true,
+   "emitted": true,
+   "ordinal": 9,
+   "param_size": 186784,
+   "param_struct": "NvKmsSetModeParams",
+   "proc": "SetMode"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_CURSOR_IMAGE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 10,
+   "param_size": 52,
+   "param_struct": "NvKmsSetCursorImageParams",
+   "proc": "SetCursorImage"
+  },
+  {
+   "command": "NVKMS_IOCTL_MOVE_CURSOR",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 11,
+   "param_size": 20,
+   "param_struct": "NvKmsMoveCursorParams",
+   "proc": "MoveCursor"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_LUT",
+   "custom_user": true,
+   "emitted": true,
+   "ordinal": 12,
+   "param_size": 72,
+   "param_struct": "NvKmsSetLutParams",
+   "proc": "SetLut"
+  },
+  {
+   "command": "NVKMS_IOCTL_CHECK_LUT_NOTIFIER",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 13,
+   "param_size": 20,
+   "param_struct": "NvKmsCheckLutNotifierParams",
+   "proc": "CheckLutNotifier"
+  },
+  {
+   "command": "NVKMS_IOCTL_IDLE_BASE_CHANNEL",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 14,
+   "param_size": 36,
+   "param_struct": "NvKmsIdleBaseChannelParams",
+   "proc": "IdleBaseChannel"
+  },
+  {
+   "command": "NVKMS_IOCTL_FLIP",
+   "custom_user": true,
+   "emitted": true,
+   "ordinal": 15,
+   "param_size": 3104,
+   "param_struct": "NvKmsFlipParams",
+   "proc": "Flip"
+  },
+  {
+   "command": "NVKMS_IOCTL_DECLARE_DYNAMIC_DPY_INTEREST",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 16,
+   "param_size": 20,
+   "param_struct": "NvKmsDeclareDynamicDpyInterestParams",
+   "proc": "DeclareDynamicDpyInterest"
+  },
+  {
+   "command": "NVKMS_IOCTL_REGISTER_SURFACE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 17,
+   "param_size": 152,
+   "param_struct": "NvKmsRegisterSurfaceParams",
+   "proc": "RegisterSurface"
+  },
+  {
+   "command": "NVKMS_IOCTL_UNREGISTER_SURFACE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 18,
+   "param_size": 16,
+   "param_struct": "NvKmsUnregisterSurfaceParams",
+   "proc": "UnregisterSurface"
+  },
+  {
+   "command": "NVKMS_IOCTL_GRANT_SURFACE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 19,
+   "param_size": 16,
+   "param_struct": "NvKmsGrantSurfaceParams",
+   "proc": "GrantSurface"
+  },
+  {
+   "command": "NVKMS_IOCTL_ACQUIRE_SURFACE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 20,
+   "param_size": 12,
+   "param_struct": "NvKmsAcquireSurfaceParams",
+   "proc": "AcquireSurface"
+  },
+  {
+   "command": "NVKMS_IOCTL_RELEASE_SURFACE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 21,
+   "param_size": 12,
+   "param_struct": "NvKmsReleaseSurfaceParams",
+   "proc": "ReleaseSurface"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_DPY_ATTRIBUTE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 22,
+   "param_size": 32,
+   "param_struct": "NvKmsSetDpyAttributeParams",
+   "proc": "SetDpyAttribute"
+  },
+  {
+   "command": "NVKMS_IOCTL_GET_DPY_ATTRIBUTE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 23,
+   "param_size": 24,
+   "param_struct": "NvKmsGetDpyAttributeParams",
+   "proc": "GetDpyAttribute"
+  },
+  {
+   "command": "NVKMS_IOCTL_GET_DPY_ATTRIBUTE_VALID_VALUES",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 24,
+   "param_size": 40,
+   "param_struct": "NvKmsGetDpyAttributeValidValuesParams",
+   "proc": "GetDpyAttributeValidValues"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_DISP_ATTRIBUTE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 25,
+   "param_size": 32,
+   "param_struct": "NvKmsSetDispAttributeParams",
+   "proc": "SetDispAttribute"
+  },
+  {
+   "command": "NVKMS_IOCTL_GET_DISP_ATTRIBUTE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 26,
+   "param_size": 24,
+   "param_struct": "NvKmsGetDispAttributeParams",
+   "proc": "GetDispAttribute"
+  },
+  {
+   "command": "NVKMS_IOCTL_GET_DISP_ATTRIBUTE_VALID_VALUES",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 27,
+   "param_size": 40,
+   "param_struct": "NvKmsGetDispAttributeValidValuesParams",
+   "proc": "GetDispAttributeValidValues"
+  },
+  {
+   "command": "NVKMS_IOCTL_QUERY_FRAMELOCK",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 28,
+   "param_size": 20,
+   "param_struct": "NvKmsQueryFrameLockParams",
+   "proc": "QueryFrameLock"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_FRAMELOCK_ATTRIBUTE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 29,
+   "param_size": 24,
+   "param_struct": "NvKmsSetFrameLockAttributeParams",
+   "proc": "SetFrameLockAttribute"
+  },
+  {
+   "command": "NVKMS_IOCTL_GET_FRAMELOCK_ATTRIBUTE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 30,
+   "param_size": 16,
+   "param_struct": "NvKmsGetFrameLockAttributeParams",
+   "proc": "GetFrameLockAttribute"
+  },
+  {
+   "command": "NVKMS_IOCTL_GET_FRAMELOCK_ATTRIBUTE_VALID_VALUES",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 31,
+   "param_size": 32,
+   "param_struct": "NvKmsGetFrameLockAttributeValidValuesParams",
+   "proc": "GetFrameLockAttributeValidValues"
+  },
+  {
+   "command": "NVKMS_IOCTL_GET_NEXT_EVENT",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 32,
+   "param_size": 48,
+   "param_struct": "NvKmsGetNextEventParams",
+   "proc": "GetNextEvent"
+  },
+  {
+   "command": "NVKMS_IOCTL_DECLARE_EVENT_INTEREST",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 33,
+   "param_size": 8,
+   "param_struct": "NvKmsDeclareEventInterestParams",
+   "proc": "DeclareEventInterest"
+  },
+  {
+   "command": "NVKMS_IOCTL_CLEAR_UNICAST_EVENT",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 34,
+   "param_size": 8,
+   "param_struct": "NvKmsClearUnicastEventParams",
+   "proc": "ClearUnicastEvent"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_LAYER_POSITION",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 37,
+   "param_size": 1196,
+   "param_struct": "NvKmsSetLayerPositionParams",
+   "proc": "SetLayerPosition"
+  },
+  {
+   "command": "NVKMS_IOCTL_GRAB_OWNERSHIP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 38,
+   "param_size": 8,
+   "param_struct": "NvKmsGrabOwnershipParams",
+   "proc": "GrabOwnership"
+  },
+  {
+   "command": "NVKMS_IOCTL_RELEASE_OWNERSHIP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 39,
+   "param_size": 8,
+   "param_struct": "NvKmsReleaseOwnershipParams",
+   "proc": "ReleaseOwnership"
+  },
+  {
+   "command": "NVKMS_IOCTL_GRANT_PERMISSIONS",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 40,
+   "param_size": 32,
+   "param_struct": "NvKmsGrantPermissionsParams",
+   "proc": "GrantPermissions"
+  },
+  {
+   "command": "NVKMS_IOCTL_ACQUIRE_PERMISSIONS",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 41,
+   "param_size": 28,
+   "param_struct": "NvKmsAcquirePermissionsParams",
+   "proc": "AcquirePermissions"
+  },
+  {
+   "command": "NVKMS_IOCTL_REVOKE_PERMISSIONS",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 42,
+   "param_size": 32,
+   "param_struct": "NvKmsRevokePermissionsParams",
+   "proc": "RevokePermissions"
+  },
+  {
+   "command": "NVKMS_IOCTL_QUERY_DPY_CRC32",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 43,
+   "param_size": 36,
+   "param_struct": "NvKmsQueryDpyCRC32Params",
+   "proc": "QueryDpyCRC32"
+  },
+  {
+   "command": "NVKMS_IOCTL_REGISTER_DEFERRED_REQUEST_FIFO",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 44,
+   "param_size": 12,
+   "param_struct": "NvKmsRegisterDeferredRequestFifoParams",
+   "proc": "RegisterDeferredRequestFifo"
+  },
+  {
+   "command": "NVKMS_IOCTL_UNREGISTER_DEFERRED_REQUEST_FIFO",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 45,
+   "param_size": 12,
+   "param_struct": "NvKmsUnregisterDeferredRequestFifoParams",
+   "proc": "UnregisterDeferredRequestFifo"
+  },
+  {
+   "command": "NVKMS_IOCTL_ALLOC_SWAP_GROUP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 46,
+   "param_size": 12,
+   "param_struct": "NvKmsAllocSwapGroupParams",
+   "proc": "AllocSwapGroup"
+  },
+  {
+   "command": "NVKMS_IOCTL_FREE_SWAP_GROUP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 47,
+   "param_size": 12,
+   "param_struct": "NvKmsFreeSwapGroupParams",
+   "proc": "FreeSwapGroup"
+  },
+  {
+   "command": "NVKMS_IOCTL_JOIN_SWAP_GROUP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 48,
+   "param_size": 2568,
+   "param_struct": "NvKmsJoinSwapGroupParams",
+   "proc": "JoinSwapGroup"
+  },
+  {
+   "command": "NVKMS_IOCTL_LEAVE_SWAP_GROUP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 49,
+   "param_size": 1032,
+   "param_struct": "NvKmsLeaveSwapGroupParams",
+   "proc": "LeaveSwapGroup"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_SWAP_GROUP_CLIP_LIST",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 50,
+   "param_size": 32,
+   "param_struct": "NvKmsSetSwapGroupClipListParams",
+   "proc": "SetSwapGroupClipList"
+  },
+  {
+   "command": "NVKMS_IOCTL_GRANT_SWAP_GROUP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 51,
+   "param_size": 16,
+   "param_struct": "NvKmsGrantSwapGroupParams",
+   "proc": "GrantSwapGroup"
+  },
+  {
+   "command": "NVKMS_IOCTL_ACQUIRE_SWAP_GROUP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 52,
+   "param_size": 12,
+   "param_struct": "NvKmsAcquireSwapGroupParams",
+   "proc": "AcquireSwapGroup"
+  },
+  {
+   "command": "NVKMS_IOCTL_RELEASE_SWAP_GROUP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 53,
+   "param_size": 12,
+   "param_struct": "NvKmsReleaseSwapGroupParams",
+   "proc": "ReleaseSwapGroup"
+  },
+  {
+   "command": "NVKMS_IOCTL_SWITCH_MUX",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 54,
+   "param_size": 24,
+   "param_struct": "NvKmsSwitchMuxParams",
+   "proc": "SwitchMux"
+  },
+  {
+   "command": "NVKMS_IOCTL_GET_MUX_STATE",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 55,
+   "param_size": 16,
+   "param_struct": "NvKmsGetMuxStateParams",
+   "proc": "GetMuxState"
+  },
+  {
+   "command": "NVKMS_IOCTL_ENABLE_VBLANK_SYNC_OBJECT",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 56,
+   "param_size": 20,
+   "param_struct": "NvKmsEnableVblankSyncObjectParams",
+   "proc": "EnableVblankSyncObject"
+  },
+  {
+   "command": "NVKMS_IOCTL_DISABLE_VBLANK_SYNC_OBJECT",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 57,
+   "param_size": 20,
+   "param_struct": "NvKmsDisableVblankSyncObjectParams",
+   "proc": "DisableVblankSyncObject"
+  },
+  {
+   "command": "NVKMS_IOCTL_NOTIFY_VBLANK",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 58,
+   "param_size": 20,
+   "param_struct": "NvKmsNotifyVblankParams",
+   "proc": "NotifyVblank"
+  },
+  {
+   "command": "NVKMS_IOCTL_SET_FLIPLOCK_GROUP",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 59,
+   "param_size": 72,
+   "param_struct": "NvKmsSetFlipLockGroupParams",
+   "proc": "SetFlipLockGroup"
+  },
+  {
+   "command": "NVKMS_IOCTL_ENABLE_VBLANK_SEM_CONTROL",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 60,
+   "param_size": 32,
+   "param_struct": "NvKmsEnableVblankSemControlParams",
+   "proc": "EnableVblankSemControl"
+  },
+  {
+   "command": "NVKMS_IOCTL_DISABLE_VBLANK_SEM_CONTROL",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 61,
+   "param_size": 16,
+   "param_struct": "NvKmsDisableVblankSemControlParams",
+   "proc": "DisableVblankSemControl"
+  },
+  {
+   "command": "NVKMS_IOCTL_ACCEL_VBLANK_SEM_CONTROLS",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 62,
+   "param_size": 16,
+   "param_struct": "NvKmsAccelVblankSemControlsParams",
+   "proc": "AccelVblankSemControls"
+  },
+  {
+   "command": "NVKMS_IOCTL_FRAMEBUFFER_CONSOLE_DISABLED",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 63,
+   "param_size": 8,
+   "param_struct": "NvKmsFramebufferConsoleDisabledParams",
+   "proc": "FramebufferConsoleDisabled"
+  },
+  {
+   "command": "NVKMS_IOCTL_REGISTER_VBLANK_INTR_CALLBACK",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 64,
+   "param_size": 40,
+   "param_struct": "NvKmsRegisterVblankIntrCallbackParams",
+   "proc": "RegisterVblankIntrCallback"
+  },
+  {
+   "command": "NVKMS_IOCTL_UNREGISTER_VBLANK_INTR_CALLBACK",
+   "custom_user": false,
+   "emitted": true,
+   "ordinal": 65,
+   "param_size": 20,
+   "param_struct": "NvKmsUnregisterVblankIntrCallbackParams",
+   "proc": "UnregisterVblankIntrCallback"
+  }
+ ],
  "opaque": [],
  "schema": "gspwn.syzlang-generation/1",
  "size_mismatch": [],
@@ -8581,7 +9253,8 @@
   "allocation": {
    "privileged": 67
   },
-  "control": {}
+  "control": {},
+  "modeset": {}
  },
  "unresolved": [],
  "uvm": [

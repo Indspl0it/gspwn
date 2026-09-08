@@ -112,9 +112,13 @@ combines `_IOC_READ` and `_IOC_WRITE` or is numeric. The reassembled request is
 | `/dev/nvidia-uvm-tools` | `openat$nvidia_uvm_tools` |
 | `/dev/nvidiaN` | `openat$nvidia` |
 | `/dev/dri/*` | `openat$dri` |
-| `/dev/nvidia-modeset` | Refused: out of scope |
+| `/dev/nvidia-modeset` | `openat$nvidia_modeset` |
 
 Any other path is skipped silently.
+
+`openat$dri` is emitted for `/dev/dri/*`, and the committed description set
+declares no such call, so a trace touching those nodes yields a seed the
+syzkaller parse gate refuses.
 
 ## The converted program
 

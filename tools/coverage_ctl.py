@@ -1323,7 +1323,7 @@ def completion_status(run_ids=None, corpus=None, ledger_path=None):
            "deferred": None, "closed": None, "total": None, "remaining": [],
            "detail": "", "driver_version": None,
            "ledger": ps.surface_ledger_path(ledger_path),
-           "corpora": []}
+           "corpora": [], "denominator_version": None}
     try:
         import surface_cov
         targets = None
@@ -1357,6 +1357,11 @@ def completion_status(run_ids=None, corpus=None, ledger_path=None):
                 "surface_verify.py check"
                 % (", ".join(empty), len(targets or {})))
         keys = {t["abi_key"] for t in targets.values()}
+        # The generation of the surface this reading counted against. It rides
+        # with the counts, so a round stamping it from this record stamps the
+        # denominator its own numbers came from and never a later one.
+        out["denominator_version"] = ps.denominator_version_for_total(
+            len(keys))
         exercised_keys = {targets[v]["abi_key"] for v in reached}
         accounted, deferred = ps.surface_ledger_keys(out["ledger"],
                                                      out["driver_version"])
@@ -1414,7 +1419,28 @@ def cmd_completion(a):
     for line in st["corpora"]:
         print("corpus %s" % line)
     print("ledger %s" % st["ledger"])
+    # .get, because a reading handed in by a caller predating this field
+    # carries no such key and reads the same as one that measured nothing.
+    version = st.get("denominator_version")
+    print("denominator %s" % (version or "unmeasured"))
     print("%s: %s" % (st["verdict"], st["detail"]))
+    # Each run's round recorded the denominator its own counts were taken
+    # against. Where a run's round was measured on another one, both are
+    # stated and neither is folded into the other.
+    if version:
+        state = ps.load()
+        for rid in (a.run_id or []):
+            r = ps.round_of_run(state, rid)
+            if r is None:
+                continue
+            recorded = ps.round_denominator_version(r)
+            if recorded == version:
+                continue
+            print("run %s belongs to round %s, measured on denominator %s "
+                  "over %d target(s). Its recorded counts and this reading "
+                  "are not comparable as one series."
+                  % (rid, r.get("round"), recorded,
+                     ps.denominator_total(recorded)))
     if not a.run_id and not a.corpus:
         # `exercised` means a program's text names the variant, and the seed
         # bank holds one generated program per target whether or not anything

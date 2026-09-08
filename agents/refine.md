@@ -95,7 +95,7 @@ for, and supplying valid object-chain seeds it cannot invent.
    - control-multiplexer commands that are modeled as opaque buffers
    - seeds that parse but whose ioctls consistently return errors
    - `python3 tools/surface_cov.py report --run-id <run-id>`, the three-stage
-     decomposition of the 764 targetable commands into targetable, modelled
+     decomposition of the 828 targetable commands into targetable, modelled
      and exercised.
      A loss at each stage has a different fix. Modelled over targetable is the
      describe phase's own completeness. Exercised over modelled measures
@@ -120,7 +120,7 @@ for, and supplying valid object-chain seeds it cannot invent.
    | unmodeled | No description exists | Author one (describe) |
    | mismodeled | A description exists and calls are rejected before reaching real work (wrong struct, wrong direction, bad constraint) | Correct it (describe) |
    | unreachable-by-construction | Needs a handle or object chain random generation will not build | A seed from a real workload (seeds) |
-   | out of scope / firmware | Lives behind GSP, or is modeset, or is closed to the tenant by an in-handler capability check | No describe or seeds work. Record it in the completion ledger at step 7 |
+   | out of scope / firmware | Lives behind GSP, or is closed to the tenant by an in-handler capability check | No describe or seeds work. Record it in the completion ledger at step 7 |
 
    The report's coverage claims read their scope from that ledger, and the
    loop's completion condition reads the accounted-for half from it.
@@ -239,7 +239,7 @@ for, and supplying valid object-chain seeds it cannot invent.
    measured with and the stop decision is recomputed from the ledger.
 
    The ledger lets the campaign finish. Completion is
-   `exercised + accounted-for = 764`, and until every unreachable target
+   `exercised + accounted-for = 828`, and until every unreachable target
    carries a reason the loop can only stop on a plateau or on a cap, and
    neither says the work is done.
 8. Promote the round's corpus into the seed bank so the next round starts
@@ -288,10 +288,10 @@ for, and supplying valid object-chain seeds it cannot invent.
   instrumented. Never present an edge count as total driver coverage.
 - Surface coverage is a ratio over the driver's enumerated command surface, so
   state it as a share of the commands the corpus names. It carries no claim
-  about lines of driver code. The denominator is 764 targets: 32 escape, 39
-  uvm, 7 uvm_tools, 531 control and 155 alloc.
+  about lines of driver code. The denominator is 828 targets: 32 escape, 39
+  uvm, 7 uvm_tools, 531 control, 155 alloc and 64 modeset.
 
-Four groups sit outside that denominator by construction and stay outside any
+Five groups sit outside that denominator by construction and stay outside any
 percentage:
 
 | Group | Count | Reason for exclusion |
@@ -300,6 +300,7 @@ percentage:
 | uvm_test | 104 | Commands that need `uvm_enable_builtin_tests=1` |
 | escape_dead | 3 | Escapes declared in nv_escape.h with no dispatch case |
 | escape_mux | 2 | NV_ESC_RM_CONTROL and NV_ESC_RM_ALLOC, whose leaves are already counted in the control and alloc families |
+| modeset_undispatched | 2 | Declared in `enum NvKmsIoctlCommand` with an empty dispatch entry, so `nvKmsIoctl` returns before any handler runs |
 
 ## State
 Record the round outcome so the orchestrator can make the loop decision. Let

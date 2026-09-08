@@ -1,0 +1,61 @@
+# No description in this repository had ever been compiled by syzkaller
+# before this job existed. The first run of it found one syntactically
+# invalid const on ioctl$UVM_DEINITIALIZE that had shipped since the
+# description set was first generated.
+#
+# This is a separate job from `selftest`, which is offline and pure Python.
+# The compile gate clones a Go dependency and builds a binary, so folding it
+# into that job would stop the offline job being offline.
+#
+# The syzkaller revision is pinned to a commit hash, and tools/syzlang_gen.py
+# pins the same value in SYZKALLER_REV. A branch or a tag can move, and a
+# green run then stops being reproducible.
+name: syzlang
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'descriptions/**'
+      - 'tools/syzlang_gen.py'
+      - 'tools/gspwn-check/**'
+      - 'tools/syz-stub/**'
+      - '.github/workflows/syzlang.yml'
+
+env:
+  SYZKALLER_REV: 1e72964b0111319984575e60f266d1fa0a98abb5
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      # The clone is one revision deep. syzkaller's full history is 168M and
+      # the gate reads pkg/ast and pkg/compiler only. Its sys/linux
+      # description corpus is never used: tools/syz-stub supplies the one
+      # declaration gspwn's files depend on.
+      - name: Fetch the pinned syzkaller revision
+        run: |
+          echo "syzkaller revision: $SYZKALLER_REV"
+          git init --quiet "$RUNNER_TEMP/syzkaller"
+          git -C "$RUNNER_TEMP/syzkaller" remote add origin \
+            https://github.com/google/syzkaller
+          git -C "$RUNNER_TEMP/syzkaller" fetch --quiet --depth 1 \
+            origin "$SYZKALLER_REV"
+          git -C "$RUNNER_TEMP/syzkaller" checkout --quiet FETCH_HEAD
+          git -C "$RUNNER_TEMP/syzkaller" rev-parse HEAD
+
+      - name: Compile the description set
+        run: |
+          python3 tools/syzlang_gen.py compile \
+            --syzkaller "$RUNNER_TEMP/syzkaller"

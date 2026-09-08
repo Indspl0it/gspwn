@@ -10,9 +10,16 @@ track_k:
     - "mmap$nvidia*"
     - "ioctl$NV_*"
     - "ioctl$UVM_*"
+    # /dev/nvidia-modeset. Its own pattern, because every variant is named
+    # for an NvKmsIoctlCommand enumerator and NVKMS_ does not match NV_*.
+    # Six families are modelled: escape, uvm, uvm_tools, control, alloc and
+    # modeset, 828 targets in total.
+    - "ioctl$NVKMS_*"
     # nvidia-drm / /dev/dri are out of scope: a default container tenant
     # (compute,utility) never receives those nodes. See the README threat
-    # model before adding them back.
+    # model before adding them back. /dev/nvidia-modeset is not out of scope:
+    # libnvidia-container creates it by default and withholds it only under
+    # OPT_NO_MODESET.
   sandbox: "namespace"
   procs: 2                 # capped to protect 32GB RAM budget
   memory_max: "12G"        # systemd cgroup MemoryMax for syz-manager
@@ -42,7 +49,7 @@ loop:
   # search, not the bill: this repo has no view of what an instance costs.
   # Watch real money in the AWS console.
   # Backstop against a runaway loop, not the expected termination. The
-  # campaign stops on completion: every one of the 764 enumerated targets is
+  # campaign stops on completion: every one of the 828 enumerated targets is
   # either exercised or carries a written reason in the completion ledger
   # (pipeline_ctl.py surface-account). Against that denominator from an empty
   # corpus, a cap of 3 stopped every campaign long before completion could
@@ -189,7 +196,7 @@ coverage:
   # report.
   #
   # tools/surface_cov.py measures the other axis, over a denominator the
-  # driver enumerates itself: 764 reachable commands, of which the corpus
+  # driver enumerates itself: 828 reachable commands, of which the corpus
   # names some. That is a claim about the command surface and never about
   # lines of driver code, and it separates the two readings of a plateau.
   # coverage_ctl.py records it as the `surface` column and reads the two

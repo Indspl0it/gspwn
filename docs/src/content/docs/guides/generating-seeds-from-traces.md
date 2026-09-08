@@ -240,10 +240,13 @@ starts with fewer programs than the bank holds and nothing says so.
 
 ## Out-of-scope devices
 
-`/dev/nvidia-modeset` is refused at conversion time. The `describe` phase does
-not model it, so a seed referencing it would fail the syzkaller-parse gate.
-See [Scope and targets](/gspwn/guides/scope-and-targets/) for why those nodes
-are excluded.
+`/dev/nvidia-modeset` is modelled from this branch onward and converts to
+`openat$nvidia_modeset`. A trace does not name the modeset sub-command. Every
+modeset call carries one kernel request number, and the selector sits in the
+parameter struct, which the trace format does not record.
+
+`/dev/dri/*` stays outside the model. See
+[Scope and targets](/gspwn/guides/scope-and-targets/) for the reason.
 
 ## Preconditions that cannot be reached
 

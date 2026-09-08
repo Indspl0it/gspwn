@@ -11,7 +11,7 @@ the outer one, whose decision is whether another campaign is worth running.
 | Curve | Quantity | Bounded |
 |---|---|---|
 | Edge | Distinct KCOV edges against cumulative executions | No known asymptote, so the verdict is an extrapolation from a fitted curve |
-| Surface | Enumerated targets this run's corpus names | Counted at 764, so the reading is subtraction |
+| Surface | Enumerated targets this run's corpus names | Counted at 828, so the reading is subtraction |
 
 Samples land in one CSV per run per track. The sampler runs from the
 `gspwn-coverage` timer as root.
@@ -126,7 +126,7 @@ suppressed by `campaign_finished`, which bounds the file's growth.
 | Never let a missing configuration stop the verdict path | Several other tools call this path |
 | Never charge Track U for the GPU | Those harnesses run in a container and never touch the card, so their samples record `n/a` |
 | Never record a surface count for Track U | Those harnesses produce no syzlang programs, and a 0 would put an absence of evidence into the curve as a measurement |
-| Never fit Heaps' law to the surface series | An unbounded power law over a quantity bounded at 764 predicts more new targets than remain, and the dynamic range makes the `R2` gate close to arbitrary |
+| Never fit Heaps' law to the surface series | An unbounded power law over a quantity bounded at 828 predicts more new targets than remain, and the dynamic range makes the `R2` gate close to arbitrary |
 | Never apply the surface reading before the GPU gate | A dead GPU does not flatten the surface count the way it flattens the edge count, so a climbing surface curve is no evidence that the card is alive |
 | Never add the exercised and accounted counts | A target can be exercised in a later round after an earlier one wrote a reason for it, and the sum would close the ledger while targets remained |
 
