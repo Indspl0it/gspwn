@@ -39,7 +39,7 @@ The chain is the unit of work and a command is not, because a command becomes
 reachable when the chain that owns it exists.
 `surface/rm-chains.json` measures how steep that join is: one
 allocation reaches 91 of the 531 targetable control commands, three reach 315
-and fifteen reach 455. A workload that builds a chain once and then issues
+and fifteen reach 458. A workload that builds a chain once and then issues
 every command that class owns is worth many workloads that rebuild a chain per
 call.
 
@@ -135,7 +135,7 @@ call.
 
    Exit 4 means fewer than two independent version sources answered, so
    nothing was compared and the check established nothing. Independence is
-   counted by group: the six committed artefact files all take their version
+   counted by group: the eleven stamped artefact files all take their version
    from one `version.mk` and count once, so a workstation with no driver
    loaded and no checkout reaches exit 4 on a healthy tree. Load the driver,
    set `driver_branch` in `config/machine.yaml`, or point `--src` at a
@@ -232,9 +232,10 @@ real workload can, and to capture the fd lifecycle around them.
 Round-1 items are tagged `[history CVE-YYYY-NNNNN]`, or
 `[history CVE-YYYY-NNNNN +N]` when several CVEs share the patch set. NVB0CC
 (ProfilerBase, the HWPM profiler) and NV83DE (KernelSMDebuggerSession) account
-for most of the commands behind them. ProfilerBase is one of the four classes
-`rm-chains.json` reports no chain for, so its 9 commands reach no chain-shaped
-program and a trace is the only route to them. A history item ranks a place
+for most of the commands behind them. ProfilerBase has no `RS_ENTRY` row of
+its own, so `rm-chains.json` records its 9 commands against the chain it
+borrows from `ProfilerCtx`, and the chain-shaped programs from step 1 already
+reach them. A history item ranks a place
 where the vendor found a bug. It is not evidence that a bug remains there.
 `pipeline_ctl.py worklist` does not print this path, because refine has
 recorded nothing in round 1.
