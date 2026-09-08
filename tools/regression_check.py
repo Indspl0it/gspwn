@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Twelve CI checks over the committed surface artefacts.
+"""Thirteen CI checks over the committed surface artefacts.
 
 Each one catches a class of defect that reached the repository unnoticed
 because nothing compared two artefacts that have to agree:
@@ -28,6 +28,25 @@ because nothing compared two artefacts that have to agree:
                 produce them, so a driver bump that moves the inventories
                 leaves both stale, and the seeds phase is otherwise the first
                 thing to notice, at run time, on the target.
+    reach       every emitted control command's handle type accepts the
+                external class the allocation chain for its owning class ends
+                on, and a command whose owning class the chain artefact
+                reports unreachable takes the untyped handle. rm-chains.json
+                states, per owning class, whether an unprivileged process can
+                build an object of it, and the description set states, per
+                command, which resource hObject takes. The two contradicted
+                each other for the whole life of a branch over the 15
+                commands the NVOC base classes Memory and ProfilerBase own.
+                The chain artefact joined on RS_ENTRY rows alone and reported
+                those two classes under unresolved_owning_classes, while the
+                emitter read internal_ancestors and typed all 15 on the
+                family resources nvh_any_memory and nvh_any_profilerbase,
+                which exist because descendants of those bases are
+                allocatable. `derived` compares handler names and counts a
+                command accounted for whether it sits under a chain or under
+                the unresolved block, so all 531 matched in either world, and
+                `pins` reads hObject only to form a unique (cmd, hObject)
+                pair and never opens the chain artefact.
     families    every field bound to a value family carries a family the
                 audit in surface/value-families-audit.json accepted, and
                 every accepted family is bound to its field with its own set
@@ -114,12 +133,13 @@ because nothing compared two artefacts that have to agree:
                 One page told a reader to run `crash_ctl.py`, a tool that has
                 never existed.
 
-Run one, or all twelve:
+Run one, or all thirteen:
 
     python3 tools/regression_check.py names
     python3 tools/regression_check.py pins
     python3 tools/regression_check.py coverage
     python3 tools/regression_check.py derived
+    python3 tools/regression_check.py reach
     python3 tools/regression_check.py families
     python3 tools/regression_check.py pages
     python3 tools/regression_check.py stale
@@ -186,7 +206,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IOCTL_MAP = os.path.join(REPO_ROOT, "tools", "ioctl_map.json")
 DESC_DIR = surface_cov.DEFAULT_DESC
 CHAINS = os.path.join(surface_cov.SURFACE_DIR, "rm-chains.json")
+CHAINS_REMEDY = "python3 tools/object_graph.py chains"
 CTRL_RANK = os.path.join(surface_cov.SURFACE_DIR, "rm-control-rank.json")
+OBJECT_GRAPH = os.path.join(surface_cov.SURFACE_DIR, "rm-object-graph.json")
+OBJECT_GRAPH_REMEDY = "python3 tools/object_graph.py extract"
 PAGES_DIR = refgen.DEFAULT_OUT
 PAGES_REMEDY = "python3 tools/refgen.py"
 GENERATION = os.path.join(DESC_DIR, "generation.json")
@@ -210,8 +233,7 @@ LF = b"\n"
 # are produced from surface/rm-control-inventory.json, so both go
 # stale against the same driver bump.
 DERIVED = [
-    ("rm-chains.json", CHAINS, "gspwn.rm-chains/1", "chains",
-     "tools/object_graph.py chains"),
+    ("rm-chains.json", CHAINS, "gspwn.rm-chains/1", "chains", CHAINS_REMEDY),
     ("rm-control-rank.json", CTRL_RANK, "gspwn.rm-control-rank/1", "commands",
      "tools/ctrl_rank.py rank"),
 ]
@@ -1631,6 +1653,412 @@ def check_derived():
     return 1
 
 
+# The resource hObject takes where the object graph places no allocatable
+# external class under the command's owning class. It is the root every other
+# handle resource derives from, so it names no class and accepts a handle
+# from anywhere.
+UNTYPED_HANDLE = "nv_handle"
+
+# The prefix tools/syzlang_gen.py builds a family resource name from, in
+# family_resource_name: this followed by the NVOC class name in lower case. A
+# family is declared for an NVOC class covering more than one allocatable
+# external class, and hObject typed on it takes a handle from any of them.
+FAMILY_PREFIX = "nvh_any_"
+
+
+def read_object_graph():
+    """-> {external class: frozenset(NVOC classes it is an instance of)}.
+
+    Each record's own `internal_class` together with its `internal_ancestors`,
+    which tools/object_graph.py extract derives from the NVOC hierarchy the
+    generated headers state. resource_list.h names one internal class per
+    allocatable external class and never a base, so the ancestor list is the
+    only place a base class such as Memory appears at all. A family resource
+    resolves back to the classes it accepts through that list.
+    """
+    try:
+        with open(OBJECT_GRAPH, encoding="utf-8") as handle:
+            doc = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise CheckInput("%s: %s. Produce it with `%s`."
+                         % (OBJECT_GRAPH, exc, OBJECT_GRAPH_REMEDY))
+    records = doc.get("records") if isinstance(doc, dict) else None
+    if not isinstance(records, list) or not records:
+        raise CheckInput(
+            "%s carries no `records` array with anything in it. A run over an "
+            "empty object graph resolves every family resource to no class "
+            "at all and reports every typed command as an offender, so it is "
+            "refused. Produce it with `%s`."
+            % (OBJECT_GRAPH, OBJECT_GRAPH_REMEDY))
+    membership = {}
+    for index, record in enumerate(records):
+        at = "records[%d]" % index
+        external = _record_field(OBJECT_GRAPH, at, record, "external_class")
+        internal = _record_field(OBJECT_GRAPH, at, record, "internal_class")
+        ancestors = record.get("internal_ancestors")
+        if ancestors is None:
+            raise CheckInput(
+                "%s: %s (%s) carries no `internal_ancestors`, so the NVOC "
+                "hierarchy cannot be read and every family resource would "
+                "resolve to the classes named directly. Regenerate it with "
+                "`%s`." % (OBJECT_GRAPH, at, external, OBJECT_GRAPH_REMEDY))
+        if not isinstance(ancestors, list):
+            raise CheckInput(
+                "%s: %s (%s) carries `internal_ancestors` as %s and this "
+                "check reads a list of NVOC class names."
+                % (OBJECT_GRAPH, at, external, type(ancestors).__name__))
+        if external in membership:
+            raise CheckInput(
+                "%s declares the external class %s twice, so an object of it "
+                "has two ancestor sets and no single one answers which "
+                "family resource a handle of it satisfies."
+                % (OBJECT_GRAPH, external))
+        membership[external] = frozenset([internal] + list(ancestors))
+    logger.info("object graph: %d external class(es), %d NVOC class name(s)",
+                len(membership),
+                len(set().union(*membership.values())) if membership else 0)
+    return membership
+
+
+def read_generation_arrays():
+    """-> (the emitted control records, {resource: external class}).
+
+    Both arrays sit in descriptions/generation.json, the manifest
+    tools/syzlang_gen.py emit records beside the description files. The
+    allocation array is the authority on which external classes the
+    description set allocates at all, and so on which of them a family
+    resource can accept a handle of.
+    """
+    raw = read_generation()[0]
+    control = raw.get("control")
+    if not isinstance(control, list) or not control:
+        raise CheckInput(
+            "%s carries no `control` array with anything in it, so no "
+            "command has a handle type to compare. Produce it with `%s`."
+            % (GENERATION, GENERATION_REMEDY))
+    allocations = raw.get("allocations")
+    if not isinstance(allocations, list) or not allocations:
+        raise CheckInput(
+            "%s carries no `allocations` array with anything in it, so no "
+            "resource resolves to an external class and every typed command "
+            "reports as an offender. Produce it with `%s`."
+            % (GENERATION, GENERATION_REMEDY))
+
+    classes = {}
+    for index, record in enumerate(allocations):
+        at = "allocations[%d]" % index
+        resource = _record_name(GENERATION, at, record, "resource")
+        external = _record_name(GENERATION, at, record, "class")
+        first = classes.setdefault(resource, external)
+        if first != external:
+            raise CheckInput(
+                "%s: %s names the resource %s for class %s, and an earlier "
+                "record names it for %s. One resource naming two classes "
+                "leaves no answer to which class a handle of it holds."
+                % (GENERATION, at, resource, external, first))
+
+    emitted, unemitted = [], 0
+    for index, record in enumerate(control):
+        at = "control[%d]" % index
+        flag = _record_field(GENERATION, at, record, "emitted")
+        if not isinstance(flag, bool):
+            raise CheckInput(
+                "%s: %s carries `emitted` as %s and this check reads a "
+                "boolean." % (GENERATION, at, type(flag).__name__))
+        if not flag:
+            unemitted += 1
+            continue
+        _record_name(GENERATION, at, record, "handler")
+        _record_name(GENERATION, at, record, "owning_class")
+        _record_name(GENERATION, at, record, "object_resource")
+        emitted.append(record)
+    if not emitted:
+        raise CheckInput(
+            "%s emits none of its %d control record(s), so the description "
+            "set declares no control variant and there is no handle type to "
+            "compare. Produce it with `%s`."
+            % (GENERATION, len(control), GENERATION_REMEDY))
+    logger.info("generation: %d emitted control record(s), %d unemitted, "
+                "%d allocation resource(s)",
+                len(emitted), unemitted, len(classes))
+    return emitted, classes, unemitted
+
+
+def handle_class_set(resource, alloc_class, alloc_classes, membership,
+                     by_lower):
+    """-> (the external classes a handle of `resource` can name, a fault).
+
+    Three shapes of resource, and the fault is the message for one of no
+    shape. The untyped handle names no class, which is the reading that makes
+    an unreachable owning class agree with the chain artefact where a wider
+    reading would let every command agree with it vacuously. A family
+    resource resolves through the NVOC hierarchy, restricted to the classes
+    the description set allocates, because a class no description allocates
+    yields no handle whatever the hierarchy says. Every other resource is one
+    the allocation array names, and it accepts the one class that array pairs
+    with it.
+    """
+    if resource == UNTYPED_HANDLE:
+        return frozenset(), None
+    if resource.startswith(FAMILY_PREFIX):
+        stem = resource[len(FAMILY_PREFIX):]
+        named = by_lower.get(stem)
+        if not named:
+            return frozenset(), ("is a family resource naming the NVOC class "
+                                 "%r, which the object graph carries under "
+                                 "no record" % stem)
+        classes = frozenset(
+            external for external, names in membership.items()
+            if names & named) & alloc_classes
+        if not classes:
+            return frozenset(), ("is a family resource the object graph "
+                                 "places no allocatable external class "
+                                 "under, so no handle of it can be built")
+        return classes, None
+    external = alloc_class.get(resource)
+    if external is None:
+        return frozenset(), ("is neither nv_handle nor a family resource, "
+                             "and none of the %d resource(s) the allocation "
+                             "array names" % len(alloc_class))
+    return frozenset([external]), None
+
+
+def chain_reach(doc):
+    """-> ({owning class: the external class its chain ends on, or None},
+    [problem]).
+
+    A record whose `chain` is a non-empty list reaches the class its
+    `target_external_class` names. A record whose chain is empty or null
+    reaches nothing, and so does an owning class the artefact lists under
+    `unresolved_owning_classes`. A class stated both ways is a contradiction
+    inside one artefact and is reported here, because the two statements
+    demand opposite handle types below.
+    """
+    reach, problems = {}, []
+    for index, record in enumerate(doc["chains"]):
+        at = "chains[%d]" % index
+        internal = _record_name(CHAINS, at, record, "internal_class")
+        steps = _record_field(CHAINS, at, record, "chain")
+        if steps is not None and not isinstance(steps, list):
+            raise CheckInput("%s: %s carries `chain` as %s and this check "
+                             "reads a list of steps or null."
+                             % (CHAINS, at, type(steps).__name__))
+        if internal in reach:
+            raise CheckInput(
+                "%s declares the internal class %s twice, so it states two "
+                "reachability verdicts for one owning class."
+                % (CHAINS, internal))
+        reach[internal] = (_record_name(CHAINS, at, record,
+                                        "target_external_class")
+                           if steps else None)
+
+    unresolved = doc.get("unresolved_owning_classes")
+    if not isinstance(unresolved, list):
+        raise CheckInput(
+            "%s carries no `unresolved_owning_classes` array. An owning class "
+            "with no chain record at all appears there and nowhere else, "
+            "which is the state the 15 Memory and ProfilerBase commands sat "
+            "in, so without that block this check reads their owning class "
+            "as one the artefact says nothing about." % CHAINS)
+    for index, row in enumerate(unresolved):
+        at = "unresolved_owning_classes[%d]" % index
+        owner = _record_name(CHAINS, at, row, "owning_class")
+        if reach.get(owner):
+            problems.append(
+                "%s reports %s under unresolved_owning_classes and under a "
+                "chain record ending on %s, so the artefact states both that "
+                "no object of it can be built and that one can"
+                % (at, owner, reach[owner]))
+        reach.setdefault(owner, None)
+    return reach, problems
+
+
+def check_reach():
+    """Every emitted control command's handle type accepts the class its
+    owning class's allocation chain ends on.
+
+    The invariant, in both directions, over the commands
+    descriptions/generation.json records as emitted:
+
+      1. surface/rm-chains.json states a reachability verdict for every
+         owning class the description set names, under a `chains` record or
+         under `unresolved_owning_classes`, and never both.
+      2. Where the verdict is a non-empty chain, the command's
+         `object_resource` accepts the class that chain's
+         `target_external_class` names.
+      3. Where the verdict is no chain, the command's `object_resource` is
+         nv_handle, which accepts no class.
+
+    A resource resolves to the external classes it accepts three ways.
+    nv_handle accepts none. A resource the `allocations` array of
+    generation.json names accepts the one `class` that array pairs with it. A
+    family resource `nvh_any_<name>` accepts every external class
+    surface/rm-object-graph.json places under the NVOC class `<name>`, that
+    is every record whose `internal_class` is `<name>` or whose
+    `internal_ancestors` holds `<name>`, restricted to the classes
+    `allocations` allocates. That restriction matters because a class no
+    description allocates yields no handle whatever the NVOC hierarchy says.
+
+    The rendered hObject is read as well, so the comparison is against the
+    field syzkaller resolves and not against a manifest entry nothing uses.
+
+    Both statements come from the NVOC hierarchy in the driver source by two
+    routes that never meet. tools/object_graph.py chains re-parses that source
+    and writes the chain artefact; tools/syzlang_gen.py emit reads the
+    surface/rm-object-graph.json that tools/object_graph.py extract writes
+    from the same source. `object_graph.py chains` joined on RS_ENTRY rows
+    alone for the whole life of a branch, so the NVOC base classes Memory and
+    ProfilerBase carried no chain and their 15 commands sat under
+    unresolved_owning_classes, while the emitter read internal_ancestors and
+    typed all 15 on nvh_any_memory and nvh_any_profilerbase, whose members a
+    chain does reach. Twelve checks stayed green: `derived` counts a command
+    accounted for under either block, and `pins` reads hObject only to form a
+    unique (cmd, hObject) pair.
+    """
+    doc = _load_derived("rm-chains.json", CHAINS, "gspwn.rm-chains/1",
+                        "chains", CHAINS_REMEDY)
+    membership = read_object_graph()
+    control, alloc_class, unemitted = read_generation_arrays()
+    calls, structs = read_descriptions()
+
+    alloc_classes = frozenset(alloc_class.values())
+    by_lower = collections.defaultdict(set)
+    for names in membership.values():
+        for name in names:
+            by_lower[name.lower()].add(name)
+    ambiguous = sorted(stem for stem, names in by_lower.items()
+                       if len(names) > 1)
+    if ambiguous:
+        raise CheckInput(
+            "%s carries %d NVOC class name(s) that differ only in case: %s. "
+            "tools/syzlang_gen.py builds a family resource name by lowering "
+            "the class name, so two of them produce one resource and this "
+            "check cannot say which class it resolves to."
+            % (OBJECT_GRAPH, len(ambiguous),
+               ", ".join("/".join(sorted(by_lower[stem]))
+                         for stem in ambiguous)))
+
+    reach, problems = chain_reach(doc)
+
+    # Resolved once per distinct resource, because the resolution walks every
+    # object graph record and 531 commands name 41 resources between them.
+    resolved, faults = {}, {}
+    for record in control:
+        resource = record["object_resource"]
+        if resource in resolved:
+            continue
+        classes, fault = handle_class_set(resource, alloc_class,
+                                          alloc_classes, membership, by_lower)
+        resolved[resource] = classes
+        if fault:
+            faults[resource] = fault
+
+    offenders = []
+    reached = unreached = 0
+    for record in control:
+        handler = record["handler"]
+        owner = record["owning_class"]
+        resource = record["object_resource"]
+        classes = resolved[resource]
+        variant = surface_cov.CONTROL_PREFIX + handler
+
+        rendered = structs.get(calls.get(variant), {}).get("hObject")
+        if rendered is None:
+            offenders.append((handler, owner, resource,
+                              "is recorded as emitted and the description set "
+                              "declares no ioctl$%s with an hObject field, so "
+                              "nothing reads the handle type" % variant))
+        elif rendered.strip() != resource:
+            offenders.append((handler, owner, resource,
+                              "renders hObject as %r, so syzkaller resolves a "
+                              "handle type the manifest does not record"
+                              % rendered.strip()))
+
+        if resource in faults:
+            offenders.append((handler, owner, resource, faults[resource]))
+            continue
+        if owner not in reach:
+            offenders.append((handler, owner, resource,
+                              "is owned by %s, which %s places under neither "
+                              "a chain record nor unresolved_owning_classes, "
+                              "so the artefact states no reachability verdict "
+                              "for it at all"
+                              % (owner, os.path.relpath(CHAINS, REPO_ROOT)
+                                 .replace(os.sep, "/"))))
+            continue
+        target = reach[owner]
+        if target is None:
+            unreached += 1
+            if classes:
+                offenders.append((handler, owner, resource,
+                                  "takes a handle of %d external class(es) "
+                                  "while the chain artefact reports %s "
+                                  "unreachable, so the description set states "
+                                  "a chain the artefact says cannot be built"
+                                  % (len(classes), owner)))
+            continue
+        reached += 1
+        if not classes:
+            offenders.append((handler, owner, resource,
+                              "takes the untyped handle while the chain "
+                              "artefact reaches %s through %s, so the "
+                              "description set drops a chain the artefact "
+                              "states" % (target, owner)))
+        elif target not in classes:
+            offenders.append((handler, owner, resource,
+                              "accepts %d external class(es) and the chain "
+                              "for %s ends on %s, which is not one of them"
+                              % (len(classes), owner, target)))
+
+    families = sorted(r for r in resolved if r.startswith(FAMILY_PREFIX))
+    targets = frozenset(t for t in reach.values() if t)
+    print("reach: %d emitted control command(s) over %d owning class(es) and "
+          "%d handle type(s), %d unemitted record(s) not compared"
+          % (len(control), len({r["owning_class"] for r in control}),
+             len(resolved), unemitted))
+    print("reach: %d command(s) whose owning class a chain reaches, %d whose "
+          "owning class the artefact reports unreachable"
+          % (reached, unreached))
+    print()
+    print("  %-30s %8s %9s %9s" % ("family handle type", "accepts", "reached",
+                                   "commands"))
+    print("  %-30s %8s %9s %9s" % ("-" * 30, "-" * 8, "-" * 9, "-" * 9))
+    for name in families:
+        print("  %-30s %8d %9d %9d"
+              % (name, len(resolved[name]), len(resolved[name] & targets),
+                 sum(1 for r in control if r["object_resource"] == name)))
+    if not families:
+        print("  %s" % "no family handle type is named by any command")
+    print()
+
+    for problem in problems[:30]:
+        print("reach: %s" % problem, file=sys.stderr)
+    if len(problems) > 30:
+        print("reach: ... and %d more contradiction(s)"
+              % (len(problems) - 30), file=sys.stderr)
+
+    if not offenders and not problems:
+        print("reach: OK")
+        return 0
+    for handler, owner, resource, fault in sorted(offenders)[:40]:
+        print("%s (%s, %s) %s" % (handler, owner, resource, fault),
+              file=sys.stderr)
+    if len(offenders) > 40:
+        print("... and %d more offending command(s)" % (len(offenders) - 40),
+              file=sys.stderr)
+    print("reach: %d offending command(s), %d contradiction(s) inside %s"
+          % (len(offenders), len(problems),
+             os.path.relpath(CHAINS, REPO_ROOT).replace(os.sep, "/")),
+          file=sys.stderr)
+    print("The chain artefact and the description set state the same "
+          "reachability by two routes through the driver source that never "
+          "meet, so neither reports the other going stale. Regenerate both, "
+          "with `%s` after `%s`, and with `%s`."
+          % (CHAINS_REMEDY, OBJECT_GRAPH_REMEDY, GENERATION_REMEDY),
+          file=sys.stderr)
+    return 1
+
+
 def _first_difference(committed, generated):
     """-> (line number, committed line, generated line) for the first line the
     two differ on, or None.
@@ -3037,9 +3465,9 @@ def _resolve_value(option, where, action, value):
 
 # A count of this tool's own checks, stated in prose. The number word or digit
 # sits immediately before the noun, which is how all four statements in the
-# tree today are written: "the twelve checks CI runs", "over all twelve
-# checks". `artefact` and `regression` are admitted between the two because
-# AGENTS.md writes the first form with the adjective.
+# tree today are written: "the thirteen artefact checks CI runs", "over all
+# thirteen checks". `artefact` and `regression` are admitted between the two
+# because AGENTS.md writes the first form with the adjective.
 CHECK_COUNT_RE = re.compile(r"\b(\w+)\s+(?:artefact\s+|regression\s+)?"
                             r"checks?\b")
 
@@ -3989,6 +4417,7 @@ CHECKS = {
     "pins": check_pins,
     "coverage": check_coverage,
     "derived": check_derived,
+    "reach": check_reach,
     "families": check_families,
     "pages": check_pages,
     "stale": check_stale,
@@ -4003,13 +4432,16 @@ CHECKS = {
 # steps present them in. It follows the dependency between them, in three
 # bands.
 #
-# The first six read the description set. names and pins read it alone,
-# coverage, derived and families join it against the artefacts it was
-# generated from, and pages renders those artefacts.
+# The first seven read the description set. names and pins read it alone,
+# coverage, derived, reach and families join it against the artefacts it was
+# generated from, and pages renders those artefacts. reach follows derived
+# because both read rm-chains.json and derived settles whether that artefact
+# accounts for the control command set at all, which is the question that has
+# to hold before its per-class placement means anything.
 #
 # stale and harnesses follow because neither reads the description set: stale
-# reads the provenance record against the artefacts the first six compare, and
-# harnesses reads the Track U seam, which the first seven never touch.
+# reads the provenance record against the artefacts the first seven compare,
+# and harnesses reads the Track U seam, which the first eight never touch.
 #
 # agents, figures, citations and commands close the order because each reads
 # prose against something the bands above have already settled. agents and
@@ -4018,8 +4450,8 @@ CHECKS = {
 # reads, and citations resolves a cited path and line in a vendored source
 # tree. A prose failure reported before the artefact failure that caused it
 # names the page where the generator is the thing to edit.
-CHECK_ORDER = ("names", "pins", "coverage", "derived", "families", "pages",
-               "stale", "harnesses", "agents", "figures",
+CHECK_ORDER = ("names", "pins", "coverage", "derived", "reach", "families",
+               "pages", "stale", "harnesses", "agents", "figures",
                "citations", "commands")
 
 

@@ -211,8 +211,8 @@ it.
 Seven commands verify a change, and every one of them also runs on a push to
 `main` and on a pull request. `syzlang_gen.py compile` runs on a pull request
 only when it touches `descriptions/`, `tools/syzlang_gen.py`,
-`tools/gspwn-check/`, `tools/syz-stub/` or its own workflow file. The twelve
-`regression_check.py` checks run as twelve separate steps there.
+`tools/gspwn-check/`, `tools/syz-stub/` or its own workflow file. The thirteen
+`regression_check.py` checks run as thirteen separate steps there.
 
 | Command | Failure it catches |
 |---|---|
@@ -224,9 +224,13 @@ only when it touches `descriptions/`, `tools/syzlang_gen.py`,
 | `python3 tools/register_check.py` | Question-shaped headings and table column headers, which scan as labels and survive a read-through |
 | `python3 tools/syzlang_gen.py compile` | A description set syzkaller's own compiler rejects |
 
-`regression_check.py all` is itself twelve checks, run in this order: `names`,
-`pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`,
-`agents`, `figures`, `citations` and `commands`. `figures` asserts every
+`regression_check.py all` is itself thirteen checks, run in this order:
+`names`, `pins`, `coverage`, `derived`, `reach`, `families`, `pages`, `stale`,
+`harnesses`, `agents`, `figures`, `citations` and `commands`. `reach` joins the
+allocation chain the chain artefact reports for an owning class against the
+handle type the description set gives that class's commands. The other checks
+read both artefacts and compare neither statement against the other.
+`figures` asserts every
 published surface figure against the committed artefacts, so a denominator that
 moves in the inventories fails the build until every figure derived from it
 moves with it. `commands` parses every documented command line against its
