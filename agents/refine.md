@@ -112,8 +112,8 @@ for, and supplying valid object-chain seeds it cannot invent.
    targets a description declares and no program in the corpus names, which
    hold the **mismodeled** and **unreachable-by-construction** gaps, and
    telling those two apart still takes the analysis below. `--family`
-   restricts either list to escape, uvm, uvm_tools, control or alloc, and
-   `--top N` bounds its length. The classifications:
+   restricts either list to escape, uvm, uvm_tools, control, alloc, modeset
+   or drm, and `--top N` bounds its length. The classifications:
 
    | Classification | Condition | Fix |
    |---|---|---|
@@ -214,7 +214,7 @@ for, and supplying valid object-chain seeds it cannot invent.
 
    `deliberately-deferred` is the one reason that does not count towards
    completion. It records that a reachable target was put aside, and a round
-   that writes it still has that target open. The other eight reasons each
+   that writes it still has that target open. The other seven reasons each
    assert that the target cannot be reached, and the identity counts those.
    Deferring the remainder of the surface does not finish a campaign.
 
@@ -306,8 +306,11 @@ percentage:
 ## State
 Record the round outcome so the orchestrator can make the loop decision. Let
 the tool measure it from the run's coverage.csv, and do not transcribe the
-numbers by hand. `--run-hours` is the spend ceiling the loop enforces, and a
-typo in it is a typo in a budget.
+numbers by hand. `--run-hours` bills hours to the round total, and hours
+derived per run are preferred over it. The spend ceiling is
+`loop.max_total_run_hours`, default 5000, which `campaign_ctl.py` checks
+against the spend ledger `state/spend.json` before it installs a campaign, so
+a typo in `--run-hours` is a typo in the figure that ceiling reads.
 Pass `--from-run` once for every campaign this round ran, Track K and Track U
 alike. Each is measured and billed separately, so a campaign left off the
 command is never billed:

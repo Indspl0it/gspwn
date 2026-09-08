@@ -73,6 +73,9 @@ jobs:
         # notice, at run time, on the system under test.
         run: python3 tools/regression_check.py derived
 
+      - name: Reachability agrees with the typed handles
+        run: python3 tools/regression_check.py reach
+
       - name: Emitted value families were accepted by the audit
         # 53 parameter fields are bound to a flags set holding the constants
         # the driver's own headers define for them. A field bound to the

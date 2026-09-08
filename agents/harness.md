@@ -6,7 +6,7 @@ test runs as root during container init before isolation is enforced.
 
 | Priority | Target | Tooling | Surface |
 |---|---|---|---|
-| Primary | libnvidia-container (C) | libFuzzer with `-fsanitize=address,undefined,fuzzer`, built inside the AFL++/clang Docker image from config/campaign.yaml | Parsing and path handling |
+| Primary | libnvidia-container (C) | `HARNESS_MODE`, default `auto`: afl-clang-fast plus AFL++'s `libAFLDriver.a` where both are present, and libFuzzer with `-fsanitize=fuzzer` otherwise. Both compile with `-fsanitize=address,undefined`, inside the AFL++/clang Docker image from config/campaign.yaml. Only the afl mode writes the `fuzzer_stats` Track U's edge curve reads | Parsing and path handling |
 | Secondary | nvidia-container-toolkit (Go) | `go test -fuzz` | OCI config.json handling, CDI spec parsing, env var processing. Panic and DoS only |
 
 libnvidia-container is the memory-safety target, and the CVE-2024-0132 class
@@ -71,11 +71,14 @@ reach them:
    harnesses failed and how many inputs went unreplayed because of them.
    Each harness must write its fuzzer output to
    `/artifacts/runs/$RUN_ID/u/<harness-name>/` (AFL++ `-o`, or the
-   libFuzzer corpus dir). The coverage sampler looks there. AFL++
-   `fuzzer_stats` in that directory gives Track U its edge curve, and without
-   it Track U contributes nothing to the round's coverage verdict. The loop
-   then decides on Track K alone and can stop while these harnesses are still
-   growing. `$RUN_ID` is already in the container environment.
+   libFuzzer corpus dir). The coverage sampler looks there. `afl-fuzz -o
+   <dir>` writes its state one level down, so `fuzzer_stats` lands at
+   `<harness-name>/default/fuzzer_stats`, and the sampler reads that path
+   first and the top level second. That file gives Track U its edge curve,
+   and without it Track U contributes nothing to the round's coverage
+   verdict. The loop then decides on Track K alone and can stop while these
+   harnesses are still growing. `$RUN_ID` is already in the container
+   environment.
    Write the harness names (the `<harness-name>` dir names above) into
    `track_u.targets` in config/campaign.yaml. That key is agent-facing, and
    the fuzz phase reads the list when checking per-harness coverage output.
@@ -92,8 +95,8 @@ reach them:
    confirm coverage output is produced.
 
 ## Sanitizer and triage hygiene
-Four settings decide what reaches the crash queue, and each is set explicitly
-per harness:
+Each harness's build.sh writes its own `build/env.sh`, and the sanitizer
+options set there decide what reaches the crash queue:
 
 - ASan with `detect_leaks=1` will report leaks in code that legitimately never
   frees before exit. Decide per harness whether leaks are in scope, set the
@@ -102,6 +105,16 @@ per harness:
   in the report.
 - UBSan should run with `halt_on_error=1`, otherwise the run continues past
   the first defect and the crashing input no longer matches the report.
+- `symbolize` follows the consumer, so set it from `HARNESS_SYMBOLIZE` and
+  never to a constant. `afl-fuzz` parses the sanitizer's own output and
+  refuses a custom `ASAN_OPTIONS` that omits `symbolize=0`, aborting at
+  startup with `PROGRAM ABORT : Custom ASAN_OPTIONS set without symbolize=0`.
+  `run_all.sh` exports `HARNESS_SYMBOLIZE=0` before sourcing `env.sh`, and
+  `replay_crashes.sh` leaves the default 1, because the `.sanlog` a replay
+  writes is the stack `crash_parse.py` hashes into a signature.
+
+Two rules apply to the harness itself:
+
 - Anything the harness itself does wrong (its own buffer handling, its own
   temp files) is a harness bug and does not reach triage as a finding.
   Reproduce every crash against the harness first, then discard the

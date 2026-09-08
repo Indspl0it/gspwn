@@ -65,11 +65,11 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+import checkout_meta  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -355,31 +355,12 @@ def driver_version(src):
     return m.group(1)
 
 
-def checkout_commit(src):
-    """Short HEAD of the checkout, or None when it is not a git tree.
-
-    Recorded alongside the version because a driver release is cut from many
-    commits, and the artefacts have to name the exact tree they were parsed
-    from when two runs of the same release disagree.
-    """
-    if not os.path.isdir(os.path.join(src, ".git")):
-        return None
-    try:
-        out = subprocess.run(
-            ["git", "-C", src, "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError) as e:
-        logger.warning("git rev-parse failed for %s: %s", src, e)
-        return None
-    return out.stdout.strip() or None
-
-
 def version_stamp(src):
     """The version string for the map, in the format `stamp` writes."""
     version = driver_version(src)
     if not version:
         return None
-    commit = checkout_commit(src)
+    commit = checkout_meta.checkout_commit(src)
     return version + ((" (commit %s)" % commit) if commit else "")
 
 
@@ -1814,7 +1795,7 @@ def build_entry_points(src):
         "schema": ENTRY_POINTS_SCHEMA,
         "source": {
             "driver_version": driver_version(src),
-            "commit": checkout_commit(src),
+            "commit": checkout_meta.checkout_commit(src),
         },
         "tables": tables,
         "counts": {

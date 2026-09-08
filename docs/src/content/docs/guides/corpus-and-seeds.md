@@ -180,15 +180,15 @@ inside the parameter struct, which `strace` does not decode, so no trace names
 a control command. `chains` closes on the whole 531:
 
 ```
-531 control command(s) accounted for: 514 emitted, 0 dropped before emission, 17 with no chain
+531 control command(s) accounted for: 529 emitted, 0 dropped before emission, 2 with no chain
 ```
 
-The 17 have no allocation chain to reach them. 15 are owned by `Memory` or
-`ProfilerBase`, NVOC base classes with no `RS_ENTRY` row, and 2 by
+The 2 have no allocation chain to reach them. Both are owned by
 `MmuFaultBuffer` and `NvDispApi`, whose every external class carries
-`RS_FLAGS_ALLOC_PRIVILEGED`. A trace of a workload that builds the object is
-the only remaining route to the first group, and nothing unprivileged reaches
-the second.
+`RS_FLAGS_ALLOC_PRIVILEGED`, and nothing unprivileged reaches either. The 15
+commands owned by `Memory` and `ProfilerBase` are reached through the chain of
+a class deriving from them, because a handler compiled into a base class serves
+an object allocated as any of its subclasses.
 
 Whether a prologue allocates on real hardware is unverified: no GPU was
 involved, no chain was allocated, and no emitted program has been executed or

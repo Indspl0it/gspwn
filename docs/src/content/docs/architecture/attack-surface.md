@@ -8,7 +8,7 @@ so the inventories describe the source they were built from.
 
 | Tree | Version | Commit |
 |---|---|---|
-| `NVIDIA/open-gpu-kernel-modules` | `610.57.04` | `e4a5faa` |
+| `NVIDIA/open-gpu-kernel-modules` | `610.57.04` | `e4a5faa2` |
 | `NVIDIA/libnvidia-container` | `v1.20.0` | `08cb279` |
 | `NVIDIA/nvidia-container-toolkit` | `v1.20.0` | `1780ac69` |
 
@@ -204,11 +204,11 @@ reaches after N allocations.
 | 1 | 91 | 17% | `RmClientResource` |
 | 3 | 315 | 59% | `Device` |
 | 4 | 337 | 63% | `VgpuConfigApi` |
-| 11 | 429 | 81% | `ConfidentialComputeApi` |
-| 15 | 455 | 86% | `SemaphoreSurface` |
-| 38 | 514 | 97% | `ZbcApi` |
+| 11 | 430 | 81% | `ProfilerBase` |
+| 16 | 464 | 87% | `Memory` |
+| 40 | 529 | 100% | `ZbcApi` |
 
-The curve ends at 38 allocations and 514 commands, which is every command an
+The curve ends at 40 allocations and 529 commands, which is every command an
 unprivileged chain reaches.
 
 The greedy step buys the class with the highest command count per allocation
@@ -217,27 +217,28 @@ the way, so the curve rises at an allocation count no single chain has.
 `Subdevice` alone owns 182 of the 531, and its three-allocation chain also
 builds `RmClientResource` and `Device`, which own 91 and 42, giving 315.
 
-Five readings measure how far chaining reaches. The first three narrow in
-sequence, 531 to 516 to 514. The fourth counts the 17 commands the narrowing
-dropped, and the fifth counts the owning classes any chain reaches.
+Six readings measure how far chaining reaches. The `RS_ENTRY` table alone
+narrows 531 to 516. The NVOC ancestor edge restores the 15 a base class owns,
+because a command compiled into a base reaches an object allocated as any
+class deriving from it. Privilege then removes 2.
 
 | Reading | Count | Absent classes |
 |---|---|---|
 | Targetable control commands | 531 | |
 | Owning class carries an `RS_ENTRY` record | 516 | `ProfilerBase` (9) and `Memory` (6), both NVOC base classes |
-| Reached by a chain an unprivileged process can build | 514 | `MmuFaultBuffer` and `NvDispApi`, whose every external class is `RS_FLAGS_ALLOC_PRIVILEGED` |
-| Reached by no chain | 17 | |
-| Internal classes carrying an unprivileged chain | 82 of the 98 recorded | |
+| Owning class resolves to a chain record, its own or a subclass's | 531 | |
+| Reached by a chain an unprivileged process can build | 529 | `MmuFaultBuffer` and `NvDispApi`, whose every external class is `RS_FLAGS_ALLOC_PRIVILEGED` |
+| Reached by no chain | 2 | |
+| Internal classes carrying an unprivileged chain | 84 of the 100 recorded | |
 
 `rm-control-rank.json` closes the arithmetic in both directions. Its
-`no_chain_reason` field over the 531 records reads 514 null, 15 `no RS_ENTRY
-row for this class` and 2 `every external class requires allocation privilege`.
-The 17 unreached commands are the entries the completion ledger closes under
-`chain-unbuildable` and `needs-privilege`.
+`no_chain_reason` field over the 531 records reads 529 null and 2 `every
+external class requires allocation privilege`. The 2 unreached commands are the
+entries the completion ledger closes under `needs-privilege`.
 
-Every figure in this section is arithmetic over the `RS_ENTRY` table. No chain
-has been allocated and no GPU was involved, so the reach these numbers describe
-is unverified.
+Every figure in this section is arithmetic over the `RS_ENTRY` table and the
+NVOC class hierarchy the generated headers state. No chain has been allocated
+and no GPU was involved, so the reach these numbers describe is unverified.
 
 ## Additional reachable surfaces
 
@@ -384,7 +385,7 @@ Four limits bound every number on this page.
 - GSP-routed commands are not measurable. 236 of the 767 non-privileged
   control commands cross the RPC queue, where KCOV cannot follow.
 - The escape inventory covers one driver version. Every number is tied to
-  commit `e4a5faa`, and the ABI moves between branches.
+  commit `e4a5faa2`, and the ABI moves between branches.
 
 ## Requires SUT
 

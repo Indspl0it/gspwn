@@ -19,7 +19,7 @@ classes carry 1595 tests.
 | Lint | `python3 -m pyflakes tools/*.py` |
 | Shell syntax | `bash -n tools/build_kernel.sh` |
 | Shipped config is valid | `python3 tools/gspwn_config.py` |
-| Twelve checks over the committed artefacts | `python3 tools/regression_check.py <check>` for `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `figures`, `citations` and `commands` |
+| Thirteen checks over the committed artefacts | `python3 tools/regression_check.py <check>` for `names`, `pins`, `coverage`, `derived`, `reach`, `families`, `pages`, `stale`, `harnesses`, `agents`, `figures`, `citations` and `commands` |
 | Documentation writing register | `python3 tools/register_check.py` |
 | Prompts reference commands that exist | An inline script that parses every `tools/*.py` invocation in `agents/*.md`, `AGENTS.md`, the documentation tree and `README.md`, and checks each subcommand and flag against the tool's own `--help` |
 

@@ -40,6 +40,13 @@ instrumented kernel fuzzing.
    - `sudo systemctl start gspwn-orchestrator`
    Without it every kernel panic ends the campaign until someone SSHes in.
    Check it later with `python3 tools/orchestrator_ctl.py status`.
+   An inactive unit can be a deliberate stop. `orchestrator_ctl.py run` exits
+   78 on every condition only a human can clear: a tripped circuit breaker, an
+   unset `orchestrator.command`, a blocked phase and a complete pipeline among
+   them. The unit names 78 in `RestartPreventExitStatus`, so systemd stops it
+   and holds it stopped. Read `status` and the exit-code table in
+   `tools/orchestrator_ctl.py` before restarting the unit, because a restart
+   against an uncleared condition reaches the same exit every `RestartSec`.
 1. Record facts into config/machine.yaml: distro (`/etc/os-release` ID),
    GPU (`nvidia-smi --query-gpu=name --format=csv,noheader`),
    Secure Boot (`mokutil --sb-state`), GSP firmware (`nvidia-smi -q`).
@@ -58,7 +65,12 @@ instrumented kernel fuzzing.
    installed (step 4).
    `harvest` must run as root, because it reads /sys/fs/pstore and
    /var/crash, which are root-only. Without root it refuses, and it does not
-   report zero crashes when it could not look.
+   report zero crashes when it could not look. Its exit code separates three
+   answers: 0 nothing to harvest with every source read, 1 nothing harvested
+   with at least one source unread, and 2 evidence harvested with at least one
+   source unread or deferred, the harvest dir on the last line. Exit 2 is a
+   partial harvest whose evidence is already on disk, so read that path before
+   re-running.
 4. Install build deps via apt, using the Debian/Kali name mapping and never
    a PPA:
    build-essential bc flex bison libssl-dev libelf-dev dwarves rsync git

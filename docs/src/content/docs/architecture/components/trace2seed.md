@@ -151,7 +151,7 @@ the `seeds` phase, one trace at a time. The conversion itself is pure:
 | A multiplexer request number never carries a call name in the map | `NVOS54_PARAMETERS.cmd` and `NVOS64_PARAMETERS.hClass` select the real target, strace decodes neither, and a call named after the dispatcher resolves to no description |
 | A chain-shaped program never hardcodes a request number | A driver bump moves every struct size and with it every request number, and a seed carrying the old one dispatches to nothing |
 | The declaration filter runs before the grouping | A chain with no declared allocation would otherwise be picked as the best prologue and then dropped, taking the commands of every shorter chain it covered with it |
-| The unreached account reads `unresolved_owning_classes` | `Memory` and `ProfilerBase` have no `RS_ENTRY` row and appear under no chain record, so their 15 commands would vanish without a line saying so |
+| The unreached account reads `unresolved_owning_classes` | An owning class the chain builder could not reach appears under no chain record, so its commands would vanish from the account without a line saying so. `MmuFaultBuffer` and `NvDispApi` are the two classes in that block today |
 
 ## Design notes
 
@@ -234,26 +234,24 @@ One `openat` covers every call in the program. Every chain step's allocation
 variant takes `fd_nv` and every control variant takes `fd_nvidiactl`, and
 `nvidia.txt` declares `fd_nvidiactl` a subtype of `fd_nv`.
 
-Against the committed artefacts the run emits 44 programs over 36 prologues and
-38 distinct chains, carrying 514 control commands, and accounts for all 531
+Against the committed artefacts the run emits 45 programs over 37 prologues and
+40 distinct chains, carrying 529 control commands, and accounts for all 531
 with no residue.
 
 ```
-wrote 44 chain-shaped program(s) to artifacts/seeds: 36 prologue(s) over 38 distinct chain(s), carrying 514 control command(s)
-no chain for Memory, so its 6 command(s) reach no program: no RS_ENTRY row for this class
+wrote 45 chain-shaped program(s) to artifacts/seeds: 37 prologue(s) over 40 distinct chain(s), carrying 529 control command(s)
 no chain for MmuFaultBuffer, so its 1 command(s) reach no program: every external class requires allocation privilege
 no chain for NvDispApi, so its 1 command(s) reach no program: every external class requires allocation privilege
-no chain for ProfilerBase, so its 9 command(s) reach no program: no RS_ENTRY row for this class
-531 control command(s) accounted for: 514 emitted, 0 dropped before emission, 17 with no chain
+531 control command(s) accounted for: 529 emitted, 0 dropped before emission, 2 with no chain
 ```
 
-The 36 prologues group by length.
+The 37 prologues group by length.
 
 | Prologue length | Prologues | Commands behind them |
 |---|---|---|
-| 2 | 10 | 50 |
-| 3 | 7 | 368 |
-| 4 | 18 | 95 |
+| 2 | 11 | 56 |
+| 3 | 6 | 350 |
+| 4 | 19 | 122 |
 | 5 | 1 | 1 |
 
 No prologue is one allocation long, so `RmClientResource`'s 91 commands, whose
@@ -265,16 +263,16 @@ The largest group is `NV01_ROOT -> NV01_DEVICE_0 -> NV20_SUBDEVICE_0`, carrying
 from an independent implementation.
 
 The saving, counted in allocation calls the fuzzer executes to reach the same
-514 commands:
+529 commands:
 
-- One program per command, each rebuilding its own chain: 1365 allocation
+- One program per command, each rebuilding its own chain: 1413 allocation
   calls.
-- Chain-shaped, `--max-calls 40`: 142 allocation calls.
+- Chain-shaped, `--max-calls 40`: 145 allocation calls.
 
-1365 is the sum of `chain_length` over the 514 chained commands. 142 is the
-count of `ioctl$NV_ESC_RM_ALLOC_*` lines across the 44 emitted programs.
+1413 is the sum of `chain_length` over the 529 chained commands. 145 is the
+count of `ioctl$NV_ESC_RM_ALLOC_*` lines across the 45 emitted programs.
 
-Program count against the call limit is 58 at `--max-calls 20`, 44 at 40 and 41
+Program count against the call limit is 59 at `--max-calls 20`, 45 at 40 and 42
 at 60. The prologue, chain and command counts do not move with the limit.
 
 ## Unwired handles
@@ -310,7 +308,7 @@ Four limits apply to the figures above.
   environment variable.
 - No chain-shaped program has been parsed by syz-db or executed. The reach
   figures rest on the `RS_ENTRY` table by way of `rm-chains.json`.
-- The 1365-against-142 comparison counts allocation calls issued. It is no
+- The 1413-against-145 comparison counts allocation calls issued. It is no
   coverage measurement.
 
 ## See also

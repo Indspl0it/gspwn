@@ -151,7 +151,7 @@ Some paths need a real object or handle chain that random generation does not
 construct. `refine` classifies those surfaces `unreachable-by-construction`,
 and the remedy is a seed from `trace2seed.py`, from either of its two
 subcommands. `convert` derives a program from a real workload trace.
-`chains` builds the allocation prologue from `rm-chains.json` and reaches 514
+`chains` builds the allocation prologue from `rm-chains.json` and reaches 529
 of the 531 control commands, which no trace names, because `strace` decodes no
 NVIDIA parameter struct.
 

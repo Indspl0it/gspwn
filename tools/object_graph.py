@@ -540,14 +540,18 @@ def allocatable_chain(graph, alloc_depth, cls):
     return out
 
 
-def cheapest_chain(entries, graph, alloc_depth, internal_class):
-    """Shortest allocatable chain over every external class of one internal class.
+def cheapest_chain_over(entries, graph, alloc_depth, internal_classes):
+    """Shortest allocatable chain over the external classes of a set of classes.
 
-    Ties break on the external class name so the output is stable across runs.
+    Returns (external class, steps, the internal class exporting it), or three
+    Nones where no external class in the set is allocatable. Ties break on the
+    external class name so the output is stable across runs. `alloc_depth`
+    covers allocatable classes only, so a step never lands on a class an
+    unprivileged process cannot allocate.
     """
     best = None
     for rec in entries:
-        if rec["internal_class"] != internal_class:
+        if rec["internal_class"] not in internal_classes:
             continue
         cls = rec["external_class"]
         steps = allocatable_chain(graph, alloc_depth, cls)
@@ -555,51 +559,135 @@ def cheapest_chain(entries, graph, alloc_depth, internal_class):
             continue
         key = (len(steps), cls)
         if best is None or key < best[0]:
-            best = (key, cls, steps)
+            best = (key, cls, steps, rec["internal_class"])
     if best is None:
-        return None, None
-    return best[1], best[2]
+        return None, None, None
+    return best[1], best[2], best[3]
 
 
-def chain_records(entries, graph, alloc_depth, depth, commands_by_class):
-    """One record per internal class, with its chain and the commands it unlocks."""
-    by_ext = {e["external_class"]: e for e in entries}
-    out = []
+def cheapest_chain(entries, graph, alloc_depth, internal_class):
+    """Shortest allocatable chain over every external class of one internal class."""
+    target, steps, _ = cheapest_chain_over(entries, graph, alloc_depth,
+                                           {internal_class})
+    return target, steps
+
+
+def descendants_by_base(entries, chains):
+    """-> {NVOC class: [RS_ENTRY internal class deriving from it, ...]}.
+
+    Each RS_ENTRY internal class contributes itself to every one of its own
+    ancestors. The class itself is excluded, so a key is always a class
+    resource_list.h never names and a value is always a class it does.
+
+    An RS_ENTRY internal class carrying no NVOC ancestor chain is refused
+    here. tools/object_graph.py extract refuses the same condition when it
+    writes `internal_ancestors`, and a command owned by a base class has no
+    other route to an allocatable class.
+    """
+    out = collections.defaultdict(list)
+    without = []
     for internal in sorted({e["internal_class"] for e in entries}):
-        exported = [e for e in entries if e["internal_class"] == internal]
-        target, steps = cheapest_chain(entries, graph, alloc_depth, internal)
-        commands = commands_by_class.get(internal, [])
-        record = {
-            "internal_class": internal,
-            "external_classes": [{
-                "external_class": e["external_class"],
-                "alloc_privilege": privilege(e),
-                "depth": depth.get(e["external_class"]),
-            } for e in sorted(exported, key=lambda e: e["external_class"])],
-            "target_external_class": target,
-            "chain": None,
-            "chain_length": None,
-            "unallocatable_reason": None,
-            "unclassified_steps": [],
-            "commands": commands,
-            "command_count": len(commands),
-        }
-        if steps is None:
-            record["unallocatable_reason"] = (
-                "every external class requires allocation privilege"
-                if all(privilege(e) in BLOCKING_PRIVILEGE for e in exported)
-                else "no external class connects to the file descriptor")
-        else:
-            record["chain"] = [{
-                "external_class": cls,
-                "alloc_param_struct": alloc_param(by_ext[cls])[1],
-                "alloc_param_kind": alloc_param(by_ext[cls])[0],
-                "alloc_privilege": privilege(by_ext[cls]),
-            } for cls in steps]
-            record["chain_length"] = len(steps)
-            record["unclassified_steps"] = [
-                cls for cls in steps if privilege(by_ext[cls]) == "unclassified"]
-        out.append(record)
+        ancestors = proper_ancestors(chains, internal)
+        if ancestors is None:
+            without.append(internal)
+            continue
+        for base in ancestors:
+            out[base].append(internal)
+    if without:
+        raise SystemExit(
+            "%d RS_ENTRY internal class(es) carry no NVOC ancestor chain, so "
+            "a control command compiled into a base class joins to no "
+            "allocatable class: %s. Run `python3 tools/object_graph.py "
+            "extract`, which refuses on the same condition, and point --src "
+            "at a checkout whose %s headers cover every class "
+            "resource_list.h names."
+            % (len(without), ", ".join(sorted(without)[:10]), GENERATED_REL))
+    return dict(out)
+
+
+def chain_record(internal, sources, entries, graph, alloc_depth, depth,
+                 commands, borrowed):
+    """One chain record for `internal`, over the external classes of `sources`.
+
+    `sources` is the set of internal classes whose external classes the chain
+    may be drawn from. It is `{internal}` for an RS_ENTRY internal class and
+    the set of classes deriving from `internal` for an NVOC base class.
+    `borrowed` puts the winning class on `chain_borrowed_from`, which stays
+    None wherever the chain is the class's own.
+    """
+    by_ext = {e["external_class"]: e for e in entries}
+    exported = sorted((e for e in entries if e["internal_class"] in sources),
+                      key=lambda e: e["external_class"])
+    target, steps, source = cheapest_chain_over(entries, graph, alloc_depth,
+                                                sources)
+    record = {
+        "internal_class": internal,
+        "external_classes": [{
+            "external_class": e["external_class"],
+            "alloc_privilege": privilege(e),
+            "depth": depth.get(e["external_class"]),
+        } for e in exported],
+        "target_external_class": target,
+        "chain": None,
+        "chain_length": None,
+        "chain_borrowed_from": source if borrowed else None,
+        "unallocatable_reason": None,
+        "unclassified_steps": [],
+        "commands": commands,
+        "command_count": len(commands),
+    }
+    if steps is None:
+        record["unallocatable_reason"] = (
+            "every external class requires allocation privilege"
+            if all(privilege(e) in BLOCKING_PRIVILEGE for e in exported)
+            else "no external class connects to the file descriptor")
+    else:
+        record["chain"] = [{
+            "external_class": cls,
+            "alloc_param_struct": alloc_param(by_ext[cls])[1],
+            "alloc_param_kind": alloc_param(by_ext[cls])[0],
+            "alloc_privilege": privilege(by_ext[cls]),
+        } for cls in steps]
+        record["chain_length"] = len(steps)
+        record["unclassified_steps"] = [
+            cls for cls in steps if privilege(by_ext[cls]) == "unclassified"]
+    return record
+
+
+def chain_records(entries, graph, alloc_depth, depth, commands_by_class,
+                  hierarchy):
+    """One record per internal class, with its chain and the commands it unlocks.
+
+    An RS_ENTRY internal class gets a record over its own external classes.
+    resource_list.h names one internal class per allocatable class and never a
+    base, so a control command compiled into a base class matches no row at
+    all. `hierarchy`, the {class: ancestor chain} map nvoc_ancestors reads from
+    the generated headers, supplies the missing edge: an owning class with no
+    RS_ENTRY row of its own gets a record whose chain is the cheapest over
+    every external class of the classes deriving from it, and
+    `chain_borrowed_from` names the class that chain belongs to. This is the
+    edge tools/syzlang_gen.py types hObject on, so the two answer the same
+    question the same way.
+
+    An owning class with no RS_ENTRY row and no class deriving from it gets no
+    record, and cmd_chains reports it under `unresolved_owning_classes`.
+    `hierarchy` is required: a hierarchy that does not cover every RS_ENTRY
+    internal class is refused, so no caller can reach the RS_ENTRY-only answer
+    by leaving it out.
+    """
+    rs_internal = sorted({e["internal_class"] for e in entries})
+    out = [chain_record(internal, {internal}, entries, graph, alloc_depth,
+                        depth, commands_by_class.get(internal, []), False)
+           for internal in rs_internal]
+    descendants = descendants_by_base(entries, hierarchy)
+    known = set(rs_internal)
+    for base in sorted(commands_by_class):
+        if base in known or base not in descendants:
+            continue
+        out.append(chain_record(base, set(descendants[base]), entries, graph,
+                                alloc_depth, depth, commands_by_class[base],
+                                True))
+    out.sort(key=lambda r: r["internal_class"])
     return out
 
 
@@ -679,14 +767,17 @@ def cmd_chains(args):
     commands_by_class = commands_by_owning_class(args.control)
     total_commands = sum(len(v) for v in commands_by_class.values())
 
-    recs = chain_records(entries, graph, alloc_depth, depth, commands_by_class)
+    hierarchy = nvoc_ancestors(args.src)
+    recs = chain_records(entries, graph, alloc_depth, depth, commands_by_class,
+                         hierarchy)
     by_internal = {r["internal_class"]: r for r in recs}
 
     unresolved = []
     for owning, commands in sorted(commands_by_class.items()):
         rec = by_internal.get(owning)
         if rec is None:
-            reason = "no RS_ENTRY row for this class"
+            reason = ("no RS_ENTRY row for this class and no class deriving "
+                      "from it")
         elif rec["chain"] is None:
             reason = rec["unallocatable_reason"]
         else:
@@ -700,15 +791,19 @@ def cmd_chains(args):
 
     curve = cumulative_reach(recs)
     reached = sum(r["command_count"] for r in recs if r["chain"] is not None)
+    borrowed = [r for r in recs if r["chain_borrowed_from"]]
     payload = {
         "schema": "gspwn.rm-chains/1",
         "source": {
             "table": repo_relative(os.path.join(args.src, TABLE_REL)),
             "control_inventory": repo_relative(args.control),
+            "hierarchy_path": repo_relative(
+                os.path.join(args.src, GENERATED_REL)),
             "driver_version": driver_version(args.src),
         },
         "counts": {
             "internal_classes": len(recs),
+            "borrowed_chains": len(borrowed),
             "chained": sum(1 for r in recs if r["chain"] is not None),
             "unallocatable": sum(1 for r in recs if r["chain"] is None),
             "targetable_commands": total_commands,
@@ -737,6 +832,10 @@ def cmd_chains(args):
               % (allocations, row["commands"],
                  100.0 * row["commands"] / max(total_commands, 1),
                  row["class_added"]))
+    for row in borrowed:
+        print("  borrowed: %-16s %2d commands, chain of %s to %s"
+              % (row["internal_class"], row["command_count"],
+                 row["chain_borrowed_from"], row["target_external_class"]))
     for row in unresolved:
         print("  no chain: %-16s %2d commands, %s"
               % (row["owning_class"], row["command_count"], row["reason"]))

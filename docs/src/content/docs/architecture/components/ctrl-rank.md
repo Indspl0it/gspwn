@@ -23,7 +23,7 @@ It writes only that file.
 
 | Invariant | Enforced by |
 |---|---|
-| Reachability outranks every other component | Whether a chain exists leads the sort key, ahead of the score, so the 17 commands with no chain sort after every command that has one whatever they score. Chain length is the third term |
+| Reachability outranks every other component | Whether a chain exists leads the sort key, ahead of the score, so the 2 commands with no chain sort after every command that has one whatever they score. Chain length is the third term |
 | A command with no chain still carries its reason | `no_chain_reason` is copied from the chains artefact onto the record |
 | A judgement about weights can be revised without a rescan | `rank_components` holds `depth`, `cve` and `size` beside `rank_score` |
 | A skewed distribution does not dominate the score | The CVE and size components are normalised logarithmically |
@@ -209,7 +209,7 @@ the rank record. Merging them into `rm-control-inventory.json` belongs with
   `rm-object-graph.json` records depth over every edge, and `rm-chains.json`
   records the length of a walk an unprivileged process can make. They would
   disagree wherever the shallowest parent is privileged. On this release they
-  agree on all 514 chained commands.
+  agree on all 529 chained commands.
 - The weighting is untuned. No campaign result has been measured against it.
 
 ## See also

@@ -27,6 +27,7 @@
      "external_class": "ACCESS_COUNTER_NOTIFY_BUFFER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -71,6 +72,7 @@
      "external_class": "NV2081_BINAPI"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -90,6 +92,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -107,6 +110,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -155,6 +159,7 @@
      "external_class": "AMPERE_SMC_EXEC_PARTITION_REF"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 5,
    "command_count": 1,
    "commands": [
@@ -192,6 +197,7 @@
      "external_class": "NV_CONFIDENTIAL_COMPUTE"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 8,
    "commands": [
@@ -244,6 +250,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -274,6 +281,7 @@
      "external_class": "NV01_CONTEXT_DMA"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 2,
    "commands": [
@@ -327,6 +335,7 @@
      "external_class": "NV40_DEBUG_BUFFER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -371,6 +380,7 @@
      "external_class": "NV50_DEFERRED_API_CLASS"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 3,
    "commands": [
@@ -416,6 +426,7 @@
      "external_class": "NV01_DEVICE_0"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 42,
    "commands": [
@@ -629,6 +640,7 @@
      "external_class": "NV20_SUBDEVICE_DIAG"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 4,
    "commands": [
@@ -665,6 +677,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -717,6 +730,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -844,6 +858,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -910,6 +925,7 @@
      "external_class": "NV04_DISPLAY_COMMON"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 4,
    "commands": [
@@ -946,6 +962,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -998,6 +1015,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -1040,6 +1058,7 @@
      "external_class": "GF100_DISP_SW"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -1072,6 +1091,7 @@
      "external_class": "NV01_EVENT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 0,
    "commands": [],
@@ -1119,6 +1139,7 @@
      "external_class": "NV_EVENT_BUFFER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 4,
    "commands": [
@@ -1168,6 +1189,7 @@
      "external_class": "FABRIC_MANAGER_SESSION"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 2,
    "commands": [
@@ -1221,6 +1243,7 @@
      "external_class": "AMPERE_SMC_PARTITION_REF"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 7,
    "commands": [
@@ -1282,6 +1305,7 @@
      "external_class": "NV30_GSYNC"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 19,
    "commands": [
@@ -1403,6 +1427,7 @@
      "external_class": "GF100_SUBDEVICE_INFOROM"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -1440,6 +1465,7 @@
      "external_class": "NV0020_GPU_MANAGEMENT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 0,
    "commands": [],
@@ -1484,6 +1510,7 @@
      "external_class": "RM_USER_SHARED_DATA"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 1,
    "commands": [
@@ -1527,6 +1554,7 @@
      "external_class": "NVA083_GRID_DISPLAYLESS"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 6,
    "commands": [
@@ -1590,6 +1618,7 @@
      "external_class": "GF100_HDACODEC"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -1634,6 +1663,7 @@
      "external_class": "NV40_I2C"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -1666,6 +1696,7 @@
      "external_class": "NV_IMEX_SESSION"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 3,
    "commands": [
@@ -1723,6 +1754,7 @@
      "external_class": "NV_COUNTER_COLLECTION_UNIT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 4,
    "commands": [
@@ -1784,6 +1816,7 @@
      "external_class": "AMPERE_DMA_COPY_A"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -1857,6 +1890,7 @@
      "external_class": "AMPERE_CHANNEL_GPFIFO_A"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 18,
    "commands": [
@@ -2018,6 +2052,7 @@
      "external_class": "KEPLER_CHANNEL_GROUP_A"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 11,
    "commands": [
@@ -2107,6 +2142,7 @@
      "external_class": "FERMI_CONTEXT_SHARE_A"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -2151,6 +2187,7 @@
      "external_class": "KERNEL_GRAPHICS_CONTEXT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 5,
    "commands": [
@@ -2216,6 +2253,7 @@
      "external_class": "ADA_A"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -2340,6 +2378,7 @@
      "external_class": "NVA084_KERNEL_HOST_VGPU_DEVICE"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 12,
    "commands": [
@@ -2427,6 +2466,7 @@
      "external_class": "GT200_DEBUGGER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 11,
    "commands": [
@@ -2516,6 +2556,7 @@
      "external_class": "KERNEL_WATCHDOG"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -2560,6 +2601,7 @@
      "external_class": "LOCK_STRESS_OBJECT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 13,
    "commands": [
@@ -2651,6 +2693,7 @@
      "external_class": "LOCK_TEST_RELAXED_DUP_OBJECT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -2683,6 +2726,7 @@
      "external_class": "AMPERE_SMC_CONFIG_SESSION"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 0,
    "commands": [],
@@ -2715,6 +2759,7 @@
      "external_class": "AMPERE_SMC_MONITOR_SESSION"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 0,
    "commands": [],
@@ -2742,11 +2787,180 @@
     },
     {
      "alloc_param_kind": "required",
+     "alloc_param_struct": "NV_MEMORY_ALLOCATION_PARAMS",
+     "alloc_privilege": "unprivileged",
+     "external_class": "NV01_MEMORY_DEVICELESS"
+    }
+   ],
+   "chain_borrowed_from": "NoDeviceMemory",
+   "chain_length": 2,
+   "command_count": 6,
+   "commands": [
+    {
+     "handler": "memCtrlCmdGetMemPageSize",
+     "method_id": "0x00410118"
+    },
+    {
+     "handler": "memCtrlCmdGetSurfaceCompressionCoverageLvm",
+     "method_id": "0x00410112"
+    },
+    {
+     "handler": "memCtrlCmdGetSurfaceInfoLvm",
+     "method_id": "0x00410110"
+    },
+    {
+     "handler": "memCtrlCmdGetTag",
+     "method_id": "0x00410121"
+    },
+    {
+     "handler": "memCtrlCmdSetTag",
+     "method_id": "0x00410120"
+    },
+    {
+     "handler": "memCtrlCmdSurfaceFlushGpuCache",
+     "method_id": "0x00410116"
+    }
+   ],
+   "external_classes": [
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "AMPERE_USERMODE_A"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "BLACKWELL_USERMODE_A"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "HOPPER_USERMODE_A"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 2,
+     "external_class": "NV01_MEMORY_DEVICELESS"
+    },
+    {
+     "alloc_privilege": "kernel",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_FRAMEBUFFER_CONSOLE"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_HW_RESOURCES"
+    },
+    {
+     "alloc_privilege": "privileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_LIST_FBMEM"
+    },
+    {
+     "alloc_privilege": "privileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_LIST_OBJECT"
+    },
+    {
+     "alloc_privilege": "privileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_LIST_SYSTEM"
+    },
+    {
+     "alloc_privilege": "privileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_LOCAL_PHYSICAL"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_LOCAL_PRIVILEGED"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_LOCAL_USER"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_SYNCPOINT"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_SYSTEM"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_SYSTEM_OS_DESCRIPTOR"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 3,
+     "external_class": "NV01_MEMORY_VIRTUAL"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 3,
+     "external_class": "NV50_MEMORY_VIRTUAL"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "NV_MEMORY_FABRIC"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 2,
+     "external_class": "NV_MEMORY_FABRIC_IMPORT_V2"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 2,
+     "external_class": "NV_MEMORY_MULTICAST_FABRIC"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "RM_USER_SHARED_DATA"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "TURING_USERMODE_A"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "VOLTA_USERMODE_A"
+    }
+   ],
+   "internal_class": "Memory",
+   "target_external_class": "NV01_MEMORY_DEVICELESS",
+   "unallocatable_reason": null,
+   "unclassified_steps": [
+    "NV01_ROOT"
+   ]
+  },
+  {
+   "chain": [
+    {
+     "alloc_param_kind": "optional",
+     "alloc_param_struct": "NvHandle",
+     "alloc_privilege": "unclassified",
+     "external_class": "NV01_ROOT"
+    },
+    {
+     "alloc_param_kind": "required",
      "alloc_param_struct": "NV00E0_ALLOCATION_PARAMETERS",
      "alloc_privilege": "unprivileged",
      "external_class": "NV_MEMORY_EXPORT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 3,
    "commands": [
@@ -2804,6 +3018,7 @@
      "external_class": "NV_MEMORY_FABRIC"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 5,
    "commands": [
@@ -2857,6 +3072,7 @@
      "external_class": "NV_MEMORY_FABRIC_IMPORT_V2"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 1,
    "commands": [
@@ -2894,6 +3110,7 @@
      "external_class": "NV_MEMORY_FABRIC_IMPORTED_REF"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 1,
    "commands": [
@@ -2937,6 +3154,7 @@
      "external_class": "NV01_MEMORY_HW_RESOURCES"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -2956,6 +3174,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -3008,6 +3227,7 @@
      "external_class": "NV_MEMORY_MAPPER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 2,
    "commands": [
@@ -3049,6 +3269,7 @@
      "external_class": "NV_MEMORY_MULTICAST_FABRIC"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 7,
    "commands": [
@@ -3097,6 +3318,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 1,
    "commands": [
@@ -3132,6 +3354,7 @@
      "external_class": "MPS_COMPUTE"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 0,
    "commands": [],
@@ -3176,6 +3399,7 @@
      "external_class": "NVB4B7_VIDEO_ENCODER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -3238,6 +3462,7 @@
      "external_class": "NV01_MEMORY_DEVICELESS"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 0,
    "commands": [],
@@ -3257,6 +3482,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 1,
    "commands": [
@@ -3339,6 +3565,7 @@
      "external_class": "NVB8B0_VIDEO_DECODER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -3428,6 +3655,7 @@
      "external_class": "NVENC_SW_SESSION"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 2,
    "commands": [
@@ -3481,6 +3709,7 @@
      "external_class": "NVFBC_SW_SESSION"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 1,
    "commands": [
@@ -3530,6 +3759,7 @@
      "external_class": "NVB8D1_VIDEO_NVJPG"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -3604,6 +3834,7 @@
      "external_class": "NVB8FA_VIDEO_OFA"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -3682,6 +3913,7 @@
      "external_class": "NV01_MEMORY_SYSTEM_OS_DESCRIPTOR"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -3714,6 +3946,7 @@
      "external_class": "NV50_P2P"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 0,
    "commands": [],
@@ -3752,6 +3985,7 @@
      "external_class": "G84_PERFBUFFER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -3771,6 +4005,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -3813,6 +4048,7 @@
      "external_class": "GF100_PROFILER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -3845,6 +4081,93 @@
      "external_class": "NV01_DEVICE_0"
     },
     {
+     "alloc_param_kind": "required",
+     "alloc_param_struct": "NV_CHANNEL_ALLOC_PARAMS",
+     "alloc_privilege": "unprivileged",
+     "external_class": "AMPERE_CHANNEL_GPFIFO_A"
+    },
+    {
+     "alloc_param_kind": "required",
+     "alloc_param_struct": "NVB1CC_ALLOC_PARAMETERS",
+     "alloc_privilege": "unprivileged",
+     "external_class": "MAXWELL_PROFILER_CONTEXT"
+    }
+   ],
+   "chain_borrowed_from": "ProfilerCtx",
+   "chain_length": 4,
+   "command_count": 9,
+   "commands": [
+    {
+     "handler": "profilerBaseCtrlCmdAllocPmaStream",
+     "method_id": "0xb0cc0105"
+    },
+    {
+     "handler": "profilerBaseCtrlCmdBindPmResources",
+     "method_id": "0xb0cc0107"
+    },
+    {
+     "handler": "profilerBaseCtrlCmdFreePmaStream",
+     "method_id": "0xb0cc0106"
+    },
+    {
+     "handler": "profilerBaseCtrlCmdInternalSriovPromotePmaStream",
+     "method_id": "0xb0cc0202"
+    },
+    {
+     "handler": "profilerBaseCtrlCmdPmaStreamUpdateGetPut",
+     "method_id": "0xb0cc0109"
+    },
+    {
+     "handler": "profilerBaseCtrlCmdReleaseCgControls",
+     "method_id": "0xb0cc0302"
+    },
+    {
+     "handler": "profilerBaseCtrlCmdRequestCgControls",
+     "method_id": "0xb0cc0301"
+    },
+    {
+     "handler": "profilerBaseCtrlCmdReserveHwpmLegacy",
+     "method_id": "0xb0cc0101"
+    },
+    {
+     "handler": "profilerBaseCtrlCmdUnbindPmResources",
+     "method_id": "0xb0cc0108"
+    }
+   ],
+   "external_classes": [
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "MAXWELL_PROFILER_CONTEXT"
+    },
+    {
+     "alloc_privilege": "unprivileged",
+     "depth": 4,
+     "external_class": "MAXWELL_PROFILER_DEVICE"
+    }
+   ],
+   "internal_class": "ProfilerBase",
+   "target_external_class": "MAXWELL_PROFILER_CONTEXT",
+   "unallocatable_reason": null,
+   "unclassified_steps": [
+    "NV01_ROOT"
+   ]
+  },
+  {
+   "chain": [
+    {
+     "alloc_param_kind": "optional",
+     "alloc_param_struct": "NvHandle",
+     "alloc_privilege": "unclassified",
+     "external_class": "NV01_ROOT"
+    },
+    {
+     "alloc_param_kind": "optional",
+     "alloc_param_struct": "NV0080_ALLOC_PARAMETERS",
+     "alloc_privilege": "unprivileged",
+     "external_class": "NV01_DEVICE_0"
+    },
+    {
      "alloc_param_kind": "optional",
      "alloc_param_struct": "NV2080_ALLOC_PARAMETERS",
      "alloc_privilege": "unprivileged",
@@ -3857,6 +4180,7 @@
      "external_class": "PROFILER_CONTEXT_EVENT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -3901,6 +4225,7 @@
      "external_class": "MAXWELL_PROFILER_CONTEXT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -3945,6 +4270,7 @@
      "external_class": "MAXWELL_PROFILER_DEVICE"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -3989,6 +4315,7 @@
      "external_class": "PROFILER_DEVICE_EVENT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -4027,6 +4354,7 @@
      "external_class": "NV01_MEMORY_LOCAL_PRIVILEGED"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -4046,6 +4374,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -4070,6 +4399,7 @@
      "external_class": "NV01_ROOT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 1,
    "command_count": 91,
    "commands": [
@@ -4489,6 +4819,7 @@
      "external_class": "HOPPER_SEC2_WORK_LAUNCH_A"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -4533,6 +4864,7 @@
      "external_class": "NV_SEMAPHORE_SURFACE"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 6,
    "commands": [
@@ -4602,6 +4934,7 @@
      "external_class": "NV04_SOFTWARE_TEST"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -4640,6 +4973,7 @@
      "external_class": "NV20_SUBDEVICE_0"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 182,
    "commands": [
@@ -5401,6 +5735,7 @@
      "external_class": "NV0060_SYNC_GPU_BOOST"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 2,
    "command_count": 0,
    "commands": [],
@@ -5439,6 +5774,7 @@
      "external_class": "NV01_MEMORY_SYNCPOINT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -5477,6 +5813,7 @@
      "external_class": "NV01_MEMORY_SYSTEM"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -5521,6 +5858,7 @@
      "external_class": "NV50_THIRD_PARTY_P2P"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 5,
    "commands": [
@@ -5586,6 +5924,7 @@
      "external_class": "GF100_TIMED_SEMAPHORE_SW"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 1,
    "commands": [
@@ -5635,6 +5974,7 @@
      "external_class": "NV01_TIMER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 1,
    "commands": [
@@ -5684,6 +6024,7 @@
      "external_class": "TRACE_DEVICE_EVENT"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -5728,6 +6069,7 @@
      "external_class": "AMPERE_USERMODE_A"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -5767,6 +6109,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -5784,6 +6127,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -5820,6 +6164,7 @@
      "external_class": "FERMI_VASPACE_A"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -5839,6 +6184,7 @@
   },
   {
    "chain": null,
+   "chain_borrowed_from": null,
    "chain_length": null,
    "command_count": 0,
    "commands": [],
@@ -5875,6 +6221,7 @@
      "external_class": "KEPLER_DEVICE_VGPU"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 3,
    "commands": [
@@ -5932,6 +6279,7 @@
      "external_class": "NVA081_VGPU_CONFIG"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 22,
    "commands": [
@@ -6059,6 +6407,7 @@
      "external_class": "NV01_MEMORY_LOCAL_USER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -6103,6 +6452,7 @@
      "external_class": "HOPPER_MMU_VIDMEM_ACCESS_BIT_BUFFER"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 0,
    "commands": [],
@@ -6146,6 +6496,7 @@
      "external_class": "NV50_MEMORY_VIRTUAL"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -6184,6 +6535,7 @@
      "external_class": "NV01_MEMORY_VIRTUAL"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 3,
    "command_count": 0,
    "commands": [],
@@ -6228,6 +6580,7 @@
      "external_class": "GF100_ZBC_CLEAR"
     }
    ],
+   "chain_borrowed_from": null,
    "chain_length": 4,
    "command_count": 1,
    "commands": [
@@ -6252,10 +6605,11 @@
   }
  ],
  "counts": {
-  "chained": 82,
-  "commands_with_a_chain": 514,
-  "commands_without_a_chain": 17,
-  "internal_classes": 98,
+  "borrowed_chains": 2,
+  "chained": 84,
+  "commands_with_a_chain": 529,
+  "commands_without_a_chain": 2,
+  "internal_classes": 100,
   "owning_classes": 42,
   "targetable_commands": 531,
   "unallocatable": 16
@@ -6323,170 +6677,182 @@
   },
   {
    "allocations": 11,
-   "class_added": "ConfidentialComputeApi",
-   "commands": 429,
+   "class_added": "ProfilerBase",
+   "commands": 430,
    "new_allocations": 1
   },
   {
    "allocations": 12,
-   "class_added": "GPUInstanceSubscription",
-   "commands": 436,
+   "class_added": "ConfidentialComputeApi",
+   "commands": 438,
    "new_allocations": 1
   },
   {
    "allocations": 13,
-   "class_added": "MemoryMulticastFabric",
-   "commands": 443,
+   "class_added": "GPUInstanceSubscription",
+   "commands": 445,
    "new_allocations": 1
   },
   {
    "allocations": 14,
-   "class_added": "Griddisplayless",
-   "commands": 449,
+   "class_added": "MemoryMulticastFabric",
+   "commands": 452,
    "new_allocations": 1
   },
   {
    "allocations": 15,
-   "class_added": "SemaphoreSurface",
-   "commands": 455,
+   "class_added": "Griddisplayless",
+   "commands": 458,
    "new_allocations": 1
   },
   {
    "allocations": 16,
-   "class_added": "KernelGraphicsContext",
-   "commands": 460,
+   "class_added": "Memory",
+   "commands": 464,
    "new_allocations": 1
   },
   {
    "allocations": 17,
-   "class_added": "MemoryFabric",
-   "commands": 465,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 18,
-   "class_added": "ThirdPartyP2P",
+   "class_added": "SemaphoreSurface",
    "commands": 470,
    "new_allocations": 1
   },
   {
+   "allocations": 18,
+   "class_added": "KernelGraphicsContext",
+   "commands": 475,
+   "new_allocations": 1
+  },
+  {
    "allocations": 19,
-   "class_added": "DiagApi",
-   "commands": 474,
+   "class_added": "MemoryFabric",
+   "commands": 480,
    "new_allocations": 1
   },
   {
    "allocations": 20,
-   "class_added": "DispCommon",
-   "commands": 478,
+   "class_added": "ThirdPartyP2P",
+   "commands": 485,
    "new_allocations": 1
   },
   {
    "allocations": 21,
-   "class_added": "EventBuffer",
-   "commands": 482,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 22,
-   "class_added": "KernelCcuApi",
-   "commands": 486,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 23,
-   "class_added": "DeferredApiObject",
+   "class_added": "DiagApi",
    "commands": 489,
    "new_allocations": 1
   },
   {
+   "allocations": 22,
+   "class_added": "DispCommon",
+   "commands": 493,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 23,
+   "class_added": "EventBuffer",
+   "commands": 497,
+   "new_allocations": 1
+  },
+  {
    "allocations": 24,
-   "class_added": "ImexSessionApi",
-   "commands": 492,
+   "class_added": "KernelCcuApi",
+   "commands": 501,
    "new_allocations": 1
   },
   {
    "allocations": 25,
-   "class_added": "MemoryExport",
-   "commands": 495,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 26,
-   "class_added": "VgpuApi",
-   "commands": 498,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 27,
-   "class_added": "ContextDma",
-   "commands": 500,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 28,
-   "class_added": "FmSessionApi",
-   "commands": 502,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 29,
-   "class_added": "MemoryMapper",
+   "class_added": "DeferredApiObject",
    "commands": 504,
    "new_allocations": 1
   },
   {
-   "allocations": 30,
-   "class_added": "NvencSession",
-   "commands": 506,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 31,
-   "class_added": "ComputeInstanceSubscription",
+   "allocations": 26,
+   "class_added": "ImexSessionApi",
    "commands": 507,
    "new_allocations": 1
   },
   {
-   "allocations": 32,
-   "class_added": "GpuUserSharedData",
-   "commands": 508,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 33,
-   "class_added": "MemoryFabricImportV2",
-   "commands": 509,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 34,
-   "class_added": "MemoryFabricImportedRef",
+   "allocations": 27,
+   "class_added": "MemoryExport",
    "commands": 510,
    "new_allocations": 1
   },
   {
-   "allocations": 35,
-   "class_added": "NvfbcSession",
-   "commands": 511,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 36,
-   "class_added": "TimedSemaSwObject",
-   "commands": 512,
-   "new_allocations": 1
-  },
-  {
-   "allocations": 37,
-   "class_added": "TimerApi",
+   "allocations": 28,
+   "class_added": "VgpuApi",
    "commands": 513,
    "new_allocations": 1
   },
   {
+   "allocations": 29,
+   "class_added": "ContextDma",
+   "commands": 515,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 30,
+   "class_added": "FmSessionApi",
+   "commands": 517,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 31,
+   "class_added": "MemoryMapper",
+   "commands": 519,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 32,
+   "class_added": "NvencSession",
+   "commands": 521,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 33,
+   "class_added": "ComputeInstanceSubscription",
+   "commands": 522,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 34,
+   "class_added": "GpuUserSharedData",
+   "commands": 523,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 35,
+   "class_added": "MemoryFabricImportV2",
+   "commands": 524,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 36,
+   "class_added": "MemoryFabricImportedRef",
+   "commands": 525,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 37,
+   "class_added": "NvfbcSession",
+   "commands": 526,
+   "new_allocations": 1
+  },
+  {
    "allocations": 38,
+   "class_added": "TimedSemaSwObject",
+   "commands": 527,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 39,
+   "class_added": "TimerApi",
+   "commands": 528,
+   "new_allocations": 1
+  },
+  {
+   "allocations": 40,
    "class_added": "ZbcApi",
-   "commands": 514,
+   "commands": 529,
    "new_allocations": 1
   }
  ],
@@ -6494,22 +6860,10 @@
  "source": {
   "control_inventory": "surface/rm-control-inventory.json",
   "driver_version": "610.57.04",
+  "hierarchy_path": "artifacts/src/open-gpu-kernel-modules/src/nvidia/generated",
   "table": "artifacts/src/open-gpu-kernel-modules/src/nvidia/src/kernel/rmapi/resource_list.h"
  },
  "unresolved_owning_classes": [
-  {
-   "command_count": 6,
-   "commands": [
-    "memCtrlCmdGetMemPageSize",
-    "memCtrlCmdGetSurfaceCompressionCoverageLvm",
-    "memCtrlCmdGetSurfaceInfoLvm",
-    "memCtrlCmdGetTag",
-    "memCtrlCmdSetTag",
-    "memCtrlCmdSurfaceFlushGpuCache"
-   ],
-   "owning_class": "Memory",
-   "reason": "no RS_ENTRY row for this class"
-  },
   {
    "command_count": 1,
    "commands": [
@@ -6525,22 +6879,6 @@
    ],
    "owning_class": "NvDispApi",
    "reason": "every external class requires allocation privilege"
-  },
-  {
-   "command_count": 9,
-   "commands": [
-    "profilerBaseCtrlCmdAllocPmaStream",
-    "profilerBaseCtrlCmdBindPmResources",
-    "profilerBaseCtrlCmdFreePmaStream",
-    "profilerBaseCtrlCmdInternalSriovPromotePmaStream",
-    "profilerBaseCtrlCmdPmaStreamUpdateGetPut",
-    "profilerBaseCtrlCmdReleaseCgControls",
-    "profilerBaseCtrlCmdRequestCgControls",
-    "profilerBaseCtrlCmdReserveHwpmLegacy",
-    "profilerBaseCtrlCmdUnbindPmResources"
-   ],
-   "owning_class": "ProfilerBase",
-   "reason": "no RS_ENTRY row for this class"
   }
  ]
 }
