@@ -35,6 +35,8 @@ The git-mining classes skip themselves when git is absent from PATH.
 
 Usage: python3 tools/selftest.py [-v]      exit 0 = all passed
 """
+import ast
+import contextlib
 import csv
 import fcntl
 import hashlib
@@ -67,6 +69,7 @@ import gitmine
 import gspwn_config
 import ioctl_inventory
 import knowledge_ctl
+import nvkms_inventory
 import object_graph
 import orchestrator_ctl
 import patch_mine
@@ -5488,12 +5491,19 @@ def _restore(old):
         setattr(regression_check, k, v)
 
 
-# A description set with one call in each of the three groups the pin check
+# A description set with one call in each of the four groups the pin check
 # reports, every selector pinned. The fixtures below edit one line of it.
+#
+# The modeset call names a real command, because the modeset ordinal lookup
+# reads the committed inventory and a made-up name would only ever report as
+# one the inventory does not carry. NVKMS_IOCTL_ALLOC_DEVICE sits at ordinal
+# 0, which is also the value a field that lost its pin would most plausibly
+# still render, so the wrong-value fixture below moves it off 0.
 PINNED_SET = """\
 ioctl$NV_ESC_RM_CONTROL_fooCtrlCmdBar(fd fd_nvidiactl, cmd const[0xc020462a], arg ptr[inout, nvos54_ctrl_fooCtrlCmdBar])
 ioctl$NV_ESC_RM_ALLOC_FOO_A(fd fd_nv, cmd const[0xc030462b], arg ptr[inout, nvos64_alloc_foo_a])
 ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])
+ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, cmd const[0xc0106d00], arg ptr[inout, nvkms_params_alloc_device])
 
 nvos54_ctrl_fooCtrlCmdBar {
 \thClient\tnvh_nv01_root
@@ -5510,6 +5520,11 @@ nvos64_alloc_foo_a {
 nv_xfer_rm_free {
 \tcmd\tconst[41, int32]
 \tsize\tconst[16, int32]
+} [packed]
+
+nvkms_params_alloc_device {
+\tcmd\tconst[0, int32]
+\tsize\tconst[1440, int32]
 } [packed]
 """
 
@@ -5714,12 +5729,17 @@ class TestSelectorPinsInTheEmittedSet(Phase4Fixtures):
 
     def test_the_struct_parser_reads_the_committed_set_completely(self):
         # generation.json records how many structs the emitter wrote. A parser
-        # that silently dropped blocks would let a free selector through.
+        # that silently dropped blocks would let a free selector through. Two
+        # counts are summed: the parameter structs the struct emitter wrote,
+        # and the pollfd structs the entry-point block carries, which take no
+        # parameter struct and so never pass through that emitter.
         with open(os.path.join(regression_check.DESC_DIR, "generation.json"),
                   encoding="utf-8") as f:
             manifest = json.load(f)
         _calls, structs = regression_check.read_descriptions()
-        self.assertEqual(len(structs), manifest["counts"]["structs_emitted"])
+        self.assertEqual(len(structs),
+                         manifest["counts"]["structs_emitted"]
+                         + manifest["counts"]["entry_point_structs"])
 
 
 class TestDenominatorCoverage(Phase4Fixtures):
@@ -5763,7 +5783,7 @@ class TestDenominatorCoverage(Phase4Fixtures):
         code, out = _run_check("coverage")
         self.assertEqual(code, 0, out)
         self.assertIn("coverage: OK", out)
-        self.assertIn("764 targetable", out)
+        self.assertIn("828 targetable", out)
 
     def test_an_unmodified_copy_of_the_set_still_covers_every_target(self):
         old = _patched(DESC_DIR=self.desc_copy())
@@ -5778,7 +5798,7 @@ class TestDenominatorCoverage(Phase4Fixtures):
         code, out = self._without(victim)
         self.assertEqual(code, 1)
         self.assertIn(victim, out)
-        self.assertIn("763 modelled", out)
+        self.assertIn("827 modelled", out)
 
     def test_the_family_the_gap_falls_in_is_reported(self):
         victim = self._first_target_in("alloc")
@@ -7035,7 +7055,7 @@ class TestSurfaceTargetKeys(unittest.TestCase):
     def test_every_target_has_a_distinct_key(self):
         keys = [t["abi_key"] for t in self.targets.values()]
         self.assertEqual(len(keys), len(set(keys)))
-        self.assertEqual(len(keys), 764)
+        self.assertEqual(len(keys), 828)
 
     def test_the_composite_holds_531_distinct_control_targets(self):
         control = [t for t in self.targets.values()
@@ -9017,7 +9037,7 @@ static const RS_ENTRY g_resourceClassInfo[] =
 
     def test_every_reader_of_the_committed_artefact_still_loads_it(self):
         targets, _excluded, meta = surface_cov.load_targets()
-        self.assertEqual(len(targets), 764)
+        self.assertEqual(len(targets), 828)
         self.assertEqual(meta.get("driver_version"), "610.57.04")
 
 
@@ -10104,12 +10124,20 @@ class TestSinceLastResetIsAboutEdges(unittest.TestCase):
 class TestCompletionDenominatorFloor(unittest.TestCase):
     """I7. A truncated inventory is a smaller surface a corpus can close."""
 
-    FAMILIES = ("escape", "uvm", "uvm_tools", "control", "alloc")
+    # Read from the tool, so a family added to the denominator joins these
+    # fixtures instead of leaving them measuring a surface that no longer
+    # exists. PER_FAMILY targets each.
+    FAMILIES = tuple(surface_cov.FAMILIES)
+    PER_FAMILY = 3
+
+    @property
+    def total(self):
+        return len(self.FAMILIES) * self.PER_FAMILY
 
     def fake_measure(self, families):
         targets = {}
         for fam in families:
-            for i in range(3):
+            for i in range(self.PER_FAMILY):
                 v = "%s_%d" % (fam, i)
                 targets[v] = {"variant": v, "family": fam, "label": v,
                               "abi_key": "%s/%d" % (fam, i)}
@@ -10140,7 +10168,7 @@ class TestCompletionDenominatorFloor(unittest.TestCase):
         st = coverage_ctl.completion_status(
             ledger_path=os.path.join(tempfile.gettempdir(), "no-ledger.json"))
         self.assertEqual(st["verdict"], "complete")
-        self.assertEqual(st["total"], 15)
+        self.assertEqual(st["total"], self.total)
 
     def test_an_unmeasurable_union_does_not_raise_through_the_catch_all(self):
         # I8: `abi_key not in closed` against a closed of None raised
@@ -10151,13 +10179,13 @@ class TestCompletionDenominatorFloor(unittest.TestCase):
                         ps.surface_completion)
         ps.surface_completion = lambda *a, **kw: (
             "unknown", {"exercised": None, "accounted": 0, "deferred": 0,
-                        "closed": None, "total": 15}, None)
+                        "closed": None, "total": self.total}, None)
         st = coverage_ctl.completion_status(
             ledger_path=os.path.join(tempfile.gettempdir(), "no-ledger.json"))
         self.assertEqual(st["verdict"], "unknown")
         self.assertNotIn("TypeError", st["detail"])
         self.assertIn("could not be measured", st["detail"])
-        self.assertEqual(len(st["remaining"]), 15)
+        self.assertEqual(len(st["remaining"]), self.total)
 
 
 class TestCompletionStatusReadsDeferralsSeparately(unittest.TestCase):
@@ -10168,7 +10196,10 @@ class TestCompletionStatusReadsDeferralsSeparately(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.ledger = os.path.join(self.tmp.name, "ledger.json")
         targets = {}
-        for fam in ("escape", "uvm", "uvm_tools", "control", "alloc"):
+        # Every family the denominator carries, so a family added to it does
+        # not leave this fixture measuring a surface with a hole in it, which
+        # completion_status refuses before any deferral is read.
+        for fam in surface_cov.FAMILIES:
             for i in range(2):
                 v = "%s_%d" % (fam, i)
                 targets[v] = {"variant": v, "family": fam, "label": v,
@@ -10189,14 +10220,15 @@ class TestCompletionStatusReadsDeferralsSeparately(unittest.TestCase):
         if reason in ps.SURFACE_REASON_NEEDS_EVIDENCE:
             record["evidence"] = ["src/x.c:1"]
         ps.set_surface_account(record, path=self.ledger,
-                               driver_version="610.57.04", targets_total=10)
+                               driver_version="610.57.04",
+                               targets_total=len(self.targets))
 
     def test_deferring_the_last_two_targets_does_not_complete_the_ledger(self):
         self.account("control/0", "deliberately-deferred")
         self.account("control/1", "deliberately-deferred")
         st = coverage_ctl.completion_status(ledger_path=self.ledger)
         self.assertEqual(st["verdict"], "incomplete")
-        self.assertEqual(st["closed"], 8)
+        self.assertEqual(st["closed"], len(self.targets) - 2)
         self.assertEqual(st["accounted"], 0)
         self.assertEqual(st["deferred"], 2)
         self.assertIn("deliberately deferred", st["detail"])
@@ -12771,12 +12803,16 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
         "arg ptr[inout, nvos64_alloc_foo])\n"
         "ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, "
         "cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])\n"
+        "ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, "
+        "cmd const[0xc0106d00], arg ptr[inout, nvkms_params_foo])\n"
         "\n"
         "nvos54_ctrl_foo {\n\tcmd\tconst[0x00000102, int32]\n} [packed]\n"
         "\n"
         "nvos64_alloc_foo {\n\thClass\tconst[0xc997, int32]\n} [packed]\n"
         "\n"
-        "nv_xfer_rm_free {\n\tcmd\tconst[41, int32]\n} [packed]\n")
+        "nv_xfer_rm_free {\n\tcmd\tconst[41, int32]\n} [packed]\n"
+        "\n"
+        "nvkms_params_foo {\n\tcmd\tconst[0, int32]\n} [packed]\n")
 
     def pins(self, text):
         directory = tempfile.mkdtemp()
@@ -12826,10 +12862,18 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
         code, out = self.pins(self.PINNED)
         self.assertEqual(code, 0, out)
         line = next(l for l in out.splitlines() if "examined across" in l)
-        numbers = [int(n) for n in re.findall(r"\d+", line)]
-        examined, control, alloc, xfer, outside = (
-            numbers[0], numbers[2], numbers[3], numbers[4], numbers[5])
-        self.assertEqual(examined, control + alloc + xfer + outside)
+        # Read each count by the group's own name, so a family added to
+        # GROUPS does not silently shift a positional index onto another
+        # number and leave the identity reconciling against the wrong terms.
+        examined = int(re.search(r"^pins: (\d+) selector", line).group(1))
+        grouped = 0
+        for group, _prefix, _family in regression_check.GROUPS:
+            found = re.search(r"\b%s (\d+)" % re.escape(group), line)
+            self.assertIsNotNone(found, "%s absent from %r" % (group, line))
+            grouped += int(found.group(1))
+        outside = int(
+            re.search(r"outside every group (\d+)", line).group(1))
+        self.assertEqual(examined, grouped + outside)
 
 
 class TestPinsChecksTheValueAndNotOnlyTheForm(unittest.TestCase):
@@ -12844,17 +12888,27 @@ class TestPinsChecksTheValueAndNotOnlyTheForm(unittest.TestCase):
            "arg ptr[inout, nvos64_alloc_foo])\n"
            "ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, cmd "
            "const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])\n"
+           "ioctl$NVKMS_IOCTL_THING(fd fd_nvidia_modeset, cmd "
+           "const[0xc0106d00], arg ptr[inout, nvkms_params_thing])\n"
            "\n"
            "nvos54_ctrl_foo {\n\tcmd\tconst[%s, int32]\n} [packed]\n"
            "\n"
            "nvos64_alloc_foo {\n\thClass\tconst[0xc997, int32]\n} [packed]\n"
            "\n"
-           "nv_xfer_rm_free {\n\tcmd\tconst[41, int32]\n} [packed]\n")
+           "nv_xfer_rm_free {\n\tcmd\tconst[41, int32]\n} [packed]\n"
+           "\n"
+           "nvkms_params_thing {\n\tcmd\tconst[7, int32]\n} [packed]\n")
+
+    MODESET_VARIANT = "NVKMS_IOCTL_THING"
+    MODESET_ORDINAL = 7
 
     def fake_targets(self, method_id="0x00000102"):
         variant = surface_cov.CONTROL_PREFIX + self.HANDLER
         targets = {variant: {"variant": variant, "family": "control",
-                             "method_id": method_id}}
+                             "method_id": method_id},
+                   self.MODESET_VARIANT: {"variant": self.MODESET_VARIANT,
+                                          "family": "modeset",
+                                          "nr": self.MODESET_ORDINAL}}
         saved = surface_cov.load_targets
         surface_cov.load_targets = lambda: (
             targets, {}, {"driver_version": "610.57.04"})
@@ -12926,7 +12980,7 @@ class TestCoverageNoticesAShrinkingDenominator(unittest.TestCase):
     """regression_check M3 and I4: the check compared the description set
     against whatever load_targets returned, so a bump that dropped targets
     left both sides smaller and the run read clean. The function docstring
-    named 764 and no constant or assertion carried it."""
+    named a total and no constant or assertion carried it."""
 
     def coverage(self, targets):
         saved = surface_cov.load_targets
@@ -12963,7 +13017,7 @@ class TestCoverageNoticesAShrinkingDenominator(unittest.TestCase):
                          sorted(surface_cov.FAMILIES))
 
     def test_the_floor_sums_to_the_number_the_docstring_used_to_name(self):
-        self.assertEqual(sum(regression_check.TARGET_FLOOR.values()), 764)
+        self.assertEqual(sum(regression_check.TARGET_FLOOR.values()), 828)
 
     def test_the_function_docstring_no_longer_names_a_bare_count(self):
         self.assertNotIn("764", regression_check.check_coverage.__doc__)
@@ -13201,7 +13255,8 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
 
     def test_all_runs_the_checks_in_the_documented_order(self):
         self.assertEqual(regression_check.check_order(),
-                         ["names", "pins", "coverage", "derived", "pages"])
+                         ["names", "pins", "coverage", "derived", "pages",
+                          "stale", "harnesses"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -13502,6 +13557,3427 @@ class TestThePromptCheckSeesAFlagOnlyInvocation(unittest.TestCase):
         # where a subcommand's flags never appear.
         self.assertIn("if sub:\n                      argv.append(sub)",
                       self.workflow())
+
+
+# ---------------------------------------------------------------------------
+# Phase 0: the two artefact and seam guards, tools/regression_check.py stale
+# and harnesses.
+#
+# Both compare committed sets that agree today and that nothing else compares.
+# The passing cases read the real artefacts, so a checkout missing them fails
+# here for the same reason the CI step fails. The failing cases build a scratch
+# tree and point the module constants at it, which is the only way to see the
+# offender reported without editing a committed file.
+# ---------------------------------------------------------------------------
+
+
+class Phase0Fixtures(unittest.TestCase):
+    """Scratch trees the two guards read through their module constants."""
+
+    def tempdir(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return holder.name
+
+    def check(self, name):
+        """-> (exit code, stdout and stderr) for one subcommand."""
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = regression_check.main([name])
+        return code, out.getvalue() + err.getvalue()
+
+    def use(self, **attrs):
+        self.addCleanup(_restore, _patched(**attrs))
+
+    def artefact(self, root, relative, payload):
+        """Write one recorded input into the scratch tree, returning its
+        digest."""
+        path = os.path.join(root, *relative.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(payload)
+        return hashlib.sha256(payload).hexdigest()
+
+    def generation(self, root, record):
+        """Write descriptions/generation.json and point `stale` at it."""
+        directory = os.path.join(root, "descriptions")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, "generation.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"generated_from": record}, fh)
+        self.use(GENERATION=path)
+        return path
+
+
+class TestRecordedInputsStillMatch(Phase0Fixtures):
+    """regression_check stale: every input generation.json records still
+    hashes to the digest the record carries.
+
+    Five sha256 values sat in descriptions/generation.json with no reader. A
+    surface artefact regenerated without regenerating the description set
+    leaves the record pointing at bytes that no longer exist, and every tool
+    that reads either one still reports success.
+    """
+
+    def scratch(self, root):
+        """A two-input record whose digests match, one of them a list member."""
+        rank = self.artefact(root, "surface/rm-control-rank.json",
+                             b'{"commands": []}\n')
+        sizes = self.artefact(root, "surface/ctrl-param-sizes.json",
+                              b'{"entries": []}\n')
+        return {
+            "ctrl_rank": {"path": "surface/rm-control-rank.json",
+                          "commands": 1, "sha256": rank},
+            "ctrl_sizes": [{"path": "surface/ctrl-param-sizes.json",
+                            "entries": 1, "sha256": sizes}],
+            "driver_version": "610.57.04",
+            "driver_commit": "e4a5faa",
+        }
+
+    def test_every_committed_input_matches_its_recorded_digest(self):
+        code, out = self.check("stale")
+        self.assertEqual(code, 0, out)
+        self.assertIn("stale: OK", out)
+
+    def test_all_five_recorded_inputs_are_reported(self):
+        code, out = self.check("stale")
+        self.assertEqual(code, 0, out)
+        for path in ("surface/rm-control-inventory.json",
+                     "surface/rm-control-rank.json",
+                     "surface/ctrl-param-sizes.json",
+                     "surface/ioctl-inventory.json",
+                     "surface/rm-object-graph.json"):
+            self.assertIn(path, out)
+
+    def test_the_recorded_checkout_is_reported_beside_the_inputs(self):
+        code, out = self.check("stale")
+        self.assertEqual(code, 0, out)
+        self.assertIn("610.57.04", out)
+        self.assertIn("e4a5faa", out)
+
+    def test_a_digest_that_moved_names_the_file(self):
+        root = self.tempdir()
+        record = self.scratch(root)
+        self.artefact(root, "surface/rm-control-rank.json", b'{"moved": 1}\n')
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("surface/rm-control-rank.json", out)
+        self.assertIn(record["ctrl_rank"]["sha256"][:16], out)
+
+    def test_a_list_member_that_moved_names_the_file(self):
+        root = self.tempdir()
+        record = self.scratch(root)
+        self.artefact(root, "surface/ctrl-param-sizes.json", b'{"moved": 1}\n')
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("surface/ctrl-param-sizes.json", out)
+
+    def test_an_absent_input_names_the_file(self):
+        root = self.tempdir()
+        record = self.scratch(root)
+        os.remove(os.path.join(root, "surface", "rm-control-rank.json"))
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("surface/rm-control-rank.json", out)
+        self.assertIn("absent", out)
+
+    def test_a_record_with_no_provenance_block_cannot_run(self):
+        root = self.tempdir()
+        directory = os.path.join(root, "descriptions")
+        os.makedirs(directory)
+        path = os.path.join(directory, "generation.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"schema": "gspwn.descriptions/1"}, fh)
+        self.use(GENERATION=path)
+        code, out = self.check("stale")
+        self.assertEqual(code, 2, out)
+        self.assertIn("generated_from", out)
+
+    def test_an_entry_shaped_in_an_unanticipated_way_cannot_run(self):
+        root = self.tempdir()
+        self.generation(root, {"ctrl_rank": {"records": 1}})
+        code, out = self.check("stale")
+        self.assertEqual(code, 2, out)
+        self.assertIn("ctrl_rank", out)
+
+
+class TestHarnessTargetListsAgree(Phase0Fixtures):
+    """regression_check harnesses: the four Track U target lists still agree.
+
+    config/campaign.yaml drives the fuzz phase, harnesses/run_all.sh runs the
+    binaries, harnesses/TARGETS.md carries the entry points and the replay
+    commands, and the directories on disk hold the sources. A target added to
+    one and not the others is skipped at run time with no signal.
+    """
+
+    NAMES = ["fuzz_alpha", "fuzz_beta"]
+
+    def scratch(self, config=None, run_all=None, doc=None, directories=None):
+        """A four-source scratch tree, each source overridable on its own."""
+        root = self.tempdir()
+        config = self.NAMES if config is None else config
+        run_all = self.NAMES if run_all is None else run_all
+        doc = self.NAMES if doc is None else doc
+        directories = ([(name, True) for name in self.NAMES]
+                       if directories is None else directories)
+
+        conf_dir = os.path.join(root, "config")
+        os.makedirs(conf_dir)
+        conf = os.path.join(conf_dir, "campaign.yaml")
+        with open(conf, "w", encoding="utf-8") as fh:
+            fh.write("track_u:\n  targets:\n")
+            for name in config:
+                fh.write("    - %s\n" % name)
+
+        harness_dir = os.path.join(root, "harnesses")
+        os.makedirs(harness_dir)
+        run = os.path.join(harness_dir, "run_all.sh")
+        with open(run, "w", encoding="utf-8") as fh:
+            fh.write("C_TARGETS=(\n")
+            for name in run_all:
+                fh.write("    %s\n" % name)
+            fh.write(")\n")
+        targets_doc = os.path.join(harness_dir, "TARGETS.md")
+        with open(targets_doc, "w", encoding="utf-8") as fh:
+            fh.write("| Harness | Replay command |\n| --- | --- |\n")
+            for name in doc:
+                fh.write("| `%s` | `harnesses/%s/build/%s` |\n"
+                         % (name, name, name))
+        for name, has_build in directories:
+            os.makedirs(os.path.join(harness_dir, name))
+            if has_build:
+                with open(os.path.join(harness_dir, name, "build.sh"),
+                          "w", encoding="utf-8") as fh:
+                    fh.write("#!/usr/bin/env bash\n")
+
+        self.use(CAMPAIGN_CONFIG=conf, RUN_ALL=run, TARGETS_DOC=targets_doc,
+                 HARNESS_DIR=harness_dir)
+        return root
+
+    def test_the_committed_sources_agree(self):
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 0, out)
+        self.assertIn("harnesses: OK", out)
+
+    def test_all_six_committed_targets_are_reported(self):
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 0, out)
+        for name in ("fuzz_ldcache", "fuzz_path_resolve", "fuzz_dsl_evaluate",
+                     "fuzz_options_parse", "fuzz_imex_channels",
+                     "fuzz_path_join"):
+            self.assertIn(name, out)
+
+    def test_both_declared_exclusions_are_reported(self):
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 0, out)
+        self.assertIn("common", out)
+        self.assertIn("go_cudacompat_elf", out)
+
+    def test_a_target_absent_from_the_config_names_that_source(self):
+        self.scratch(config=["fuzz_alpha"])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_beta", out)
+        self.assertIn("config/campaign.yaml", out)
+
+    def test_a_target_absent_from_one_source_names_the_ones_that_carry_it(self):
+        self.scratch(config=["fuzz_alpha"])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("harnesses/run_all.sh", out)
+        self.assertIn("harnesses/TARGETS.md", out)
+
+    def test_a_target_absent_from_the_run_script_names_that_source(self):
+        self.scratch(run_all=["fuzz_alpha"])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_beta", out)
+        self.assertIn("harnesses/run_all.sh", out)
+
+    def test_a_target_absent_from_the_target_table_names_that_source(self):
+        self.scratch(doc=["fuzz_alpha"])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_beta", out)
+        self.assertIn("harnesses/TARGETS.md", out)
+
+    def test_a_target_with_no_source_directory_names_that_source(self):
+        self.scratch(directories=[("fuzz_alpha", True)])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_beta", out)
+        self.assertIn("build.sh", out)
+
+    def test_a_directory_with_no_build_script_and_no_exclusion_is_reported(self):
+        self.scratch(directories=[("fuzz_alpha", True), ("fuzz_beta", True),
+                                  ("fuzz_gamma", False)])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 1, out)
+        self.assertIn("fuzz_gamma", out)
+
+    def test_a_declared_exclusion_is_not_reported_as_a_disagreement(self):
+        self.scratch(doc=self.NAMES + ["go_cudacompat_elf"],
+                     directories=[("fuzz_alpha", True), ("fuzz_beta", True),
+                                  ("go_cudacompat_elf", True),
+                                  ("common", False)])
+        code, out = self.check("harnesses")
+        self.assertEqual(code, 0, out)
+
+    def test_the_go_exclusion_reason_matches_what_campaign_yaml_states(self):
+        # The reason is the one config/campaign.yaml already records against
+        # track_u.targets. Comment markers and line wrapping are removed
+        # before the comparison, so the two texts are compared as prose.
+        with open(os.path.join(os.path.dirname(HERE), "config",
+                               "campaign.yaml"), encoding="utf-8") as fh:
+            text = re.sub(r"\s+", " ", re.sub(r"\s*#\s*", " ", fh.read()))
+        self.assertIn(
+            regression_check.HARNESS_EXCLUSIONS["go_cudacompat_elf"], text)
+
+    def test_every_declared_exclusion_carries_a_reason(self):
+        for name, reason in regression_check.HARNESS_EXCLUSIONS.items():
+            self.assertTrue(reason.strip(), name)
+
+
+class TestTheTwoGuardsAreRegistered(unittest.TestCase):
+    """Both guards run under `regression_check.py all`."""
+
+    def test_the_registry_holds_seven_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 7)
+
+    def test_both_guards_are_registered_and_ordered(self):
+        for name in ("stale", "harnesses"):
+            self.assertIn(name, regression_check.CHECKS, name)
+            self.assertIn(name, regression_check.CHECK_ORDER, name)
+
+    def test_the_module_docstring_names_seven_checks(self):
+        self.assertIn("Seven CI checks", regression_check.__doc__)
+
+    def test_the_workflow_runs_both_guards(self):
+        with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
+                               "selftest.yml"), encoding="utf-8") as fh:
+            workflow = fh.read()
+        # Asserted as a membership test and not with assertIn, because the
+        # workflow is one long string and a failure would print all of it.
+        for name in ("stale", "harnesses"):
+            self.assertTrue("regression_check.py %s" % name in workflow,
+                            "the workflow runs no %s step" % name)
+
+# A syzlang `const` argument, as this generator writes one: a decimal or hex
+# literal, or the format placeholder that will carry one. The filter keeps
+# prose out of the arity scan, where "const[...]" appears inside a
+# SystemExit message and carries no syzlang argument at all.
+CONST_ARGUMENT = re.compile(r"^(?:0x)?(?:[0-9A-Fa-f]+|%[#0-9]*[a-z])$")
+
+# A string literal that opens a syscall signature: a name, then an open
+# parenthesis. Every `const` inside one sits at a parameter position.
+SIGNATURE_LITERAL = re.compile(r"^[A-Za-z_%$][A-Za-z0-9_$%]*\(")
+
+
+def const_spans(text):
+    """Every `const[...]` in one string literal, as (offset, arguments).
+
+    Brackets nest, so `array[const[0, int8], 4]` has to be read with a depth
+    counter and split on top-level commas only.
+    """
+    spans = []
+    for match in re.finditer(r"const\[", text):
+        depth = 0
+        arguments = [""]
+        index = match.end()
+        closed = False
+        while index < len(text):
+            char = text[index]
+            if char == "]" and depth == 0:
+                closed = True
+                break
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+            elif char == "," and depth == 0:
+                arguments.append("")
+                index += 1
+                continue
+            arguments[-1] += char
+            index += 1
+        if not closed:
+            continue
+        arguments = [part.strip() for part in arguments]
+        if not CONST_ARGUMENT.match(arguments[0]):
+            continue
+        spans.append((match.start(), arguments))
+    return spans
+
+
+def const_emission_sites(source):
+    """Every `const[...]` the generator emits, with its syzlang position.
+
+    A syzlang `const` takes one argument at a syscall parameter position and
+    two at a struct field position, where the second names the field's base
+    type. `pkg/compiler/check.go`'s `checkTypeArgs` enforces that split, and
+    F23 was one emission site carrying the struct form at a parameter
+    position: `ioctl$UVM_DEINITIALIZE(... arg const[0, intptr])`, which
+    syzkaller rejects with "wrong number of arguments for type const, expect
+    value".
+
+    Position is read in two steps. A literal that opens a call signature is a
+    syscall line, and every `const` in it is at a parameter position. Any
+    other literal is at a struct field position, unless it is assigned to a
+    name that a signature literal later interpolates into an argument slot,
+    which is the route F23's site took to reach a syscall line.
+    """
+    tree = ast.parse(source)
+    fed = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Mod):
+            continue
+        left = node.left
+        if not isinstance(left, ast.Constant) or not isinstance(left.value,
+                                                                str):
+            continue
+        if not SIGNATURE_LITERAL.match(left.value):
+            continue
+        for inner in ast.walk(node.right):
+            if isinstance(inner, ast.Name):
+                fed.add(inner.id)
+    parameter_literals = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Constant) or not isinstance(value.value,
+                                                                 str):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id in fed
+                   for t in node.targets):
+            continue
+        parameter_literals.add(id(value))
+    sites = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value,
+                                                                str):
+            continue
+        spans = const_spans(node.value)
+        if not spans:
+            continue
+        signature = SIGNATURE_LITERAL.match(node.value) is not None
+        position = ("parameter"
+                    if signature or id(node) in parameter_literals
+                    else "field")
+        for offset, arguments in spans:
+            sites.append({
+                "line": node.lineno,
+                "position": position,
+                "arguments": len(arguments),
+                "text": node.value[offset:offset + 40],
+            })
+    return sites
+
+
+class TestTheConstEmissionArity(unittest.TestCase):
+    """F23: `tools/syzlang_gen.py` emitted `arg const[0, intptr]` on
+    `ioctl$UVM_DEINITIALIZE`, the struct field form of `const` at a syscall
+    parameter position. Nothing caught it, because no description in this
+    repository had ever been compiled. The scan reads the generator's own
+    source so the error class cannot reappear silently."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(HERE, "syzlang_gen.py"),
+                  encoding="utf-8") as handle:
+            cls.sites = const_emission_sites(handle.read())
+
+    def test_the_scan_finds_every_emission_site(self):
+        # 27 sites at the revision this scan was written against. The floor
+        # catches a scan that silently stops seeing the generator's output,
+        # which would pass every arity assertion below it.
+        self.assertGreaterEqual(len(self.sites), 25)
+
+    def test_every_const_at_a_parameter_position_takes_one_argument(self):
+        for site in self.sites:
+            if site["position"] == "parameter":
+                self.assertEqual(1, site["arguments"], site)
+
+    def test_every_const_at_a_field_position_takes_two_arguments(self):
+        for site in self.sites:
+            if site["position"] == "field":
+                self.assertEqual(2, site["arguments"], site)
+
+    def test_both_positions_are_actually_present(self):
+        found = {site["position"] for site in self.sites}
+        self.assertEqual({"parameter", "field"}, found)
+
+    def test_prose_naming_const_is_not_read_as_an_emission(self):
+        source = 'raise SystemExit("%s must render as const[...]: free" % x)\n'
+        self.assertEqual([], const_emission_sites(source))
+
+    def test_a_signature_literal_puts_its_const_at_a_parameter_position(self):
+        source = 'blocks.append("ioctl$%s(fd %s, cmd const[%s])" % (a, b, c))\n'
+        sites = const_emission_sites(source)
+        self.assertEqual(1, len(sites))
+        self.assertEqual("parameter", sites[0]["position"])
+        self.assertEqual(1, sites[0]["arguments"])
+
+    def test_a_bare_literal_is_at_a_field_position(self):
+        source = 'overrides = {"cmd": "const[%d, int32]" % nr}\n'
+        sites = const_emission_sites(source)
+        self.assertEqual(1, len(sites))
+        self.assertEqual("field", sites[0]["position"])
+        self.assertEqual(2, sites[0]["arguments"])
+
+    def test_a_literal_reaching_a_signature_slot_is_at_a_parameter_position(
+            self):
+        # F23's shape, planted: the two-argument form assigned to a name that
+        # a signature literal then interpolates into an argument slot. The
+        # scan has to flag this, or it would have passed over F23 itself.
+        source = ('def f():\n'
+                  '    arg = "const[0, intptr]"\n'
+                  '    return "ioctl$%s(fd %s, arg %s)" % (n, d, arg)\n')
+        sites = const_emission_sites(source)
+        self.assertEqual(1, len(sites))
+        self.assertEqual("parameter", sites[0]["position"])
+        self.assertEqual(2, sites[0]["arguments"])
+
+    def test_the_nested_padding_array_is_read_as_one_field_const(self):
+        source = 'return "array[const[0, int8], %d]" % size\n'
+        sites = const_emission_sites(source)
+        self.assertEqual(1, len(sites))
+        self.assertEqual("field", sites[0]["position"])
+        self.assertEqual(2, sites[0]["arguments"])
+
+    def test_the_deinitialize_variant_carries_the_one_argument_form(self):
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia_uvm.txt")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("ioctl$UVM_DEINITIALIZE(fd fd_nvidia_uvm, "
+                      "cmd const[0x30000002], arg const[0])", text)
+        self.assertNotIn("const[0, intptr]", text)
+
+
+class TestTheSyzStubIsMinimal(unittest.TestCase):
+    """The stub supplies the one declaration gspwn's description files take
+    from syzkaller's own sys/linux/sys.txt. Compiling it alone is an error, so
+    it only ever runs bundled with those files."""
+
+    def read(self, name):
+        with open(os.path.join(syzlang_gen.SYZ_STUB_DIR, name),
+                  encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_stub_declares_the_file_descriptor_resource(self):
+        declarations = [line for line in self.read("gspwn_stub.txt").split("\n")
+                        if line.strip() and not line.startswith("#")]
+        self.assertEqual(["resource fd[int32]: -1"], declarations)
+
+    def test_the_stub_states_why_it_never_compiles_alone(self):
+        self.assertIn("unused resource fd", self.read("gspwn_stub.txt"))
+
+    def test_the_const_sidecar_carries_the_two_syscall_numbers(self):
+        text = self.read("gspwn_stub.txt.const")
+        self.assertIn("arches = amd64", text)
+        self.assertIn("__NR_ioctl = amd64:16", text)
+        self.assertIn("__NR_openat = amd64:257", text)
+
+    def test_the_const_sidecar_names_where_the_numbers_came_from(self):
+        self.assertIn("sys/linux/sys.txt.const",
+                      self.read("gspwn_stub.txt.const"))
+
+    def test_the_driver_calls_the_two_compiler_entry_points(self):
+        with open(syzlang_gen.GSPWN_CHECK_SRC, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("ast.ParseGlob", source)
+        self.assertIn("compiler.Compile", source)
+        # A nil consts map makes Compile return after the type-check pass
+        # alone, which reports a clean compile over an empty program.
+        self.assertIn("compiler.NewConstFile", source)
+
+
+class TestTheCompileSubcommand(unittest.TestCase):
+    """Phase 1: `syzlang_gen.py compile` runs syzkaller's own compiler over
+    the description set."""
+
+    def parse(self, argv):
+        return syzlang_gen.build_parser().parse_args(argv)
+
+    def test_the_subcommand_is_registered(self):
+        args = self.parse(["compile"])
+        self.assertEqual("compile", args.cmd)
+        self.assertIs(syzlang_gen.cmd_compile, args.func)
+
+    def test_the_checkout_path_is_a_flag(self):
+        args = self.parse(["compile", "--syzkaller", "/tmp/syzkaller"])
+        self.assertEqual("/tmp/syzkaller", args.syzkaller)
+
+    def test_the_checkout_path_defaults_to_none(self):
+        self.assertIsNone(self.parse(["compile"]).syzkaller)
+
+    def test_the_pinned_revision_is_a_commit_hash(self):
+        self.assertRegex(syzlang_gen.SYZKALLER_REV, r"^[0-9a-f]{40}$")
+        self.assertEqual("1e72964b0111319984575e60f266d1fa0a98abb5",
+                         syzlang_gen.SYZKALLER_REV)
+
+    def test_a_missing_go_toolchain_exits_three(self):
+        args = self.parse(["compile"])
+        path = os.environ.get("PATH", "")
+        os.environ["PATH"] = ""
+        self.addCleanup(os.environ.__setitem__, "PATH", path)
+        with self.assertLogs(syzlang_gen.logger, "ERROR") as caught:
+            self.assertEqual(3, syzlang_gen.cmd_compile(args))
+        self.assertIn("go", "\n".join(caught.output).lower())
+
+    def test_the_toolchain_code_is_not_the_compile_failure_code(self):
+        self.assertEqual(3, syzlang_gen.EXIT_NO_TOOLCHAIN)
+
+
+class TestTheCompileVerdictParse(unittest.TestCase):
+    """The driver's verdict line, read from the output it really prints.
+    Both samples are captured from `tools/gspwn-check` runs."""
+
+    OK = ("compile: OK, 2 const(s) loaded, 855 syscall(s), 166 resource(s), "
+          "4183 type(s), 0 unsupported\n")
+    FAILED = "compile: failed, 1 error(s)\n"
+    DIAGNOSTIC = ("nvidia_uvm.txt:51: wrong number of arguments for type "
+                  "const, expect value\n")
+
+    def test_the_success_line_yields_every_count(self):
+        verdict = syzlang_gen.parse_compile_verdict(self.OK)
+        self.assertEqual(2, verdict["consts"])
+        self.assertEqual(855, verdict["syscalls"])
+        self.assertEqual(166, verdict["resources"])
+        self.assertEqual(4183, verdict["types"])
+        self.assertEqual(0, verdict["unsupported"])
+
+    def test_the_builtin_pseudo_syscalls_are_subtracted(self):
+        # pkg/compiler/types.go prepends 6 syz_builtinN pseudo-syscalls to
+        # every compile, so 855 is 849 of gspwn's own plus those 6. 849 is
+        # 845 ioctl variants and 4 openat, which is F6.
+        verdict = syzlang_gen.parse_compile_verdict(self.OK)
+        self.assertEqual(6, verdict["builtin_syscalls"])
+        self.assertEqual(849, verdict["own_syscalls"])
+        self.assertEqual(verdict["syscalls"],
+                         verdict["own_syscalls"] + verdict["builtin_syscalls"])
+
+    def test_a_failure_line_has_no_verdict(self):
+        self.assertIsNone(syzlang_gen.parse_compile_verdict(self.FAILED))
+
+    def test_empty_output_has_no_verdict(self):
+        self.assertIsNone(syzlang_gen.parse_compile_verdict(""))
+
+    def test_the_builtin_count_is_named_once(self):
+        self.assertEqual(6, syzlang_gen.SYZ_BUILTIN_SYSCALLS)
+
+    def test_a_diagnostic_is_reproduced_unchanged(self):
+        reported = syzlang_gen.format_diagnostics(
+            self.DIAGNOSTIC + self.FAILED)
+        self.assertIn("nvidia_uvm.txt:51: wrong number of arguments for type "
+                      "const, expect value", reported)
+        self.assertIn("compile: failed, 1 error(s)", reported)
+
+    def test_no_diagnostics_reports_that_and_not_an_empty_block(self):
+        self.assertEqual("(the driver printed no diagnostics)",
+                         syzlang_gen.format_diagnostics("  \n \n"))
+
+
+class TestTheSyzlangWorkflow(unittest.TestCase):
+    """The compile gate runs in its own CI job. The offline selftest job stays
+    offline and pure Python."""
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(HERE), ".github", "workflows",
+                            "syzlang.yml")
+        with open(path, encoding="utf-8") as handle:
+            cls.text = handle.read()
+
+    def test_the_workflow_pins_the_same_revision_as_the_tool(self):
+        self.assertIn(syzlang_gen.SYZKALLER_REV, self.text)
+
+    def test_the_workflow_runs_on_a_push_to_main(self):
+        self.assertIn("branches: [main]", self.text)
+
+    def test_the_workflow_watches_every_input_the_gate_reads(self):
+        for path in ("descriptions/**", "tools/syzlang_gen.py",
+                     "tools/gspwn-check/**", "tools/syz-stub/**",
+                     ".github/workflows/syzlang.yml"):
+            self.assertIn(path, self.text)
+
+    def test_the_workflow_runs_the_subcommand(self):
+        self.assertIn("tools/syzlang_gen.py compile", self.text)
+
+    def test_the_workflow_never_compiles_the_stub_alone(self):
+        # The stub's one resource is unused without the gspwn files, which
+        # syzkaller reports as a hard error.
+        self.assertNotIn("-dir tools/syz-stub", self.text)
+
+
+class TestTheCompileGateIsDocumented(unittest.TestCase):
+    """The gate replaces a hand-produced result, so the prompts and the exit
+    code table have to name it."""
+
+    def read(self, *parts):
+        with open(os.path.join(os.path.dirname(HERE), *parts),
+                  encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_exit_code_table_carries_the_toolchain_code(self):
+        text = self.read("docs", "src", "content", "docs", "reference",
+                         "exit-codes.md")
+        self.assertIn("| `syzlang_gen.py` | `compile` | 3 |", text)
+
+    def test_the_exit_code_table_carries_the_compile_failure_code(self):
+        text = self.read("docs", "src", "content", "docs", "reference",
+                         "exit-codes.md")
+        self.assertIn("| `syzlang_gen.py` | `compile` | 1 |", text)
+
+    def test_the_describe_prompt_cites_the_command(self):
+        self.assertIn("python3 tools/syzlang_gen.py compile",
+                      self.read("agents", "describe.md"))
+
+    def test_the_describe_prompt_asks_for_no_hand_run(self):
+        # F14a: no `syz-compile` binary exists. The prompt asked for its
+        # output at three points, and produced that evidence by hand.
+        text = self.read("agents", "describe.md")
+        self.assertNotIn("compile with" + chr(10) + "   syz-compile",
+                         text)
+        self.assertNotIn("Every description compiles under syz-compile", text)
+        self.assertNotIn("syz-compile success output", text)
+
+    def test_the_describe_prompt_says_the_binary_does_not_exist(self):
+        self.assertIn("syzkaller ships no", self.read("agents", "describe.md"))
+
+    def test_the_command_table_carries_the_gate(self):
+        self.assertIn("python3 tools/syzlang_gen.py compile",
+                      self.read("AGENTS.md"))
+
+
+class TestTheFopsTableParse(unittest.TestCase):
+    """Every entry point the driver registers is read from the file_operations
+    initialiser itself, so a table gaining or losing a member moves the
+    artefact and not a hand-kept list."""
+
+    TABLE = """
+static struct file_operations sample_fops = {
+    .owner     = THIS_MODULE,
+    .poll      = sample_poll,
+    .unlocked_ioctl = sample_ioctl,
+#if NVCPU_IS_X86_64 || NVCPU_IS_AARCH64
+    .compat_ioctl = sample_ioctl,
+#endif
+    .mmap      = sample_mmap,
+    .open      = sample_open,
+    .release   = sample_close,
+};
+"""
+
+    def test_every_member_but_owner_is_an_entry_point(self):
+        found = ioctl_inventory.parse_fops_table(self.TABLE, "sample_fops")
+        self.assertEqual([e["operation"] for e in found],
+                         ["poll", "unlocked_ioctl", "compat_ioctl", "mmap",
+                          "open", "release"])
+
+    def test_the_handler_symbol_is_recorded(self):
+        found = ioctl_inventory.parse_fops_table(self.TABLE, "sample_fops")
+        by_op = {e["operation"]: e["handler"] for e in found}
+        self.assertEqual(by_op["mmap"], "sample_mmap")
+        self.assertEqual(by_op["release"], "sample_close")
+
+    def test_a_member_behind_a_preprocessor_guard_names_it(self):
+        # compat_ioctl exists only on two architectures. An artefact that
+        # counted it unconditionally would overstate the entry points a given
+        # build registers.
+        found = ioctl_inventory.parse_fops_table(self.TABLE, "sample_fops")
+        by_op = {e["operation"]: e for e in found}
+        self.assertIsNone(by_op["mmap"]["conditional"])
+        self.assertIn("NVCPU_IS_X86_64", by_op["compat_ioctl"]["conditional"])
+
+    def test_the_line_number_is_recorded_for_each_member(self):
+        found = ioctl_inventory.parse_fops_table(self.TABLE, "sample_fops")
+        self.assertEqual([e["line"] for e in found], [4, 5, 7, 9, 10, 11])
+
+    def test_an_absent_table_raises(self):
+        with self.assertRaises(ioctl_inventory.InventoryError):
+            ioctl_inventory.parse_fops_table(self.TABLE, "no_such_fops")
+
+    def test_a_forward_declaration_is_not_a_table(self):
+        # uvm.c:47 forward-declares uvm_fops with no initialiser. Reading that
+        # as the table would produce a table with no entry points.
+        text = ("static const struct file_operations uvm_fops;\n"
+                + self.TABLE.replace("sample_fops", "uvm_fops"))
+        found = ioctl_inventory.parse_fops_table(text, "uvm_fops")
+        self.assertEqual(len(found), 6)
+
+
+class TestTheEntryPointArtefactShape(unittest.TestCase):
+    """The artefact records every file_operations table the driver defines on a
+    character device, and states for each whether the description set models
+    it."""
+
+    def artefact(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "entry-points.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed entry-point artefact not present")
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_the_schema_is_stamped(self):
+        self.assertEqual(self.artefact()["schema"],
+                         ioctl_inventory.ENTRY_POINTS_SCHEMA)
+
+    def test_three_tables_are_modelled(self):
+        # nvidia_fops serves two nodes, so four modelled nodes sit on three
+        # tables.
+        tables = [t for t in self.artefact()["tables"] if t["modelled"]]
+        self.assertEqual(sorted(t["fops"] for t in tables),
+                         ["nvidia_fops", "uvm_fops", "uvm_tools_fops"])
+
+    def test_the_modelled_nodes_are_the_four_the_set_opens(self):
+        paths = sorted(p for t in self.artefact()["tables"] if t["modelled"]
+                       for p in t["paths"])
+        self.assertEqual(paths, ["/dev/nvidia-uvm", "/dev/nvidia-uvm-tools",
+                                 "/dev/nvidiaN", "/dev/nvidiactl"])
+
+    def test_every_unmodelled_table_states_a_reason(self):
+        for table in self.artefact()["tables"]:
+            if table["modelled"]:
+                continue
+            self.assertTrue(table["reason"],
+                            "%s carries no reason" % table["fops"])
+
+    def test_the_unmodelled_reasons_name_the_tenant_surface(self):
+        # A node absent from the container's device set is outside the tenant
+        # surface. A node inside it and still unmodelled has to say so, so the
+        # artefact cannot be read as though the scope decision were uniform.
+        for table in self.artefact()["tables"]:
+            if table["modelled"]:
+                continue
+            self.assertIn("tenant_surface", table)
+            self.assertIsInstance(table["tenant_surface"], bool)
+
+    def test_modeset_is_recorded_inside_the_tenant_surface(self):
+        # F15: libnvidia-container creates the node by default. Recording it
+        # as outside would contradict the artefact Phase 3 acts on.
+        table = self.table("nvkms_fops")
+        self.assertFalse(table["modelled"])
+        self.assertTrue(table["tenant_surface"])
+
+    def test_nvlink_is_recorded_outside_the_tenant_surface(self):
+        table = self.table("nvlink_fops")
+        self.assertFalse(table["modelled"])
+        self.assertFalse(table["tenant_surface"])
+
+    def table(self, symbol):
+        for table in self.artefact()["tables"]:
+            if table["fops"] == symbol:
+                return table
+        self.fail("no table named %s" % symbol)
+
+    def test_the_modelled_entry_point_count_is_recorded(self):
+        doc = self.artefact()
+        counted = sum(len(t["entry_points"]) for t in doc["tables"]
+                      if t["modelled"])
+        self.assertEqual(doc["counts"]["modelled_entry_points"], counted)
+
+    def test_the_three_modelled_tables_carry_sixteen_entry_points(self):
+        # nvidia_fops 6, uvm_fops 5, uvm_tools_fops 5. The figure is asserted
+        # so a driver release that adds or drops an entry point fails here
+        # rather than moving a reported number silently.
+        self.assertEqual(self.artefact()["counts"]["modelled_entry_points"],
+                         16)
+
+    def test_uvm_fops_registers_mmap_and_no_poll(self):
+        ops = {e["operation"] for e in self.table("uvm_fops")["entry_points"]}
+        self.assertIn("mmap", ops)
+        self.assertNotIn("poll", ops)
+
+    def test_uvm_tools_fops_registers_poll_and_no_mmap(self):
+        ops = {e["operation"]
+               for e in self.table("uvm_tools_fops")["entry_points"]}
+        self.assertIn("poll", ops)
+        self.assertNotIn("mmap", ops)
+
+    def test_nvidia_fops_registers_both(self):
+        ops = {e["operation"] for e in self.table("nvidia_fops")["entry_points"]}
+        self.assertLessEqual({"mmap", "poll"}, ops)
+
+
+class TestTheUvmInitCensusIsConfirmedBeforeUse(unittest.TestCase):
+    """The retyping is derived from `requires_initialized_fd` in the committed
+    inventory. A regenerated inventory that lost the field, or a driver release
+    that moved the split, has to fail here rather than emit 36 variants taking
+    the uninitialised descriptor."""
+
+    def inventory(self, uvm, tools):
+        return {"nodes": [
+            {"paths": ["/dev/nvidia-uvm"],
+             "entry": "uvm_unlocked_ioctl_entry (kernel-open/nvidia-uvm/uvm.c)",
+             "scheme": "bare_command_number", "commands": uvm},
+            {"paths": ["/dev/nvidia-uvm-tools"],
+             "entry": "uvm_tools_unlocked_ioctl_entry "
+                      "(kernel-open/nvidia-uvm/uvm_tools.c)",
+             "scheme": "bare_command_number", "commands": tools},
+        ]}
+
+    def commands(self, requiring, free, prefix="UVM"):
+        out = [{"name": "%s_R%d" % (prefix, i),
+                "requires_initialized_fd": True} for i in range(requiring)]
+        out += [{"name": "%s_F%d" % (prefix, i),
+                 "requires_initialized_fd": False} for i in range(free)]
+        return out
+
+    def test_the_expected_split_is_accepted(self):
+        census = syzlang_gen.uvm_fd_census(
+            self.inventory(self.commands(36, 3), self.commands(0, 7, "TOOLS")))
+        self.assertEqual(sum(1 for v in census.values() if v), 36)
+        self.assertEqual(sum(1 for v in census.values() if not v), 10)
+
+    def test_a_moved_uvm_split_is_fatal(self):
+        with self.assertRaises(syzlang_gen.CensusError) as caught:
+            syzlang_gen.uvm_fd_census(
+                self.inventory(self.commands(35, 4), self.commands(0, 7, "TOOLS")))
+        self.assertIn("35", str(caught.exception))
+        self.assertIn("36", str(caught.exception))
+
+    def test_a_tools_node_requiring_initialisation_is_fatal(self):
+        # 0 true on the tools node is what makes uvmFd the only route the
+        # constraint takes into that family. A non-zero count means the
+        # driver moved and the uvm_tools typing has to be revisited.
+        with self.assertRaises(syzlang_gen.CensusError):
+            syzlang_gen.uvm_fd_census(
+                self.inventory(self.commands(36, 3), self.commands(1, 6, "TOOLS")))
+
+    def test_a_missing_field_is_fatal_and_not_read_as_false(self):
+        commands = self.commands(36, 3)
+        del commands[0]["requires_initialized_fd"]
+        with self.assertRaises(syzlang_gen.CensusError):
+            syzlang_gen.uvm_fd_census(
+                self.inventory(commands, self.commands(0, 7, "TOOLS")))
+
+    def test_the_committed_inventory_still_reads_the_expected_split(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "ioctl-inventory.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed inventory not present")
+        with open(path, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        census = syzlang_gen.uvm_fd_census(inventory)
+        self.assertEqual(sum(1 for v in census.values() if v), 36)
+        self.assertEqual(
+            sorted(n for n, v in census.items() if not v),
+            ["UVM_DEINITIALIZE", "UVM_INITIALIZE", "UVM_MM_INITIALIZE"]
+            + sorted(n for n, v in census.items()
+                     if not v and n.startswith("UVM_TOOLS")))
+
+
+class TestTheUvmVaSpaceResourceTyping(unittest.TestCase):
+    """F24 and F25. The 36 commands the driver marks INIT_CHECK take the
+    initialised descriptor, the producer is the pseudo-syscall, and
+    ioctl$UVM_INITIALIZE produces nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.desc = os.path.join(os.path.dirname(HERE), "descriptions")
+        cls.inv = os.path.join(os.path.dirname(HERE), "surface",
+                               "ioctl-inventory.json")
+
+    def read(self, name):
+        path = os.path.join(self.desc, name)
+        if not os.path.isfile(path):
+            self.skipTest("committed description set not present")
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def census(self):
+        if not os.path.isfile(self.inv):
+            self.skipTest("committed inventory not present")
+        with open(self.inv, encoding="utf-8") as fh:
+            return syzlang_gen.uvm_fd_census(json.load(fh))
+
+    def taken_by(self):
+        """-> {command name: the fd resource its emitted variant takes}."""
+        out = {}
+        for line in self.read("nvidia_uvm.txt").splitlines():
+            match = re.match(r"ioctl\$(\w+)\(fd (\w+),", line)
+            if match:
+                out[match.group(1)] = match.group(2)
+        return out
+
+    def test_the_subtype_is_declared_over_the_base(self):
+        self.assertIn("resource fd_nvidia_uvm_vaspace[fd_nvidia_uvm]",
+                      self.read("nvidia.txt"))
+
+    def test_every_command_requiring_initialisation_takes_the_subtype(self):
+        census, taken = self.census(), self.taken_by()
+        wrong = sorted(n for n, needs in census.items()
+                       if needs and n in taken
+                       and taken[n] != "fd_nvidia_uvm_vaspace")
+        self.assertEqual(wrong, [])
+        self.assertEqual(
+            sum(1 for n, needs in census.items()
+                if needs and taken.get(n) == "fd_nvidia_uvm_vaspace"), 36)
+
+    def test_every_command_not_requiring_it_keeps_the_base(self):
+        census, taken = self.census(), self.taken_by()
+        free = {n for n, needs in census.items() if not needs}
+        uvm_free = sorted(n for n in free
+                          if taken.get(n) == "fd_nvidia_uvm")
+        self.assertEqual(uvm_free, ["UVM_DEINITIALIZE", "UVM_INITIALIZE",
+                                    "UVM_MM_INITIALIZE"])
+
+    def test_the_tools_commands_keep_their_own_descriptor(self):
+        # Membership comes from the node and never from the name. Five
+        # commands named UVM_TOOLS_* are dispatched by uvm_ioctl on
+        # /dev/nvidia-uvm and carry the initialisation requirement; the seven
+        # on the tools node do not.
+        if not os.path.isfile(self.inv):
+            self.skipTest("committed inventory not present")
+        with open(self.inv, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        names = [c["name"] for node in inventory["nodes"]
+                 if syzlang_gen.uvm_node_group(node) == "uvm_tools"
+                 for c in node["commands"]]
+        taken = self.taken_by()
+        self.assertEqual(len(names), 7)
+        self.assertEqual({taken[n] for n in names}, {"fd_nvidia_uvm_tools"})
+
+    def test_the_initialise_ioctl_produces_nothing(self):
+        # F25: its return is 0 on success and on failure alike, so a resource
+        # taken from it would hold 0 and every consumer would receive stdin.
+        for line in self.read("nvidia_uvm.txt").splitlines():
+            if line.startswith("ioctl$UVM_INITIALIZE("):
+                self.assertTrue(line.rstrip().endswith(")"), line)
+                return
+        self.fail("ioctl$UVM_INITIALIZE is not declared")
+
+    def test_the_pseudo_syscall_is_the_only_producer(self):
+        text = self.read("nvidia.txt")
+        producers = [l for l in text.splitlines()
+                     if l.rstrip().endswith(" fd_nvidia_uvm_vaspace")]
+        self.assertEqual(len(producers), 1, producers)
+        self.assertTrue(producers[0].startswith("syz_nvidia_uvm_init("),
+                        producers[0])
+
+    def test_the_pseudo_syscall_is_declared_once(self):
+        whole = "".join(self.read(n) for n in
+                        ("nvidia.txt", "nvidia_uvm.txt", "nvidia_ctrl.txt",
+                         "nvidia_structs.txt"))
+        self.assertEqual(whole.count("syz_nvidia_uvm_init("), 1)
+
+    def test_both_uvm_fd_fields_take_the_initialised_subtype(self):
+        # F24a, and the second field it did not record. Both handlers fget the
+        # field and then require UVM_FD_VA_SPACE: uvm_tools.c:2023 and
+        # uvm.c:73. Two structs declare a uvmFd field, so each assertion is
+        # anchored to the block declaring it.
+        for struct in ("UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS",
+                       "UVM_MM_INITIALIZE_PARAMS"):
+            self.assertEqual(self.struct_field(struct, "uvmFd"),
+                             "fd_nvidia_uvm_vaspace", struct)
+
+    def test_no_uvm_fd_field_is_still_a_bare_integer(self):
+        text = self.read("nvidia_structs.txt")
+        self.assertEqual([l for l in text.splitlines()
+                          if l.startswith("\tuvmFd") and "int32" in l], [])
+
+    def test_the_mm_initialise_call_keeps_the_uninitialised_descriptor(self):
+        # uvm_fd_type_init at uvm_fd_type.c:92 returns NV_ERR_IN_USE unless
+        # the ioctl's own descriptor is still UVM_FD_UNINITIALIZED, so this
+        # one call takes two descriptors in opposite states.
+        self.assertEqual(self.taken_by()["UVM_MM_INITIALIZE"],
+                         "fd_nvidia_uvm")
+
+    def struct_field(self, struct, field):
+        """-> the emitted type of one field of one struct."""
+        text = self.read("nvidia_structs.txt")
+        block = re.search(r"^%s \{\n(.*?)^\}" % re.escape(struct), text,
+                          re.M | re.S)
+        self.assertIsNotNone(block, struct)
+        found = re.search(r"^\t%s\s+(\S+)$" % re.escape(field),
+                          block.group(1), re.M)
+        self.assertIsNotNone(found, "%s.%s" % (struct, field))
+        return found.group(1)
+
+    def test_no_cmd_value_moved_in_the_uvm_file(self):
+        # The retyping changes the resource each variant takes and nothing
+        # else. Every emitted request number is still the one the inventory
+        # records for that command.
+        if not os.path.isfile(self.inv):
+            self.skipTest("committed inventory not present")
+        with open(self.inv, encoding="utf-8") as fh:
+            inventory = json.load(fh)
+        expected = {c["name"]: c["requests"][0]
+                    for node in inventory["nodes"]
+                    if node["scheme"] == "bare_command_number"
+                    for c in node["commands"] if c.get("requests")}
+        seen = 0
+        for line in self.read("nvidia_uvm.txt").splitlines():
+            match = re.match(r"ioctl\$(\w+)\(fd \w+, cmd const\[(\w+)\]", line)
+            if match and match.group(1) in expected:
+                self.assertEqual(match.group(2), expected[match.group(1)],
+                                 match.group(1))
+                seen += 1
+        self.assertEqual(seen, 46)
+
+
+class TestTheEntryPointCalls(unittest.TestCase):
+    """F7, F9, F26. The description set declares the mmap and poll entry points
+    the driver registers on the nodes it already opens."""
+
+    def read(self, name="nvidia.txt"):
+        path = os.path.join(os.path.dirname(HERE), "descriptions", name)
+        if not os.path.isfile(path):
+            self.skipTest("committed description set not present")
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def call(self, name):
+        for line in self.read().splitlines():
+            if line.startswith(name + "("):
+                return line
+        self.fail("%s is not declared" % name)
+
+    def test_every_registered_entry_point_carries_a_call(self):
+        declared = [l.split("(")[0] for l in self.read().splitlines()
+                    if l.startswith(("mmap$", "poll$"))]
+        self.assertEqual(sorted(declared),
+                         ["mmap$nvidia", "mmap$nvidia_uvm", "mmap$nvidiactl",
+                          "poll$nvidia", "poll$nvidia_uvm_tools",
+                          "poll$nvidiactl"])
+
+    def test_each_mmap_takes_the_resource_its_node_declares(self):
+        self.assertIn("fd fd_nvidia,", self.call("mmap$nvidia"))
+        self.assertIn("fd fd_nvidiactl,", self.call("mmap$nvidiactl"))
+        self.assertIn("fd fd_nvidia_uvm_vaspace,", self.call("mmap$nvidia_uvm"))
+
+    def test_each_poll_takes_the_resource_its_node_declares(self):
+        self.assertIn("nv_pollfd_nvidia", self.call("poll$nvidia"))
+        self.assertIn("nv_pollfd_uvm_tools",
+                      self.call("poll$nvidia_uvm_tools"))
+
+    def test_the_rm_mmap_offsets_are_pinned_to_zero(self):
+        # nv-mmap.c:554 abandons the mapping for any non-zero vm_pgoff, so
+        # zero is the only offset that reaches the handler body.
+        for name in ("mmap$nvidia", "mmap$nvidiactl"):
+            self.assertIn("offset const[0]", self.call(name), name)
+
+    def test_the_uvm_mmap_offset_is_not_pinned(self):
+        # F26: uvm.c:793 requires the offset to equal the mapping address the
+        # kernel selects at run time, so no fixed value satisfies it.
+        self.assertNotIn("offset const[", self.call("mmap$nvidia_uvm"))
+
+    def test_the_uvm_offset_limitation_is_cited_in_the_emitter(self):
+        with open(os.path.join(HERE, "syzlang_gen.py"), encoding="utf-8") as fh:
+            source = fh.read()
+        self.assertIn("uvm.c:793", source)
+        self.assertIn("nv-mmap.c:554", source)
+
+    def test_no_entry_point_call_is_counted_as_an_ioctl_variant(self):
+        # surface_cov joins on ioctl$ names. An mmap or poll line that matched
+        # would enter the command denominator, which the phase forbids.
+        names = surface_cov.scan_variants(
+            [os.path.join(os.path.dirname(HERE), "descriptions",
+                          "nvidia.txt")], "descriptions")
+        self.assertFalse([n for n in names if "mmap" in n or "poll" in n])
+
+
+class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
+    """Entry points are counted beside the command denominator and never
+    inside it. A mmap or poll entry point has no method id, no parameter
+    struct and no inventory row, so a total mixing the two counts two kinds
+    of thing."""
+
+    def test_the_loader_reports_the_artefact_counts(self):
+        modelled, registered, tables = surface_cov.load_entry_points()
+        self.assertEqual(modelled, 16)
+        self.assertEqual(registered, 43)
+        self.assertEqual(len(tables), 3)
+
+    def test_the_denominator_is_unchanged_by_the_counter(self):
+        targets, _excluded, _meta = surface_cov.load_targets()
+        self.assertEqual(len(targets), 828)
+
+    def test_the_six_families_still_carry_the_whole_denominator(self):
+        targets, _excluded, _meta = surface_cov.load_targets()
+        self.assertEqual(
+            sum(1 for t in targets.values()
+                if t["family"] in surface_cov.FAMILIES), 828)
+        self.assertEqual(len(surface_cov.FAMILIES), 6)
+
+    def test_an_entry_point_inside_the_denominator_is_refused(self):
+        with self.assertRaises(surface_cov.SurfaceError) as caught:
+            surface_cov.assert_outside_denominator(
+                {"NV_ESC_RM_FREE": {}, "mmap$nvidia_uvm": {}})
+        self.assertIn("mmap$nvidia_uvm", str(caught.exception))
+
+    def test_the_pseudo_syscall_inside_the_denominator_is_refused(self):
+        with self.assertRaises(surface_cov.SurfaceError):
+            surface_cov.assert_outside_denominator(
+                {"syz_nvidia_uvm_init": {}})
+
+    def test_a_clean_denominator_passes(self):
+        self.assertIsNone(
+            surface_cov.assert_outside_denominator({"NV_ESC_RM_FREE": {}}))
+
+    def test_the_committed_denominator_carries_no_entry_point(self):
+        targets, _excluded, _meta = surface_cov.load_targets()
+        self.assertIsNone(surface_cov.assert_outside_denominator(targets))
+
+    def test_the_modelled_report_prints_both_counts_separately(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = _surface_cov_modelled()
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("828", text)
+        self.assertIn("entry points", text)
+        # The two totals sit on different lines, so neither reading can be
+        # taken for the other.
+        totals = [l for l in text.splitlines() if l.startswith("total")]
+        self.assertEqual(len(totals), 1)
+        self.assertNotIn("entry", totals[0])
+
+    def test_the_report_names_the_counter_as_outside_the_denominator(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            _surface_cov_modelled()
+        self.assertIn("not part of the", out.getvalue())
+
+    def test_the_sum_of_the_two_is_never_printed(self):
+        # 828 + 16 is 844 and names nothing. A reader who found it on this
+        # page would take it for a denominator.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            _surface_cov_modelled()
+        self.assertNotIn("844", out.getvalue())
+
+
+class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
+    """Every mmap and poll the driver registers on a modelled node has a
+    declared call, so a driver release that adds one fails the check rather
+    than leaving an undescribed entry point."""
+
+    def test_the_expected_calls_are_derived_from_the_artefact(self):
+        _m, _r, tables = surface_cov.load_entry_points()
+        self.assertEqual(sorted(surface_cov.entry_point_calls(tables)),
+                         ["mmap$nvidia", "mmap$nvidia_uvm", "mmap$nvidiactl",
+                          "poll$nvidia", "poll$nvidia_uvm_tools",
+                          "poll$nvidiactl"])
+
+    def test_a_node_with_no_suffix_is_refused(self):
+        # A device node the mapping does not name cannot have its call name
+        # derived, and guessing one would report a gap against a call that
+        # was never meant to exist.
+        with self.assertRaises(surface_cov.SurfaceError):
+            surface_cov.entry_point_calls(
+                [{"fops": "x_fops", "paths": ["/dev/nvidia-modeset"],
+                  "entry_points": [{"operation": "mmap"}]}])
+
+    def test_the_check_passes_over_the_committed_set(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = regression_check.check_coverage()
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("entry point", out.getvalue())
+
+    def test_the_check_reports_the_entry_point_count(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            regression_check.check_coverage()
+        self.assertIn("16", out.getvalue())
+
+    def test_the_check_still_reports_the_command_denominator(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            regression_check.check_coverage()
+        self.assertIn("828 targetable across 6 families", out.getvalue())
+
+
+def _surface_cov_modelled():
+    """Run `surface_cov.py modelled` through its own parser.
+
+    main() reads sys.argv and takes no argument, so the subcommand handler is
+    driven directly and the test never rewrites the process argv.
+    """
+    args = surface_cov.build_parser().parse_args(["modelled"])
+    return args.func(args)
+
+
+class TestTheExecutorPatch(unittest.TestCase):
+    """The executor half of syz_nvidia_uvm_init. Carried as a patch against
+    the pinned syzkaller checkout and never as a fork of it, so the pin keeps
+    naming an upstream revision and the delta stays one reviewable file."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.path = os.path.join(os.path.dirname(HERE), "tools", "syz-patches",
+                                "0001-syz_nvidia_uvm_init.patch")
+
+    def read(self):
+        if not os.path.isfile(self.path):
+            self.fail("the executor patch is not committed at %s" % self.path)
+        with open(self.path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def added(self):
+        """-> the lines the patch adds, without the diff marker."""
+        return "\n".join(l[1:] for l in self.read().splitlines()
+                         if l.startswith("+") and not l.startswith("+++"))
+
+    def test_the_emitter_names_the_patch_it_depends_on(self):
+        self.assertEqual(syzlang_gen.SYZ_PATCH_REL,
+                         "tools/syz-patches/0001-syz_nvidia_uvm_init.patch")
+
+    def test_the_patch_touches_only_the_executor_header(self):
+        touched = [l.split()[-1] for l in self.read().splitlines()
+                   if l.startswith("+++ ")]
+        self.assertEqual(touched, ["b/executor/common_linux.h"])
+
+    def test_the_guard_follows_the_pseudo_syscall_form(self):
+        self.assertIn("#if SYZ_EXECUTOR || __NR_syz_nvidia_uvm_init",
+                      self.added())
+
+    def test_the_implementation_is_declared_static_long(self):
+        self.assertIn("static long syz_nvidia_uvm_init(volatile long a0)",
+                      self.added())
+
+    def test_the_command_number_matches_the_generated_description(self):
+        # One number, in two places that no build step joins. A drift here
+        # would leave the pseudo-syscall issuing an ioctl the driver does not
+        # dispatch, and every consumer of the resource would still be typed.
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed generation record not present")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
+        request = [r["request"] for r in record["uvm"]
+                   if r["command"] == "UVM_INITIALIZE"][0]
+        found = re.search(r"#define GSPWN_UVM_INITIALIZE (0x[0-9a-fA-F]+)",
+                          self.added())
+        self.assertIsNotNone(found)
+        self.assertEqual(int(found.group(1), 16), int(request, 16))
+
+    def test_a_failed_initialisation_produces_no_resource(self):
+        # The ioctl returns 0 whether or not initialisation succeeded, so
+        # rmStatus is the only thing separating the two. A descriptor that did
+        # not reach UVM_FD_VA_SPACE must not become a resource.
+        added = self.added()
+        self.assertIn("if (params.rmStatus != 0) {", added)
+        self.assertRegex(
+            added, r"if \(params\.rmStatus != 0\) \{\s*\n\s*close\(fd\);"
+                   r"\s*\n\s*return -1;")
+
+    def test_a_failed_open_returns_the_open_result(self):
+        self.assertRegex(self.added(),
+                         r"int fd = open\(\"/dev/nvidia-uvm\", O_RDWR\);"
+                         r"\s*\n\s*if \(fd < 0\)\s*\n\s*return fd;")
+
+    def test_the_descriptor_is_returned_on_success(self):
+        self.assertTrue(self.added().rstrip().endswith("#endif"))
+        self.assertIn("return fd;", self.added())
+
+    def test_the_patch_uses_only_executor_integer_typedefs(self):
+        # executor.cc:60-63 defines uint64, uint32, uint16 and uint8 and no
+        # signed forms. int32 would not compile.
+        body = re.search(r"struct gspwn_uvm_initialize_params \{(.*?)\};",
+                         self.added(), re.S)
+        self.assertIsNotNone(body)
+        for declared in re.findall(r"^\t(\w+) ", body.group(1), re.M):
+            self.assertIn(declared, ("uint64", "uint32", "uint16", "uint8"))
+
+
+class TestThePseudoSyscallParameterLayout(unittest.TestCase):
+    """The patch reads rmStatus at a fixed offset. The offset is asserted
+    against the committed layout, so a struct that moves fails here rather
+    than leaving the executor reading the wrong word of a live parameter."""
+
+    # The emitted syzlang types this struct uses, and their widths.
+    WIDTH = {"int64": 8, "int32": 4, "int16": 2, "int8": 1}
+
+    def emitted_layout(self, struct):
+        """-> ([(field, offset)], total size) from descriptions."""
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia_structs.txt")
+        if not os.path.isfile(path):
+            self.skipTest("committed description set not present")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        block = re.search(r"^%s \{\n(.*?)^\}" % re.escape(struct), text,
+                          re.M | re.S)
+        self.assertIsNotNone(block, struct)
+        offset, fields = 0, []
+        for line in block.group(1).splitlines():
+            name, _, kind = line.strip().partition("\t")
+            kind = kind.strip()
+            array = re.match(r"array\[const\[0, (int\d+)\], (\d+)\]", kind)
+            if array:
+                width = self.WIDTH[array.group(1)] * int(array.group(2))
+            else:
+                width = self.WIDTH[kind]
+            fields.append((name.strip(), offset))
+            offset += width
+        return fields, offset
+
+    def recorded_layout(self):
+        """-> ({field: offset}, size) as generation.json records it.
+
+        The authority for the offset the executor half hardcodes. It is
+        derived from the header on every emit run, so a struct that moves
+        moves this record and fails the comparison below.
+        """
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed generation record not present")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
+        params = record["entry_points"]["pseudo_syscall"]["params"]
+        self.assertEqual(params["struct"], "UVM_INITIALIZE_PARAMS")
+        return ({f["name"]: f["offset"] for f in params["fields"]},
+                params["size"])
+
+    def test_the_recorded_layout_matches_the_emitted_one(self):
+        recorded, recorded_size = self.recorded_layout()
+        emitted, emitted_size = self.emitted_layout("UVM_INITIALIZE_PARAMS")
+        self.assertEqual(recorded, dict(emitted))
+        self.assertEqual(recorded_size, emitted_size)
+
+    def test_the_committed_layout_puts_rmstatus_at_offset_eight(self):
+        recorded, size = self.recorded_layout()
+        self.assertEqual(recorded["flags"], 0)
+        self.assertEqual(recorded["rmStatus"], 8)
+        self.assertEqual(size, 16)
+
+    def test_the_patch_struct_matches_that_layout(self):
+        path = os.path.join(os.path.dirname(HERE), "tools", "syz-patches",
+                            "0001-syz_nvidia_uvm_init.patch")
+        if not os.path.isfile(path):
+            self.fail("the executor patch is not committed")
+        with open(path, encoding="utf-8") as fh:
+            added = "\n".join(l[1:] for l in fh.read().splitlines()
+                              if l.startswith("+") and not l.startswith("+++"))
+        body = re.search(r"struct gspwn_uvm_initialize_params \{(.*?)\};",
+                         added, re.S).group(1)
+        widths = {"uint64": 8, "uint32": 4, "uint16": 2, "uint8": 1}
+        offset, patch_fields = 0, {}
+        for kind, name in re.findall(r"^\t(\w+) (\w+);", body, re.M):
+            patch_fields[name] = offset
+            offset += widths[kind]
+        recorded, size = self.recorded_layout()
+        # Named on both sides. A patch that builds, runs and reads a
+        # neighbouring word as the status would produce a resource on failed
+        # initialisations, and nothing else in the sweep would catch it.
+        for field in ("flags", "rmStatus"):
+            self.assertEqual(
+                patch_fields.get(field), recorded[field],
+                "%s: the executor patch reads offset %r and "
+                "descriptions/generation.json records offset %d"
+                % (field, patch_fields.get(field), recorded[field]))
+        self.assertEqual(
+            offset, size,
+            "the executor patch's struct is %d bytes and "
+            "descriptions/generation.json records %d" % (offset, size))
+
+    def test_the_struct_size_did_not_move_for_the_retyped_structs(self):
+        # Both uvmFd fields became a 32-bit resource where int32 stood, so
+        # neither struct's size changed. 595 structs still match their
+        # measured sizeof and none mismatches.
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed generation record not present")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
+        self.assertEqual(record["counts"]["size_mismatch"], 0)
+        self.assertEqual(record["size_mismatch"], [])
+        self.assertEqual(record["counts"]["size_match"], 595)
+
+
+class TestTheUvmOrderingMeasurement(unittest.TestCase):
+    """The pseudo-syscall's value is argued and not demonstrated. This is the
+    measurement that settles it on the next branch, and what it cannot measure
+    is stated rather than substituted."""
+
+    PRODUCED = """r0 = syz_nvidia_uvm_init(0x0)
+ioctl$UVM_REGISTER_GPU(r0, 0x19, &(0x7f0000000000)=nil)
+"""
+    OPENED = """r0 = openat$nvidia_uvm(0xffffffffffffff9c, &(0x7f0000000000), 0x2, 0x0)
+ioctl$UVM_REGISTER_GPU(r0, 0x19, &(0x7f0000000100)=nil)
+"""
+    BOTH = """r0 = openat$nvidia_uvm(0xffffffffffffff9c, &(0x7f0000000000), 0x2, 0x0)
+r1 = syz_nvidia_uvm_init(0x0)
+ioctl$UVM_INITIALIZE(r0, 0x30000001, &(0x7f0000000100)=nil)
+ioctl$UVM_REGISTER_GPU(r1, 0x19, &(0x7f0000000200)=nil)
+"""
+    UNRELATED = """r0 = openat$nvidiactl(0xffffffffffffff9c, &(0x7f0000000000), 0x2, 0x0)
+ioctl$NV_ESC_RM_FREE(r0, 0xc0184629, &(0x7f0000000100)=nil)
+"""
+
+    def requiring(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "ioctl-inventory.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed inventory not present")
+        with open(path, encoding="utf-8") as fh:
+            census = syzlang_gen.uvm_fd_census(json.load(fh))
+        return {n for n, needs in census.items() if needs}
+
+    def test_a_program_consuming_the_produced_resource_is_ordered(self):
+        named, ordered = surface_cov.uvm_ordering(
+            [self.PRODUCED], self.requiring())
+        self.assertEqual((named, ordered), (1, 1))
+
+    def test_a_program_taking_the_opened_descriptor_is_not_ordered(self):
+        named, ordered = surface_cov.uvm_ordering(
+            [self.OPENED], self.requiring())
+        self.assertEqual((named, ordered), (1, 0))
+
+    def test_holding_the_producer_is_not_enough(self):
+        # The program calls the producer and then hands the command the
+        # descriptor openat returned. Counting it as ordered would count the
+        # presence of a call rather than the dependency.
+        named, ordered = surface_cov.uvm_ordering(
+            [self.BOTH.replace("r1, 0x19", "r0, 0x19")], self.requiring())
+        self.assertEqual((named, ordered), (1, 0))
+
+    def test_the_dependency_is_what_counts(self):
+        named, ordered = surface_cov.uvm_ordering(
+            [self.BOTH], self.requiring())
+        self.assertEqual((named, ordered), (1, 1))
+
+    def test_a_program_naming_no_such_command_is_not_counted(self):
+        named, ordered = surface_cov.uvm_ordering(
+            [self.UNRELATED], self.requiring())
+        self.assertEqual((named, ordered), (0, 0))
+
+    def test_a_command_that_needs_no_initialisation_is_not_counted(self):
+        program = "r0 = openat$nvidia_uvm(0xffffffffffffff9c, " \
+                  "&(0x7f0000000000), 0x2, 0x0)\n" \
+                  "ioctl$UVM_DEINITIALIZE(r0, 0x30000002, 0x0)\n"
+        self.assertEqual(surface_cov.uvm_ordering([program], self.requiring()),
+                         (0, 0))
+
+    def test_the_reported_limit_names_what_it_cannot_measure(self):
+        text = surface_cov.uvm_ordering_note(3, 2)
+        self.assertIn("2 of 3", text)
+        # Reaching past the check is a kernel-side fact. Saying the corpus
+        # measured it would be the second unmeasured claim in the ledger.
+        self.assertIn("per-symbol coverage", text)
+
+    def test_the_note_does_not_claim_the_handler_was_reached(self):
+        text = surface_cov.uvm_ordering_note(3, 2).lower()
+        self.assertNotIn("reached the handler", text)
+        self.assertNotIn("proves", text)
+
+
+
+# ---------------------------------------------------------------------------
+# Phase 3, the /dev/nvidia-modeset command inventory. nvkms_inventory.py reads
+# enum NvKmsIoctlCommand out of nvkms-api.h and the dispatch[] table out of
+# nvkms.c, and cross-checks one against the other. The count it settles, 64
+# dispatched of 66 declared, becomes part of the campaign denominator, so a
+# silent drift in it is the failure these classes exist to catch.
+# 5 classes, 26 tests.
+# ---------------------------------------------------------------------------
+
+# One command per tuple: enum name, proc symbol, macro. A proc of None
+# declares the command without dispatching it, which is the shape the two
+# 3DVISION commands take in the real header. The undispatched one sits before
+# a dispatched one so the array length still covers every declared ordinal,
+# matching the real table.
+NVKMS_FIXTURE_COMMANDS = (
+    ("NVKMS_IOCTL_ALLOC_DEVICE", "AllocDevice", "ENTRY"),
+    ("NVKMS_IOCTL_FREE_DEVICE", "FreeDevice", "ENTRY"),
+    ("NVKMS_IOCTL_QUERY_DISP", "QueryDisp", "ENTRY"),
+    ("NVKMS_IOCTL_SET_MODE", "SetMode", "ENTRY_CUSTOM_USER"),
+    ("NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES", None, None),
+    ("NVKMS_IOCTL_FLIP", "Flip", "ENTRY_CUSTOM_USER"),
+)
+
+# The macro block is copied from nvkms.c in shape, because its `#define` lines
+# name ENTRY and ENTRY_CUSTOM_USER inside the initialiser and a scrape that
+# counts them reads one use too many per macro. That is the defect the
+# fixture reproduces, so the definitions belong in it verbatim.
+NVKMS_C_HEAD = '''\
+#include "nvkms.h"
+
+static NvBool nvKmsIoctl(void *pOpaqueFd, NvU32 cmd, NvU64 paramsAddress,
+                         const size_t paramSize)
+{
+    static const struct {
+        NvBool (*proc)(struct NvKmsPerOpen *, void *);
+        NvBool (*prepUser)(void *, void *);
+        NvBool (*doneUser)(void *, void *);
+        const size_t paramSize;
+        const size_t extraSize;
+        const size_t requestSize;
+        const size_t requestOffset;
+        const size_t replySize;
+        const size_t replyOffset;
+    } dispatch[] = {
+
+#define _ENTRY_WITH_USER(_cmd, _func, _prepUser, _doneUser, _extraSize)      \\
+        [_cmd] = {                                                           \\
+            .proc          = _func,                                          \\
+            .prepUser      = _prepUser,                                      \\
+            .doneUser      = _doneUser,                                      \\
+            .paramSize     = sizeof(struct NvKms##_func##Params),            \\
+            .requestSize   = sizeof(struct NvKms##_func##Request),           \\
+            .requestOffset = offsetof(struct NvKms##_func##Params, request), \\
+            .replySize     = sizeof(struct NvKms##_func##Reply),             \\
+            .replyOffset   = offsetof(struct NvKms##_func##Params, reply),   \\
+            .extraSize     = _extraSize,                                     \\
+        }
+
+#define ENTRY(_cmd, _func)                                                   \\
+        _ENTRY_WITH_USER(_cmd, _func, NULL, NULL, 0)
+
+#define ENTRY_CUSTOM_USER(_cmd, _func)                                       \\
+        _ENTRY_WITH_USER(_cmd, _func,                                        \\
+                         _func##PrepUser, _func##DoneUser,                   \\
+                         sizeof(struct NvKms##_func##ExtraUserState))
+
+'''
+
+NVKMS_C_TAIL = '''
+    };
+
+#undef ENTRY
+
+    if (cmd >= ARRAY_LEN(dispatch)) {
+        return NV_FALSE;
+    }
+
+    if (dispatch[cmd].proc == NULL) {
+        return NV_FALSE;
+    }
+
+    return NV_TRUE;
+}
+'''
+
+
+def nvkms_header_text(commands=NVKMS_FIXTURE_COMMANDS, comment=False):
+    """A stand-in nvkms-api.h carrying one enum NvKmsIoctlCommand."""
+    lines = ["#ifndef NVKMS_API_H", "#define NVKMS_API_H", "",
+             "enum NvKmsIoctlCommand {"]
+    for index, (name, _proc, _macro) in enumerate(commands):
+        if comment and index == 1:
+            lines.append("    /* NVKMS_IOCTL_NOT_A_COMMAND, retired. */")
+        lines.append("    %s," % name)
+    lines += ["};", "", "#endif /* NVKMS_API_H */"]
+    return "\n".join(lines) + "\n"
+
+
+def nvkms_source_text(commands=NVKMS_FIXTURE_COMMANDS, drop=(), extra=()):
+    """A stand-in nvkms.c carrying one dispatch[] table.
+
+    drop names commands to leave out of the table while the header still
+    declares them, which is the scratch copy the cross-check has to reject.
+    extra appends further raw table lines for the malformed cases.
+    """
+    body = []
+    for name, proc, macro in commands:
+        if proc is None or name in drop:
+            continue
+        body.append("        %s(%s, %s)," % (macro, name, proc))
+    body.extend("        %s" % line for line in extra)
+    return NVKMS_C_HEAD + "\n".join(body) + NVKMS_C_TAIL
+
+
+def write_nvkms_tree(root, header=None, source=None, version="610.57.04"):
+    """Lay the two scraped files out the way the driver checkout does."""
+    interface = os.path.join(root, "src", "nvidia-modeset", "interface")
+    src = os.path.join(root, "src", "nvidia-modeset", "src")
+    os.makedirs(interface, exist_ok=True)
+    os.makedirs(src, exist_ok=True)
+    with open(os.path.join(interface, "nvkms-api.h"), "w") as f:
+        f.write(nvkms_header_text() if header is None else header)
+    with open(os.path.join(src, "nvkms.c"), "w") as f:
+        f.write(nvkms_source_text() if source is None else source)
+    if version is not None:
+        with open(os.path.join(root, "version.mk"), "w") as f:
+            f.write("NVIDIA_VERSION = %s\n" % version)
+    return root
+
+
+class NvkmsFixtureTree(unittest.TestCase):
+    """A driver tree holding only the two files nvkms_inventory.py reads."""
+
+    # The fixture declares six commands and dispatches five of them. Passing
+    # the pair through collect() keeps the real 66/64 constants out of the
+    # fixture while exercising the same check.
+    DECLARED = len(NVKMS_FIXTURE_COMMANDS)
+    DISPATCHED = sum(1 for _n, proc, _m in NVKMS_FIXTURE_COMMANDS if proc)
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        write_nvkms_tree(self.root)
+
+    def rewrite_source(self, text):
+        with open(os.path.join(self.root, "src", "nvidia-modeset", "src",
+                               "nvkms.c"), "w") as f:
+            f.write(text)
+
+    def rewrite_header(self, text):
+        with open(os.path.join(self.root, "src", "nvidia-modeset",
+                               "interface", "nvkms-api.h"), "w") as f:
+            f.write(text)
+
+    def collect(self, declared=None, dispatched=None):
+        return nvkms_inventory.collect(
+            self.root,
+            expect_declared=self.DECLARED if declared is None else declared,
+            expect_dispatched=(self.DISPATCHED if dispatched is None
+                               else dispatched))
+
+
+class TestNvkmsEnumScrape(NvkmsFixtureTree):
+    """parse_enum reads the declared command list in ordinal order."""
+
+    def declared(self):
+        with open(os.path.join(self.root, "src", "nvidia-modeset",
+                               "interface", "nvkms-api.h")) as f:
+            return nvkms_inventory.parse_enum(f.read())
+
+    def test_every_declared_command_is_read(self):
+        self.assertEqual([r["command"] for r in self.declared()],
+                         [n for n, _p, _m in NVKMS_FIXTURE_COMMANDS])
+
+    def test_the_ordinal_is_the_position_in_the_declaration(self):
+        self.assertEqual([r["ordinal"] for r in self.declared()],
+                         list(range(len(NVKMS_FIXTURE_COMMANDS))))
+
+    def test_a_comment_between_declarations_is_not_read_as_a_command(self):
+        # A commented-out command name inside the enum body reads as a
+        # declared value to a scrape that splits on commas without stripping
+        # comments, and shifts every ordinal after it by one.
+        self.rewrite_header(nvkms_header_text(comment=True))
+        self.assertEqual([r["command"] for r in self.declared()],
+                         [n for n, _p, _m in NVKMS_FIXTURE_COMMANDS])
+
+    def test_a_source_declaring_no_such_enum_is_rejected(self):
+        self.rewrite_header("#define NVKMS_API_H\n")
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        self.assertIn("NvKmsIoctlCommand", str(e.exception))
+
+
+class TestNvkmsDispatchScrape(NvkmsFixtureTree):
+    """parse_dispatch reads the table uses and not the macro definitions."""
+
+    def entries(self):
+        with open(os.path.join(self.root, "src", "nvidia-modeset", "src",
+                               "nvkms.c")) as f:
+            return nvkms_inventory.parse_dispatch(f.read())
+
+    def test_every_dispatched_command_is_read(self):
+        self.assertEqual([e["command"] for e in self.entries()],
+                         [n for n, p, _m in NVKMS_FIXTURE_COMMANDS if p])
+
+    def test_the_macro_definitions_are_not_counted_as_uses(self):
+        # `#define ENTRY_CUSTOM_USER(` and `#define ENTRY(` sit inside the
+        # initialiser. Counting them gives one use too many per macro, and a
+        # 59/5 split then reads as 58/6.
+        entries = self.entries()
+        self.assertEqual(len(entries), self.DISPATCHED)
+        self.assertNotIn("_cmd", [e["command"] for e in entries])
+
+    def test_the_two_macros_are_told_apart(self):
+        by_macro = {}
+        for entry in self.entries():
+            by_macro.setdefault(entry["macro"], []).append(entry["command"])
+        self.assertEqual(sorted(by_macro), ["ENTRY", "ENTRY_CUSTOM_USER"])
+        self.assertEqual(by_macro["ENTRY_CUSTOM_USER"],
+                         ["NVKMS_IOCTL_SET_MODE", "NVKMS_IOCTL_FLIP"])
+
+    def test_the_proc_symbol_is_read_from_the_second_macro_argument(self):
+        self.assertEqual(self.entries()[0]["proc"], "AllocDevice")
+
+    def test_an_entry_records_the_line_it_was_read_from(self):
+        line = self.entries()[0]["line"]
+        text = nvkms_source_text().splitlines()
+        self.assertIn("NVKMS_IOCTL_ALLOC_DEVICE", text[line - 1])
+
+    def test_a_use_wrapped_across_two_lines_is_read(self):
+        # Six of the 64 uses in the real table wrap after the command
+        # argument, because the command name and the proc symbol together run
+        # past the column limit. A per-line match reads 58 of 64 and the
+        # cross-check then rejects a table that is intact.
+        self.rewrite_source(nvkms_source_text().replace(
+            "ENTRY(NVKMS_IOCTL_QUERY_DISP, QueryDisp),",
+            "ENTRY(NVKMS_IOCTL_QUERY_DISP,\n              QueryDisp),"))
+        entries = {e["command"]: e["proc"] for e in self.entries()}
+        self.assertEqual(len(entries), self.DISPATCHED)
+        self.assertEqual(entries["NVKMS_IOCTL_QUERY_DISP"], "QueryDisp")
+
+    def test_a_wrapped_use_records_the_line_it_opens_on(self):
+        self.rewrite_source(nvkms_source_text().replace(
+            "ENTRY(NVKMS_IOCTL_QUERY_DISP, QueryDisp),",
+            "ENTRY(NVKMS_IOCTL_QUERY_DISP,\n              QueryDisp),"))
+        entry, = [e for e in self.entries()
+                  if e["command"] == "NVKMS_IOCTL_QUERY_DISP"]
+        with open(os.path.join(self.root, "src", "nvidia-modeset", "src",
+                               "nvkms.c")) as f:
+            lines = f.read().splitlines()
+        self.assertIn("NVKMS_IOCTL_QUERY_DISP", lines[entry["line"] - 1])
+
+    def test_a_source_carrying_no_dispatch_table_is_rejected(self):
+        self.rewrite_source("int nvKmsIoctl(void) { return 0; }\n")
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        self.assertIn("dispatch", str(e.exception))
+
+    def test_a_table_that_never_closes_is_rejected(self):
+        self.rewrite_source(NVKMS_C_HEAD + "        ENTRY(A, B),\n")
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        self.assertIn("dispatch", str(e.exception))
+
+
+class TestNvkmsCrossCheck(NvkmsFixtureTree):
+    """The enum and the table are read as two sources and reconciled."""
+
+    def test_the_fixture_tree_passes_its_own_counts(self):
+        summary = self.collect()["summary"]
+        self.assertEqual(summary["declared"], self.DECLARED)
+        self.assertEqual(summary["dispatched"], self.DISPATCHED)
+
+    def test_dropping_one_entry_fails_the_count_check(self):
+        # The scratch copy the plan asks for: the header still declares the
+        # command, the table no longer dispatches it.
+        self.rewrite_source(
+            nvkms_source_text(drop=("NVKMS_IOCTL_QUERY_DISP",)))
+        with self.assertRaises(nvkms_inventory.SourceError):
+            self.collect()
+
+    def test_the_count_failure_names_the_expected_and_the_found(self):
+        self.rewrite_source(
+            nvkms_source_text(drop=("NVKMS_IOCTL_QUERY_DISP",)))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        message = str(e.exception)
+        self.assertIn(str(self.DISPATCHED), message)
+        self.assertIn(str(self.DISPATCHED - 1), message)
+        self.assertIn("NVKMS_IOCTL_QUERY_DISP", message)
+
+    def test_a_declared_command_with_no_entry_is_recorded_undispatched(self):
+        record = self.collect()["commands"][4]
+        self.assertEqual(record["command"],
+                         "NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES")
+        self.assertFalse(record["dispatched"])
+        self.assertIsNone(record["proc"])
+
+    def test_the_undispatched_record_names_the_reason(self):
+        record = self.collect()["commands"][4]
+        self.assertEqual(record["undispatched_reason"],
+                         "no handler in the dispatch table")
+
+    def test_a_dispatched_record_carries_no_reason(self):
+        self.assertIsNone(self.collect()["commands"][0]["undispatched_reason"])
+
+    def test_an_entry_for_an_undeclared_command_is_rejected(self):
+        self.rewrite_source(nvkms_source_text(
+            extra=("ENTRY(NVKMS_IOCTL_NO_SUCH_COMMAND, NoSuch),",)))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect(dispatched=self.DISPATCHED + 1)
+        self.assertIn("NVKMS_IOCTL_NO_SUCH_COMMAND", str(e.exception))
+
+    def test_a_command_dispatched_twice_is_rejected(self):
+        self.rewrite_source(nvkms_source_text(
+            extra=("ENTRY(NVKMS_IOCTL_FREE_DEVICE, FreeDeviceAgain),",)))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect(dispatched=self.DISPATCHED + 1)
+        self.assertIn("NVKMS_IOCTL_FREE_DEVICE", str(e.exception))
+
+    def test_the_macro_split_must_reconcile_against_the_dispatched_total(self):
+        summary = self.collect()["summary"]
+        self.assertEqual(summary["entries_plain"] +
+                         summary["entries_custom_user"],
+                         summary["dispatched"])
+
+    def test_the_array_length_covers_every_declared_ordinal(self):
+        # ARRAY_LEN(dispatch) is the designated-initialiser array's length,
+        # which is the highest dispatched ordinal plus one. A command declared
+        # past that bound is rejected by nvKmsIoctl before the proc lookup.
+        self.assertEqual(self.collect()["scan"]["array_len"], self.DECLARED)
+
+    def test_a_command_declared_past_the_array_bound_is_rejected(self):
+        commands = NVKMS_FIXTURE_COMMANDS + (
+            ("NVKMS_IOCTL_PAST_THE_END", None, None),)
+        self.rewrite_header(nvkms_header_text(commands))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect(declared=self.DECLARED + 1)
+        self.assertIn("NVKMS_IOCTL_PAST_THE_END", str(e.exception))
+
+    def test_a_source_missing_the_array_bound_check_is_rejected(self):
+        self.rewrite_source(
+            nvkms_source_text().replace("cmd >= ARRAY_LEN(dispatch)",
+                                        "cmd > 0xffff"))
+        with self.assertRaises(nvkms_inventory.SourceError) as e:
+            self.collect()
+        self.assertIn("ARRAY_LEN", str(e.exception))
+
+
+class TestNvkmsRecordFields(NvkmsFixtureTree):
+    """Each record carries what the emitter slice needs without re-deriving."""
+
+    def record(self, name):
+        for r in self.collect()["commands"]:
+            if r["command"] == name:
+                return r
+        raise AssertionError("no record for %s" % name)
+
+    def test_a_dispatched_record_carries_the_param_size_expression(self):
+        self.assertEqual(self.record("NVKMS_IOCTL_ALLOC_DEVICE")["param_size"],
+                         "sizeof(struct NvKmsAllocDeviceParams)")
+
+    def test_a_dispatched_record_names_the_param_struct(self):
+        self.assertEqual(
+            self.record("NVKMS_IOCTL_ALLOC_DEVICE")["param_struct"],
+            "NvKmsAllocDeviceParams")
+
+    def test_a_dispatched_record_names_the_request_and_reply_structs(self):
+        record = self.record("NVKMS_IOCTL_ALLOC_DEVICE")
+        self.assertEqual(record["request_struct"], "NvKmsAllocDeviceRequest")
+        self.assertEqual(record["reply_struct"], "NvKmsAllocDeviceReply")
+
+    def test_a_custom_user_record_names_the_extra_user_state_struct(self):
+        record = self.record("NVKMS_IOCTL_FLIP")
+        self.assertTrue(record["custom_user"])
+        self.assertEqual(record["extra_user_state_struct"],
+                         "NvKmsFlipExtraUserState")
+
+    def test_a_plain_record_carries_no_extra_user_state_struct(self):
+        record = self.record("NVKMS_IOCTL_ALLOC_DEVICE")
+        self.assertFalse(record["custom_user"])
+        self.assertIsNone(record["extra_user_state_struct"])
+
+    def test_an_undispatched_record_carries_no_struct_names(self):
+        record = self.record("NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES")
+        for field in ("param_struct", "param_size", "request_struct",
+                      "reply_struct", "extra_user_state_struct"):
+            self.assertIsNone(record[field], field)
+
+    def test_the_summary_names_the_undispatched_commands_and_ordinals(self):
+        # Requirement 5: a reader confirms the count against the enum from
+        # the artefact alone, without re-running the scrape.
+        self.assertEqual(
+            self.collect()["summary"]["undispatched_commands"],
+            [{"command": "NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES",
+              "ordinal": 4}])
+
+    def test_the_written_artefact_reloads_as_the_collected_inventory(self):
+        out = os.path.join(self.root, "nvkms-command-inventory.json")
+        inventory = self.collect()
+        nvkms_inventory.write_json(inventory, out)
+        with open(out) as f:
+            self.assertEqual(json.load(f), inventory)
+
+
+class TestNvkmsCommittedInventory(unittest.TestCase):
+    """The committed artefact carries the count this phase claims.
+
+    The driver checkout under artifacts/ is not committed, so the scrape
+    cannot run here. The artefact it wrote is committed, and these read it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "nvkms-command-inventory.json")
+        with open(path) as f:
+            cls.inventory = json.load(f)
+
+    def test_the_schema_follows_the_control_inventory_shape_family(self):
+        self.assertEqual(self.inventory["schema"],
+                         "gspwn.nvkms-command-inventory/1")
+        for key in ("schema", "source", "scan", "summary", "commands"):
+            self.assertIn(key, self.inventory)
+
+    def test_64_commands_are_dispatched_of_66_declared(self):
+        summary = self.inventory["summary"]
+        self.assertEqual(summary["declared"],
+                         nvkms_inventory.EXPECTED_DECLARED)
+        self.assertEqual(summary["dispatched"],
+                         nvkms_inventory.EXPECTED_DISPATCHED)
+        self.assertEqual((summary["declared"], summary["dispatched"]),
+                         (66, 64))
+
+    def test_the_macro_split_reconciles_against_the_dispatched_total(self):
+        # 59 plain and 5 custom-user. A scrape that counts the two `#define`
+        # lines as uses reads 58 and 6, which sums to 64 and passes the total
+        # check on its own. The split catches it.
+        summary = self.inventory["summary"]
+        self.assertEqual(summary["entries_plain"], 59)
+        self.assertEqual(summary["entries_custom_user"], 5)
+        self.assertEqual(summary["entries_plain"] +
+                         summary["entries_custom_user"], 64)
+
+    def test_both_undispatched_commands_are_named(self):
+        self.assertEqual(
+            [c["command"]
+             for c in self.inventory["summary"]["undispatched_commands"]],
+            ["NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES",
+             "NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS"])
+
+    def test_the_named_undispatched_ordinals_match_their_records(self):
+        records = {r["command"]: r for r in self.inventory["commands"]}
+        for named in self.inventory["summary"]["undispatched_commands"]:
+            record = records[named["command"]]
+            self.assertEqual(record["ordinal"], named["ordinal"])
+            self.assertFalse(record["dispatched"])
+
+    def test_every_record_sits_at_its_own_ordinal(self):
+        self.assertEqual([r["ordinal"] for r in self.inventory["commands"]],
+                         list(range(66)))
+
+    def test_the_array_bound_covers_every_declared_ordinal(self):
+        self.assertEqual(self.inventory["scan"]["array_len"], 66)
+
+    def test_every_dispatched_record_carries_its_struct_names(self):
+        for record in self.inventory["commands"]:
+            if not record["dispatched"]:
+                continue
+            proc = record["proc"]
+            self.assertEqual(record["param_struct"], "NvKms%sParams" % proc)
+            self.assertEqual(record["request_struct"], "NvKms%sRequest" % proc)
+            self.assertEqual(record["reply_struct"], "NvKms%sReply" % proc)
+
+    def test_the_five_custom_user_commands_are_the_ones_named(self):
+        self.assertEqual(
+            [r["command"] for r in self.inventory["commands"]
+             if r["custom_user"]],
+            ["NVKMS_IOCTL_VALIDATE_MODE_INDEX", "NVKMS_IOCTL_VALIDATE_MODE",
+             "NVKMS_IOCTL_SET_MODE", "NVKMS_IOCTL_SET_LUT",
+             "NVKMS_IOCTL_FLIP"])
+
+    def test_the_artefact_records_no_absolute_source_path(self):
+        # An artefact that recorded the author's home directory differs
+        # between two checkouts of the same tree.
+        self.assertEqual(self.inventory["source"]["src_root"],
+                         "artifacts/src/open-gpu-kernel-modules")
+class DenominatorFixture(StateTempMixin):
+    """State files in the shape one written before denominator_version existed.
+
+    The machine-local state/pipeline.json this branch was developed against is
+    schema version 1 with no `rounds` key at all, so normalize() synthesises
+    round 1 for it. Both shapes appear below: the synthesised round, and a
+    round list whose records carry every completion count and no version
+    field.
+    """
+
+    PRE_FIELD_ROUND = {"round": 1, "status": "complete",
+                       "coverage_verdict": "plateaued", "new_crashes": 2,
+                       "run_hours": 10.0, "decision": "continue",
+                       "decision_reason": "targets remain",
+                       "run_ids": ["r1-k1"],
+                       "surface_verdict": "incomplete",
+                       "surface_exercised": 700, "surface_accounted": 20,
+                       "surface_closed": 715, "surface_total": 764,
+                       "surface_ledger": "state/completion-ledger.json"}
+
+    def write_v1_state(self, rounds=None):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        raw = {"version": 1,
+               "phases": {p: {"status": "pending", "updated": None,
+                              "notes": ""} for p in ps.PHASES},
+               "crashes": {}, "campaigns": [],
+               "manifest": "artifacts/builds/manifest.json"}
+        if rounds is not None:
+            raw["rounds"] = rounds
+        with open(self.state_path, "w") as f:
+            json.dump(raw, f)
+        # These rounds carry billed hours, and spent_hours() refuses to read a
+        # budget from a state file whose ledger is absent. The operator seeds
+        # it after that refusal.
+        ps.seed_spend_ledger()
+        return raw
+
+
+class TestTheDenominatorVersionVocabulary(unittest.TestCase):
+    """A round's completion counts were taken against the target total the
+    inventories enumerated when it closed. The label names that total so a
+    later, larger surface never restates a measurement nobody made."""
+
+    def test_a_label_carries_the_total_it_names(self):
+        self.assertEqual(ps.denominator_total("v1-764"), 764)
+        self.assertEqual(ps.denominator_total("v2-828"), 828)
+
+    def test_a_total_maps_to_the_label_for_it(self):
+        self.assertEqual(ps.denominator_version_for_total(764), "v1-764")
+        self.assertEqual(ps.denominator_version_for_total(828), "v2-828")
+
+    def test_a_total_with_no_table_entry_still_records_the_total(self):
+        """A denominator that moves before the table does still lands a label
+        a reader can take the total back out of."""
+        label = ps.denominator_version_for_total(900)
+        self.assertEqual(ps.denominator_total(label), 900)
+
+    def test_a_total_that_is_not_a_count_is_refused(self):
+        for bad in (0, -1, None, "764", 764.0):
+            with self.assertRaises(ValueError):
+                ps.denominator_version_for_total(bad)
+
+    def test_an_unreadable_label_is_refused_by_name(self):
+        with self.assertRaises(ValueError) as cm:
+            ps.denominator_total("latest")
+        self.assertIn("latest", str(cm.exception))
+
+    def test_the_default_is_the_first_denominator(self):
+        self.assertEqual(ps.DEFAULT_DENOMINATOR_VERSION, "v1-764")
+        self.assertEqual(ps.denominator_total(ps.DEFAULT_DENOMINATOR_VERSION),
+                         764)
+
+
+class TestARoundRecordPredatingTheField(DenominatorFixture,
+                                        unittest.TestCase):
+    """The read-default path. Absence dates a record to the five-family
+    surface, which is never an error and never read forward."""
+
+    def test_a_state_file_with_no_rounds_key_reads_as_the_first_denominator(
+            self):
+        self.write_v1_state()
+        r = ps.load()["rounds"][0]
+        self.assertEqual(r["denominator_version"], "v1-764")
+
+    def test_a_round_carrying_no_field_reads_as_the_first_denominator(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        r = ps.load()["rounds"][0]
+        self.assertNotIn("denominator_version", self.PRE_FIELD_ROUND)
+        self.assertEqual(ps.round_denominator_version(r), "v1-764")
+
+    def test_the_absence_is_never_read_forward_to_a_later_denominator(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        r = ps.load()["rounds"][0]
+        self.assertNotEqual(ps.round_denominator_version(r), "v2-828")
+        self.assertEqual(ps.denominator_total(
+            ps.round_denominator_version(r)), 764)
+
+    def test_a_recorded_field_survives_the_round_trip(self):
+        st = ps.default_state()
+        ps.current_round(st)["denominator_version"] = "v2-828"
+        ps.save(st)
+        self.assertEqual(ps.load()["rounds"][0]["denominator_version"],
+                         "v2-828")
+
+    def test_validate_names_a_round_carrying_an_unreadable_label(self):
+        st = ps.default_state()
+        ps.current_round(st)["denominator_version"] = "latest"
+        problems = ps.validate(st)
+        self.assertTrue(any("latest" in p for p in problems), problems)
+
+    def test_a_rollup_over_one_denominator_names_one(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertEqual(ps.denominator_rollup(ps.load()),
+                         [("v1-764", [1])])
+
+    def test_a_rollup_spanning_the_move_states_each_denominator_apart(self):
+        """The boundary case. Two rounds counted against two totals are two
+        series, and one figure over both would report a surface nobody
+        measured."""
+        second = dict(self.PRE_FIELD_ROUND, round=2, decision=None,
+                      denominator_version="v2-828", surface_total=828,
+                      surface_exercised=760, surface_closed=780)
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND), second])
+        self.assertEqual(ps.denominator_rollup(ps.load()),
+                         [("v1-764", [1]), ("v2-828", [2])])
+
+    def test_a_round_with_no_completion_reading_is_left_out_of_the_rollup(
+            self):
+        """A round that never measured the surface has no counts to attribute
+        to a denominator."""
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND, surface_total=None,
+                                  surface_exercised=None,
+                                  surface_verdict="unknown")])
+        self.assertEqual(ps.denominator_rollup(ps.load()), [])
+
+    def test_the_round_a_run_belongs_to_is_found_by_its_id(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        st = ps.load()
+        self.assertEqual(ps.round_of_run(st, "r1-k1")["round"], 1)
+        self.assertIsNone(ps.round_of_run(st, "never-registered"))
+
+
+class TestRoundShowReadsTheRecordedDenominator(DenominatorFixture,
+                                               unittest.TestCase):
+    """round-show reports each round against the denominator that round was
+    measured on. This is the regression case for the rounds already on a
+    machine when the surface grows."""
+
+    class Args:
+        def __init__(self, **kw):
+            self.json = kw.get("json", False)
+
+    def show(self, **kw):
+        import pipeline_ctl
+        with redirect_stdout(io.StringIO()) as out:
+            pipeline_ctl.cmd_round_show(self.Args(**kw))
+        return out.getvalue()
+
+    def test_a_round_predating_the_field_keeps_its_own_counts(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        out = self.show()
+        self.assertIn("700 exercised + 20 accounted of 764", out)
+        self.assertIn("v1-764", out)
+        self.assertNotIn("828", out)
+
+    def test_the_live_inventory_is_not_read_when_a_round_is_shown(self):
+        """An old round's counts stand as measured. Recounting the
+        inventories here would restate them against a denominator that round
+        never saw."""
+        self.addCleanup(setattr, surface_cov, "load_targets",
+                        surface_cov.load_targets)
+
+        def refuse():
+            raise AssertionError("round-show recounted an old round against "
+                                 "the current inventory")
+        surface_cov.load_targets = refuse
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertIn("of 764", self.show())
+
+    def test_a_history_spanning_the_move_states_both_denominators(self):
+        second = dict(self.PRE_FIELD_ROUND, round=2, decision=None,
+                      denominator_version="v2-828", surface_total=828,
+                      surface_exercised=760, surface_accounted=20,
+                      surface_closed=780)
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND), second])
+        out = self.show()
+        self.assertIn("700 exercised + 20 accounted of 764", out)
+        self.assertIn("760 exercised + 20 accounted of 828", out)
+        self.assertIn("v1-764", out)
+        self.assertIn("v2-828", out)
+        # 1592 is 764 + 828, and 1460 is 700 + 760. Either one in the output
+        # would be two scales summed into a number neither round measured.
+        self.assertNotIn("1592", out)
+        self.assertNotIn("1460", out)
+
+    def test_the_json_form_carries_the_field(self):
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        rounds = json.loads(self.show(json=True))
+        self.assertEqual(rounds[0]["denominator_version"], "v1-764")
+
+    def test_the_brief_names_the_denominator_the_round_measured(self):
+        """A session recovering from a panic reads the brief. An unlabelled
+        surface line there invites the current inventory to be read into a
+        round that counted against another one."""
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        import pipeline_ctl
+        with redirect_stdout(io.StringIO()) as out:
+            pipeline_ctl.cmd_brief(types.SimpleNamespace(last=None))
+        text = out.getvalue()
+        self.assertIn("700 of 764 exercised", text)
+        self.assertIn("denominator v1-764", text)
+
+
+class TestRoundEndWritesTheDenominatorVersion(DenominatorFixture,
+                                              unittest.TestCase):
+    """The write path. From this point on round-end records the denominator
+    the round's completion counts were taken against, on every close."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_runs = coverage_ctl.RUNS_DIR
+        coverage_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+        self.addCleanup(lambda: setattr(coverage_ctl, "RUNS_DIR",
+                                        self._orig_runs))
+        ps.save(ps.default_state())
+        d = os.path.join(coverage_ctl.RUNS_DIR, "r1")
+        os.makedirs(d, exist_ok=True)
+        base = 1_700_000_000
+        with open(os.path.join(d, "coverage.csv"), "w") as f:
+            f.write(",".join(coverage_ctl.FIELDS) + "\n")
+            for i in range(11):
+                f.write(csv_line(base + i * 3600, 1000 + i * 300,
+                                 source="json:/stats") + "\n")
+
+    class Args:
+        def __init__(self, **kw):
+            for k in ("from_run", "coverage_verdict", "new_crashes",
+                      "edges_start", "edges_end", "run_hours", "notes",
+                      "worklist", "ledger", "force"):
+                setattr(self, k, kw.get(k))
+
+    def stub_completion(self, **reading):
+        self.addCleanup(setattr, coverage_ctl, "completion_status",
+                        coverage_ctl.completion_status)
+        record = {"verdict": "incomplete", "exercised": 700, "accounted": 20,
+                  "deferred": 0, "closed": 715, "total": 764,
+                  "detail": "stubbed"}
+        record.update(reading)
+        coverage_ctl.completion_status = lambda **kw: record
+
+    def end_round(self):
+        with redirect_stdout(io.StringIO()):
+            pipeline_ctl_cmd_round_end(self.Args(from_run=["r1"]))
+        return ps.load()["rounds"][-1]
+
+    def test_the_round_records_the_denominator_the_reading_counted(self):
+        self.stub_completion(total=764, denominator_version="v1-764")
+        self.assertEqual(self.end_round()["denominator_version"], "v1-764")
+
+    def test_a_moved_denominator_lands_as_the_later_version(self):
+        """The forward case. Nothing here introduces the larger surface, and
+        this confirms the record follows it when a later change does."""
+        self.stub_completion(total=828, denominator_version="v2-828",
+                             closed=780)
+        r = self.end_round()
+        self.assertEqual(r["denominator_version"], "v2-828")
+        self.assertEqual(r["surface_total"], 828)
+
+    def test_an_unmeasurable_reading_leaves_the_first_denominator_on_record(
+            self):
+        """The counts are None when the reading fails, so the label describes
+        nothing and the default is the honest one."""
+        self.stub_completion(verdict="unknown", exercised=None,
+                             accounted=None, closed=None, total=None,
+                             denominator_version=None)
+        r = self.end_round()
+        self.assertEqual(r["denominator_version"], "v1-764")
+        self.assertIsNone(r["surface_total"])
+
+    def test_a_reading_that_names_no_denominator_at_all_is_tolerated(self):
+        """completion_status grew the key in the same change. A caller
+        holding an older reading must not crash round-end."""
+        self.stub_completion()
+        self.end_round()
+
+    def test_the_label_and_the_recorded_total_agree(self):
+        self.stub_completion(total=828, denominator_version="v2-828",
+                             closed=780)
+        r = self.end_round()
+        self.assertEqual(ps.denominator_total(r["denominator_version"]),
+                         r["surface_total"])
+
+
+class TestCompletionReadsTheDenominatorPerRun(DenominatorFixture,
+                                              unittest.TestCase):
+    """coverage_ctl completion states the denominator it counted against, and
+    names any run whose round was measured on another one."""
+
+    class Args:
+        def __init__(self, **kw):
+            self.run_id = kw.get("run_id")
+            self.corpus = kw.get("corpus")
+            self.ledger = kw.get("ledger")
+            self.top = kw.get("top", 0)
+
+    def stub_status(self, **reading):
+        self.addCleanup(setattr, coverage_ctl, "completion_status",
+                        coverage_ctl.completion_status)
+        record = {"verdict": "incomplete", "exercised": 700, "accounted": 20,
+                  "deferred": 0, "closed": 715, "total": 764, "remaining": [],
+                  "detail": "715 of 764 target(s) closed",
+                  "driver_version": "610.57.04", "ledger": "l.json",
+                  "corpora": [], "denominator_version": "v1-764"}
+        record.update(reading)
+        coverage_ctl.completion_status = lambda **kw: record
+
+    def run_completion(self, **kw):
+        with redirect_stdout(io.StringIO()) as out:
+            coverage_ctl.cmd_completion(self.Args(**kw))
+        return out.getvalue()
+
+    def test_the_reading_names_the_denominator_it_counted_against(self):
+        self.stub_status()
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertIn("v1-764", self.run_completion(run_id=["r1-k1"]))
+
+    def test_a_run_on_the_current_denominator_adds_no_boundary_note(self):
+        self.stub_status()
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertNotIn("not comparable",
+                         self.run_completion(run_id=["r1-k1"]))
+
+    def test_a_run_from_a_round_on_an_earlier_denominator_is_stated_apart(
+            self):
+        """The rollup rule. The run's round counted against 764 and this
+        reading counts against 828, so both totals are stated and neither is
+        folded into the other."""
+        self.stub_status(total=828, closed=780, denominator_version="v2-828")
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        out = self.run_completion(run_id=["r1-k1"])
+        self.assertIn("v2-828", out)
+        self.assertIn("v1-764", out)
+        self.assertIn("764 target(s)", out)
+        self.assertIn("round 1", out)
+
+    def test_an_unregistered_run_carries_no_round_to_read(self):
+        self.stub_status(total=828, closed=780, denominator_version="v2-828")
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        out = self.run_completion(run_id=["never-registered"])
+        self.assertNotIn("never-registered belongs to", out)
+
+    def test_an_unmeasured_reading_says_so_where_the_denominator_goes(self):
+        self.stub_status(verdict="unknown", exercised=None, accounted=None,
+                         closed=None, total=None, denominator_version=None,
+                         detail="completion not measured: boom")
+        self.write_v1_state([dict(self.PRE_FIELD_ROUND)])
+        self.assertIn("unmeasured", self.run_completion(run_id=["r1-k1"]))
+
+
+class TestCompletionStatusCarriesTheDenominator(unittest.TestCase):
+    """The reading computes its own label from the target total it counted,
+    so the label and the counts come from one measurement."""
+
+    def test_the_reading_over_the_committed_inventories_names_its_total(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "ioctl-inventory.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed inventory not present")
+        st = coverage_ctl.completion_status()
+        if st["total"] is None:
+            self.skipTest("the completion reading could not be measured here")
+        self.assertEqual(st["denominator_version"],
+                         ps.denominator_version_for_total(st["total"]))
+
+
+# ---------------------------------------------------------------------------
+# /dev/nvidia-modeset: the one kernel request number its whole command set
+# multiplexes through, and the seed converter's tracking of the node.
+#
+# The number resolves the family and never the sub-command, which is F18. The
+# tests below pin the derivation against the header the kernel module compiles
+# with, and pin the map section it lands in to a key every name reader skips.
+# ---------------------------------------------------------------------------
+
+
+class ModesetHeaderFixture(unittest.TestCase):
+    """A scratch checkout carrying only the modeset interface header.
+
+    Both copies of nvkms-ioctl.h are written, because the derivation reads the
+    kernel-side copy and cross-checks the interface copy against it. A tree
+    where the two disagree is a tree where the request number the kernel
+    enforces and the one the interface publishes are different numbers.
+    """
+
+    HEADER = (
+        "#ifndef NVKMS_IOCTL_H\n"
+        "#define NVKMS_IOCTL_H\n"
+        "\n"
+        '#include "nvtypes.h"\n'
+        "\n"
+        "struct NvKmsIoctlParams {\n"
+        "    NvU32 cmd;\n"
+        "    NvU32 size;\n"
+        "    NvU64 address NV_ALIGN_BYTES(8);\n"
+        "};\n"
+        "\n"
+        "#define NVKMS_IOCTL_MAGIC 'm'\n"
+        "#define NVKMS_IOCTL_CMD 0\n"
+        "\n"
+        "#define NVKMS_IOCTL_IOWR \\\n"
+        "    _IOWR(NVKMS_IOCTL_MAGIC, NVKMS_IOCTL_CMD, struct NvKmsIoctlParams)\n"
+        "\n"
+        "#endif\n"
+    )
+
+    def setUp(self):
+        self.src = tempfile.mkdtemp(prefix="nvkms-src-")
+        self.addCleanup(shutil.rmtree, self.src, True)
+        self.write(ioctl_inventory.NVKMS_IOCTL_H, self.HEADER)
+        self.write(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, self.HEADER)
+
+    def write(self, relative, text):
+        path = os.path.join(self.src, *relative.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        return path
+
+    def request(self, sizes=None):
+        return ioctl_inventory.nvkms_request(self.src, sizes)
+
+    def only_record(self, section):
+        requests = section["requests"]
+        self.assertEqual(len(requests), 1, requests)
+        return list(requests.items())[0]
+
+
+class TestModesetRequestNumberIsDerivedFromTheHeader(ModesetHeaderFixture):
+    """The number is computed from the declarations, never transcribed.
+
+    The header expands to 0xc0106d00 on x86-64, confirmed by compiling it:
+    dir _IOWR is 3 and occupies bits 30 and 31, sizeof(struct
+    NvKmsIoctlParams) is 16 and occupies bits 16 to 29, NVKMS_IOCTL_MAGIC is
+    'm' at 0x6d and occupies bits 8 to 15, and NVKMS_IOCTL_CMD is 0. A driver
+    branch that adds a field to the envelope moves the size field and
+    therefore the whole number, which is why nothing here is a constant.
+    """
+
+    def test_the_request_number_matches_the_compiled_expansion(self):
+        request, record = self.only_record(self.request())
+        self.assertEqual(request, "0xc0106d00")
+        self.assertEqual(record["param_size"], 16)
+        self.assertEqual(record["magic"], "m")
+        self.assertEqual(record["nr"], 0)
+        self.assertEqual(record["param_struct"], "NvKmsIoctlParams")
+
+    def test_the_selector_field_is_recorded_and_the_node_is_named(self):
+        _request, record = self.only_record(self.request())
+        self.assertEqual(record["selector_field"], "cmd")
+        self.assertEqual(record["node"], "/dev/nvidia-modeset")
+
+    def test_an_added_envelope_field_moves_the_number(self):
+        # A driver change moves the size field, so a transcribed derivation
+        # would keep reporting 0xc0106d00 here.
+        grown = self.HEADER.replace(
+            "    NvU64 address NV_ALIGN_BYTES(8);\n",
+            "    NvU64 address NV_ALIGN_BYTES(8);\n    NvU32 flags;\n")
+        self.write(ioctl_inventory.NVKMS_IOCTL_H, grown)
+        self.write(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, grown)
+        request, record = self.only_record(self.request())
+        self.assertEqual(record["param_size"], 24)
+        self.assertEqual(request, "0xc0186d00")
+
+    def test_a_member_of_an_unknown_type_is_refused(self):
+        # Sizing a type the table does not carry is the guess this tool
+        # refuses everywhere else.
+        broken = self.HEADER.replace(
+            "    NvU32 size;\n", "    NvKmsSomeUnion size;\n")
+        self.write(ioctl_inventory.NVKMS_IOCTL_H, broken)
+        self.write(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, broken)
+        with self.assertRaises(ioctl_inventory.InventoryError) as caught:
+            self.request()
+        self.assertIn("NvKmsSomeUnion", str(caught.exception))
+
+    def test_the_two_header_copies_are_required_to_agree(self):
+        divergent = self.HEADER.replace("#define NVKMS_IOCTL_CMD 0",
+                                        "#define NVKMS_IOCTL_CMD 1")
+        self.write(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, divergent)
+        with self.assertRaises(ioctl_inventory.InventoryError) as caught:
+            self.request()
+        message = str(caught.exception)
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H, message)
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE, message)
+
+    def test_a_measured_size_that_disagrees_is_refused(self):
+        with self.assertRaises(ioctl_inventory.InventoryError) as caught:
+            self.request({"NvKmsIoctlParams": 24})
+        message = str(caught.exception)
+        self.assertIn("24", message)
+        self.assertIn("16", message)
+
+    def test_a_measured_size_that_agrees_is_accepted(self):
+        request, _record = self.only_record(
+            self.request({"NvKmsIoctlParams": 16}))
+        self.assertEqual(request, "0xc0106d00")
+
+    def test_a_missing_header_names_the_path_it_looked_for(self):
+        os.remove(os.path.join(self.src,
+                               *ioctl_inventory.NVKMS_IOCTL_H.split("/")))
+        with self.assertRaises(ioctl_inventory.InventoryError) as caught:
+            self.request()
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H, str(caught.exception))
+
+    def test_the_header_is_required_of_a_checkout(self):
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H,
+                      ioctl_inventory.REQUIRED_FILES)
+        self.assertIn(ioctl_inventory.NVKMS_IOCTL_H_INTERFACE,
+                      ioctl_inventory.REQUIRED_FILES)
+
+
+class TestModesetRequestNumberReachesTheMap(ModesetHeaderFixture):
+    """build_map carries the section, and every name reader skips it.
+
+    A top-level entry naming a call would be read as an ioctl description
+    name by trace2seed and checked against the description set by
+    regression_check. No description declares a call for the request number,
+    because the number covers 64 commands at once, so the section hangs under
+    a comment key the way the RM multiplexers do.
+    """
+
+    ONE_COMMAND = {"nodes": [{"commands": [
+        {"name": "NV_ESC_RM_FREE", "requests": ["0xc0204629"],
+         "is_argument_array": False, "syzlang": "ioctl$NV_ESC_RM_FREE"},
+    ]}]}
+
+    def build(self):
+        mapping, _skipped = ioctl_inventory.build_map(
+            self.ONE_COMMAND, None, self.request())
+        return mapping
+
+    def test_the_section_key_is_a_comment_key(self):
+        self.assertTrue(
+            ioctl_inventory.MAP_MODESET_KEY.startswith("comment"))
+
+    def test_the_map_carries_the_request_number_under_the_section(self):
+        mapping = self.build()
+        section = mapping[ioctl_inventory.MAP_MODESET_KEY]
+        self.assertIn("0xc0106d00", section["requests"])
+
+    def test_the_section_states_that_the_sub_command_is_unresolved(self):
+        # F18 in the artefact itself. A reader who finds the number and
+        # concludes a command-level match has been told otherwise here.
+        section = self.build()[ioctl_inventory.MAP_MODESET_KEY]
+        self.assertIn("F18", section["doc"])
+        self.assertIn("sub-command", section["doc"])
+
+    def test_the_number_is_not_read_as_a_call_name(self):
+        mapping = self.build()
+        names = {k.lower(): v for k, v in mapping.items()
+                 if not k.startswith("comment")}
+        self.assertNotIn("0xc0106d00", names)
+        self.assertIn("0xc0204629", names)
+
+    def test_the_regression_check_name_reader_skips_the_section(self):
+        mapping = self.build()
+        path = os.path.join(tempfile.mkdtemp(prefix="nvkms-map-"), "map.json")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(mapping, handle)
+        old = _patched(IOCTL_MAP=path)
+        try:
+            entries = regression_check.read_ioctl_map()
+        finally:
+            _restore(old)
+        self.assertEqual([key for key, _name in entries], ["0xc0204629"])
+
+    def test_the_seed_converter_loader_skips_the_section(self):
+        mapping = self.build()
+        path = os.path.join(tempfile.mkdtemp(prefix="nvkms-map-"), "map.json")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(mapping, handle)
+        names, multiplexers = trace2seed.load_map(path)
+        self.assertNotIn("0xc0106d00", names)
+        self.assertNotIn("0xc0106d00", multiplexers)
+
+    def test_an_inventory_with_no_modeset_record_still_builds_a_map(self):
+        mapping, _skipped = ioctl_inventory.build_map(self.ONE_COMMAND)
+        self.assertNotIn(ioctl_inventory.MAP_MODESET_KEY, mapping)
+
+    def test_the_comment_sections_are_written_above_the_request_numbers(self):
+        # Both sections are known only after the request-number loop, so
+        # insertion order appends them below the numbers and a regeneration
+        # moves forty lines of a generated file for a one-line change.
+        mapping, _skipped = ioctl_inventory.build_map(
+            {"nodes": [{"commands": [
+                dict(TestIoctlInventoryParsing.MULTIPLEXER),
+                self.ONE_COMMAND["nodes"][0]["commands"][0],
+            ]}]}, None, self.request())
+        keys = list(mapping)
+        numbers = [i for i, k in enumerate(keys) if not k.startswith("comment")]
+        sections = [keys.index(ioctl_inventory.MAP_MULTIPLEXER_KEY),
+                    keys.index(ioctl_inventory.MAP_MODESET_KEY)]
+        self.assertTrue(numbers)
+        self.assertLess(max(sections), min(numbers))
+
+
+class TestModesetEntryPointRecordStatesReachability(unittest.TestCase):
+    """The nvkms_fops record ships its reason verbatim to a reader.
+
+    refgen renders it into the generated entry-point page, so a wrong
+    sentence there is a wrong sentence in the documentation. Two claims it
+    carried were wrong at once. It said lookup_devices puts the node in a
+    default container, which is the host-side driver info list and not the
+    mount decision, and on the legacy path nvc_mount.c refuses the node
+    without the display capability. It also said the command family sits
+    outside the denominator, which the modeset emitter makes false.
+
+    Both halves are pinned here. The reachability claim is checked against
+    the source lines it cites, and the denominator claim is checked in the
+    negative, because that is the direction it rots in: a later edit
+    restating the family as excluded is the regression, and no count in this
+    file would catch it.
+    """
+
+    def record(self):
+        found = [t for t in ioctl_inventory.FOPS_TABLES
+                 if t["fops"] == "nvkms_fops"]
+        self.assertEqual(len(found), 1, found)
+        return found[0]
+
+    def test_the_node_is_inside_the_tenant_surface(self):
+        self.assertTrue(self.record()["tenant_surface"])
+
+    def test_the_entry_points_of_this_table_stay_unmodelled(self):
+        # The commands are modelled and mmap/poll are not. This flag is the
+        # entry-point census, so it stays false and the reason says why.
+        self.assertFalse(self.record()["modelled"])
+
+    def test_the_reason_never_places_the_family_outside_the_denominator(self):
+        reason = self.record()["reason"].lower()
+        for claim in ("not in the denominator", "outside the denominator",
+                      "opens no descriptor", "no description"):
+            self.assertNotIn(claim, reason)
+
+    def test_the_reason_places_the_commands_inside_the_denominator(self):
+        self.assertIn("inside the denominator", self.record()["reason"])
+
+    def test_the_reason_cites_the_cdi_path_it_calls_default(self):
+        reason = self.record()["reason"]
+        self.assertIn("pkg/nvcdi/common-nvml.go", reason)
+        self.assertIn("internal/info/auto.go", reason)
+
+    def test_the_reason_cites_the_legacy_capability_gate(self):
+        reason = self.record()["reason"]
+        self.assertIn("nvc_mount.c", reason)
+        self.assertIn("options.h", reason)
+        self.assertIn("OPT_DISPLAY", reason)
+
+    def test_the_reason_does_not_rest_on_the_driver_info_list(self):
+        # lookup_devices populates the host-side list and does not decide
+        # what a container receives. Resting the claim on it is the error
+        # this record carried.
+        self.assertNotIn("lookup_devices", self.record()["reason"])
+
+    def test_the_shared_constant_still_serves_the_records_it_is_right_for(self):
+        # TENANT_DEVICE_SOURCE was left pointed at lookup_devices, because
+        # absence from that list does keep a node out of a container on
+        # either path. Repointing it would have broken the records below.
+        outside = [t["fops"] for t in ioctl_inventory.FOPS_TABLES
+                   if t["reason"] == ioctl_inventory.OUTSIDE_TENANT_SURFACE]
+        self.assertTrue(outside)
+        for table in ioctl_inventory.FOPS_TABLES:
+            if table["reason"] == ioctl_inventory.OUTSIDE_TENANT_SURFACE:
+                self.assertFalse(table["tenant_surface"], table["fops"])
+
+
+class TestTraceSeedTracksTheModesetNode(unittest.TestCase):
+    """The seed converter opens /dev/nvidia-modeset.
+
+    While the family was unmodelled the node sat in OUT_OF_SCOPE and every
+    trace touching it produced a skip comment. With the family modelled that
+    silently discards real coverage, so the node moves into DEV_TO_DESC and
+    the converter emits the openat the description set declares.
+    """
+
+    TRACE = ('openat(AT_FDCWD, "/dev/nvidia-modeset", O_RDWR) = 3\n'
+             'ioctl(3, 0xc0106d00, 0x7ffd) = 0\n')
+
+    def convert(self, trace, names=None, multiplexers=None):
+        return trace2seed.convert(trace, names or {}, multiplexers or {})
+
+    def test_the_node_is_no_longer_skipped(self):
+        prog = self.convert(self.TRACE)
+        self.assertNotIn("# skipped", prog)
+
+    def test_the_node_opens_the_call_the_descriptions_declare(self):
+        prog = self.convert(self.TRACE)
+        self.assertIn("openat$nvidia_modeset(", prog)
+        self.assertIn("/dev/nvidia-modeset", prog)
+
+    def test_the_node_resolves_through_the_shared_table(self):
+        self.assertEqual(trace2seed.dev_desc("/dev/nvidia-modeset"),
+                         "openat$nvidia_modeset")
+
+    def test_a_modeset_ioctl_is_reported_unmapped_and_never_named(self):
+        # F18 at the seed converter. The request number covers all 64
+        # commands, so no call name can be recovered from a trace that
+        # carries only the number. Saying so is the honest outcome.
+        prog = self.convert(self.TRACE)
+        self.assertIn("0xc0106d00", prog)
+        self.assertNotIn("ioctl$NVKMS", prog)
+
+    def test_a_node_outside_the_table_is_still_not_opened(self):
+        prog = self.convert(
+            'openat(AT_FDCWD, "/dev/nvidia-modeset-x", O_RDWR) = 3\n')
+        self.assertNotIn("openat$", prog)
+
+
+class TestEveryCallDevDescReturnsIsDeclared(unittest.TestCase):
+    """Every name dev_desc() can return, by any branch, has to be declared.
+
+    A name no description declares produces a seed bank syzkaller refuses at
+    the parse gate, and the failure surfaces phases later reading as a
+    description problem. Checking DEV_TO_DESC alone would not have caught
+    `openat$dri`, which was a hardcoded fallthrough inside the function and
+    never a value in that table. Both the dict and the branches beside it are
+    covered here, driven through dev_desc() and through its own source, so a
+    branch added tomorrow is covered on the day it is added.
+    """
+
+    OPENAT_RE = re.compile(r"^openat\$([A-Za-z0-9_]+)\(", re.M)
+
+    # Paths reaching every branch of dev_desc(): each table key, the per-GPU
+    # regex on both a single and a multi-digit minor, the refused prefix, and
+    # a path no branch claims.
+    PROBE_PATHS = ("/dev/nvidia0", "/dev/nvidia9", "/dev/nvidia12",
+                   "/dev/dri/card0", "/dev/dri/renderD128",
+                   "/dev/nvidia-drm", "/dev/null", "")
+
+    def declared_openats(self):
+        try:
+            files = regression_check._description_files()
+        except regression_check.CheckInput as exc:
+            self.skipTest(str(exc))
+        declared = set()
+        for path in files:
+            with open(path, encoding="utf-8") as handle:
+                declared.update(self.OPENAT_RE.findall(handle.read()))
+        self.assertTrue(declared,
+                        "the committed description set declares no openat")
+        return declared
+
+    def assert_declared(self, names, where):
+        """Fail on any name the description set does not declare.
+
+        Only the modeset call may be absent, and only while the emitter has
+        not landed in this tree. It is skipped by name, so the check still
+        fails for anything else missing alongside it.
+        """
+        declared = self.declared_openats()
+        missing = sorted(n for n in names
+                         if n[len("openat$"):] not in declared)
+        if missing == ["openat$nvidia_modeset"]:
+            self.skipTest(
+                "openat$nvidia_modeset is not in the committed description "
+                "set, because the modeset emitter has not landed in this tree")
+        self.assertEqual(missing, [], where)
+
+    def dev_desc_returns(self):
+        """Every name dev_desc() actually hands back for PROBE_PATHS."""
+        paths = list(trace2seed.DEV_TO_DESC) + list(self.PROBE_PATHS)
+        return {name for name in (trace2seed.dev_desc(p) for p in paths)
+                if name is not None}
+
+    def dev_desc_literals(self):
+        """Every openat$ name spelled inside dev_desc()'s own source.
+
+        Read from the function itself, because a hardcoded fallthrough is
+        invisible to any reading of the tables beside it and invisible to a
+        probe list that happens to miss its branch.
+        """
+        tree = ast.parse(inspect.getsource(trace2seed.dev_desc))
+        return {node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value.startswith("openat$")}
+
+    def test_every_name_dev_desc_returns_is_declared(self):
+        names = self.dev_desc_returns()
+        self.assertIn("openat$nvidiactl", names)
+        self.assertIn("openat$nvidia", names)
+        self.assert_declared(names, "returned by dev_desc()")
+
+    def test_every_name_spelled_inside_dev_desc_is_declared(self):
+        # The check that catches a fallthrough no probe path reaches.
+        self.assert_declared(self.dev_desc_literals(),
+                             "spelled inside dev_desc()")
+
+    def test_every_tracked_node_names_a_declared_call(self):
+        self.assert_declared(set(trace2seed.DEV_TO_DESC.values()),
+                             "named by DEV_TO_DESC")
+
+    def test_a_node_is_never_in_both_tables(self):
+        both = sorted(set(trace2seed.DEV_TO_DESC) & set(trace2seed.OUT_OF_SCOPE))
+        self.assertEqual(both, [])
+        overlap = sorted(
+            node for node in trace2seed.DEV_TO_DESC
+            for prefix in trace2seed.OUT_OF_SCOPE_PREFIXES
+            if node.startswith(prefix))
+        self.assertEqual(overlap, [])
+
+
+class TestDriNodesAreRefusedAndNotNamed(unittest.TestCase):
+    """/dev/dri/* is refused, and the refusal states what is known.
+
+    dev_desc() returned `openat$dri` for these paths, a call the description
+    set has never declared, so a trace touching a render node converted into
+    a seed bank that failed the parse gate. The threat model excludes these
+    nodes, so the fix is a refusal carrying a reason and not a new call.
+
+    The path is a prefix over a directory whose members carry a card or
+    render-node index, so the exact-match table cannot hold it.
+    """
+
+    def test_the_undeclared_call_is_gone_from_dev_desc(self):
+        # Named pin for the defect itself, beside the general check that
+        # every name dev_desc() spells is declared. Scoped to the function,
+        # because out_of_scope()'s docstring cites the name on purpose.
+        self.assertNotIn("openat$dri",
+                         inspect.getsource(trace2seed.dev_desc))
+
+    def test_dev_desc_names_no_call_for_a_dri_node(self):
+        for path in ("/dev/dri/card0", "/dev/dri/renderD128"):
+            self.assertIsNone(trace2seed.dev_desc(path), path)
+
+    def test_a_dri_node_is_refused_with_a_reason(self):
+        for path in ("/dev/dri/card0", "/dev/dri/renderD128"):
+            self.assertIn("/dev/dri/*", trace2seed.out_of_scope(path) or "")
+
+    def test_the_reason_leaves_tenant_reachability_open(self):
+        # Recorded as an open question. Asserting these nodes are unreachable
+        # would be a claim this tool has no source for.
+        reason = trace2seed.out_of_scope("/dev/dri/card0")
+        self.assertIn("open question", reason)
+        self.assertIn("outside the modelled surface", reason)
+
+    def test_a_modelled_node_is_not_refused(self):
+        for path in trace2seed.DEV_TO_DESC:
+            self.assertIsNone(trace2seed.out_of_scope(path), path)
+        self.assertIsNone(trace2seed.out_of_scope("/dev/nvidia0"))
+
+    def test_a_traced_dri_open_becomes_a_skip_and_opens_nothing(self):
+        prog = trace2seed.convert(
+            'openat(AT_FDCWD, "/dev/dri/renderD128", O_RDWR) = 3\n'
+            'ioctl(3, 0xc0106d00, 0x7ffd) = 0\n', {}, {})
+        self.assertIn("# skipped:", prog)
+        self.assertNotIn("openat$", prog)
+        # The fd was never tracked, so its ioctl is dropped with it.
+        self.assertNotIn("0xc0106d00", prog)
+# The struct that motivated the bitfield fix, reproduced from
+# src/nvidia-modeset/interface/nvkms-api-types.h:499 with the two nested
+# aggregates reduced to their measured sizes. gcc on x86-64 gives the real
+# struct sizeof 80, align 8, composition at offset 4, supportedSurfaceMemory
+# Formats at 32, ilut at 40 and tmo at 60. The two single-bit NvBool members
+# share one byte, so the run occupies byte 0 and composition's four-byte
+# alignment pads bytes 1 to 3.
+LAYER_CAPABILITIES_HEADER = """
+struct NvKmsCompositionCapabilities {
+    NvU32 a;
+    NvU32 b;
+    NvU32 c;
+    NvU32 d;
+    NvU32 e;
+    NvU32 f;
+    NvU32 g;
+};
+
+struct NvKmsLUTCaps {
+    NvU32 a;
+    NvU32 b;
+    NvU32 c;
+    NvU32 d;
+    NvU32 e;
+};
+
+struct NvKmsLayerCapabilities {
+    NvBool supportsWindowMode              :1;
+    NvBool supportsICtCp                   :1;
+    struct NvKmsCompositionCapabilities composition;
+    NvU64 supportedSurfaceMemoryFormats NV_ALIGN_BYTES(8);
+    struct NvKmsLUTCaps ilut;
+    struct NvKmsLUTCaps tmo;
+};
+"""
+
+
+class BitfieldFixture(unittest.TestCase):
+    """A TypeIndex over the NvKmsLayerCapabilities reproduction above."""
+
+    def index_over(self, text):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "caps.h")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        index = syzlang_gen.TypeIndex()
+        index.scan_file(path, "caps.h")
+        return index
+
+    def caps_index(self):
+        return self.index_over(LAYER_CAPABILITIES_HEADER)
+
+
+class TestTheBitfieldMemberParse(BitfieldFixture):
+    """parse_member_statement reads a single-bit member as a bitfield member
+    and still refuses a width the packing rule below does not cover."""
+
+    def test_a_single_bit_member_carries_its_width(self):
+        members = syzlang_gen.parse_member_statement(
+            "NvBool supportsWindowMode :1")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].name, "supportsWindowMode")
+        self.assertEqual(members[0].type, "NvBool")
+        self.assertEqual(members[0].bits, 1)
+
+    def test_a_plain_member_carries_no_width(self):
+        members = syzlang_gen.parse_member_statement("NvU32 cmd")
+        self.assertIsNone(members[0].bits)
+
+    def test_a_wider_bitfield_is_still_refused(self):
+        # 3 bits in an NvU32 is a packing this layout rule does not derive,
+        # and a guessed offset reaches the wrong field.
+        with self.assertRaises(syzlang_gen.LayoutError) as caught:
+            syzlang_gen.parse_member_statement("NvU32 mode :3")
+        self.assertIn("bitfield", str(caught.exception))
+
+    def test_an_unnamed_bitfield_is_still_refused(self):
+        with self.assertRaises(syzlang_gen.LayoutError):
+            syzlang_gen.parse_member_statement("NvU32 :1")
+
+    def test_a_scope_operator_is_not_read_as_a_bitfield(self):
+        with self.assertRaises(syzlang_gen.LayoutError):
+            syzlang_gen.parse_member_statement("Ns::Type field")
+
+
+class TestTheBitfieldLayout(BitfieldFixture):
+    """The derived layout matches what gcc gives for the real struct."""
+
+    def layout(self):
+        return self.caps_index().layout("NvKmsLayerCapabilities")
+
+    def test_the_struct_totals_the_measured_size_and_alignment(self):
+        layout = self.layout()
+        self.assertEqual(layout.size, 80)
+        self.assertEqual(layout.align, 8)
+
+    def test_every_member_sits_at_the_offset_gcc_gives(self):
+        offsets = {f.name: f.offset for f in self.layout().fields}
+        self.assertEqual(offsets["supportsWindowMode"], 0)
+        self.assertEqual(offsets["supportsICtCp"], 0)
+        self.assertEqual(offsets["composition"], 4)
+        self.assertEqual(offsets["supportedSurfaceMemoryFormats"], 32)
+        self.assertEqual(offsets["ilut"], 40)
+        self.assertEqual(offsets["tmo"], 60)
+
+    def test_the_two_bits_share_one_storage_unit(self):
+        fields = {f.name: f for f in self.layout().fields}
+        self.assertEqual(fields["supportsWindowMode"].size, 1)
+        self.assertEqual(fields["supportsICtCp"].size, 0)
+
+    def test_the_struct_no_longer_fails_the_member_parser(self):
+        index = self.caps_index()
+        self.assertIn("NvKmsLayerCapabilities", index.structs)
+        self.assertEqual(index.parse_failures["NvKmsLayerCapabilities"], 0)
+
+
+class TestTheBitfieldRendering(BitfieldFixture):
+    """render_struct emits a syzlang bitfield group whose widths sum inside
+    one storage unit, so the emitted struct keeps the C size."""
+
+    def rendered(self):
+        index = self.caps_index()
+        layout = index.layout("NvKmsLayerCapabilities")
+        return syzlang_gen.render_struct("NvKmsLayerCapabilities", layout)
+
+    def test_each_bit_renders_with_its_width(self):
+        text = self.rendered()
+        self.assertRegex(text, r"\n\tsupportsWindowMode\s+int8:1\n")
+        self.assertRegex(text, r"\n\tsupportsICtCp\s+int8:1\n")
+
+    def test_no_synthetic_bit_padding_closes_the_unit(self):
+        # pkg/compiler/gen.go:394 closes a bitfield group by growing the last
+        # member's TypeSize to the byte padding that follows it, so the
+        # explicit byte padding below already ends the unit. A synthetic
+        # int8:6 member would render as a fuzzable field named as padding.
+        self.assertNotRegex(self.rendered(), r"int8:[2-8]\n")
+
+    def test_the_padding_to_the_next_member_is_still_explicit(self):
+        self.assertIn("array[const[0, int8], 3]", self.rendered())
+
+
+# nvkms-api.h declares an enumeration member by tag, `enum NvKmsEventType
+# eventType;`, where every RM header reaches one through a typedef. 30 struct
+# definitions on the modeset ioctl path do it, NvKmsAllocDeviceReply among
+# them, and the member parser rejected the whole family. Three forms appear:
+# a plain tagged member, an array of them, and one definition written inline
+# with its declarator (NvKmsValidateModeIndexReply.source).
+ENUM_MEMBER_HEADER = """
+enum NvKmsEventType {
+    NvKmsEventTypeDpyChanged = 0,
+    NvKmsEventTypeFlipOccurred = 1,
+};
+
+struct NvKmsEventCarrier {
+    NvU32 head;
+    enum NvKmsEventType eventType;
+    enum NvKmsEventType history[4];
+    enum NvKmsModeSource {
+        NvKmsModeSourceUnknown = 0,
+        NvKmsModeSourceEdid = 1,
+    } source;
+    NvU32 tail;
+};
+"""
+
+
+class TestTheEnumMemberParse(BitfieldFixture):
+    """A member declared by enumeration tag lays out as the unsigned int gcc
+    gives it, and an inline definition carries its declarator."""
+
+    def caps_index(self):
+        return self.index_over(ENUM_MEMBER_HEADER)
+
+    def test_a_tagged_member_is_read(self):
+        members = syzlang_gen.parse_member_statement(
+            "enum NvKmsEventType eventType")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].type, "enum NvKmsEventType")
+        self.assertEqual(members[0].name, "eventType")
+
+    def test_a_definition_written_inline_keeps_its_declarator(self):
+        members = syzlang_gen.parse_member_statement(
+            "enum E { A = 0, B = 1, } source")
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0].name, "source")
+
+    def test_a_definition_with_no_declarator_contributes_no_member(self):
+        self.assertEqual(
+            syzlang_gen.parse_member_statement("enum E { A = 0, B = 1, }"), [])
+
+    def test_a_typedef_inside_a_struct_body_is_still_refused(self):
+        with self.assertRaises(syzlang_gen.LayoutError):
+            syzlang_gen.parse_member_statement("typedef NvU32 Thing")
+
+    def test_the_carrier_lays_out_at_four_bytes_an_enumeration(self):
+        layout = self.caps_index().layout("NvKmsEventCarrier")
+        offsets = {f.name: f.offset for f in layout.fields}
+        self.assertEqual(offsets["eventType"], 4)
+        self.assertEqual(offsets["history"], 8)
+        self.assertEqual(offsets["source"], 24)
+        self.assertEqual(offsets["tail"], 28)
+        self.assertEqual(layout.size, 32)
+
+
+# NvKmsRegisterVblankIntrCallbackRequest carries a function pointer through a
+# typedef, `NVRgInterruptCallbackProc pCallback`, declared at
+# kernel-open/common/inc/nvkms-api-types.h:806. The typedef scanner read only
+# `typedef <words> <name>;`, so the alias was absent and the member's type was
+# unknown. It is the last of the 64 dispatched modeset commands to model.
+FUNCTION_POINTER_HEADER = """
+typedef void (*NVRgInterruptCallbackProc)(NvU64 clientData,
+                                          NvU32 head);
+
+struct CallbackRequest {
+    NvU32 head;
+    NVRgInterruptCallbackProc pCallback NV_ALIGN_BYTES(8);
+    NvU64 param NV_ALIGN_BYTES(8);
+};
+"""
+
+
+class TestTheFunctionPointerTypedef(BitfieldFixture):
+    """A function-pointer typedef is an eight-byte pointer, and a member
+    declared through one lays out as one."""
+
+    def caps_index(self):
+        return self.index_over(FUNCTION_POINTER_HEADER)
+
+    def test_the_typedef_is_registered_as_a_pointer(self):
+        index = self.caps_index()
+        self.assertTrue(
+            index.resolve_alias("NVRgInterruptCallbackProc").endswith("*"))
+
+    def test_a_member_declared_through_it_is_eight_bytes(self):
+        layout = self.caps_index().layout("CallbackRequest")
+        fields = {f.name: f for f in layout.fields}
+        self.assertEqual(fields["pCallback"].offset, 8)
+        self.assertEqual(fields["pCallback"].size, 8)
+        self.assertEqual(fields["pCallback"].syz, "int64")
+        self.assertEqual(fields["param"].offset, 16)
+        self.assertEqual(layout.size, 24)
+
+
+class ModesetDenominator(unittest.TestCase):
+    """The sixth family enters the denominator from the modeset inventory,
+    and only the dispatched commands do. Counting the two the dispatch table
+    leaves NULL would put the surface at 830 and claim two targets nothing
+    can reach."""
+
+    COMMANDS = [
+        {"command": "NVKMS_IOCTL_ALLOC_DEVICE", "ordinal": 0,
+         "dispatched": True, "proc": "AllocDevice",
+         "param_struct": "NvKmsAllocDeviceParams", "custom_user": False,
+         "source": "src/nvidia-modeset/src/nvkms.c:5093"},
+        {"command": "NVKMS_IOCTL_FLIP", "ordinal": 1, "dispatched": True,
+         "proc": "Flip", "param_struct": "NvKmsFlipParams",
+         "custom_user": True,
+         "source": "src/nvidia-modeset/src/nvkms.c:5094"},
+        {"command": "NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES",
+         "ordinal": 2, "dispatched": False, "proc": None,
+         "param_struct": None, "custom_user": False,
+         "undispatched_reason": "no handler in the dispatch table",
+         "source": "src/nvidia-modeset/interface/nvkms-api.h:246"},
+    ]
+
+    def artefacts(self, tmp, commands=None, version="610.57.04"):
+        source = {"path": tmp, "driver_version": version}
+        ioctl = {"source": source, "nodes": [
+            {"paths": ["/dev/nvidiactl"], "module": "nvidia",
+             "commands": [{"name": "NV_ESC_CARD_INFO"}]}]}
+        records = commands if commands is not None else self.COMMANDS
+        nvkms = {"source": dict(source,
+                                dispatch_source="src/nvidia-modeset/src/"
+                                                "nvkms.c"),
+                 "summary": {"declared": len(records),
+                             "dispatched": sum(1 for c in records
+                                               if c["dispatched"])},
+                 "commands": records}
+        for name, doc in (("ioctl-inventory.json", ioctl),
+                          ("rm-control-inventory.json",
+                           {"source": source, "methods": []}),
+                          ("rm-object-graph.json",
+                           {"source": source, "records": []}),
+                          ("nvkms-command-inventory.json", nvkms)):
+            with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+        return tmp
+
+    def load(self, tmp):
+        original = (surface_cov.IOCTL_INV, surface_cov.CTRL_INV,
+                    surface_cov.OBJ_GRAPH, surface_cov.NVKMS_INV)
+        surface_cov.IOCTL_INV = os.path.join(tmp, "ioctl-inventory.json")
+        surface_cov.CTRL_INV = os.path.join(tmp, "rm-control-inventory.json")
+        surface_cov.OBJ_GRAPH = os.path.join(tmp, "rm-object-graph.json")
+        surface_cov.NVKMS_INV = os.path.join(
+            tmp, "nvkms-command-inventory.json")
+        try:
+            return surface_cov.load_targets()
+        finally:
+            (surface_cov.IOCTL_INV, surface_cov.CTRL_INV,
+             surface_cov.OBJ_GRAPH, surface_cov.NVKMS_INV) = original
+
+
+class TestTheModesetFamilyEntersTheDenominator(ModesetDenominator):
+
+    def test_modeset_is_a_reported_family(self):
+        self.assertIn("modeset", surface_cov.FAMILIES)
+        self.assertEqual(len(surface_cov.FAMILIES), 6)
+
+    def test_a_dispatched_command_is_a_target_under_its_own_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, _excluded, _ = self.load(self.artefacts(tmp))
+        record = targets["NVKMS_IOCTL_ALLOC_DEVICE"]
+        self.assertEqual(record["family"], "modeset")
+        self.assertEqual(record["nr"], 0)
+        self.assertEqual(record["detail"], "NvKmsAllocDeviceParams")
+
+    def test_an_undispatched_command_is_excluded_and_still_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, excluded, _ = self.load(self.artefacts(tmp))
+        name = "NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES"
+        self.assertNotIn(name, targets)
+        self.assertEqual(excluded[name]["family"], "modeset_undispatched")
+
+    def test_the_abi_key_is_the_dispatch_ordinal_and_not_the_name(self):
+        # A driver that renames a command keeps its ordinal, and the ledger
+        # keyed on the ordinal keeps the row it accounted.
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, _excluded, _ = self.load(self.artefacts(tmp))
+        self.assertEqual(targets["NVKMS_IOCTL_FLIP"]["abi_key"], "modeset/1")
+
+    def test_ordinal_zero_is_not_read_as_a_missing_ordinal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            targets, _excluded, _ = self.load(self.artefacts(tmp))
+        self.assertEqual(targets["NVKMS_IOCTL_ALLOC_DEVICE"]["abi_key"],
+                         "modeset/0")
+
+    def test_a_modeset_inventory_from_another_release_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.artefacts(tmp)
+            path = os.path.join(tmp, "nvkms-command-inventory.json")
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            doc["source"]["driver_version"] = "999.99.99"
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            with self.assertRaises(surface_cov.SurfaceError) as caught:
+                self.load(tmp)
+        self.assertIn("nvkms-command-inventory.json",
+                      str(caught.exception))
+
+    def test_a_summary_disagreeing_with_its_records_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.artefacts(tmp)
+            path = os.path.join(tmp, "nvkms-command-inventory.json")
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            doc["summary"]["dispatched"] += 1
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            with self.assertRaises(surface_cov.SurfaceError) as caught:
+                self.load(tmp)
+        self.assertIn("dispatched", str(caught.exception))
+
+
+class TestTheCommittedModesetDenominator(unittest.TestCase):
+    """The reading over the committed artefacts, which is the number every
+    completion figure from this phase onward is measured against."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.NVKMS_INV):
+            raise unittest.SkipTest("committed inventories not present")
+        cls.targets, cls.excluded, _meta = surface_cov.load_targets()
+
+    def test_the_denominator_reads_828_across_six_families(self):
+        self.assertEqual(len(self.targets), 828)
+        self.assertEqual(
+            len({t["family"] for t in self.targets.values()}), 6)
+
+    def test_the_modeset_family_carries_64_targets(self):
+        modeset = [t for t in self.targets.values()
+                   if t["family"] == "modeset"]
+        self.assertEqual(len(modeset), 64)
+
+    def test_the_other_five_families_are_unmoved(self):
+        counted = {}
+        for target in self.targets.values():
+            counted[target["family"]] = counted.get(target["family"], 0) + 1
+        self.assertEqual(counted["escape"], 32)
+        self.assertEqual(counted["uvm"], 39)
+        self.assertEqual(counted["uvm_tools"], 7)
+        self.assertEqual(counted["control"], 531)
+        self.assertEqual(counted["alloc"], 155)
+
+    def test_both_undispatched_ordinals_are_excluded_by_name(self):
+        undispatched = sorted(
+            name for name, r in self.excluded.items()
+            if r["family"] == "modeset_undispatched")
+        self.assertEqual(undispatched,
+                         ["NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES",
+                          "NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS"])
+
+    def test_every_modeset_target_carries_a_distinct_abi_key(self):
+        keys = [t["abi_key"] for t in self.targets.values()
+                if t["family"] == "modeset"]
+        self.assertEqual(len(set(keys)), 64)
+
+
+class TestTheValueCheckReadsAsAList(unittest.TestCase):
+    """The pin check's value comparison was one hardcoded tuple naming the
+    control prefix, so no second family could ever be compared against an
+    authority. The list form is the fix, and modeset is the second entry."""
+
+    def test_the_groups_carry_a_lookup_beside_the_prefix(self):
+        for entry in regression_check.GROUPS:
+            self.assertEqual(len(entry), 3, entry)
+
+    def test_both_checked_families_are_reporting_groups(self):
+        groups = {name for name, _prefix, _lookup in regression_check.GROUPS}
+        for family, _field, _lookup in regression_check.VALUE_CHECKED:
+            self.assertIn(family, groups)
+
+    def test_control_and_modeset_are_both_value_checked(self):
+        checked = {family for family, _f, _l in regression_check.VALUE_CHECKED}
+        self.assertEqual(checked, {"control", "modeset"})
+
+    def test_each_checked_family_names_the_field_it_compares(self):
+        fields = {family: field
+                  for family, field, _l in regression_check.VALUE_CHECKED}
+        self.assertEqual(fields["control"], "cmd")
+        self.assertEqual(fields["modeset"], "cmd")
+
+    def test_every_checked_field_is_a_selector_the_check_examines(self):
+        # A family compared on a field SELECTORS never reaches is a check
+        # that reports a clean run over nothing.
+        for _family, field, _lookup in regression_check.VALUE_CHECKED:
+            self.assertIn(field, regression_check.SELECTORS)
+
+    def test_the_lookups_are_callables_taking_no_argument(self):
+        for _family, _field, lookup in regression_check.VALUE_CHECKED:
+            self.assertTrue(callable(lookup))
+
+    def test_the_modeset_lookup_is_the_dispatch_ordinal(self):
+        lookup = dict((f, l) for f, _fl, l in
+                      regression_check.VALUE_CHECKED)["modeset"]
+        if not os.path.isfile(surface_cov.NVKMS_INV):
+            self.skipTest("committed inventory not present")
+        ordinals = lookup()
+        # All 66, the two undispatched ones included, for the reason
+        # control_method_ids reads the excluded control commands: a
+        # description hand-added for one still has its pin checked. Only the
+        # 64 the set declares are compared.
+        self.assertEqual(len(ordinals), 66)
+        self.assertEqual(ordinals["NVKMS_IOCTL_ALLOC_DEVICE"], 0)
+        self.assertEqual(
+            ordinals["NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS"], 36)
+
+    def test_the_modeset_floor_is_recorded_beside_the_other_five(self):
+        self.assertEqual(regression_check.TARGET_FLOOR["modeset"], 64)
+        self.assertEqual(len(regression_check.TARGET_FLOOR), 6)
+
+
+class TestTheModesetPinsAreCheckedAgainstTheOrdinal(unittest.TestCase):
+    """A modeset variant pinned to the wrong ordinal reaches another one of
+    the 64 leaves, and nothing else in the set would say so."""
+
+    def run_pins(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = regression_check.check_pins()
+        return code, buf.getvalue()
+
+    def test_the_committed_set_pins_all_64_correctly(self):
+        if not os.path.isfile(surface_cov.NVKMS_INV):
+            self.skipTest("committed inventory not present")
+        code, out = self.run_pins()
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"modeset 64")
+        self.assertRegex(out, r"64 modeset cmd\(s\) checked")
+
+
+class TestTheModesetReferencePage(unittest.TestCase):
+    """The sixth family gets a page of its own and the index counts it, so a
+    reader browsing the enumerated surface sees 828 and not 764."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.NVKMS_INV):
+            raise unittest.SkipTest("committed inventories not present")
+        cls.pages, cls.rows = refgen.render()
+
+    def test_a_modeset_page_is_generated(self):
+        self.assertIn("modeset-commands.md", self.pages)
+        self.assertEqual(self.rows["modeset-commands.md"], 66)
+
+    def test_the_page_names_both_undispatched_commands(self):
+        page = self.pages["modeset-commands.md"]
+        self.assertIn("NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES", page)
+        self.assertIn("NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS", page)
+
+    def test_the_page_carries_a_row_for_every_declared_command(self):
+        page = self.pages["modeset-commands.md"]
+        with open(surface_cov.NVKMS_INV, encoding="utf-8") as fh:
+            commands = json.load(fh)["commands"]
+        for command in commands:
+            self.assertIn("| `%s` |" % command["command"], page)
+        # The two with no dispatch entry are rendered twice: once in the full
+        # ordinal table and once in the section stating why they are out.
+        self.assertEqual(page.count("| `NVKMS_IOCTL_"), len(commands) + 2)
+
+    def test_the_index_states_the_new_total_and_family_count(self):
+        index = self.pages["index.md"]
+        self.assertIn("Total targets: 828.", index)
+        self.assertIn("`modeset`", index)
+        self.assertIn("`modeset_undispatched`", index)
+
+    def test_the_index_no_longer_states_764_as_the_total(self):
+        self.assertNotIn("764", self.pages["index.md"])
+
+    def test_the_index_counts_its_own_pages_and_never_a_literal(self):
+        index = self.pages["index.md"]
+        self.assertEqual(self.rows["index.md"], len(refgen.BUILDERS))
+        self.assertNotIn("Four pages render", index)
+
+    def test_every_generated_page_is_listed_on_the_index(self):
+        index = self.pages["index.md"]
+        for name in refgen.PAGE_TITLES:
+            self.assertIn(refgen.PAGE_TITLES[name][1], index, name)
+
+    def test_the_committed_pages_match_the_regenerated_ones(self):
+        out = os.path.join(os.path.dirname(HERE), "docs", "src", "content",
+                           "docs", "reference", "surface")
+        if not os.path.isdir(out):
+            self.skipTest("documentation tree not present")
+        for name, text in self.pages.items():
+            path = os.path.join(out, name)
+            self.assertTrue(os.path.isfile(path), name)
+            with open(path, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), text, name)
+
+
+class TestTheEnumMemberLayout(BitfieldFixture):
+    """The offsets the enumeration carrier lays out at."""
+
+    def caps_index(self):
+        return self.index_over(ENUM_MEMBER_HEADER)
+
+    def test_every_member_sits_where_gcc_puts_it(self):
+        layout = self.caps_index().layout("NvKmsEventCarrier")
+        offsets = {f.name: f.offset for f in layout.fields}
+        self.assertEqual(offsets["eventType"], 4)
+        self.assertEqual(offsets["history"], 8)
+        self.assertEqual(offsets["source"], 24)
+        self.assertEqual(offsets["tail"], 28)
+        self.assertEqual(layout.size, 32)
 
 
 def pipeline_ctl_cmd_round_end(args):

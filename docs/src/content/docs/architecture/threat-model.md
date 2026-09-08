@@ -15,18 +15,47 @@ The campaign models one attacker per track.
 | Confinement in force | Linux capabilities dropped to the container runtime's default set, the runtime's seccomp profile, the device cgroup allowlist | None at the time the code runs |
 | Capability request | `NVIDIA_DRIVER_CAPABILITIES=compute,utility`, which CUDA images request | Not applicable |
 | Device nodes received | `/dev/nvidiactl`, `/dev/nvidiaX`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` | Not applicable |
+| Device nodes received on the CDI path | `/dev/nvidia-modeset`, injected with no capability check | Not applicable |
 | Device nodes received conditionally | `/dev/nvidia-nvswitchctl` and `/dev/nvidia-nvswitch*`, when the image sets `NVIDIA_NVSWITCH=enabled` | Not applicable |
-| Device nodes withheld | `/dev/nvidia-modeset`, `/dev/dri/*`, `/dev/nvidia-nvlink` | Not applicable |
+| Device nodes withheld | `/dev/dri/*`, `/dev/nvidia-nvlink` | Not applicable |
 | Primary target | The NVIDIA GPU kernel driver ioctl surface | `libnvidia-container`, written in C. The memory-safety surface |
 | Secondary target | None | `nvidia-container-toolkit`, written in Go. Panic and denial-of-service surface only |
 | Trust boundary crossed | Container to host kernel | Untrusted image input to a host root process |
 | Objective | Host kernel compromise from inside the container | Host compromise before the container is confined |
 
-`NVIDIA_DRIVER_CAPABILITIES` gates which device nodes a container receives. The
-`graphics` and `display` values yield `/dev/dri` and the `nvidia-drm` nodes, and
-a default tenant requests neither. An ioctl surface reachable only through those
-nodes lies outside the Track K attacker's reach, and a crash found there cannot
-be claimed under the model.
+Go is memory-safe. A finding against `nvidia-container-toolkit` supports a
+denial-of-service claim and no memory-corruption claim. The `harness` sub-agent
+prompt forbids one.
+
+## Device node injection paths
+
+Two mechanisms inject NVIDIA device nodes into a container. They differ on
+`/dev/nvidia-modeset`, and the path in force decides whether that node lies
+inside the Track K attacker's reach.
+
+| Path | Modeset injected under `compute,utility` | Mechanism |
+|---|---|---|
+| CDI, including `jit-cdi` | Yes | `pkg/nvcdi/common-nvml.go:52` lists `/dev/nvidia-modeset` beside the three unconditional control nodes, and `:28` calls that discoverer with no capability check. `NVIDIA_DRIVER_CAPABILITIES` appears nowhere in `pkg/nvcdi` |
+| Legacy `libnvidia-container` | No | `src/nvc_mount.c:786` skips the modeset minor unless `OPT_DISPLAY` is set. `src/options.h:92` sets that flag from the `display` value alone, `:91` shows `graphics` does not set it, and `:100` omits it from the container defaults |
+
+`internal/info/auto.go:89` resolves the default runtime mode to `jit-cdi`, and
+`internal/modifier/mode.go:17` routes both CDI modes through the CDI generator.
+The campaign models that default, so `/dev/nvidia-modeset` is inside the Track K
+attacker's reach and its 64 dispatched commands are counted in the denominator.
+
+`NVIDIA_DRIVER_CAPABILITIES` gates the legacy path, where the `display` value
+yields the modeset node. A deployment pinned to `legacy` mode withholds it, and
+a modeset crash is claimable against a CDI deployment only.
+
+`/dev/dri/*` and the `nvidia-drm` nodes stay outside the model in this branch,
+on an argument that has not been re-verified under CDI. The legacy argument
+rests on the capability set, which a default tenant leaves at
+`compute,utility`. `internal/discover/graphics.go:39` declares
+`NewDRMNodesDiscoverer`, and the comment above it at `:37` restricts that
+function to legacy mode. No capability check has been traced on the CDI path
+for DRM nodes, and that trace is open work. If those nodes prove reachable they
+form a new family with its own denominator, and this page changes before any
+phase models them.
 
 Device nodes are one gate of two, and the second is the allocation privilege
 flag the driver attaches to each object class. A class carrying
@@ -35,10 +64,6 @@ device node, and a class carrying `RS_FLAGS_ALLOC_NON_PRIVILEGED` is in reach
 even where its subsystem sounds excluded. The
 [attack surface](/gspwn/architecture/attack-surface/) page holds the
 measurement behind both statements.
-
-Go is memory-safe. A finding against `nvidia-container-toolkit` supports a
-denial-of-service claim and no memory-corruption claim. The `harness` sub-agent
-prompt forbids one.
 
 ## Surfaces inside the model that the node list does not name
 
@@ -66,7 +91,7 @@ it, and it appears there only inside `blockedPrefixes`.
 
 | Excluded | Reason |
 |---|---|
-| `nvidia-modeset` and `/dev/dri/*` | A default tenant never receives those nodes |
+| `/dev/dri/*` and the `nvidia-drm` nodes | A default tenant receives neither on the legacy path. The CDI path is untraced for DRM nodes, so this exclusion is provisional. See [Device node injection paths](/gspwn/architecture/threat-model/#device-node-injection-paths) |
 | `/dev/nvidia-nvlink` | The container toolkit never injects it. It appears there only inside `blockedPrefixes` |
 | The display channel class tree below `NVC570_DISPLAY` | All 38 classes carry `RS_FLAGS_ALLOC_PRIVILEGED`, so the tenant cannot allocate them |
 | Symlink TOCTOU and mount-escape logic bugs on Track U | Fuzzing finds them poorly. Recorded in the report as future work |

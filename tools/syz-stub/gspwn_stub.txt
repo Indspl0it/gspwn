@@ -1,0 +1,10 @@
+# The one declaration gspwn's description files take from syzkaller's own
+# sys/linux/sys.txt. Compiling the four gspwn files without it fails with
+# "unknown type fd". Compiling this file on its own fails with
+# "unused resource fd". Both are hard errors, so the compile gate always runs
+# the stub bundled with descriptions/*.txt and never alone.
+#
+# The rest of syzkaller's sys/linux corpus is deliberately absent. Compiled
+# against all of it, 152 errors arise in Android and vendor-only files this
+# repository does not use, none of them in gspwn's own.
+resource fd[int32]: -1

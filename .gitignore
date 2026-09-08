@@ -20,6 +20,10 @@ thoughts/
 improvement_v0.8.1.md
 tmp/
 .claude/settings.local.json
+# Subagent git worktrees. The tooling creates these inside the
+# repository and removes them when the agent finishes; a worktree
+# caught in a commit carries a second copy of the whole tree.
+.claude/worktrees/
 # The documentation site's build output and toolchain. package.json and
 # package-lock.json are committed; CI installs from the lockfile.
 docs/node_modules/

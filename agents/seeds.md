@@ -20,6 +20,15 @@ traced multiplexer call becomes a comment naming the escape and the field that
 was not visible. It is not a gap in the map and extending the map cannot close
 it.
 
+`/dev/nvidia-modeset` has the same shape and is worse. All 64 of its commands
+share the single request number `0xc0106d00`, and the leaf lives in
+`NvKmsIoctlParams.cmd`, a field the trace text does not carry. A traced
+modeset call therefore names the family and never the command, and no
+extension of the map recovers it. Build a modeset seed from
+`surface/nvkms-command-inventory.json`, which carries the dispatch ordinal and
+the parameter struct of every command, and never from a trace. The 64 modeset
+variants are the sixth family of the 828-target denominator.
+
 The chain is the unit of work and a command is not, because a command becomes
 reachable when the chain that owns it exists.
 `surface/rm-chains.json` measures how steep that join is: one

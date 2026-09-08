@@ -49,16 +49,34 @@ IOCTL_RE = re.compile(r"ioctl\((\d+),\s*(0x[0-9a-fA-F]+|_IOC\([^)]*\)|\w+)")
 IOCTL_SYM_RE = re.compile(r"_IOC\(([^,]+),([^,]+),([^,]+),([^)]+)\)")
 CLOSE_RE = re.compile(r"close\((\d+)")
 
+# Device node to the openat variant the description set declares for it. Every
+# value here has to be a declared call: a seed naming one no description
+# declares fails the syzkaller-parse gate, and the whole bank fails with it.
+# selftest checks this table against the committed descriptions.
 DEV_TO_DESC = {
     "/dev/nvidiactl": "openat$nvidiactl",
     "/dev/nvidia-uvm": "openat$nvidia_uvm",
     "/dev/nvidia-uvm-tools": "openat$nvidia_uvm_tools",
+    "/dev/nvidia-modeset": "openat$nvidia_modeset",
 }
 
-# Devices the describe phase is forbidden to model (agents/describe.md):
-# seeds referencing them fail the syzkaller-parse gate.
-OUT_OF_SCOPE = {
-    "/dev/nvidia-modeset": "nvidia-modeset out of scope",
+# Devices no description models, whose traced opens become a skip comment
+# naming the reason, so a converted trace records what it dropped and why.
+# Leaving a modelled node here discards every trace touching it and reports
+# nothing, which is the expensive direction, so a node belongs in exactly one
+# of these tables and DEV_TO_DESC.
+#
+# Exact paths. /dev/nvidia-modeset was the only member and moved into
+# DEV_TO_DESC when the modeset family was modelled.
+OUT_OF_SCOPE = {}
+
+# Path prefixes, for a directory whose members carry a card or render-node
+# index and which no fixed key covers. Checked after the exact paths above.
+OUT_OF_SCOPE_PREFIXES = {
+    "/dev/dri/": "/dev/dri/* is outside the modelled surface. The description "
+                 "set declares no call on any of these nodes, and whether a "
+                 "default tenant receives them is an open question this tool "
+                 "does not settle.",
 }
 
 # Linux ioctl encoding: request = dir<<30 | size<<16 | type<<8 | nr.
@@ -187,13 +205,36 @@ def parse_request(raw):
         return None
 
 
+def out_of_scope(path):
+    """-> why `path` is refused, or None where a description models it.
+
+    Returning a call name for an unmodelled node is the failure this exists
+    to prevent. Such a seed converts cleanly here and syzkaller refuses the
+    whole bank at the parse gate, which surfaces several phases later and
+    reads as a description problem. `openat$dri` was exactly that: a
+    hardcoded fallthrough in dev_desc() naming a call the description set
+    has never declared.
+    """
+    if path in OUT_OF_SCOPE:
+        return OUT_OF_SCOPE[path]
+    for prefix, reason in OUT_OF_SCOPE_PREFIXES.items():
+        if path.startswith(prefix):
+            return reason
+    return None
+
+
 def dev_desc(path):
+    """-> the syzlang call a traced open on `path` becomes, or None.
+
+    Every name returned from here has to be declared by the committed
+    description set, whichever branch produces it. selftest drives this
+    function to check that, so a branch added below is covered on the day it
+    is added.
+    """
     if path in DEV_TO_DESC:
         return DEV_TO_DESC[path]
     if re.fullmatch(r"/dev/nvidia\d+", path):
         return "openat$nvidia"
-    if path.startswith("/dev/dri/"):
-        return "openat$dri"
     return None
 
 
@@ -274,8 +315,9 @@ def convert(trace_text, ioctl_map, multiplexers=None):
         m = OPEN_RE.search(raw)
         if m:
             path, fd = m.group(1), m.group(2)
-            if path in OUT_OF_SCOPE:
-                lines.append("# skipped: " + OUT_OF_SCOPE[path])
+            refused = out_of_scope(path)
+            if refused:
+                lines.append("# skipped: " + refused)
                 continue
             desc = dev_desc(path)
             if desc is None:

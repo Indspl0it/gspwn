@@ -37,7 +37,7 @@ jobs:
       - name: Shipped config is valid
         run: python3 tools/gspwn_config.py
 
-      # The five steps below compare committed artefacts that have to agree
+      # The seven steps below compare committed artefacts that have to agree
       # and that nothing else compares. Each reads files only, so they run in
       # the same offline job as everything above.
 
@@ -58,7 +58,7 @@ jobs:
         run: python3 tools/regression_check.py pins
 
       - name: Descriptions cover the whole denominator
-        # The inventories under surface enumerate 764 targets and
+        # The inventories under surface enumerate 828 targets and
         # descriptions declares the variants. A target losing its
         # description shrinks the numerator silently, because every later
         # measurement joins on the variant name.
@@ -82,6 +82,23 @@ jobs:
         # regenerates into a temporary directory and diffs, which also
         # catches a page edited by hand.
         run: python3 tools/regression_check.py pages
+
+      - name: Recorded inputs still match the artefacts
+        # descriptions/generation.json records the sha256 of the five surface
+        # artefacts the description set was generated from, and nothing read
+        # them. A surface artefact regenerated without regenerating the
+        # description set leaves the record naming bytes that no longer
+        # exist, and both files still parse, so every tool that reads either
+        # one reports success.
+        run: python3 tools/regression_check.py stale
+
+      - name: Track U target lists still agree
+        # Four files carry the Track U harness list: config/campaign.yaml,
+        # harnesses/run_all.sh, harnesses/TARGETS.md and the directories
+        # holding a build.sh. A target added to one and not the others is
+        # built and never run, or run and never built, and the fuzz phase
+        # reports the skip as a per-target note hours into a campaign.
+        run: python3 tools/regression_check.py harnesses
 
       - name: Documentation writing register
         # Question-shaped headings and table column headers scan as labels, so

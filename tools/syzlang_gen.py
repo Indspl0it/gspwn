@@ -62,17 +62,21 @@ another file, records its digest in generation.json, and fails when it is
 absent: without it 521 of the 595 size-matched structs lose their measured
 size and the run still exits 0. `--no-ctrl-sizes` is the deliberate case.
 
-The set is generated offline from a source checkout. No GPU, no SUT. It has
-not been through syz-compile, which is the describe phase's first gate.
+The set is generated offline from a source checkout. No GPU, no SUT.
+`compile` is the gate over it: it builds tools/gspwn-check against a
+pinned syzkaller checkout and runs syzkaller's own compiler over the
+descriptions and tools/syz-stub together.
 
 Subcommands:
   emit        write the description set, the _IOWR header and the manifest
   emit-probe  write the C size probes for the structs this tool needs
   verify      report the size-match table and nothing else
   summary     counts per category
+  compile     compile the set with syzkaller's own compiler
 
-Exit codes: 0 success, 1 bad input or unreadable source, 2 strict-mode
-size mismatch.
+Exit codes: 0 success, 1 bad input or unreadable source or a set that
+does not compile, 2 strict-mode size mismatch, 3 `compile` found no Go
+toolchain and no syzkaller checkout.
 """
 import argparse
 import collections
@@ -81,7 +85,10 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -106,13 +113,57 @@ SCHEMA = "gspwn.syzlang-generation/1"
 # tools/trace2seed.py documents the same failure on the seeds side.
 AT_FDCWD = "0xffffffffffffff9c"
 
+UVM_FD_RESOURCE = "fd_nvidia_uvm"
+UVM_TOOLS_FD_RESOURCE = "fd_nvidia_uvm_tools"
+# The initialised descriptor. `resource B[A]` makes a producer of B satisfy a
+# consumer of A, and makes a consumer of B satisfiable only by a producer of
+# B, which is the ordering constraint uvm.c:927 imposes.
+UVM_VASPACE_RESOURCE = "fd_nvidia_uvm_vaspace"
+
+# The producer. It is a pseudo-syscall and not ioctl$UVM_INITIALIZE because
+# __UVM_ROUTE_CMD_STACK at kernel-open/nvidia-uvm/uvm_api.h:45 returns 0 on
+# every path but a copy_from_user or copy_to_user failure, carrying the
+# handler's real status in params.rmStatus. syzkaller takes a resource's value
+# from the raw syscall return (executor/executor.cc:1355,
+# pkg/csource/csource.go:548), so a resource produced by that ioctl would hold
+# 0 on every execution and every consumer would receive file descriptor 0.
+UVM_INIT_CALL = "syz_nvidia_uvm_init"
+
+# The executor half of that call, carried as a patch against the pinned
+# syzkaller checkout and never as a fork of it, so the pin keeps naming an
+# upstream revision and this campaign's delta stays one reviewable file. The
+# description half needs none of it: pkg/compiler/consts.go:250 assigns no
+# syscall number to a call whose name starts with syz_, so the set compiles
+# against an unpatched checkout with the declaration alone.
+SYZ_PATCH_REL = "tools/syz-patches/0001-syz_nvidia_uvm_init.patch"
+
+# UVM_INIT_FLAGS_* from kernel-open/nvidia-uvm/uvm_types.h. DISABLE_HMM and
+# DISABLE_PAGEABLE_MIGRATIONS are both 0x1, so the set holds three values.
+UVM_INIT_FLAG_MACROS = (
+    "UVM_INIT_FLAGS_DISABLE_HMM",
+    "UVM_INIT_FLAGS_DISABLE_PAGEABLE_MIGRATIONS",
+    "UVM_INIT_FLAGS_MULTI_PROCESS_SHARING_MODE",
+    "UVM_INIT_FLAGS_DISABLE_PAGEABLE_ACCESS",
+)
+
 # Header trees the struct parser reads, relative to --src, longest include
 # root first so a header's include path is computed against the right one.
+#
+# src/nvidia-modeset/interface holds nvkms-api.h, which declares every modeset
+# parameter struct and is the only copy of that header in the tree.
+# src/common/unix/common/inc holds nv_mode_timings.h, which nvkms-api.h:201
+# includes and which exists nowhere else; without it the modeset translation
+# unit does not preprocess. Three of the modeset interface headers,
+# nvkms-api-types.h, nvkms-format.h and nvkms-ioctl.h, are byte-identical
+# copies of files already under kernel-open, so the two roots below add no
+# second definition of anything already parsed.
 INCLUDE_ROOTS = [
     os.path.join("kernel-open", "nvidia-uvm"),
     os.path.join("kernel-open", "common", "inc"),
     os.path.join("src", "common", "sdk", "nvidia", "inc"),
     os.path.join("src", "common", "inc"),
+    os.path.join("src", "common", "unix", "common", "inc"),
+    os.path.join("src", "nvidia-modeset", "interface"),
     os.path.join("src", "nvidia", "arch", "nvalloc", "unix", "include"),
 ]
 
@@ -122,12 +173,19 @@ INCLUDE_ROOTS = [
 # through the quoted-include rule. A control header three directories down has
 # no sibling and falls through to the -I order, so with kernel-open first the
 # translation unit gets both copies and every RS_ACCESS type is a redefinition.
+#
+# The modeset interface sits last for the same reason: its nvkms-api-types.h,
+# nvkms-format.h and nvkms-ioctl.h duplicate kernel-open/common/inc copies
+# byte for byte, so whichever arm resolves first gives the same translation
+# unit and the shared include guards make the second inclusion a no-op.
 PROBE_INCLUDES = [
     os.path.join("kernel-open", "nvidia-uvm"),
     os.path.join("src", "common", "sdk", "nvidia", "inc"),
     os.path.join("kernel-open", "common", "inc"),
     os.path.join("src", "common", "inc"),
+    os.path.join("src", "common", "unix", "common", "inc"),
     os.path.join("src", "nvidia", "arch", "nvalloc", "unix", "include"),
+    os.path.join("src", "nvidia-modeset", "interface"),
 ]
 
 # Base type sizes and alignments for x86-64 System V, which is the only
@@ -167,6 +225,72 @@ ALLOC_ESCAPE = "NV_ESC_RM_ALLOC"
 # a loop, so the inner command is dispatched once and cannot unwrap again.
 XFER_ESCAPE = "NV_ESC_IOCTL_XFER_CMD"
 XFER_STRUCT = "nv_ioctl_xfer_t"
+
+# ---------------------------------------------------------------------------
+# /dev/nvidia-modeset
+# ---------------------------------------------------------------------------
+
+# The whole modeset command set reaches the kernel through one request number.
+# nvkms-ioctl.h:47 defines NVKMS_IOCTL_IOWR as _IOWR(NVKMS_IOCTL_MAGIC,
+# NVKMS_IOCTL_CMD, struct NvKmsIoctlParams), and nvkms.c reads the real command
+# from NvKmsIoctlParams.cmd after copy_from_user. NV_ESC_RM_CONTROL has the
+# same shape, so the emission below mirrors emit_control: one variant per leaf,
+# each carrying a per-variant copy of the envelope with cmd pinned.
+
+# The Linux _IOC field layout, from include/uapi/asm-generic/ioctl.h: the
+# command number in bits 0 to 7, the magic in 8 to 15, the argument size in 16
+# to 29 and the direction in 30 to 31, with _IOC_WRITE 1 and _IOC_READ 2, so
+# _IOWR sets both. surface/ioctl-inventory.json records the same widths for
+# the RM escapes under `encoding`; they are repeated here because the modeset
+# node has no inventory row carrying a request number.
+IOC_TYPE_SHIFT = 8
+IOC_SIZE_SHIFT = 16
+IOC_SIZE_BITS = 14
+IOC_SIZE_MAX = (1 << IOC_SIZE_BITS) - 1
+IOC_DIRECTION_SHIFT = 30
+IOC_DIRECTION_READ_WRITE = 3
+
+NVKMS_NODE = "/dev/nvidia-modeset"
+NVKMS_FD_RESOURCE = "fd_nvidia_modeset"
+NVKMS_ENVELOPE_STRUCT = "NvKmsIoctlParams"
+NVKMS_MAGIC_MACRO = "NVKMS_IOCTL_MAGIC"
+NVKMS_CMD_MACRO = "NVKMS_IOCTL_CMD"
+NVKMS_VARIANT_PREFIX = "NVKMS_IOCTL_"
+NVKMS_STRUCT_PREFIX = "nvkms_params_"
+
+# The ten flat handle typedefs of nvkms-api-types.h:55-64, each a plain NvU32
+# with no class hierarchy behind it. Typing a member by its C type rather than
+# by its field name works here and not for RM, because every one of these is a
+# distinct typedef the header applies consistently, where RM spells every
+# handle NvHandle and the type carries no information.
+#
+# Each parameter struct is pointed at inout, so pkg/compiler/check.go:891
+# counts one member as both a constructor and an input for its resource, which
+# is what a reply field carrying a handle and a request field consuming one
+# actually are.
+NVKMS_HANDLE_TYPEDEFS = (
+    "NvKmsDeviceHandle",
+    "NvKmsDispHandle",
+    "NvKmsConnectorHandle",
+    "NvKmsSurfaceHandle",
+    "NvKmsFrameLockHandle",
+    "NvKmsDeferredRequestFifoHandle",
+    "NvKmsSwapGroupHandle",
+    "NvKmsVblankSyncObjectHandle",
+    "NvKmsVblankSemControlHandle",
+    "NvKmsVblankIntrCallbackHandle",
+)
+
+NVKMS_HANDLE_WIDTH = 4
+
+
+def nvkms_resource(typedef):
+    """-> the syzlang resource name for one NvKms<Thing>Handle typedef."""
+    stem = typedef[len("NvKms"):-len("Handle")]
+    return "nvkms_" + re.sub(r"(?<!^)(?=[A-Z])", "_", stem).lower()
+
+
+NVKMS_HANDLE_RESOURCES = {t: nvkms_resource(t) for t in NVKMS_HANDLE_TYPEDEFS}
 # kernel-open/common/inc/nv.h:76. nv.c:2513 rejects a larger inner argument
 # before it validates the inner command.
 #
@@ -234,7 +358,8 @@ class LayoutError(Exception):
 
 
 Member = collections.namedtuple(
-    "Member", "type name dims align inline_kind inline_members")
+    "Member", "type name dims align inline_kind inline_members bits",
+    defaults=(None,))
 
 Field = collections.namedtuple("Field", "name offset size syz")
 
@@ -262,6 +387,17 @@ ENUM_RE = re.compile(r"\benum\b(?:\s+(\w+))?\s*\{")
 DECLARE_ALIGNED_RE = re.compile(r"^NV_DECLARE_ALIGNED\s*\((.*),\s*(\d+)\s*\)$",
                                 re.S)
 DIM_RE = re.compile(r"\[([^\]]*)\]")
+# A named single-bit bitfield member: `NvBool supportsWindowMode :1`. The
+# width is fixed at 1 because that is the only width the layout rule in
+# TypeIndex.layout derives, and it is the only width any header on the
+# modelled ioctl paths uses. A wider field, an unnamed one and a zero-width
+# one all fall through to the LayoutError below.
+BITFIELD_RE = re.compile(
+    r"^(?P<type>[A-Za-z_][\w \t]*?)[ \t]+(?P<name>\w+)[ \t]*:[ \t]*1$")
+# `typedef void (*NAME)(args);`. The alias pattern beside it reads a word-only
+# underlying type and cannot spell this one.
+FUNCTION_POINTER_TYPEDEF_RE = re.compile(
+    r"\btypedef\s+[A-Za-z_][\w\s*]*?\(\s*\*\s*(?P<name>\w+)\s*\)\s*\(")
 # A hex literal contains letters, so an identifier pattern without the
 # left-hand guard matches "x0" inside "0x0" and a macro expression that is
 # already a plain number gets reported as unresolvable.
@@ -355,9 +491,13 @@ def parse_dims(text):
 def parse_member_statement(stmt):
     """One struct member statement as a list of Member records.
 
-    Raises LayoutError for a construct whose layout cannot be derived, which
-    at present means a bitfield: bitfield packing is compiler-defined and a
-    guessed offset produces a description that reaches the wrong field.
+    A named single-bit bitfield is read as a Member carrying `bits`. Every
+    other bitfield form raises LayoutError, because its packing is
+    compiler-defined and a guessed offset produces a description that reaches
+    the wrong field. One bit of a byte-wide type packs the same way under
+    every arm of the x86-64 gcc rules, and NvKmsLayerCapabilities in
+    src/nvidia-modeset/interface/nvkms-api-types.h:499 is the only bitfield
+    on any modelled ioctl path.
     """
     stmt = " ".join(stmt.split())
     m = DECLARE_ALIGNED_RE.match(stmt)
@@ -372,9 +512,33 @@ def parse_member_statement(stmt):
             stmt = " ".join(pattern.sub(" ", stmt).split())
     stmt = " ".join(ATTRIBUTE_RE.sub(" ", stmt).split())
     if ":" in stmt and "::" not in stmt:
-        raise LayoutError("bitfield member %r" % stmt)
-    if stmt.startswith(("typedef", "static", "enum ")):
+        bf = BITFIELD_RE.match(stmt)
+        if not bf:
+            raise LayoutError("bitfield member %r" % stmt)
+        return [Member(" ".join(bf.group("type").split()), bf.group("name"),
+                       [], forced_align, None, None, 1)]
+    if stmt.startswith(("typedef", "static")):
         raise LayoutError("unsupported member declaration %r" % stmt)
+
+    if stmt.startswith("enum "):
+        # A member declared by enumeration tag. Every RM header reaches an
+        # enumeration through a typedef, so this form appears only under
+        # src/nvidia-modeset/interface, where 30 struct definitions on the
+        # ioctl path use it and NvKmsAllocDeviceReply is the first.
+        # TypeIndex.size_align gives a tagged enumeration the size and
+        # alignment of unsigned int, which is the x86-64 gcc arm, and reports
+        # a tag it never scanned rather than assuming one.
+        open_index = stmt.find("{")
+        if open_index != -1:
+            # A definition written where the member is declared, as
+            # NvKmsValidateModeIndexReply.source is. _scan_enums recorded its
+            # enumerators from the same file text, so only the tag is needed
+            # here; a definition carrying no declarator declares no member.
+            end = match_brace(stmt, open_index)
+            declarators = stmt[end:].strip()
+            if not declarators:
+                return []
+            stmt = " ".join((stmt[:open_index] + " " + declarators).split())
 
     agg = AGGREGATE_RE.search(stmt)
     if agg and agg.start() == 0:
@@ -574,6 +738,17 @@ class TypeIndex:
             if name not in self.aliases:
                 self.aliases[name] = under
                 self.alias_source[name] = rel_path
+        # A function-pointer typedef, which the pattern above cannot spell.
+        # NVRgInterruptCallbackProc at kernel-open/common/inc/nvkms-api-types
+        # .h:806 is one, and NvKmsRegisterVblankIntrCallbackRequest declares a
+        # member through it. Registered as a pointer, which is eight bytes on
+        # the only architecture this campaign builds for; what it points at is
+        # never dereferenced by a description.
+        for m in FUNCTION_POINTER_TYPEDEF_RE.finditer(text):
+            name = m.group("name")
+            if name not in self.aliases:
+                self.aliases[name] = "void *"
+                self.alias_source[name] = rel_path
 
     # -- constant evaluation ------------------------------------------------
 
@@ -649,7 +824,24 @@ class TypeIndex:
         type_name = " ".join(type_name.split())
         if type_name.endswith("*"):
             return (8, 8, "int64")
+        resource = NVKMS_HANDLE_RESOURCES.get(type_name)
+        if resource:
+            # The typedef's own width is read back rather than assumed, so a
+            # driver widening a handle stops the run here instead of emitting
+            # a resource that silently shortens its containing struct.
+            underlying = self.resolve_alias(type_name)
+            width = BASE_TYPES.get(underlying, (None, None))[0]
+            if width != NVKMS_HANDLE_WIDTH:
+                raise LayoutError(
+                    "%s resolves to %r, which is not the %d-byte type the "
+                    "modeset handle resources are declared over"
+                    % (type_name, underlying, NVKMS_HANDLE_WIDTH))
+            return (NVKMS_HANDLE_WIDTH, NVKMS_HANDLE_WIDTH, resource)
         canonical = self.resolve_alias(type_name)
+        if canonical.endswith("*"):
+            # A pointer reached through a typedef, which the spelling check
+            # above sees only when the member declares the star itself.
+            return (8, 8, "int64")
         if canonical in BASE_TYPES:
             size, align = BASE_TYPES[canonical]
             return (size, align, SYZ_INT.get(size, "int8"))
@@ -697,6 +889,14 @@ class TypeIndex:
 
         Raises LayoutError when any member's type or array bound could not be
         resolved. Nothing is guessed to complete a layout.
+
+        A run of consecutive single-bit members of one base type shares
+        storage units of that type's width, which is how gcc allocates them on
+        x86-64. The member opening a unit carries the unit's byte size and the
+        rest carry zero, so the offsets below advance once per unit. syzkaller
+        records the same total against the last member of a group instead
+        (pkg/compiler/gen.go:394); the two placements sum alike and only the
+        sum reaches an emitted description.
         """
         if depth > MAX_STRUCT_DEPTH:
             raise LayoutError("struct nesting deeper than %d at %r"
@@ -707,7 +907,39 @@ class TypeIndex:
         kind, members = self.structs[name]
         fields, offset, max_align = [], 0, 1
         union_size = 0
+        # Bits already taken from the open storage unit, and its byte offset.
+        # Reset by any member that is not a bitfield.
+        run_bits, run_offset, run_unit = 0, 0, 0
         for index, member in enumerate(members):
+            if member.bits and kind == "union":
+                raise LayoutError(
+                    "bitfield %s.%s sits in a union, whose storage unit this "
+                    "rule does not derive" % (name, member.name))
+            if member.bits:
+                size, align, syz = self.member_layout(member, name, index,
+                                                      depth)
+                if member.bits > size * 8:
+                    raise LayoutError(
+                        "bitfield %s.%s is %d bits wide in a %d-byte type"
+                        % (name, member.name, member.bits, size))
+                max_align = max(max_align, align)
+                if run_bits and run_bits + member.bits <= run_unit * 8:
+                    # Shares the unit the previous member opened.
+                    fields.append(Field(member.name, run_offset, 0,
+                                        "%s:%d" % (syz, member.bits)))
+                    run_bits += member.bits
+                    continue
+                padded = (offset + align - 1) // align * align
+                if padded != offset:
+                    fields.append(Field("pad%d" % index, offset,
+                                        padded - offset, None))
+                    offset = padded
+                fields.append(Field(member.name, offset, size,
+                                    "%s:%d" % (syz, member.bits)))
+                run_bits, run_offset, run_unit = member.bits, offset, size
+                offset += size
+                continue
+            run_bits, run_offset, run_unit = 0, 0, 0
             size, align, syz = self.member_layout(member, name, index, depth)
             max_align = max(max_align, align)
             if kind == "union":
@@ -1066,20 +1298,44 @@ def build_openat_block():
         "resource fd_nvidia[fd_nv]",
         "resource fd_nvidia_uvm[fd]",
         "resource fd_nvidia_uvm_tools[fd]",
+        "resource %s[fd]" % NVKMS_FD_RESOURCE,
+        "resource %s[%s]" % (UVM_VASPACE_RESOURCE, UVM_FD_RESOURCE),
         "",
     ]
     opens = [
         ("openat$nvidiactl", "/dev/nvidiactl", "fd_nvidiactl"),
         ("openat$nvidia", "/dev/nvidia#", "fd_nvidia"),
-        ("openat$nvidia_uvm", "/dev/nvidia-uvm", "fd_nvidia_uvm"),
+        ("openat$nvidia_uvm", "/dev/nvidia-uvm", UVM_FD_RESOURCE),
         ("openat$nvidia_uvm_tools", "/dev/nvidia-uvm-tools",
-         "fd_nvidia_uvm_tools"),
+         UVM_TOOLS_FD_RESOURCE),
+        ("openat$nvidia_modeset", NVKMS_NODE, NVKMS_FD_RESOURCE),
     ]
     for name, path, res in opens:
         lines.append(
             '%s(fd const[%s], file ptr[in, string["%s"]], '
             "flags const[0x2], mode const[0]) %s"
             % (name, AT_FDCWD, path, res))
+    lines += [
+        "",
+        "# The initialised UVM descriptor. 36 of the 39 uvm commands and",
+        "# uvm_mmap refuse a descriptor that has not been through",
+        "# uvm_api_initialize (kernel-open/nvidia-uvm/uvm.c:927), which sets",
+        "# UVM_FD_VA_SPACE at uvm.c:959. The producer is a pseudo-syscall and",
+        "# not ioctl$UVM_INITIALIZE: __UVM_ROUTE_CMD_STACK at",
+        "# kernel-open/nvidia-uvm/uvm_api.h:45 returns 0 on success and on",
+        "# failure alike, carrying the real status in params.rmStatus, and",
+        "# syzkaller takes a resource's value from the raw syscall return.",
+        "# A resource produced by that ioctl would hold 0 on every execution",
+        "# and every consumer would receive file descriptor 0.",
+        "#",
+        "# The implementation opens /dev/nvidia-uvm, issues UVM_INITIALIZE,",
+        "# and returns the descriptor. It lives in a patch this repository",
+        "# carries against the pinned syzkaller checkout; the declaration",
+        "# alone compiles, because pkg/compiler/consts.go:250 assigns no",
+        "# syscall number to a call whose name starts with syz_.",
+        "%s(flags flags[uvm_init_flags]) %s"
+        % (UVM_INIT_CALL, UVM_VASPACE_RESOURCE),
+    ]
     return "\n".join(lines)
 
 
@@ -1333,8 +1589,47 @@ HANDLE_FIELDS = {
 }
 
 
+# File-descriptor-carrying fields, by the struct that declares them. A bare
+# integer here receives a mutated value and never a descriptor the program
+# holds; typed as a resource it receives one the program opened.
+# Two structs carry a descriptor of the same kind. Both handlers fget the
+# field, check it is a UVM descriptor, and then require UVM_FD_VA_SPACE, so
+# both take the initialised subtype:
+#
+#   UVM_TOOLS_INIT_EVENT_TRACKER   uvm_tools.c:2008 fget,
+#                                  uvm_tools.c:2023 UVM_FD_VA_SPACE
+#   UVM_MM_INITIALIZE              uvm.c:67 fget,
+#                                  uvm.c:73 UVM_FD_VA_SPACE
+#
+# UVM_MM_INITIALIZE is the clearest case: it is marked
+# requires_initialized_fd false because it runs on a second, fresh descriptor,
+# and uvm_fd_type_init at uvm_fd_type.c:92 returns NV_ERR_IN_USE unless that
+# descriptor is still UVM_FD_UNINITIALIZED. Its own fd must therefore be
+# uninitialised while its uvmFd field must be initialised, two descriptors in
+# opposite states in one call, which is what the two resources express.
+#
+# The subtype is satisfiable in both because syz_nvidia_uvm_init takes no
+# input descriptor, so syzkaller can always insert it. Both resources resolve
+# to 32 bits where int32 stood, so neither struct's size moves.
+#
+# Stated limit: resource fd_nvidia_uvm_vaspace[fd_nvidia_uvm] lets a producer
+# of the subtype satisfy a consumer of the base, so syzkaller may hand the
+# initialised descriptor to ioctl$UVM_MM_INITIALIZE's own fd argument, where
+# uvm_fd_type_init stops it with NV_ERR_IN_USE. syzlang has no way to say a
+# consumer must not take a subtype, so the grammar cannot exclude that shape.
+# openat$nvidia_uvm remains a producer of the base type, so generation
+# produces both shapes and the success path stays reachable.
+FD_FIELDS = {
+    "UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS": {"uvmFd": UVM_VASPACE_RESOURCE},
+    "UVM_MM_INITIALIZE_PARAMS": {"uvmFd": UVM_VASPACE_RESOURCE},
+}
+
+
 def handle_overrides(struct):
-    return dict(HANDLE_FIELDS.get(struct, {}))
+    """-> the per-field type overrides one parameter struct takes."""
+    overrides = dict(HANDLE_FIELDS.get(struct, {}))
+    overrides.update(FD_FIELDS.get(struct, {}))
+    return overrides
 
 
 def base_param_type(index, name):
@@ -1747,6 +2042,151 @@ def emit_control(emitter, inventory, control, number_to_class, graph,
     return "\n".join(blocks), records, dict(skipped), len(reachable)
 
 
+def nvkms_request(index, envelope_size):
+    """-> the one kernel request number every modeset command carries.
+
+    Derived from NVKMS_IOCTL_MAGIC, NVKMS_IOCTL_CMD and the measured size of
+    NvKmsIoctlParams, so a driver that renumbers the node or widens the
+    envelope moves this number instead of leaving a stale literal behind.
+    """
+    magic = index.defines.get(NVKMS_MAGIC_MACRO, "").strip()
+    m = re.fullmatch(r"'(.)'", magic)
+    if not m:
+        raise SystemExit(
+            "%s reads %r in the headers, which is not a single character "
+            "constant, so the modeset request number cannot be derived. "
+            "Check --src points at an open-gpu-kernel-modules checkout "
+            "carrying src/nvidia-modeset/interface/nvkms-ioctl.h."
+            % (NVKMS_MAGIC_MACRO, magic or "(absent)"))
+    nr = index.const(index.defines.get(NVKMS_CMD_MACRO, ""))
+    if nr is None:
+        raise SystemExit(
+            "%s did not evaluate to an integer, so the modeset request "
+            "number cannot be derived." % NVKMS_CMD_MACRO)
+    if envelope_size > IOC_SIZE_MAX:
+        raise SystemExit(
+            "%s measures %d bytes, which does not fit the %d-bit _IOC_SIZE "
+            "field, so the derived request number would be truncated."
+            % (NVKMS_ENVELOPE_STRUCT, envelope_size, IOC_SIZE_BITS))
+    number = ((IOC_DIRECTION_READ_WRITE << IOC_DIRECTION_SHIFT)
+              | (envelope_size << IOC_SIZE_SHIFT)
+              | (ord(m.group(1)) << IOC_TYPE_SHIFT)
+              | nr)
+    return "0x%08x" % number, ord(m.group(1)), nr
+
+
+def emit_modeset(emitter, nvkms):
+    """One ioctl$NVKMS_* variant per dispatched modeset command.
+
+    nvkms is the record set of surface/nvkms-command-inventory.json. Its
+    param_struct field carries the struct the dispatch macro named, so the
+    naming convention is read and never rebuilt from the proc symbol here.
+    """
+    index = emitter.index
+    try:
+        envelope = index.layout(NVKMS_ENVELOPE_STRUCT)
+    except LayoutError as exc:
+        raise SystemExit(
+            "the %s layout could not be derived, so no modeset description "
+            "can be emitted: %s" % (NVKMS_ENVELOPE_STRUCT, exc))
+    request, magic, nr = nvkms_request(index, envelope.size)
+    logger.info("modeset request number %s from _IOWR(0x%02x, %d, %s) over a "
+                "%d-byte envelope", request, magic, nr,
+                NVKMS_ENVELOPE_STRUCT, envelope.size)
+
+    dispatched = [c for c in nvkms["commands"] if c["dispatched"]]
+    expected = nvkms["summary"]["dispatched"]
+    if len(dispatched) != expected:
+        raise SystemExit(
+            "the modeset inventory carries %d dispatched record(s) against a "
+            "summary claiming %d. The artefact disagrees with itself and the "
+            "denominator would be wrong either way; regenerate it with "
+            "tools/nvkms_inventory.py." % (len(dispatched), expected))
+
+    blocks, records = [], []
+    skipped = collections.Counter()
+    for command in dispatched:
+        name = command["command"]
+        struct = command["param_struct"]
+        emitted = emitter.ensure(struct)
+        if emitted is None:
+            skipped["parameter struct has no layout and no measured "
+                    "size"] += 1
+            records.append({"command": name, "ordinal": command["ordinal"],
+                            "emitted": False,
+                            "reason": "no layout and no measured size for %s"
+                                      % struct})
+            continue
+        try:
+            params_size = index.layout(emitted).size
+        except LayoutError:
+            params_size = emitter.measured(emitted)
+        if params_size is None:
+            skipped["parameter size unknown"] += 1
+            continue
+        variant = NVKMS_STRUCT_PREFIX + name[len(NVKMS_VARIANT_PREFIX):].lower()
+        overrides = {
+            "cmd": "const[%d, int32]" % command["ordinal"],
+            "size": "const[%d, int32]" % params_size,
+            "address": "ptr64[inout, %s]" % emitted,
+        }
+        variant_struct(emitter, NVKMS_ENVELOPE_STRUCT, variant, overrides)
+        what = "the modeset variant for %s" % name
+        # cmd selects the leaf out of 64 and size is validated against the
+        # command's own parameter size before the handler runs, so a free
+        # field on either reaches no handler at all.
+        require_pinned(emitter, variant, "cmd", what)
+        require_pinned(emitter, variant, "size", what)
+        require_pointer(emitter, variant, "address", what)
+        blocks.append(
+            "ioctl$%s(fd %s, cmd const[%s], arg ptr[inout, %s])"
+            % (name, NVKMS_FD_RESOURCE, request, variant))
+        records.append({"command": name, "ordinal": command["ordinal"],
+                        "proc": command["proc"], "param_struct": struct,
+                        "param_size": params_size,
+                        "custom_user": command["custom_user"],
+                        "emitted": True})
+    for reason, count in sorted(skipped.items()):
+        logger.info("modeset commands skipped, %s: %d", reason, count)
+    logger.info("%d modeset variants emitted of %d dispatched",
+                len(blocks), len(dispatched))
+    return "\n".join(blocks), records, dict(skipped), request
+
+
+def emit_nvkms_resources(emitter):
+    """The ten flat modeset handle resources, and the members that carry them.
+
+    A resource no emitted struct names would fail pkg/compiler's unused check,
+    so the members are counted here and a resource with none stops the run:
+    silently dropping it would leave the description set claiming a handle
+    scheme it does not model.
+    """
+    used = collections.Counter()
+    for text in emitter.rendered.values():
+        for resource in set(re.findall(r"\bnvkms_\w+", text)):
+            if resource in NVKMS_HANDLE_RESOURCES.values():
+                used[resource] += 1
+    missing = sorted(set(NVKMS_HANDLE_RESOURCES.values()) - set(used))
+    if missing:
+        raise SystemExit(
+            "%d modeset handle resource(s) are named by no emitted struct "
+            "(%s). syzkaller's pkg/compiler refuses a declared resource "
+            "nothing uses, so the description set would not compile. Either "
+            "the typedef left nvkms-api-types.h or the parameter struct that "
+            "carried it went opaque."
+            % (len(missing), ", ".join(missing)))
+    # The annotation sits on its own line: syzlang takes no trailing comment
+    # after a declaration.
+    lines = []
+    for typedef in NVKMS_HANDLE_TYPEDEFS:
+        resource = NVKMS_HANDLE_RESOURCES[typedef]
+        lines.append("# %s, carried by %d emitted member(s)"
+                     % (typedef, used[resource]))
+        lines.append("resource %s[int%d]"
+                     % (resource, NVKMS_HANDLE_WIDTH * 8))
+    return "\n".join(lines)
+
+
 def graph_depths(graph):
     """Shallowest object-graph depth per NVOC internal class.
 
@@ -1822,6 +2262,268 @@ def rank_commands(methods, graph, ranking, order):
     return sorted(methods, key=key)
 
 
+# ---------------------------------------------------------------------------
+# The UVM file descriptor state machine
+# ---------------------------------------------------------------------------
+
+
+
+class CensusError(Exception):
+    """A committed census this emitter derives typing from does not read what
+    the emitter was written against."""
+
+
+# The split surface/ioctl-inventory.json records for the two UVM nodes, from
+# the UVM_ROUTE_CMD_*_INIT_CHECK macro name (tools/ioctl_inventory.py:676).
+# Read as (requires an initialised descriptor, does not). The uvm figure is
+# 34 UVM_ROUTE_CMD_STACK_INIT_CHECK plus 2 UVM_ROUTE_CMD_ALLOC_INIT_CHECK
+# against 2 UVM_ROUTE_CMD_STACK_NO_INIT_CHECK, with UVM_DEINITIALIZE routed
+# by a bare case label at uvm.c:1001 making the third free command.
+#
+# The zero on the tools node is what makes UVM_TOOLS_INIT_EVENT_TRACKER's
+# uvmFd field the only route the constraint takes into that family. A non-zero
+# count means the driver moved and the uvm_tools typing has to be revisited,
+# so it is checked and not assumed.
+UVM_INIT_CENSUS = {"uvm": (36, 3), "uvm_tools": (0, 7)}
+
+
+def uvm_node_group(node):
+    """-> "uvm", "uvm_tools", "uvm_test", or None for a non-UVM node."""
+    if node.get("scheme") != "bare_command_number":
+        return None
+    paths = node.get("paths") or []
+    if "/dev/nvidia-uvm-tools" in paths:
+        return "uvm_tools"
+    if "/dev/nvidia-uvm" not in paths:
+        return None
+    return "uvm_test" if "uvm_test.c" in (node.get("entry") or "") else "uvm"
+
+
+def uvm_fd_census(inventory):
+    """-> {UVM command name: whether it requires an initialised descriptor}.
+
+    Covers the uvm and uvm_tools nodes. The test node is excluded: it is
+    compiled out unless the module is built for test, so its commands are not
+    in the denominator and are emitted only under --uvm-test.
+
+    The counts are checked against UVM_INIT_CENSUS before the mapping is
+    returned. Emitting the retyping from a census that moved would put the
+    wrong resource on a command with nothing to say so, and the compile gate
+    accepts both typings.
+    """
+    census, counts = {}, {}
+    for node in inventory.get("nodes", []):
+        group = uvm_node_group(node)
+        if group not in UVM_INIT_CENSUS:
+            continue
+        requiring = free = 0
+        for command in node.get("commands", []):
+            name = command.get("name")
+            needs = command.get("requires_initialized_fd")
+            if not isinstance(needs, bool):
+                raise CensusError(
+                    "%s carries no boolean requires_initialized_fd in the "
+                    "committed inventory, so whether it refuses an "
+                    "uninitialised descriptor cannot be read. "
+                    "tools/ioctl_inventory.py records the field from the "
+                    "UVM_ROUTE_CMD_* macro name; regenerate the inventory "
+                    "against the driver checkout." % name)
+            census[name] = needs
+            requiring += 1 if needs else 0
+            free += 0 if needs else 1
+        counts[group] = (requiring, free)
+    for group, expected in sorted(UVM_INIT_CENSUS.items()):
+        seen = counts.get(group)
+        if seen is None:
+            raise CensusError(
+                "the committed inventory carries no %s node, so the UVM "
+                "descriptor typing cannot be derived. Regenerate it with "
+                "tools/ioctl_inventory.py against the driver checkout."
+                % group)
+        if seen != expected:
+            raise CensusError(
+                "the %s node reads %d command(s) requiring an initialised "
+                "descriptor and %d not requiring one, against the %d and %d "
+                "this emitter was written against. The retyping of the UVM "
+                "family is derived from that split, so it is not emitted "
+                "from a census that moved. Either the driver release changed "
+                "which commands carry UVM_ROUTE_CMD_*_INIT_CHECK, in which "
+                "case UVM_INIT_CENSUS is the record to move, or the "
+                "inventory was regenerated from a partial checkout."
+                % (group, seen[0], seen[1], expected[0], expected[1]))
+    logger.info("UVM descriptor census confirmed: %s",
+                ", ".join("%s %d requiring, %d free" % (g, c[0], c[1])
+                          for g, c in sorted(counts.items())))
+    return census
+
+
+def uvm_fd_resource(group, command):
+    """-> the fd resource one UVM variant takes.
+
+    Driven by the artefact field and never by a name list: a hand-kept list of
+    36 names is the defect the committed census exists to avoid.
+    """
+    if group == "uvm_tools":
+        return UVM_TOOLS_FD_RESOURCE
+    return (UVM_VASPACE_RESOURCE if command.get("requires_initialized_fd")
+            else UVM_FD_RESOURCE)
+
+
+# ---------------------------------------------------------------------------
+# Entry points other than ioctl
+# ---------------------------------------------------------------------------
+
+# Linux UAPI values, fixed by the ABI, from asm-generic/mman-common.h and
+# asm-generic/poll.h. syzkaller's own sys/linux/sys.txt carries the same sets
+# under unprefixed names. These are prefixed because the compile gate stages
+# the description set without that corpus and the target build merges it with
+# it, and an unprefixed name would then be declared twice.
+NV_MMAP_PROT = (0x1, 0x2, 0x4)              # PROT_READ, PROT_WRITE, PROT_EXEC
+NV_MMAP_FLAGS = (0x1, 0x2, 0x10, 0x20)      # SHARED, PRIVATE, FIXED, ANON
+NV_POLL_EVENTS = (0x1, 0x2, 0x4, 0x8, 0x10, 0x20)
+
+# mmap's offset argument, where the handler leaves it free. Page-aligned
+# because a misaligned offset fails in do_mmap before the driver runs.
+NV_MMAP_OFFSET = "intptr[0:0xffffffff, 0x1000]"
+
+
+UVM_INIT_PARAMS_STRUCT = "UVM_INITIALIZE_PARAMS"
+
+
+def init_params_layout(emitter):
+    """-> the field layout syz_nvidia_uvm_init's executor half reads.
+
+    Recorded in generation.json so the offset the patch hardcodes is checked
+    against the layout derived from the header on this run, and not against a
+    number written once and never read again.
+    """
+    try:
+        layout = emitter.index.layout(UVM_INIT_PARAMS_STRUCT)
+    except LayoutError as exc:
+        raise SystemExit(
+            "the %s layout could not be derived, so the offset "
+            "%s reads rmStatus at cannot be recorded and the executor half "
+            "would be unchecked: %s"
+            % (UVM_INIT_PARAMS_STRUCT, UVM_INIT_CALL, exc))
+    return {
+        "struct": UVM_INIT_PARAMS_STRUCT,
+        "size": layout.size,
+        "fields": [{"name": f.name, "offset": f.offset, "size": f.size,
+                    "syzlang": f.syz}
+                   for f in layout.fields],
+    }
+
+
+def _flag_set(name, values):
+    return "%s = %s" % (name, ", ".join("0x%x" % v for v in values))
+
+
+def count_entry_point_structs(text):
+    """-> the struct blocks the entry-point text declares.
+
+    They carry no parameter struct and never pass through the struct emitter,
+    so generation.json records them separately and the two counts are summed
+    where the whole description set is compared against the manifest.
+    """
+    return len(re.findall(r"^\w+ \{$", text, re.M))
+
+
+def emit_entry_points():
+    """-> (the mmap and poll block, [record per emitted call]).
+
+    The five calls the driver's file_operations tables register on the four
+    device nodes the description set opens. surface/entry-points.json carries
+    the whole census, including the six tables no description opens.
+
+    An entry point is not a command: it carries no method id, no parameter
+    struct and no inventory row, so none of these calls enters the command
+    denominator. tools/surface_cov.py counts them on their own line.
+    """
+    lines = [
+        _flag_set("nv_mmap_prot", NV_MMAP_PROT),
+        _flag_set("nv_mmap_flags", NV_MMAP_FLAGS),
+        _flag_set("nv_poll_events", NV_POLL_EVENTS),
+        "",
+        "nv_pollfd_nvidiactl {",
+        "\tfd\tfd_nvidiactl",
+        "\tevents\tflags[nv_poll_events, int16]",
+        "\trevents\tconst[0, int16]",
+        "}",
+        "",
+        "nv_pollfd_nvidia {",
+        "\tfd\tfd_nvidia",
+        "\tevents\tflags[nv_poll_events, int16]",
+        "\trevents\tconst[0, int16]",
+        "}",
+        "",
+        "nv_pollfd_uvm_tools {",
+        "\tfd\tfd_nvidia_uvm_tools",
+        "\tevents\tflags[nv_poll_events, int16]",
+        "\trevents\tconst[0, int16]",
+        "}",
+        "",
+        "# nvidia_mmap at kernel-open/nvidia/nv-mmap.c:770 reaches",
+        "# nvidia_mmap_helper, which consumes a mapping context a prior ioctl",
+        "# established. That helper abandons the mapping for any non-zero",
+        "# vm_pgoff at nv-mmap.c:554, so zero is the only offset that reaches",
+        "# the body and the offset is pinned to it.",
+    ]
+    records = []
+    for name, resource in (("mmap$nvidiactl", "fd_nvidiactl"),
+                           ("mmap$nvidia", "fd_nvidia")):
+        lines.append(
+            "%s(addr vma, len len[addr], prot flags[nv_mmap_prot], "
+            "flags flags[nv_mmap_flags], fd %s, offset const[0])"
+            % (name, resource))
+        records.append({"call": name, "operation": "mmap",
+                        "resource": resource, "offset_pinned": True,
+                        "offset_value": 0,
+                        "offset_authority": "kernel-open/nvidia/nv-mmap.c:554"})
+    lines += [
+        "",
+        "# uvm_mmap at kernel-open/nvidia-uvm/uvm.c:759 returns -EBADFD at",
+        "# uvm.c:779 until a prior ioctl has made the descriptor a VA space,",
+        "# which is why this one takes the initialised subtype. Its offset is",
+        "# left free: uvm.c:793 requires vm_start == (vm_pgoff << PAGE_SHIFT),",
+        "# so the only legal offset is the mapping address the kernel selects",
+        "# at run time and no fixed value satisfies it. uvm.c:801 further",
+        "# requires VM_SHARED, VM_READ and VM_WRITE together, which one member",
+        "# of nv_mmap_flags and two of nv_mmap_prot give.",
+        "mmap$nvidia_uvm(addr vma, len len[addr], prot flags[nv_mmap_prot], "
+        "flags flags[nv_mmap_flags], fd %s, offset %s)"
+        % (UVM_VASPACE_RESOURCE, NV_MMAP_OFFSET),
+        "",
+        "# nvidia_poll at kernel-open/nvidia/nv.c:2280 and uvm_tools_poll at",
+        "# kernel-open/nvidia-uvm/uvm_tools.c:692. nvidia_fops serves both",
+        "# /dev/nvidiactl and /dev/nvidiaN, so both carry a poll call:",
+        "# nv.c:2292 branches on nv_is_control_device and skips the",
+        "# open-complete check that returns POLLERR for the actual device, so",
+        "# the control node is a reachable path of its own. uvm_fops",
+        "# registers no poll and uvm_tools_fops registers no mmap, so neither",
+        "# carries the other call.",
+        "poll$nvidiactl(fds ptr[in, array[nv_pollfd_nvidiactl]], "
+        "nfds len[fds], timeout int32)",
+        "poll$nvidia(fds ptr[in, array[nv_pollfd_nvidia]], nfds len[fds], "
+        "timeout int32)",
+        "poll$nvidia_uvm_tools(fds ptr[in, array[nv_pollfd_uvm_tools]], "
+        "nfds len[fds], timeout int32)",
+    ]
+    records.append({"call": "mmap$nvidia_uvm", "operation": "mmap",
+                    "resource": UVM_VASPACE_RESOURCE,
+                    "offset_pinned": False, "offset_value": None,
+                    "offset_authority": "kernel-open/nvidia-uvm/uvm.c:793"})
+    records.append({"call": "poll$nvidiactl", "operation": "poll",
+                    "resource": "fd_nvidiactl", "offset_pinned": None,
+                    "offset_value": None, "offset_authority": None})
+    records.append({"call": "poll$nvidia", "operation": "poll",
+                    "resource": "fd_nvidia", "offset_pinned": None,
+                    "offset_value": None, "offset_authority": None})
+    records.append({"call": "poll$nvidia_uvm_tools", "operation": "poll",
+                    "resource": UVM_TOOLS_FD_RESOURCE, "offset_pinned": None,
+                    "offset_value": None, "offset_authority": None})
+    return "\n".join(lines), records
+
+
 def emit_uvm(emitter, inventory, include_test):
     """UVM and UVM-tools descriptions.
 
@@ -1835,11 +2537,10 @@ def emit_uvm(emitter, inventory, include_test):
         if node["scheme"] != "bare_command_number":
             continue
         paths = node["paths"]
-        if "/dev/nvidia-uvm-tools" in paths:
-            fd_res = "fd_nvidia_uvm_tools"
+        node_group = uvm_node_group(node)
+        if node_group == "uvm_tools":
             group = "uvm_tools"
-        elif "/dev/nvidia-uvm" in paths:
-            fd_res = "fd_nvidia_uvm"
+        elif node_group in ("uvm", "uvm_test"):
             group = "uvm"
         else:
             logger.warning("UVM node with unexpected paths %s, skipped", paths)
@@ -1862,9 +2563,14 @@ def emit_uvm(emitter, inventory, include_test):
                 continue
             request = command["requests"][0]
             struct = command["param_struct"]
-            arg = "const[0, intptr]"
+            # The resource each variant takes comes from the artefact field
+            # and never from a name list. The uvm_test node is typed the same
+            # way: uvm_test_ioctl is reached by falling through uvm_ioctl, so
+            # its commands carry the same descriptor requirement.
+            fd_res = uvm_fd_resource(node_group, command)
+            arg = "const[0]"
             if struct:
-                emitted = emitter.ensure(struct)
+                emitted = emitter.ensure(struct, handle_overrides(struct))
                 if emitted is not None:
                     arg = "ptr[inout, %s]" % emitted
                 elif command["param_size"]:
@@ -1909,14 +2615,27 @@ def emit_flags_sets(index):
             "NVOS64_FLAGS_* were not found in the headers, so the allocation "
             "flags set cannot be emitted from source. Check --src points at "
             "an open-gpu-kernel-modules checkout.")
-    return "nvos64_alloc_flags = %s" % ", ".join("0x%x" % v for v in values)
+    sets = ["nvos64_alloc_flags = %s" % ", ".join("0x%x" % v for v in values)]
+    # UVM_INIT_FLAGS_* from kernel-open/nvidia-uvm/uvm_types.h, the one
+    # argument syz_nvidia_uvm_init passes through to UVM_INITIALIZE_PARAMS.
+    # DISABLE_HMM and DISABLE_PAGEABLE_MIGRATIONS are both 0x1, so the set
+    # holds three values and not four.
+    init = sorted({index.const(index.defines.get(name, ""))
+                   for name in UVM_INIT_FLAG_MACROS} - {None})
+    if not init:
+        raise SystemExit(
+            "UVM_INIT_FLAGS_* were not found in the headers, so the UVM "
+            "initialisation flags set cannot be emitted from source. Check "
+            "--src points at an open-gpu-kernel-modules checkout.")
+    sets.append("uvm_init_flags = %s" % ", ".join("0x%x" % v for v in init))
+    return "\n".join(sets)
 
 
 # ---------------------------------------------------------------------------
 # The _IOWR header
 # ---------------------------------------------------------------------------
 
-def emit_header(inventory):
+def emit_header(inventory, nvkms_request_number=None):
     """The header syz-extract consumes, defining every emitted number."""
     encoding = inventory["encoding"]
     magic = encoding["ioctl_magic"]
@@ -1970,6 +2689,17 @@ def emit_header(inventory):
                 lines.append("#define %-40s %s"
                              % (command["name"], request))
         lines.append("")
+    if nvkms_request_number is not None:
+        lines += [
+            "/* %s */" % NVKMS_NODE,
+            "/* One number for the whole command set. The leaf lives in",
+            " * NvKmsIoctlParams.cmd and is invisible to _IOC, so a trace",
+            " * carrying this number names the family and not the command.",
+            " */",
+            "#define %-40s %s" % ("NVKMS_IOCTL_CMD_REQUEST",
+                                  nvkms_request_number),
+            "",
+        ]
     lines.append("#endif /* GSPWN_NVIDIA_IOCTL_H */")
     return "\n".join(lines)
 
@@ -2149,11 +2879,14 @@ def load_all(args):
                  args.control)
     graph = load_json(args.graph, "the object graph")
     require_keys(graph, ["records"], "the object graph", args.graph)
+    nvkms = load_json(args.nvkms, "the modeset command inventory")
+    require_keys(nvkms, ["commands", "summary", "source"],
+                 "the modeset command inventory", args.nvkms)
     if not inventory["nodes"]:
         raise SystemExit(
             "the escape inventory names no device nodes at %s; regenerate it"
             % args.inventory)
-    return inventory, control, graph
+    return inventory, control, graph, nvkms
 
 
 def rel(path):
@@ -2306,7 +3039,7 @@ def merged_sizes(inventory, extra_paths):
 
 def build(args):
     """Everything both `emit` and `verify` need. Returns a result dict."""
-    inventory, control, graph = load_all(args)
+    inventory, control, graph, nvkms = load_all(args)
     index = scan_headers(args.src)
     ctrl_sizes_paths = resolve_ctrl_sizes(args)
     sizes = merged_sizes(inventory, ctrl_sizes_paths)
@@ -2325,6 +3058,11 @@ def build(args):
                        "(%s%s)", len(missing), ", ".join(sorted(missing)[:6]),
                        ", ..." if len(missing) > 6 else "")
 
+    # Confirmed before any UVM variant is typed from it: the retyping is
+    # derived from this split and the compile gate accepts both typings, so a
+    # census that moved has to stop the run here.
+    uvm_fd_census(inventory)
+
     emitter = Emitter(index, sizes)
     resources = emit_resources(graph, class_map, not args.all_classes)
     flags = emit_flags_sets(index)
@@ -2337,8 +3075,20 @@ def build(args):
         emitter, inventory, class_map, graph, True, True)
     xfer_text, xfer_records = emit_xfer(emitter, inventory)
     uvm_text, uvm_records = emit_uvm(emitter, inventory, args.uvm_test)
+    modeset_text, modeset_records, modeset_skipped, modeset_request = \
+        emit_modeset(emitter, nvkms)
+    # After emission, so the count of members carrying each resource is read
+    # off the structs the run actually rendered.
+    modeset_resources = emit_nvkms_resources(emitter)
+    entry_text, entry_records = emit_entry_points()
 
     return {
+        "nvkms": nvkms,
+        "modeset_text": modeset_text, "modeset_records": modeset_records,
+        "modeset_skipped": modeset_skipped,
+        "modeset_request": modeset_request,
+        "modeset_resources": modeset_resources,
+        "entry_text": entry_text, "entry_records": entry_records,
         "inventory": inventory, "control": control, "graph": graph,
         "index": index, "emitter": emitter, "sizes": sizes,
         "ctrl_sizes_paths": ctrl_sizes_paths,
@@ -2377,8 +3127,10 @@ def cmd_emit(args):
 
     core = "\n\n".join([
         banner,
-        "# Device nodes. nvidia-drm, nvidia-modeset and /dev/dri/* are out of\n"
-        "# scope in the threat model, so nothing here opens them.\n"
+        "# Device nodes. nvidia-drm and /dev/dri/* are out of scope in the\n"
+        "# threat model, so nothing here opens them. /dev/nvidia-modeset is\n"
+        "# in scope: libnvidia-container creates it by default\n"
+        "# (src/nvc.c:317) and withholds it only under OPT_NO_MODESET.\n"
         + build_openat_block(),
         "# One resource per RM object class. Every handle derives from\n"
         "# nv_handle, so a field typed nv_handle accepts any of them and a\n"
@@ -2403,6 +3155,17 @@ def cmd_emit(args):
         "# set is chip-gated carries one call taking nv_handle, because at\n"
         "# most one of those parents exists on any given GPU.\n"
         + result["alloc_text"],
+        "# Entry points other than ioctl, from the file_operations tables the\n"
+        "# driver registers on the four nodes opened above. nvidia_fops at\n"
+        "# kernel-open/nvidia/nv.c:250 registers poll and mmap, uvm_fops at\n"
+        "# kernel-open/nvidia-uvm/uvm.c:1070 registers mmap, and\n"
+        "# uvm_tools_fops at kernel-open/nvidia-uvm/uvm_tools.c:2744\n"
+        "# registers poll. surface/entry-points.json carries the whole\n"
+        "# census, including the six tables no description opens. An entry\n"
+        "# point carries no method id, no parameter struct and no inventory\n"
+        "# row, so none of these calls is a command and none enters the\n"
+        "# command denominator.\n"
+        + result["entry_text"],
     ]) + "\n"
 
     structs = "\n\n".join([
@@ -2428,12 +3191,40 @@ def cmd_emit(args):
         + result["uvm_text"],
     ]) + "\n"
 
+    modeset = "\n\n".join([
+        banner,
+        "# The ten modeset handle types. nvkms-api-types.h:55 declares each as\n"
+        "# a plain NvU32 with no class hierarchy behind it, so each is a flat\n"
+        "# resource and none derives from another. Every parameter struct is\n"
+        "# pointed at inout, so one member both produces a handle from a reply\n"
+        "# field and consumes one in a request field.\n"
+        + result["modeset_resources"],
+        "# /dev/nvidia-modeset. The whole command set multiplexes through one\n"
+        "# kernel request number, %s, which nvkms-ioctl.h:47 builds as\n"
+        "# _IOWR(NVKMS_IOCTL_MAGIC, NVKMS_IOCTL_CMD, struct NvKmsIoctlParams).\n"
+        "# nvkms.c reads the leaf from NvKmsIoctlParams.cmd after\n"
+        "# copy_from_user, so each variant pins that field to its dispatch\n"
+        "# ordinal and sets size to its own parameter struct's measured size.\n"
+        "# Two of the 66 declared commands carry no dispatch entry and are\n"
+        "# absent here: NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES and\n"
+        "# NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS.\n"
+        "#\n"
+        "# One request number for 64 commands means a strace-shaped trace\n"
+        "# names the family and never the leaf, so tools/trace2seed.py cannot\n"
+        "# recover which modeset command a traced call was. That is a stated\n"
+        "# limitation of this branch and not a defect in the map.\n"
+        % result["modeset_request"]
+        + result["modeset_text"],
+    ]) + "\n"
+
     out = args.out_dir
     write_file(os.path.join(out, "nvidia.txt"), core)
     write_file(os.path.join(out, "nvidia_structs.txt"), structs)
     write_file(os.path.join(out, "nvidia_ctrl.txt"), ctrl)
     write_file(os.path.join(out, "nvidia_uvm.txt"), uvm)
-    write_file(os.path.join(out, args.header_name), emit_header(inventory))
+    write_file(os.path.join(out, "nvidia_modeset.txt"), modeset)
+    write_file(os.path.join(out, args.header_name),
+               emit_header(inventory, result["modeset_request"]))
 
     manifest = {
         "schema": SCHEMA,
@@ -2441,6 +3232,7 @@ def cmd_emit(args):
             "escape_inventory": json_source_record(args.inventory, "nodes"),
             "control_inventory": json_source_record(args.control, "methods"),
             "object_graph": json_source_record(args.graph, "records"),
+            "nvkms_inventory": json_source_record(args.nvkms, "commands"),
             "ctrl_sizes": [size_source_record(p)
                            for p in result["ctrl_sizes_paths"]],
             "ctrl_rank": (rank_source_record(result["ranking"])
@@ -2475,6 +3267,20 @@ def cmd_emit(args):
             "uvm_emitted": sum(1 for r in result["uvm_records"]
                                if r["emitted"]),
             "uvm_total": len(result["uvm_records"]),
+            "modeset_variants": sum(1 for r in result["modeset_records"]
+                                    if r["emitted"]),
+            "modeset_dispatched": result["nvkms"]["summary"]["dispatched"],
+            "modeset_declared": result["nvkms"]["summary"]["declared"],
+            "modeset_handle_resources": len(NVKMS_HANDLE_TYPEDEFS),
+            # Entry points and the initialisation pseudo-syscall are counted
+            # here and never joined into the command families above. An mmap
+            # or poll call has no method id and no inventory row, so folding
+            # it into the denominator would count two kinds of thing under
+            # one total.
+            "entry_point_calls": len(result["entry_records"]),
+            "entry_point_structs": count_entry_point_structs(
+                result["entry_text"]),
+            "pseudo_syscalls": 1,
             "structs_emitted": len(emitter.order),
             "size_match": len(emitter.size_match),
             "size_mismatch": len(emitter.size_mismatch),
@@ -2488,13 +3294,38 @@ def cmd_emit(args):
         "unresolved": [{"struct": n, "reason": r}
                        for n, r in sorted(emitter.unresolved)],
         "skipped": {"allocation": result["alloc_skipped"],
-                    "control": result["ctrl_skipped"]},
+                    "control": result["ctrl_skipped"],
+                    "modeset": result["modeset_skipped"]},
         "missing_class_numbers": sorted(result["missing_class_numbers"]),
         "escapes": result["escape_records"],
         "xfer": result["xfer_records"],
         "allocations": result["alloc_records"],
         "control": result["ctrl_records"],
         "uvm": result["uvm_records"],
+        "modeset": result["modeset_records"],
+        # Their own key, separate from the five command families, because
+        # they are not commands and are not in the 764.
+        "entry_points": {
+            "calls": result["entry_records"],
+            "pseudo_syscall": {
+                "call": UVM_INIT_CALL,
+                "produces": UVM_VASPACE_RESOURCE,
+                "implementation": SYZ_PATCH_REL,
+                # The layout the executor half reads. It writes flags and
+                # then reads rmStatus at a fixed offset to decide whether
+                # initialisation succeeded, and a wrong offset there gives a
+                # patch that builds, runs, reads a neighbouring word as the
+                # status and produces a resource on failed initialisations.
+                # Recorded here so the offset the patch hardcodes is checked
+                # against the layout this run derived from the header.
+                "params": init_params_layout(emitter),
+                "reason": "ioctl$UVM_INITIALIZE returns 0 on success and on "
+                          "failure alike (uvm_api.h:45), and syzkaller takes "
+                          "a resource's value from the raw syscall return "
+                          "(executor.cc:1355), so that ioctl cannot produce "
+                          "the initialised descriptor",
+            },
+        },
     }
     write_file(os.path.join(out, "generation.json"),
                json.dumps(manifest, indent=1, sort_keys=True) + "\n")
@@ -2584,6 +3415,10 @@ def add_common(parser):
                         default=os.path.join(DEFAULT_SURFACE,
                                              "rm-object-graph.json"),
                         help="output of tools/object_graph.py extract")
+    parser.add_argument("--nvkms",
+                        default=os.path.join(DEFAULT_SURFACE,
+                                             "nvkms-command-inventory.json"),
+                        help="output of tools/nvkms_inventory.py")
     parser.add_argument("--ctrl-sizes", action="append",
                         help="JSON of measured struct sizes from the probe "
                              "runner; may be given more than once. Defaults "
@@ -2621,6 +3456,276 @@ def add_common(parser):
                              "match its measured size")
 
 
+
+# ---------------------------------------------------------------------------
+# The compile gate
+#
+# syzkaller ships no `syz-compile` binary. Compiling a description set is
+# `ast.ParseGlob` followed by `compiler.Compile`, both in Go, and
+# `sys/syz-sysgen` wraps them for syzkaller's own build against its fixed
+# sys/<os>/ layout. tools/gspwn-check/main.go calls the same two functions
+# against an arbitrary directory, and the subcommand below builds it and runs
+# it over this repository's descriptions plus tools/syz-stub.
+# ---------------------------------------------------------------------------
+
+# The syzkaller revision the gate is verified against, as a commit hash. A
+# branch or a tag can move and a green run then stops being reproducible.
+# .github/workflows/syzlang.yml pins the same value.
+SYZKALLER_REV = "1e72964b0111319984575e60f266d1fa0a98abb5"
+SYZKALLER_URL = "https://github.com/google/syzkaller"
+
+# Where the pinned revision is cloned when --syzkaller names no checkout. CI
+# puts it inside the runner's workspace, a workstation keeps it under the home
+# cache, so the path is overridable.
+DEFAULT_SYZKALLER_DIR = os.environ.get("GSPWN_SYZKALLER_DIR") or os.path.join(
+    os.path.expanduser("~"), ".cache", "gspwn", "syzkaller")
+
+SYZ_STUB_DIR = os.path.join(REPO_ROOT, "tools", "syz-stub")
+GSPWN_CHECK_SRC = os.path.join(REPO_ROOT, "tools", "gspwn-check", "main.go")
+
+GIT_TIMEOUT_SECONDS = int(os.environ.get("GSPWN_GIT_TIMEOUT_SECONDS", "900"))
+GO_BUILD_TIMEOUT_SECONDS = int(
+    os.environ.get("GSPWN_GO_BUILD_TIMEOUT_SECONDS", "900"))
+SYZ_COMPILE_TIMEOUT_SECONDS = int(
+    os.environ.get("GSPWN_SYZ_COMPILE_TIMEOUT_SECONDS", "300"))
+
+# A toolchain the gate needs and cannot obtain. Kept apart from exit 1, which
+# reports a description set that does not compile: without the split, a runner
+# with no Go on it reads as a broken description set.
+EXIT_NO_TOOLCHAIN = 3
+
+# pkg/compiler/types.go prepends six syz_builtinN pseudo-syscalls to every
+# compile, whatever the input (`builtinDefs`, all marked disabled), so the
+# driver's syscall count runs six above the description set's own.
+SYZ_BUILTIN_SYSCALLS = 6
+
+COMPILE_OK_RE = re.compile(
+    r"^compile: OK, (?P<consts>\d+) const\(s\) loaded, "
+    r"(?P<syscalls>\d+) syscall\(s\), (?P<resources>\d+) resource\(s\), "
+    r"(?P<types>\d+) type\(s\), (?P<unsupported>\d+) unsupported\s*$",
+    re.MULTILINE)
+
+NO_DIAGNOSTICS = "(the driver printed no diagnostics)"
+
+
+def parse_compile_verdict(stdout):
+    """The driver's verdict line, or None when it printed no clean compile.
+
+    `own_syscalls` is the description set's own count, the driver's figure
+    less the pseudo-syscalls pkg/compiler prepends unconditionally.
+    """
+    match = COMPILE_OK_RE.search(stdout or "")
+    if match is None:
+        return None
+    verdict = {key: int(value) for key, value in match.groupdict().items()}
+    verdict["builtin_syscalls"] = SYZ_BUILTIN_SYSCALLS
+    verdict["own_syscalls"] = verdict["syscalls"] - SYZ_BUILTIN_SYSCALLS
+    return verdict
+
+
+def format_diagnostics(text):
+    """The driver's own output, unchanged.
+
+    A syzkaller parse error names a file, a line and the type it rejected. A
+    summary of it is not actionable, so the text is reproduced and never
+    reworded.
+    """
+    stripped = (text or "").strip("\n")
+    if not stripped.strip():
+        return NO_DIAGNOSTICS
+    return stripped
+
+
+def checkout_revision(path):
+    """The checkout's HEAD, or None when git cannot read it."""
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        proc = subprocess.run([git, "-C", path, "rev-parse", "HEAD"],
+                              capture_output=True, text=True,
+                              timeout=GIT_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("reading the revision of %s failed: %s", path, exc)
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def clone_syzkaller(git, target):
+    """Fetch the pinned revision into `target`. Returns None on success and
+    the reason on failure.
+
+    A one-revision fetch, so the 168M history never arrives. The sequence is
+    idempotent: an interrupted run leaves a directory that the next run
+    re-initialises and re-fetches into.
+    """
+    steps = [
+        [git, "init", "--quiet", target],
+        [git, "-C", target, "remote", "remove", "origin"],
+        [git, "-C", target, "remote", "add", "origin", SYZKALLER_URL],
+        [git, "-C", target, "fetch", "--quiet", "--depth", "1", "origin",
+         SYZKALLER_REV],
+        [git, "-C", target, "checkout", "--quiet", "FETCH_HEAD"],
+    ]
+    # `remote remove` fails on a fresh directory, which is the normal case and
+    # not an error. Every other step is required.
+    optional = {1}
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as exc:
+        return "creating %s failed: %s" % (target, exc)
+    for index, argv in enumerate(steps):
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=GIT_TIMEOUT_SECONDS)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return "%s failed: %s" % (" ".join(argv), exc)
+        if proc.returncode != 0 and index not in optional:
+            return "%s exited %d: %s" % (" ".join(argv), proc.returncode,
+                                         proc.stderr.strip())
+    return None
+
+
+def resolve_syzkaller(given, cache_dir):
+    """The checkout to build the driver against, and the reason when there is
+    none. Returns (path, None) or (None, reason).
+
+    A path given on the command line is used as it stands. Otherwise the
+    cache is used, cloned at SYZKALLER_REV when it holds no checkout yet.
+    """
+    if given:
+        if not os.path.isdir(os.path.join(given, "pkg", "compiler")):
+            return None, ("%s holds no pkg/compiler, so it is not a syzkaller "
+                          "checkout" % given)
+        return given, None
+    if os.path.isdir(os.path.join(cache_dir, "pkg", "compiler")):
+        return cache_dir, None
+    git = shutil.which("git")
+    if git is None:
+        return None, ("git is not on PATH and %s holds no checkout, so "
+                      "syzkaller %s cannot be fetched"
+                      % (cache_dir, SYZKALLER_REV))
+    logger.info("cloning syzkaller %s into %s", SYZKALLER_REV, cache_dir)
+    problem = clone_syzkaller(git, cache_dir)
+    if problem is not None:
+        return None, problem
+    if not os.path.isdir(os.path.join(cache_dir, "pkg", "compiler")):
+        return None, "%s has no pkg/compiler after the clone" % cache_dir
+    return cache_dir, None
+
+
+def build_driver(go, checkout, out_path):
+    """Build tools/gspwn-check and return the completed process.
+
+    The driver's source stays in this repository. `go build` is handed its
+    file path and run with the checkout as its working directory, so the
+    checkout's own go.mod supplies pkg/ast and pkg/compiler and the checkout
+    never holds a copy of the driver.
+    """
+    argv = [go, "build", "-o", out_path, GSPWN_CHECK_SRC]
+    logger.debug("building the driver: %s (in %s)", " ".join(argv), checkout)
+    return subprocess.run(argv, cwd=checkout, capture_output=True, text=True,
+                          timeout=GO_BUILD_TIMEOUT_SECONDS)
+
+
+def stage_descriptions(stage_dir, description_dir):
+    """Populate `stage_dir` with the stub and the description set.
+
+    The driver takes one directory and globs `*.txt` and `*.txt.const` in it,
+    and the two inputs live in separate directories under version control.
+    Symlinks where the filesystem takes them, copies where it does not.
+    """
+    staged = []
+    for source_dir in (SYZ_STUB_DIR, description_dir):
+        for name in sorted(os.listdir(source_dir)):
+            if not name.endswith(".txt") and not name.endswith(".txt.const"):
+                continue
+            source = os.path.join(source_dir, name)
+            target = os.path.join(stage_dir, name)
+            try:
+                os.symlink(source, target)
+            except (OSError, NotImplementedError, AttributeError):
+                shutil.copyfile(source, target)
+            staged.append(name)
+    return staged
+
+
+def cmd_compile(args):
+    """Compile the description set with syzkaller's own compiler."""
+    go = shutil.which("go")
+    if go is None:
+        logger.error(
+            "go is not on PATH. The compile gate builds tools/gspwn-check "
+            "against syzkaller's pkg/compiler and pkg/ast, which needs a Go "
+            "toolchain. Install Go and re-run.")
+        return EXIT_NO_TOOLCHAIN
+    checkout, problem = resolve_syzkaller(args.syzkaller, args.cache_dir)
+    if checkout is None:
+        logger.error("no syzkaller checkout: %s", problem)
+        return EXIT_NO_TOOLCHAIN
+    revision = checkout_revision(checkout)
+    logger.info("syzkaller %s at %s", revision or "(revision unread)",
+                checkout)
+    if revision is not None and revision != SYZKALLER_REV:
+        logger.warning("the checkout is at %s and this gate is verified "
+                       "against %s", revision, SYZKALLER_REV)
+    work = tempfile.mkdtemp(prefix="gspwn-compile-")
+    try:
+        driver = os.path.join(work, "gspwn-check")
+        try:
+            built = build_driver(go, checkout, driver)
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.error("building tools/gspwn-check failed: %s", exc)
+            return EXIT_NO_TOOLCHAIN
+        if built.returncode != 0:
+            logger.error("go build exited %d", built.returncode)
+            sys.stderr.write(format_diagnostics(built.stderr) + "\n")
+            return EXIT_NO_TOOLCHAIN
+        stage = os.path.join(work, "stage")
+        os.mkdir(stage)
+        try:
+            staged = stage_descriptions(stage, args.descriptions)
+        except OSError as exc:
+            logger.error("staging %s and %s failed: %s", rel(SYZ_STUB_DIR),
+                         args.descriptions, exc)
+            return EXIT_NO_TOOLCHAIN
+        # The driver's diagnostics name the staged path. The file names are
+        # unchanged by staging, so a diagnostic's basename resolves against
+        # one of the two directories named here.
+        logger.info("compiling %d file(s) from %s and %s, staged into %s: %s",
+                    len(staged), rel(SYZ_STUB_DIR), args.descriptions, stage,
+                    " ".join(staged))
+        try:
+            proc = subprocess.run([driver, "-dir", stage, "-arch", args.arch],
+                                  capture_output=True, text=True,
+                                  timeout=SYZ_COMPILE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            logger.error("tools/gspwn-check did not finish within %d seconds, "
+                         "so the gate produced no verdict",
+                         SYZ_COMPILE_TIMEOUT_SECONDS)
+            return EXIT_NO_TOOLCHAIN
+        except OSError as exc:
+            logger.error("running tools/gspwn-check failed: %s", exc)
+            return EXIT_NO_TOOLCHAIN
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    verdict = parse_compile_verdict(proc.stdout)
+    if proc.returncode != 0 or verdict is None:
+        logger.error("the description set does not compile. The driver's own "
+                     "diagnostics follow, unchanged:")
+        sys.stderr.write(format_diagnostics(proc.stderr) + "\n")
+        if proc.stdout.strip():
+            sys.stderr.write(proc.stdout)
+        return 1
+    sys.stdout.write(proc.stdout)
+    logger.info("%d syscall(s) is %d from the description set plus the %d "
+                "syz_builtinN pseudo-syscalls pkg/compiler prepends to every "
+                "compile", verdict["syscalls"], verdict["own_syscalls"],
+                verdict["builtin_syscalls"])
+    return 0
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="syzlang_gen.py",
@@ -2653,6 +3758,24 @@ def build_parser():
     p.add_argument("--probe-dir", required=True,
                    help="directory to write the probes into")
     p.set_defaults(func=cmd_emit_probe)
+
+    p = sub.add_parser("compile",
+                       help="compile the description set with syzkaller's "
+                            "own compiler")
+    p.add_argument("--syzkaller",
+                   help="an existing syzkaller checkout to build the driver "
+                        "against. Without it the pinned revision %s is "
+                        "cloned into --cache-dir" % SYZKALLER_REV[:12])
+    p.add_argument("--cache-dir", default=DEFAULT_SYZKALLER_DIR,
+                   help="where the pinned revision is cloned "
+                        "(default: %(default)s)")
+    p.add_argument("--descriptions", default=DEFAULT_OUT,
+                   help="the description set to compile "
+                        "(default: %(default)s)")
+    p.add_argument("--arch", default="amd64",
+                   help="target architecture, matching the arch tags in the "
+                        ".const sidecars (default: %(default)s)")
+    p.set_defaults(func=cmd_compile)
     return ap
 
 

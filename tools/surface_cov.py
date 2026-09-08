@@ -98,6 +98,7 @@ SYZ_DB = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller", "bin",
 IOCTL_INV = os.path.join(SURFACE_DIR, "ioctl-inventory.json")
 CTRL_INV = os.path.join(SURFACE_DIR, "rm-control-inventory.json")
 OBJ_GRAPH = os.path.join(SURFACE_DIR, "rm-object-graph.json")
+NVKMS_INV = os.path.join(SURFACE_DIR, "nvkms-command-inventory.json")
 
 # A syzlang call line, and a call site inside a program. Both spell the variant
 # the same way, so one pattern reads a description file and a corpus program.
@@ -108,6 +109,9 @@ ROOT = "<root fd>"
 
 CONTROL_PREFIX = "NV_ESC_RM_CONTROL_"
 ALLOC_PREFIX = "NV_ESC_RM_ALLOC_"
+# Every NvKmsIoctlCommand enumerator carries it, so it names the family in a
+# variant name and in a corpus program alike.
+MODESET_PREFIX = "NVKMS_IOCTL_"
 
 # Families in report order. The first five are the denominator; the rest are
 # counted and excluded, each for a reason `report` prints.
@@ -116,14 +120,17 @@ ALLOC_PREFIX = "NV_ESC_RM_ALLOC_"
 ESCAPE_PREFIX = "NV_ESC_"
 XFER_VARIANT_PREFIX = "NV_ESC_IOCTL_XFER_CMD_"
 
-FAMILIES = ["escape", "uvm", "uvm_tools", "control", "alloc"]
-EXCLUDED = ["control_gsp", "uvm_test", "escape_dead", "escape_mux"]
+FAMILIES = ["escape", "uvm", "uvm_tools", "control", "alloc", "modeset"]
+EXCLUDED = ["control_gsp", "uvm_test", "escape_dead", "escape_mux",
+            "modeset_undispatched"]
 
 EXCLUSION_REASON = {
     "control_gsp": "handler compiled out; runs on GSP where KCOV cannot follow",
     "uvm_test": "needs uvm_enable_builtin_tests=1, which the target does not set",
     "escape_dead": "declared in nv_escape.h with no dispatch case",
     "escape_mux": "a multiplexer whose leaves are already counted in another family",
+    "modeset_undispatched": "declared in NvKmsIoctlCommand with a NULL "
+                            "dispatch entry",
 }
 
 # Two escapes select the real target from a field in their own parameter
@@ -216,11 +223,13 @@ def load_targets():
     inv = _load(IOCTL_INV, "the ioctl inventory")
     ctrl = _load(CTRL_INV, "the RM control inventory")
     graph = _load(OBJ_GRAPH, "the RM object graph")
+    nvkms = _load(NVKMS_INV, "the modeset command inventory")
 
     versions = {p: _driver_version(o) for p, o in
                 (("ioctl-inventory.json", inv),
                  ("rm-control-inventory.json", ctrl),
-                 ("rm-object-graph.json", graph))}
+                 ("rm-object-graph.json", graph),
+                 ("nvkms-command-inventory.json", nvkms))}
     distinct = {v for v in versions.values() if v}
     if len(distinct) > 1:
         raise SurfaceError(
@@ -356,6 +365,37 @@ def load_targets():
             "source": "resource_list.h",
         }
 
+    # /dev/nvidia-modeset. Every command reaches the kernel through one
+    # request number and the leaf is the ordinal in NvKmsIoctlParams.cmd, so
+    # the ordinal is the ABI identity and the command name is only the join
+    # key the description set and the corpus spell. The two commands the
+    # dispatch table leaves NULL are counted apart: nvKmsIoctl returns FALSE
+    # for either before any handler runs.
+    dispatched = 0
+    for command in nvkms.get("commands", []):
+        name = command.get("command")
+        if not name:
+            continue
+        is_dispatched = bool(command.get("dispatched"))
+        dispatched += is_dispatched
+        record = {
+            "variant": name,
+            "family": "modeset" if is_dispatched else "modeset_undispatched",
+            "label": "%s %s" % (command.get("ordinal"),
+                                command.get("proc") or "(no handler)"),
+            "detail": command.get("param_struct") or "",
+            "nr": command.get("ordinal"),
+            "source": command.get("source") or "",
+        }
+        (targets if is_dispatched else excluded)[name] = record
+    claimed = (nvkms.get("summary") or {}).get("dispatched")
+    if claimed is not None and claimed != dispatched:
+        raise SurfaceError(
+            "the modeset inventory records %d dispatched command(s) against "
+            "a summary claiming %d. The denominator would be wrong either "
+            "way; regenerate %s with tools/nvkms_inventory.py."
+            % (dispatched, claimed, NVKMS_INV))
+
     for record in list(targets.values()) + list(excluded.values()):
         record["abi_key"] = abi_key(record)
 
@@ -366,6 +406,26 @@ def load_targets():
     logger.info("denominator: %d targets across %d families; %d excluded",
                 len(targets), len(FAMILIES), len(excluded))
     return targets, excluded, meta
+
+
+# A call declaration at the head of a syzlang line. Wider than VARIANT_RE,
+# which matches ioctl variants alone: an entry-point call is not an ioctl and
+# would never be seen by it.
+CALL_RE = re.compile(r"^([a-z_][A-Za-z0-9_]*\$?[A-Za-z0-9_]*)\(", re.M)
+
+
+def scan_call_names(paths):
+    """-> every call name the given description files declare."""
+    names = set()
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError as exc:
+            logger.warning("%s: %s (skipped)", path, exc)
+            continue
+        names.update(match.group(1) for match in CALL_RE.finditer(text))
+    return names
 
 
 def scan_variants(paths, what):
@@ -636,6 +696,231 @@ def _measure_args(args, with_corpus=True):
                    with_corpus=with_corpus)
 
 
+# ---------------------------------------------------------------------------
+# Entry points, counted beside the command denominator
+# ---------------------------------------------------------------------------
+
+# The file_operations census tools/ioctl_inventory.py --emit-entry-points
+# writes. It is read for a second count and never joined into the first: an
+# entry point has no method id, no parameter struct and no inventory row, so
+# folding it into the 764 would make the completion rule
+# `exercised + accounted-for = 764` count two different kinds of thing.
+ENTRY_POINTS = os.path.join(SURFACE_DIR, "entry-points.json")
+
+# The entry points the description set declares a call for. open and release
+# are reached by openat and by process exit and carry no call of their own;
+# unlocked_ioctl and compat_ioctl are the command families already counted.
+ENTRY_POINT_CALLS = ("mmap", "poll")
+
+# Device node to the suffix its syzlang call names take. Derived and never
+# guessed: a node absent here cannot have a call name computed, and inventing
+# one would report a gap against a call nothing was meant to declare.
+ENTRY_POINT_NODE_SUFFIX = {
+    "/dev/nvidiactl": "nvidiactl",
+    "/dev/nvidiaN": "nvidia",
+    "/dev/nvidia-uvm": "nvidia_uvm",
+    "/dev/nvidia-uvm-tools": "nvidia_uvm_tools",
+}
+
+# Call-name prefixes that are not commands. A denominator carrying one of
+# these has started counting entry points among commands.
+NON_COMMAND_PREFIXES = ("mmap$", "poll$", "syz_")
+
+
+def load_entry_points():
+    """-> (entry points on the modelled tables, entry points registered in
+    total, the modelled table records).
+
+    The two counts are returned apart because only the first has calls in the
+    description set. The second states how much of the driver's registered
+    surface the modelled nodes are, which is the honest denominator for the
+    scope decision and is not a fuzzing target count.
+    """
+    doc = _load(ENTRY_POINTS, "the entry-point census")
+    tables = doc.get("tables")
+    if not isinstance(tables, list) or not tables:
+        raise SurfaceError(
+            "%s carries no `tables` array, so the entry points the driver "
+            "registers cannot be counted. Produce it with "
+            "`tools/ioctl_inventory.py --emit-entry-points`." % ENTRY_POINTS)
+    modelled = [t for t in tables if t.get("modelled")]
+    return (sum(len(t.get("entry_points") or []) for t in modelled),
+            sum(len(t.get("entry_points") or []) for t in tables),
+            modelled)
+
+
+def entry_point_calls(tables):
+    """-> the syzlang call names the modelled tables require.
+
+    One per (node, operation) pair the driver registers, for the operations
+    that carry a call of their own.
+    """
+    names = set()
+    for table in tables:
+        operations = {e.get("operation") for e in table.get("entry_points")
+                      or []}
+        for operation in sorted(operations & set(ENTRY_POINT_CALLS)):
+            for path in table.get("paths") or []:
+                suffix = ENTRY_POINT_NODE_SUFFIX.get(path)
+                if suffix is None:
+                    raise SurfaceError(
+                        "%s names device node %s on table %s and no syzlang "
+                        "call suffix is recorded for it, so the call the "
+                        "description set would have to declare cannot be "
+                        "derived. Either the node became modelled and "
+                        "ENTRY_POINT_NODE_SUFFIX is the record to move, or "
+                        "the artefact marks a table modelled that is not."
+                        % (ENTRY_POINTS, path, table.get("fops")))
+                names.add("%s$%s" % (operation, suffix))
+    return names
+
+
+def assert_outside_denominator(targets):
+    """Refuse a command denominator that has taken in an entry point.
+
+    Called wherever the denominator is reported. The 764 counts commands
+    across five families; an mmap, a poll or a pseudo-syscall is none of
+    them, and a total mixing the two cannot be read as either.
+    """
+    intruders = sorted(v for v in targets
+                       if v.startswith(NON_COMMAND_PREFIXES))
+    if intruders:
+        raise SurfaceError(
+            "%d entry point(s) or pseudo-syscall(s) entered the command "
+            "denominator: %s. Entry points are counted on their own line and "
+            "never inside the %d, because they carry no method id, no "
+            "parameter struct and no inventory row. A denominator holding "
+            "both cannot settle the completion rule."
+            % (len(intruders), ", ".join(intruders[:8]), len(targets)))
+    return None
+
+
+def report_entry_points():
+    """Print the entry-point counts, visually apart from the denominator."""
+    try:
+        modelled, registered, tables = load_entry_points()
+    except SurfaceError as exc:
+        print()
+        print("entry points: not counted (%s)" % exc)
+        return
+    print()
+    print("entry points  %d registered on the %d device node(s) whose entry "
+          "points are" % (modelled,
+                          sum(len(t.get("paths") or []) for t in tables)))
+    print("              modelled, of %d across every file_operations table "
+          "the driver" % registered)
+    print("              defines. Counted here and not part of the command "
+          "total above: an")
+    print("              entry point has no method id, no parameter struct "
+          "and no")
+    print("              inventory row. /dev/nvidia-modeset is opened for the "
+          "modeset")
+    print("              command family and its own mmap and poll are not "
+          "modelled.")
+    print("              %d call(s) declared: %s"
+          % (len(entry_point_calls(tables)),
+             ", ".join(sorted(entry_point_calls(tables)))))
+
+
+# ---------------------------------------------------------------------------
+# The UVM initialisation ordering, measured over a corpus
+# ---------------------------------------------------------------------------
+
+# The call that produces the initialised UVM descriptor. Its executor half
+# returns the descriptor only where uvm_api_initialize wrote NV_OK into
+# rmStatus, so a program whose command consumes that resource took a
+# descriptor that went through the transition.
+UVM_INIT_PRODUCER = "syz_nvidia_uvm_init"
+
+# `rN = call(...)` and `ioctl$NAME(rN, ...)` in a syzkaller program.
+PROGRAM_PRODUCER_RE = re.compile(r"^\s*(r\d+)\s*=\s*([A-Za-z_][\w$]*)\(", re.M)
+PROGRAM_CONSUMER_RE = re.compile(r"^\s*ioctl\$(\w+)\((r\d+)[,)]", re.M)
+
+
+def uvm_requiring_commands():
+    """-> the uvm commands the inventory marks as requiring initialisation."""
+    inv = _load(IOCTL_INV, "the ioctl inventory")
+    requiring = set()
+    for node in inv.get("nodes", []):
+        if node.get("scheme") != "bare_command_number":
+            continue
+        for command in node.get("commands", []):
+            if command.get("requires_initialized_fd"):
+                requiring.add(command.get("name"))
+    return requiring
+
+
+def report_uvm_ordering(corpus_dir):
+    """Print the ordering measurement over one corpus directory."""
+    if not corpus_dir or not os.path.isdir(corpus_dir):
+        return
+    programs = []
+    for name in sorted(os.listdir(corpus_dir)):
+        path = os.path.join(corpus_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                programs.append(fh.read())
+        except OSError as exc:
+            logger.warning("%s: %s (skipped)", path, exc)
+    if not programs:
+        return
+    named, ordered = uvm_ordering(programs, uvm_requiring_commands())
+    if not named:
+        return
+    print()
+    print(uvm_ordering_note(named, ordered))
+
+
+def uvm_ordering(programs, requiring):
+    """-> (programs naming a command that requires initialisation, of those
+    the programs where the command consumes the produced resource).
+
+    The second count is a property of the dependency and not of the call
+    list: a program that calls the producer and then hands the command the
+    descriptor openat returned is counted in the first and not the second,
+    because its command still meets the refusal.
+    """
+    named = ordered = 0
+    for text in programs:
+        produced = {var for var, call in PROGRAM_PRODUCER_RE.findall(text)
+                    if call == UVM_INIT_PRODUCER}
+        uses = [(name, var)
+                for name, var in PROGRAM_CONSUMER_RE.findall(text)
+                if name in requiring]
+        if not uses:
+            continue
+        named += 1
+        if any(var in produced for _name, var in uses):
+            ordered += 1
+    return named, ordered
+
+
+def uvm_ordering_note(named, ordered):
+    """-> the line the campaign report carries for that measurement.
+
+    States what the corpus settles and what it does not. Whether a call
+    reached past the UVM_FD_VA_SPACE check is a kernel-side fact: the driver
+    returns 0 from the ioctl either way and writes the refusal into
+    params.rmStatus, which syzkaller does not record. Reading the corpus shape
+    as the handler having run would put a second unmeasured claim in the
+    ledger beside the one this measurement exists to settle.
+    """
+    return (
+        "%d of %d program(s) naming a uvm command that requires an "
+        "initialised descriptor take that descriptor from %s. The rest hand "
+        "the command a descriptor that never went through uvm_api_initialize, "
+        "and it meets NV_ERR_ILLEGAL_ACTION. This counts the dependency the "
+        "program expresses. How many executions reached past the "
+        "UVM_FD_VA_SPACE check is a kernel-side fact and is not in this "
+        "number: the ioctl returns 0 whether or not the check passed and "
+        "carries the refusal in params.rmStatus, which no corpus records. "
+        "Settling it needs per-symbol coverage over the uvm_api_* handlers, "
+        "which tools/coverage_ctl.py does not collect: it records edge totals."
+        % (ordered, named, UVM_INIT_PRODUCER))
+
+
 def cmd_modelled(args):
     # Reports the targetable and modelled columns only, neither of which
     # depends on a corpus. Resolving one anyway paid a full corpus.db unpack
@@ -654,7 +939,9 @@ def cmd_modelled(args):
                      "%.1f%%" % _pct(len(hit), len(total))])
     rows.append(["total", len(covered), len(targets),
                  "%.1f%%" % _pct(len(covered), len(targets))])
+    assert_outside_denominator(targets)
     _table(rows, ["family", "modelled", "targetable", "share"])
+    report_entry_points()
     if extra:
         print()
         print("%d variant(s) declared that no inventory names. An alternate "
@@ -717,6 +1004,11 @@ def cmd_report(args):
               "pass --run-id <id> to measure the run's own corpus.db")
     print()
     _table(rows, ["family", "targetable", "modelled", "exercised", "reached"])
+    report_entry_points()
+    # The uvm family's ordering constraint, measured over this corpus. The
+    # pseudo-syscall was adopted on an argument and not on a measurement, and
+    # this is the reading that settles whether it earned its maintenance cost.
+    report_uvm_ordering(meta.get("corpus"))
     print()
     lost_model = len(targets) - len(all_m)
     lost_corpus = len(all_m) - len(all_e)

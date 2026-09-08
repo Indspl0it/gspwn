@@ -4,7 +4,7 @@
 The documentation site describes the tools that enumerate the attack surface.
 It did not render the surface itself, so a reader asking which escapes exist,
 or where a given control command ranks, had to open a 1.2 MB JSON file. This
-tool turns the committed artefacts into five browsable pages under
+tool turns the committed artefacts into six browsable pages under
 docs/src/content/docs/reference/surface/:
 
     index.md               the five pages, their record counts and sources
@@ -12,6 +12,8 @@ docs/src/content/docs/reference/surface/:
     control-commands.md    the 531 targetable control commands, ranked
     allocation-classes.md  the 155 allocatable classes and the 98 chains
     driver-cves.md         the 61 disclosures classified as reaching Track K
+    modeset-commands.md    the 64 dispatched modeset commands and the 2 with
+                           no dispatch entry
 
 Run it:
 
@@ -31,6 +33,7 @@ is absent or unreadable.
 Sources, all of them committed:
 
     surface/ioctl-inventory.json
+    surface/nvkms-command-inventory.json
     surface/rm-control-inventory.json
     surface/rm-control-rank.json
     surface/rm-object-graph.json
@@ -135,9 +138,11 @@ def _need(doc, path, key, kind=list):
 
 
 def load_all():
-    """-> every artefact the five pages read, keyed by its short name."""
+    """-> every artefact the generated pages read, keyed by its short name."""
     docs = {
         "ioctl": _load(surface_cov.IOCTL_INV, "the ioctl inventory"),
+        "nvkms": _load(surface_cov.NVKMS_INV,
+                       "the modeset command inventory"),
         "ctrl": _load(surface_cov.CTRL_INV, "the RM control inventory"),
         "graph": _load(surface_cov.OBJ_GRAPH, "the RM object graph"),
         "rank": _load(CTRL_RANK, "the control command ranking"),
@@ -145,8 +150,11 @@ def load_all():
         "cves": _load(PRIOR_CVES, "the classified CVE record"),
         "hotspots": _load(HOTSPOTS, "the patch-mining output"),
         "map": _load(IOCTL_MAP, "the ioctl name map"),
+        "entry": _load(surface_cov.ENTRY_POINTS, "the entry-point census"),
     }
     _need(docs["ioctl"], surface_cov.IOCTL_INV, "nodes")
+    _need(docs["nvkms"], surface_cov.NVKMS_INV, "commands")
+    _need(docs["entry"], surface_cov.ENTRY_POINTS, "tables")
     _need(docs["ctrl"], surface_cov.CTRL_INV, "methods")
     _need(docs["graph"], surface_cov.OBJ_GRAPH, "records")
     _need(docs["rank"], CTRL_RANK, "commands")
@@ -918,9 +926,10 @@ def fix_location_sections(docs):
         "[Control commands](/gspwn/reference/surface/control-commands/) is "
         "computed from. The family column carries the surface family "
         "`tools/surface_cov.py` places the command in, so a row outside the "
-        "764-target model is visible as one."
+        "%d-target model is visible as one."
         % (len(by_function),
-           len(doc.get("hotspots", {}).get("by_function", []))),
+           len(doc.get("hotspots", {}).get("by_function", [])),
+           len(docs["targets"])),
         "",
         table(["Function", "File", "Releases", "Lines changed", "Signals",
                "Disclosures bracketing it", "Target", "Owning class",
@@ -1085,6 +1094,103 @@ def page_cves(docs):
 
 
 # --------------------------------------------------------------------------
+# modeset-commands.md
+# --------------------------------------------------------------------------
+
+def page_modeset(docs):
+    nvkms = docs["nvkms"]
+    commands = nvkms["commands"]
+    summary = nvkms["summary"]
+    scan = nvkms.get("scan", {})
+    source = nvkms.get("source", {})
+    dispatched = [c for c in commands if c["dispatched"]]
+    undispatched = [c for c in commands if not c["dispatched"]]
+
+    parts = [
+        frontmatter("Modeset commands",
+                    "The %d dispatched commands of /dev/nvidia-modeset, "
+                    "their dispatch ordinals, handler symbols and parameter "
+                    "structs, and the %d the dispatch table leaves empty."
+                    % (len(dispatched), len(undispatched))),
+        "",
+        provenance(["surface/nvkms-command-inventory.json"]),
+        "",
+        "`/dev/nvidia-modeset` is created by default in a GPU container: "
+        "`lookup_devices` at `libnvidia-container/src/nvc_info.c:515` lists "
+        "it beside `/dev/nvidiactl`, `/dev/nvidia-uvm` and "
+        "`/dev/nvidia-uvm-tools`, and withholds it only under "
+        "`OPT_NO_MODESET`. Its commands are the sixth family of the surface "
+        "denominator.",
+        "",
+        "## Dispatch",
+        "",
+        "The whole command set reaches the kernel through one request "
+        "number. `%s` at `%s:47` expands to `_IOWR(NVKMS_IOCTL_MAGIC, "
+        "NVKMS_IOCTL_CMD, struct NvKmsIoctlParams)`, and `nvKmsIoctl` reads "
+        "the command itself out of `NvKmsIoctlParams.cmd` after "
+        "`copy_from_user`. `NV_ESC_RM_CONTROL` has the same shape: one "
+        "number, many leaves."
+        % ("NVKMS_IOCTL_IOWR",
+           "src/nvidia-modeset/interface/nvkms-ioctl.h"),
+        "",
+        "A traced call therefore carries a number that names the family and "
+        "not the command. `tools/trace2seed.py` reads a kernel request "
+        "number and cannot recover which of the %d commands a trace was, "
+        "because the sub-command lives in a payload the trace format does "
+        "not carry. That limit is accepted for this branch."
+        % len(dispatched),
+        "",
+        table(["Quantity", "Value", "Source"],
+              [["Declared enumerators", summary["declared"],
+                code("enum NvKmsIoctlCommand")],
+               ["Dispatch array length", num(scan.get("array_len")),
+                code(scan.get("array_bound_expression"))],
+               ["Populated entries", summary["dispatched"],
+                code(source.get("dispatch_source"))],
+               ["Entries by the plain macro", summary["entries_plain"],
+                code("ENTRY")],
+               ["Entries by the custom-user macro",
+                summary["entries_custom_user"], code("ENTRY_CUSTOM_USER")],
+               ["Empty entries", summary["undispatched"],
+                code("dispatch[cmd].proc == NULL")]]),
+        "",
+        "## Commands",
+        "",
+        "Ordered by dispatch ordinal, which is the index the command's own "
+        "value indexes the dispatch array at. The ordinal is the ABI "
+        "identity of a modeset target: a driver renaming a command keeps it, "
+        "and the completion ledger is keyed on it.",
+        "",
+        table(["Ordinal", "Command", "Handler", "Parameter struct",
+               "Request struct", "Reply struct", "Macro"],
+              [[c["ordinal"], code(c["command"]), code(c["proc"]),
+                code(c["param_struct"]), code(c["request_struct"]),
+                code(c["reply_struct"]),
+                code(c["macro"]) if c["dispatched"]
+                else c["undispatched_reason"]]
+               for c in commands]),
+        "",
+        "## Commands outside the denominator",
+        "",
+        "%d of the %d declared enumerators carry no dispatch entry. "
+        "`nvKmsIoctl` returns `FALSE` for either before any handler runs, so "
+        "neither is a target and the family contributes %d and not %d."
+        % (len(undispatched), summary["declared"], len(dispatched),
+           summary["declared"]),
+        "",
+        table(["Ordinal", "Command", "Reason"],
+              [[c["ordinal"], code(c["command"]), c["undispatched_reason"]]
+               for c in undispatched]),
+        "",
+        "## See also",
+        "",
+        "- [Enumerated surface](/gspwn/reference/surface/)",
+        "- [Attack surface](/gspwn/architecture/attack-surface/)",
+    ]
+    return "\n".join(parts).rstrip() + "\n", len(commands)
+
+
+# --------------------------------------------------------------------------
 # index.md
 # --------------------------------------------------------------------------
 
@@ -1098,7 +1204,12 @@ PAGE_SOURCES = {
                               "surface/rm-chains.json"],
     "driver-cves.md": ["surface/prior-cves.json",
                        "surface/cve-hotspots.json"],
+    "modeset-commands.md": ["surface/nvkms-command-inventory.json"],
 }
+
+# index.md renders the entry-point census beside the command totals, so its
+# provenance line names that artefact as well as the four pages' own sources.
+INDEX_EXTRA_SOURCES = ["surface/entry-points.json"]
 
 PAGE_TITLES = {
     "escapes.md": ("Escapes", "escapes",
@@ -1114,7 +1225,40 @@ PAGE_TITLES = {
                        "The disclosures NVIDIA places in the kernel modules "
                        "this project fuzzes, and where reading the fixing "
                        "diff placed each one"),
+    "modeset-commands.md": ("Modeset commands", "modeset-commands",
+                            "The dispatched commands of "
+                            "/dev/nvidia-modeset, their dispatch ordinals "
+                            "and parameter structs"),
 }
+
+
+def entry_point_rows(entry):
+    """-> one row per file_operations table the driver defines.
+
+    Ordered modelled first and then by table name, so the four nodes the
+    description set opens read together and the rest state why they are out.
+    """
+    rows = []
+    for table in sorted(entry["tables"],
+                        key=lambda t: (not t["modelled"], t["fops"])):
+        operations = []
+        for point in table["entry_points"]:
+            name = code(point["operation"])
+            if point["conditional"]:
+                # The condition is rendered with `or` and never with the C
+                # `||`, because a pipe inside a table cell has to be escaped
+                # and a backslash in a generated page is otherwise a sign the
+                # tool leaked a path from the machine that ran it.
+                condition = " or ".join(
+                    part.strip()
+                    for part in point["conditional"].split("||"))
+                name += " (under %s)" % code(condition)
+            operations.append(name)
+        rows.append([", ".join(code(p) for p in table["paths"]),
+                     code(table["fops"]),
+                     ", ".join(operations),
+                     "yes" if table["modelled"] else table["reason"]])
+    return rows
 
 
 def page_index(docs, rows):
@@ -1134,12 +1278,12 @@ def page_index(docs, rows):
                     "artefacts."),
         "",
         provenance(sorted({s for sources in PAGE_SOURCES.values()
-                           for s in sources})),
+                           for s in sources} | set(INDEX_EXTRA_SOURCES))),
         "",
-        "Four pages render the enumerated surface of driver %s. Every row is "
+        "%d pages render the enumerated surface of driver %s. Every row is "
         "read from an artefact under `surface/`, and nothing on "
         "these pages is written by hand."
-        % code(meta.get("driver_version") or "unknown"),
+        % (len(PAGE_SOURCES), code(meta.get("driver_version") or "unknown")),
         "",
         "## Pages",
         "",
@@ -1163,7 +1307,9 @@ def page_index(docs, rows):
                 ("uvm", "one command of `/dev/nvidia-uvm`"),
                 ("uvm_tools", "one command of `/dev/nvidia-uvm-tools`"),
                 ("control", "one leaf of `NV_ESC_RM_CONTROL`"),
-                ("alloc", "one leaf of `NV_ESC_RM_ALLOC`")]
+                ("alloc", "one leaf of `NV_ESC_RM_ALLOC`"),
+                ("modeset", "one leaf of the single `/dev/nvidia-modeset` "
+                            "request number")]
                if name in families]),
         "",
         table(["Excluded family", "Records", "Reason"],
@@ -1175,19 +1321,42 @@ def page_index(docs, rows):
                 ("escape_mux", "a dispatcher whose leaves are counted in the "
                                "control and allocation families"),
                 ("escape_dead", "declared in a header and dispatched by "
-                                "nothing")]
+                                "nothing"),
+                ("modeset_undispatched", "declared in "
+                                         "`enum NvKmsIoctlCommand` with an "
+                                         "empty dispatch entry")]
                if name in excluded]),
         "",
         "Total targets: %d." % len(targets),
         "",
+        "## Entry points",
+        "",
+        "The command families above count `ioctl` targets. The driver also "
+        "registers `mmap` and `poll` on the device nodes it serves, and "
+        "those carry no method id, no parameter struct and no inventory row. "
+        "They are counted here and never inside the %d above."
+        % len(targets),
+        "",
+        table(["Device node", "fops table", "Entry points", "Modelled"],
+              entry_point_rows(docs["entry"])),
+        "",
+        "%d entry point(s) are registered on the %d modelled device node(s), "
+        "of %d across every `file_operations` table the driver defines. The "
+        "description set declares a call for each `mmap` and `poll` on a "
+        "modelled node; `open` and `release` are reached by `openat` and by "
+        "process exit, and `unlocked_ioctl` is the command families above."
+        % (docs["entry"]["counts"]["modelled_entry_points"],
+           docs["entry"]["counts"]["modelled_nodes"],
+           docs["entry"]["counts"]["entry_points"]),
+        "",
         "## Staleness",
         "",
-        "`%s` regenerates all five pages into a temporary directory and "
+        "`%s` regenerates all %d pages into a temporary directory and "
         "compares them against the committed copies, naming the page and the "
         "first differing line when they disagree. It runs in the same offline "
-        "CI job as the other four artefact checks, so an artefact "
+        "CI job as the other six artefact checks, so an artefact "
         "regenerated against a new driver release without regenerating these "
-        "pages fails the build." % CHECK,
+        "pages fails the build." % (CHECK, len(BUILDERS) + 1),
         "",
         "## See also",
         "",
@@ -1207,6 +1376,7 @@ BUILDERS = [
     ("control-commands.md", page_control),
     ("allocation-classes.md", page_alloc),
     ("driver-cves.md", page_cves),
+    ("modeset-commands.md", page_modeset),
 ]
 
 

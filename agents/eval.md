@@ -23,7 +23,7 @@ configurations. Report what happened, including when it is uninteresting.
 
    | Stage | Population | Diagnosis of a loss |
    |---|---|---|
-   | targetable | commands a default tenant may call, 764 in total | the scope of the claim |
+   | targetable | commands a default tenant may call, 828 in total | the scope of the claim |
    | modelled | targets a syzlang variant declares | the describe phase is incomplete |
    | exercised | targets a program in the corpus names | the fuzzer builds programs too invalid to emit the call, usually a wrong resource chain |
 
@@ -32,8 +32,8 @@ configurations. Report what happened, including when it is uninteresting.
    The JSON carries `corpus` and `corpus_mtime`. Quote both wherever the
    exercised number appears, so a reader can tell which corpus produced it.
 
-   The denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control and 155
-   alloc targets. Four groups sit outside it and stay outside every
+   The denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc
+   and 64 modeset targets. Five groups sit outside it and stay outside every
    percentage:
 
    | Group | Count | Reason for exclusion |
@@ -42,6 +42,7 @@ configurations. Report what happened, including when it is uninteresting.
    | uvm_test | 104 | Commands that need `uvm_enable_builtin_tests=1` |
    | escape_dead | 3 | Escapes declared in nv_escape.h with no dispatch case |
    | escape_mux | 2 | NV_ESC_RM_CONTROL and NV_ESC_RM_ALLOC, whose leaves already count in the control and alloc families |
+   | modeset_undispatched | 2 | Declared in `enum NvKmsIoctlCommand` with an empty dispatch entry, so `nvKmsIoctl` returns before any handler runs |
 
    State the exclusions wherever the percentage appears.
 
@@ -53,7 +54,7 @@ configurations. Report what happened, including when it is uninteresting.
    chains are wrong, and a plateau at high surface coverage is the real
    stopping condition.
 2b. Completion: `python3 tools/coverage_ctl.py completion --run-id <id>` prints
-   whether every one of the 764 targets is either exercised or accounted for,
+   whether every one of the 828 targets is either exercised or accounted for,
    and lists the ones that are neither. Exit 0 is complete, 3 is incomplete and
    1 means the reading failed. This is the campaign's primary stopping rule, so
    record the three counts in `artifacts/eval/<run-id>/` alongside the coverage
@@ -66,10 +67,10 @@ configurations. Report what happened, including when it is uninteresting.
 
    The denominator entitles this phase to one claim it could not make before:
 
-   > On driver <version>, the campaign exercised N of the 764 commands a
+   > On driver <version>, the campaign exercised N of the 828 commands a
    > default `compute,utility` container tenant can reach. The remaining
-   > 764 minus N are accounted for, each with a recorded reason. The
-   > accounted-for set excludes the 345 commands outside the denominator by
+   > 828 minus N are accounted for, each with a recorded reason. The
+   > accounted-for set excludes the 347 commands outside the denominator by
    > construction.
 
    That template covers the remainder only where the ledger holds no

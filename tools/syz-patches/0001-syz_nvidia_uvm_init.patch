@@ -1,0 +1,70 @@
+diff --git a/executor/common_linux.h b/executor/common_linux.h
+index f9b1e7a..6e363af 100644
+--- a/executor/common_linux.h
++++ b/executor/common_linux.h
+@@ -2854,6 +2854,65 @@ static long syz_open_dev(volatile long a0, volatile long a1, volatile long a2)
+ }
+ #endif
+ 
++#if SYZ_EXECUTOR || __NR_syz_nvidia_uvm_init
++#include <fcntl.h>
++#include <string.h>
++#include <sys/ioctl.h>
++#include <unistd.h>
++
++// syz_nvidia_uvm_init(flags flags[uvm_init_flags]) fd_nvidia_uvm_vaspace
++//
++// Opens /dev/nvidia-uvm, issues UVM_INITIALIZE on it and returns the
++// descriptor. 36 of the driver's 39 UVM commands and uvm_mmap refuse a
++// descriptor that has not been through that transition, which
++// uvm_api_initialize performs by setting UVM_FD_VA_SPACE on the open file.
++//
++// A pseudo-syscall is needed because the ioctl cannot produce the resource
++// itself. __UVM_ROUTE_CMD_STACK in kernel-open/nvidia-uvm/uvm_api.h returns 0
++// on every path but a copy_from_user or copy_to_user failure and carries the
++// handler's real status in params.rmStatus, while syzkaller takes a
++// resource's value from the raw syscall return. A resource produced by
++// ioctl$UVM_INITIALIZE would hold 0 on every execution, and every consumer
++// would receive file descriptor 0.
++#define GSPWN_UVM_INITIALIZE 0x30000001
++
++// UVM_INITIALIZE_PARAMS from kernel-open/nvidia-uvm/uvm_linux_ioctl.h: NvU64
++// flags at offset 0, NV_STATUS rmStatus at offset 8, 16 bytes with the tail
++// padding the driver's alignment produces. NV_STATUS is NvU32 and NV_OK is 0.
++// The layout is asserted against descriptions/generation.json in
++// tools/selftest.py, so a struct that moves fails a test rather than leaving
++// this reading the wrong word.
++struct gspwn_uvm_initialize_params {
++	uint64 flags;
++	uint32 rmStatus;
++	uint32 pad;
++};
++
++static long syz_nvidia_uvm_init(volatile long a0)
++{
++	struct gspwn_uvm_initialize_params params;
++	int fd = open("/dev/nvidia-uvm", O_RDWR);
++	if (fd < 0)
++		return fd;
++	memset(&params, 0, sizeof(params));
++	params.flags = (uint64)a0;
++	if (ioctl(fd, GSPWN_UVM_INITIALIZE, &params) < 0) {
++		close(fd);
++		return -1;
++	}
++	// The ioctl returns 0 whether or not initialisation succeeded, and only
++	// rmStatus separates the two. A descriptor that did not reach
++	// UVM_FD_VA_SPACE must not become a resource: every consumer of it
++	// would be refused by the driver, and the program would carry an
++	// ordering dependency that never holds.
++	if (params.rmStatus != 0) {
++		close(fd);
++		return -1;
++	}
++	return fd;
++}
++#endif
++
+ #if SYZ_EXECUTOR || __NR_syz_open_procfs
+ #include <fcntl.h>
+ #include <string.h>

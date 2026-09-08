@@ -178,8 +178,8 @@ is now named there. The evidence for each is below.
 `NV04_DISPLAY_COMMON` (class 0x0073) carries `RS_FLAGS_ALLOC_NON_PRIVILEGED`
 and hangs off `NV01_DEVICE_0`, so it is allocated over `/dev/nvidiactl` with no
 display device node involved. The threat model excludes display by device node,
-naming `/dev/nvidia-modeset` and `/dev/dri/*`, and that exclusion does not
-reach this class.
+naming `/dev/dri/*`, and that exclusion does not reach this class. The same
+holds under the privilege flag, which is the second gate.
 
 | `NV0073` commands | Count |
 |---|---|
@@ -255,7 +255,8 @@ Three questions the phase prompts currently guess at have settled answers.
 Labs' descriptions if published. They are not, so that step resolves to no
 import available and should point at Moneta instead. Moneta's payloads are
 untyped byte arrays, so they carry the escape numbering and not the parameter
-structure, and they cover `/dev/nvidia-modeset`, which is out of scope here.
+structure, and they cover `/dev/nvidia-modeset`, which this branch models as
+its sixth family.
 
 ## Limits of the CVE record
 

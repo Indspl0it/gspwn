@@ -13867,7 +13867,7 @@ UVM_MAP_EXTERNAL_SPARSE_PARAMS {
 } [packed]
 
 UVM_MM_INITIALIZE_PARAMS {
-	uvmFd   	int32
+	uvmFd   	fd_nvidia_uvm_vaspace
 	rmStatus	int32
 } [packed]
 
@@ -13920,7 +13920,7 @@ UVM_TOOLS_INIT_EVENT_TRACKER_PARAMS {
 	controlBuffer  	int64
 	processor      	NvUuid
 	allProcessors  	int32
-	uvmFd          	int32
+	uvmFd          	fd_nvidia_uvm_vaspace
 	rmStatus       	int32
 	pad_tail       	array[const[0, int8], 4]
 } [packed]
@@ -13952,4 +13952,2370 @@ UVM_TOOLS_DISABLE_COUNTERS_PARAMS {
 	counterTypeFlags	int64
 	rmStatus        	int32
 	pad_tail        	array[const[0, int8], 4]
+} [packed]
+
+NvKmsDeviceId {
+	rmDeviceId	int32
+	migDevice 	int32
+} [packed]
+
+NvKmsAllocDeviceRequest_s4 {
+	name 	array[int8, 32]
+	value	int32
+} [packed]
+
+NvKmsAllocDeviceRequest {
+	versionString               	array[int8, 32]
+	deviceId                    	NvKmsDeviceId
+	no3d                        	int8
+	enableConsoleHotplugHandling	int8
+	pad4                        	array[const[0, int8], 2]
+	registryKeys                	array[NvKmsAllocDeviceRequest_s4, 16]
+} [packed]
+
+NvKmsCompositionCapabilities_s0 {
+	supportedBlendModes	array[int32, 2]
+} [packed]
+
+NvKmsCompositionCapabilities {
+	colorKeySelect          	array[NvKmsCompositionCapabilities_s0, 3]
+	supportedColorKeySelects	int32
+} [packed]
+
+NvKmsLUTCaps {
+	supported  	int8
+	vssSupport 	int8
+	pad2       	array[const[0, int8], 2]
+	vssType    	int32
+	vssSegments	int32
+	lutEntries 	int32
+	entryFormat	int32
+} [packed]
+
+NvKmsLayerCapabilities {
+	supportsWindowMode           	int8:1
+	supportsICtCp                	int8:1
+	pad2                         	array[const[0, int8], 3]
+	composition                  	NvKmsCompositionCapabilities
+	supportedSurfaceMemoryFormats	int64
+	ilut                         	NvKmsLUTCaps
+	tmo                          	NvKmsLUTCaps
+} [packed]
+
+NvKmsDispIOCoherencyModes {
+	coherent   	int8
+	noncoherent	int8
+} [packed]
+
+NvKmsAllocDeviceReply {
+	status                            	int32
+	deviceHandle                      	nvkms_device
+	subDeviceMask                     	int32
+	numHeads                          	int32
+	numDisps                          	int32
+	dispHandles                       	array[nvkms_disp, 8]
+	supportsSwapGroups                	int8
+	supportsWarpAndBlend              	int8
+	requiresAllAllocationsInSysmem    	int8
+	supportsHeadSurface               	int8
+	validNIsoFormatMask               	int8
+	pad11                             	array[const[0, int8], 3]
+	surfaceAlignment                  	int32
+	maxWidthInBytes                   	int32
+	maxWidthInPixels                  	int32
+	maxHeightInPixels                 	int32
+	maxCursorSize                     	int32
+	cursorCompositionCaps             	NvKmsCompositionCapabilities
+	numLayers                         	array[int32, 4]
+	pad18                             	array[const[0, int8], 4]
+	layerCaps                         	array[NvKmsLayerCapabilities, 8]
+	olutCaps                          	NvKmsLUTCaps
+	validLayerRRTransforms            	int16
+	isoIOCoherencyModes               	NvKmsDispIOCoherencyModes
+	nisoIOCoherencyModes              	NvKmsDispIOCoherencyModes
+	displayIsGpuL2Coherent            	int8
+	supportsSyncpts                   	int8
+	supportsIndependentAcqRelSemaphore	int8
+	supportsVblankSyncObjects         	int8
+	pad27                             	array[const[0, int8], 2]
+	vtFbBaseAddress                   	int64
+	vtFbSize                          	int64
+} [packed]
+
+NvKmsAllocDeviceParams {
+	request	NvKmsAllocDeviceRequest
+	pad1   	array[const[0, int8], 4]
+	reply  	NvKmsAllocDeviceReply
+} [packed]
+
+nvkms_params_alloc_device {
+	cmd    	const[0, int32]
+	size   	const[1440, int32]
+	address	ptr64[inout, NvKmsAllocDeviceParams]
+} [packed]
+
+NvKmsFreeDeviceRequest {
+	deviceHandle	nvkms_device
+} [packed]
+
+NvKmsFreeDeviceReply {
+	padding	int32
+} [packed]
+
+NvKmsFreeDeviceParams {
+	request	NvKmsFreeDeviceRequest
+	reply  	NvKmsFreeDeviceReply
+} [packed]
+
+nvkms_params_free_device {
+	cmd    	const[1, int32]
+	size   	const[8, int32]
+	address	ptr64[inout, NvKmsFreeDeviceParams]
+} [packed]
+
+NvKmsQueryDispRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+} [packed]
+
+NVDpyIdList {
+	opaqueDpyIdList	int32
+} [packed]
+
+NvKmsQueryDispReply {
+	validDpys       	NVDpyIdList
+	bootDpys        	NVDpyIdList
+	muxDpys         	NVDpyIdList
+	frameLockHandle 	nvkms_frame_lock
+	numConnectors   	int32
+	connectorHandles	array[nvkms_connector, 16]
+	gpuString       	array[int8, 80]
+} [packed]
+
+NvKmsQueryDispParams {
+	request	NvKmsQueryDispRequest
+	reply  	NvKmsQueryDispReply
+} [packed]
+
+nvkms_params_query_disp {
+	cmd    	const[2, int32]
+	size   	const[172, int32]
+	address	ptr64[inout, NvKmsQueryDispParams]
+} [packed]
+
+NvKmsQueryConnectorStaticDataRequest {
+	deviceHandle   	nvkms_device
+	dispHandle     	nvkms_disp
+	connectorHandle	nvkms_connector
+} [packed]
+
+NVDpyId {
+	opaqueDpyId	int32
+} [packed]
+
+NvKmsQueryConnectorStaticDataReply {
+	dpyId           	NVDpyId
+	isDP            	int8
+	isLvds          	int8
+	locationOnChip  	int8
+	pad4            	const[0, int8]
+	legacyTypeIndex 	int32
+	type            	int32
+	typeIndex       	int32
+	signalFormat    	int32
+	physicalIndex   	int32
+	physicalLocation	int32
+} [packed]
+
+NvKmsQueryConnectorStaticDataParams {
+	request	NvKmsQueryConnectorStaticDataRequest
+	reply  	NvKmsQueryConnectorStaticDataReply
+} [packed]
+
+nvkms_params_query_connector_static_data {
+	cmd    	const[3, int32]
+	size   	const[44, int32]
+	address	ptr64[inout, NvKmsQueryConnectorStaticDataParams]
+} [packed]
+
+NvKmsQueryConnectorDynamicDataRequest {
+	deviceHandle   	nvkms_device
+	dispHandle     	nvkms_disp
+	connectorHandle	nvkms_connector
+} [packed]
+
+NvKmsQueryConnectorDynamicDataReply {
+	detectComplete  	int8
+	pad1            	array[const[0, int8], 3]
+	dynamicDpyIdList	NVDpyIdList
+} [packed]
+
+NvKmsQueryConnectorDynamicDataParams {
+	request	NvKmsQueryConnectorDynamicDataRequest
+	reply  	NvKmsQueryConnectorDynamicDataReply
+} [packed]
+
+nvkms_params_query_connector_dynamic_data {
+	cmd    	const[4, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsQueryConnectorDynamicDataParams]
+} [packed]
+
+NvKmsQueryDpyStaticDataRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+} [packed]
+
+NvKmsQueryDpyStaticDataReply {
+	connectorHandle	nvkms_connector
+	type           	int32
+	dpAddress      	array[int8, 64]
+	mobileInternal 	int8
+	isDpMST        	int8
+	pad5           	array[const[0, int8], 2]
+	headMask       	int32
+	isHDRCapable   	int8
+	pad_tail       	array[const[0, int8], 3]
+} [packed]
+
+NvKmsQueryDpyStaticDataParams {
+	request	NvKmsQueryDpyStaticDataRequest
+	reply  	NvKmsQueryDpyStaticDataReply
+} [packed]
+
+nvkms_params_query_dpy_static_data {
+	cmd    	const[5, int32]
+	size   	const[96, int32]
+	address	ptr64[inout, NvKmsQueryDpyStaticDataParams]
+} [packed]
+
+NvKmsQueryDpyDynamicDataRequest_s11 {
+	bufferSize	int16
+	buffer    	array[int8, 2048]
+} [packed]
+
+NvKmsQueryDpyDynamicDataRequest {
+	deviceHandle                	nvkms_device
+	dispHandle                  	nvkms_disp
+	dpyId                       	NVDpyId
+	forceConnected              	int8
+	forceDisconnected           	int8
+	overrideEdid                	int8
+	ignoreEdid                  	int8
+	ignoreEdidChecksum          	int8
+	allowDVISpecPClkOverride    	int8
+	dpInbandStereoSignaling     	int8
+	disableACPIBrightnessHotkeys	int8
+	edid                        	NvKmsQueryDpyDynamicDataRequest_s11
+	pad_tail                    	array[const[0, int8], 2]
+} [packed]
+
+NvKmsQueryDpyDynamicDataReply_s4 {
+	heightInCM	int8
+	widthInCM 	int8
+} [packed]
+
+NvKmsQueryDpyDynamicDataReply_s9 {
+	supported	int8
+	isDLP    	int8
+	isAegis  	int8
+	pad3     	const[0, int8]
+	subType  	int32
+} [packed]
+
+NvKmsQueryDpyDynamicDataReply_s10_s0 {
+	valid 	int8
+	buffer	array[int8, 16]
+	str   	array[int8, 37]
+} [packed]
+
+NvKmsQueryDpyDynamicDataReply_s10 {
+	guid	NvKmsQueryDpyDynamicDataReply_s10_s0
+} [packed]
+
+NvKmsQueryDpyDynamicDataReply_s11 {
+	bufferSize	int16
+	valid     	int8
+	buffer    	array[int8, 2048]
+	infoString	array[int8, 32768]
+	pad_tail  	const[0, int8]
+} [packed]
+
+NvKmsDpyOutputColorFormatInfo_s0 {
+	maxBpc	int32
+	minBpc	int32
+} [packed]
+
+NvKmsDpyOutputColorFormatInfo_s1 {
+	maxBpc	int32
+	minBpc	int32
+} [packed]
+
+NvKmsDpyOutputColorFormatInfo_s2 {
+	maxBpc	int32
+	minBpc	int32
+} [packed]
+
+NvKmsDpyOutputColorFormatInfo {
+	rgb444	NvKmsDpyOutputColorFormatInfo_s0
+	yuv444	NvKmsDpyOutputColorFormatInfo_s1
+	yuv422	NvKmsDpyOutputColorFormatInfo_s2
+} [packed]
+
+NvKmsSuperframeInfo_s1 {
+	x     	int16
+	y     	int16
+	width 	int16
+	height	int16
+} [packed]
+
+NvKmsSuperframeInfo {
+	numViews	int8
+	pad1    	const[0, int8]
+	view    	array[NvKmsSuperframeInfo_s1, 4]
+} [packed]
+
+NvKmsQueryDpyDynamicDataReply {
+	name                              	array[int8, 128]
+	maxPixelClockKHz                  	int32
+	connected                         	int8
+	isVirtualRealityHeadMountedDisplay	int8
+	physicalDimensions                	NvKmsQueryDpyDynamicDataReply_s4
+	maxWidthInPixels                  	int32
+	maxHeightInPixels                 	int32
+	vrrType                           	int32
+	supportsHDR                       	int8
+	pad9                              	array[const[0, int8], 3]
+	stereo3DVision                    	NvKmsQueryDpyDynamicDataReply_s9
+	dp                                	NvKmsQueryDpyDynamicDataReply_s10
+	edid                              	NvKmsQueryDpyDynamicDataReply_s11
+	pad12                             	array[const[0, int8], 2]
+	supportedOutputColorFormats       	NvKmsDpyOutputColorFormatInfo
+	superframeInfo                    	NvKmsSuperframeInfo
+	pad_tail                          	array[const[0, int8], 2]
+} [packed]
+
+NvKmsQueryDpyDynamicDataParams {
+	request	NvKmsQueryDpyDynamicDataRequest
+	reply  	NvKmsQueryDpyDynamicDataReply
+} [packed]
+
+nvkms_params_query_dpy_dynamic_data {
+	cmd    	const[6, int32]
+	size   	const[37168, int32]
+	address	ptr64[inout, NvKmsQueryDpyDynamicDataParams]
+} [packed]
+
+NvKmsModeValidationFrequencyRanges_s2 {
+	high	int32
+	low 	int32
+} [packed]
+
+NvKmsModeValidationFrequencyRanges {
+	source   	int32
+	numRanges	int32
+	range    	array[NvKmsModeValidationFrequencyRanges_s2, 8]
+} [packed]
+
+NvKmsModeValidationValidSyncs {
+	ignoreEdidSource	int8
+	pad1            	array[const[0, int8], 3]
+	horizSyncHz     	NvKmsModeValidationFrequencyRanges
+	vertRefreshHz1k 	NvKmsModeValidationFrequencyRanges
+} [packed]
+
+NvKmsModeValidationParams {
+	verboseModeValidation     	int8
+	moreVerboseModeValidation 	int8
+	preferYUV420              	int8
+	pad3                      	const[0, int8]
+	stereoMode                	int32
+	overrides                 	int32
+	validSyncs                	NvKmsModeValidationValidSyncs
+	dscMode                   	int32
+	dscOverrideBitsPerPixelX16	int32
+	maxUsageBoundPixelDepth   	array[int8, 8]
+} [packed]
+
+NvKmsDpyOutputColorParams {
+	format         	int32
+	formatSpecified	int8
+	pad2           	array[const[0, int8], 3]
+	bpc            	int32
+	bpcSpecified   	int8
+	pad_tail       	array[const[0, int8], 3]
+} [packed]
+
+NvKmsValidateModeIndexRequest {
+	deviceHandle  	nvkms_device
+	dispHandle    	nvkms_disp
+	dpyId         	NVDpyId
+	modeValidation	NvKmsModeValidationParams
+	dpyOutputColor	NvKmsDpyOutputColorParams
+	modeIndex     	int32
+	infoStringSize	int32
+	pad7          	array[const[0, int8], 4]
+	pInfoString   	int64
+} [packed]
+
+NvModeTimings_s11 {
+	w   	int16
+	h   	int16
+} [packed]
+
+NvModeTimings {
+	pixelClockHz	int64
+	RRx1k       	int32
+	hVisible    	int16
+	hSyncStart  	int16
+	hSyncEnd    	int16
+	hTotal      	int16
+	hSkew       	int16
+	vVisible    	int16
+	vSyncStart  	int16
+	vSyncEnd    	int16
+	vTotal      	int16
+	sizeMM      	NvModeTimings_s11
+	interlaced  	int8
+	doubleScan  	int8
+	hSyncPos    	int8
+	hSyncNeg    	int8
+	vSyncPos    	int8
+	vSyncNeg    	int8
+	hdmi3D      	int8
+	pad19       	array[const[0, int8], 3]
+	yuv420Mode  	int32
+} [packed]
+
+NvKmsMode {
+	timings	NvModeTimings
+	name   	array[int8, 32]
+} [packed]
+
+NvKmsScalingUsageBounds {
+	maxVDownscaleFactor	int16
+	maxHDownscaleFactor	int16
+	vTaps              	int32
+	vUpscalingAllowed  	int8
+	pad_tail           	array[const[0, int8], 3]
+} [packed]
+
+NvKmsUsageBounds_s0 {
+	usable                       	int8
+	pad1                         	array[const[0, int8], 3]
+	scaling                      	NvKmsScalingUsageBounds
+	supportedSurfaceMemoryFormats	int64
+} [packed]
+
+NvKmsUsageBounds {
+	layer	array[NvKmsUsageBounds_s0, 8]
+} [packed]
+
+NvKmsValidateModeIndexReply {
+	end                 	int8
+	valid               	int8
+	pad2                	array[const[0, int8], 6]
+	mode                	NvKmsMode
+	validSyncs          	NvKmsModeValidationValidSyncs
+	preferredMode       	int8
+	description         	array[int8, 64]
+	pad6                	array[const[0, int8], 3]
+	source              	int32
+	infoStringLenWritten	int32
+	modeUsage           	NvKmsUsageBounds
+	hdmi3DAvailable     	int8
+	pad_tail            	array[const[0, int8], 7]
+} [packed]
+
+NvKmsValidateModeIndexParams {
+	request	NvKmsValidateModeIndexRequest
+	reply  	NvKmsValidateModeIndexReply
+} [packed]
+
+nvkms_params_validate_mode_index {
+	cmd    	const[7, int32]
+	size   	const[736, int32]
+	address	ptr64[inout, NvKmsValidateModeIndexParams]
+} [packed]
+
+NvKmsValidateModeRequest {
+	deviceHandle  	nvkms_device
+	dispHandle    	nvkms_disp
+	dpyId         	NVDpyId
+	modeValidation	NvKmsModeValidationParams
+	dpyOutputColor	NvKmsDpyOutputColorParams
+	pad5          	array[const[0, int8], 4]
+	mode          	NvKmsMode
+	infoStringSize	int32
+	pad7          	array[const[0, int8], 4]
+	pInfoString   	int64
+} [packed]
+
+NvKmsValidateModeReply {
+	valid               	int8
+	pad1                	array[const[0, int8], 3]
+	validSyncs          	NvKmsModeValidationValidSyncs
+	infoStringLenWritten	int32
+	pad3                	array[const[0, int8], 4]
+	modeUsage           	NvKmsUsageBounds
+} [packed]
+
+NvKmsValidateModeParams {
+	request	NvKmsValidateModeRequest
+	reply  	NvKmsValidateModeReply
+} [packed]
+
+nvkms_params_validate_mode {
+	cmd    	const[8, int32]
+	size   	const[656, int32]
+	address	ptr64[inout, NvKmsValidateModeParams]
+} [packed]
+
+NvKmsRect {
+	x     	int16
+	y     	int16
+	width 	int16
+	height	int16
+} [packed]
+
+NvKmsSize {
+	width 	int16
+	height	int16
+} [packed]
+
+NvKmsPoint {
+	x   	int16
+	y   	int16
+} [packed]
+
+NvKmsFlipCommonParams_s1 {
+	specified	int8
+	pad1     	const[0, int8]
+	point    	NvKmsPoint
+} [packed]
+
+NVColorKey {
+	a     	int16
+	r     	int16
+	g     	int16
+	b     	int16
+	matchA	int8
+	matchR	int8
+	matchG	int8
+	matchB	int8
+} [packed]
+
+NvKmsCompositionParams {
+	colorKeySelect	int32
+	colorKey      	NVColorKey
+	blendingMode  	array[int32, 2]
+	surfaceAlpha  	int8
+	depth         	int8
+	pad_tail      	array[const[0, int8], 2]
+} [packed]
+
+NvKmsSetCursorImageCommonParams {
+	surfaceHandle   	array[nvkms_surface, 2]
+	cursorCompParams	NvKmsCompositionParams
+} [packed]
+
+NvKmsMoveCursorCommonParams {
+	x   	int16
+	y   	int16
+} [packed]
+
+NvKmsFlipCommonParams_s2 {
+	image            	NvKmsSetCursorImageCommonParams
+	imageSpecified   	int8
+	pad2             	const[0, int8]
+	position         	NvKmsMoveCursorCommonParams
+	positionSpecified	int8
+	pad_tail         	const[0, int8]
+} [packed]
+
+NvKmsFlipCommonParams_s3 {
+	val      	int32
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsSetInputLutParams {
+	specified	int8
+	pad1     	array[const[0, int8], 3]
+	depth    	int32
+	start    	int32
+	end      	int32
+	pRamps   	int64
+} [packed]
+
+NvKmsSetOutputLutParams {
+	specified	int8
+	enabled  	int8
+	pad2     	array[const[0, int8], 6]
+	pRamps   	int64
+} [packed]
+
+NvKmsSetLutCommonParams {
+	input      	NvKmsSetInputLutParams
+	output     	NvKmsSetOutputLutParams
+	synchronous	int8
+	pad_tail   	array[const[0, int8], 7]
+} [packed]
+
+NvKmsLUTSurfaceParams {
+	surfaceHandle	nvkms_surface
+	pad1         	array[const[0, int8], 4]
+	offset       	int64
+	vssSegments  	int32
+	lutEntries   	int32
+} [packed]
+
+NvKmsFlipCommonParams_s5 {
+	specified	int8
+	enabled  	int8
+	pad2     	array[const[0, int8], 6]
+	lut      	NvKmsLUTSurfaceParams
+} [packed]
+
+NvKmsFlipCommonParams_s6 {
+	specified	int8
+	pad1     	array[const[0, int8], 3]
+	val      	int32
+} [packed]
+
+NvKmsHDRStaticMetadata_s0 {
+	x   	int16
+	y   	int16
+} [packed]
+
+NvKmsHDRStaticMetadata_s1 {
+	x   	int16
+	y   	int16
+} [packed]
+
+NvKmsHDRStaticMetadata {
+	displayPrimaries            	array[NvKmsHDRStaticMetadata_s0, 3]
+	whitePoint                  	NvKmsHDRStaticMetadata_s1
+	maxDisplayMasteringLuminance	int16
+	minDisplayMasteringLuminance	int16
+	maxCLL                      	int16
+	maxFALL                     	int16
+} [packed]
+
+NvKmsFlipCommonParams_s7 {
+	specified     	int8
+	enabled       	int8
+	pad2          	array[const[0, int8], 2]
+	eotf          	int32
+	staticMetadata	NvKmsHDRStaticMetadata
+} [packed]
+
+NvKmsFlipCommonParams_s8 {
+	specified	int8
+	pad1     	array[const[0, int8], 3]
+	val      	int32
+} [packed]
+
+NvKmsFlipCommonParams_s9 {
+	specified	int8
+	pad1     	array[const[0, int8], 3]
+	state    	int32
+	mode     	int32
+} [packed]
+
+NvKmsRRParams {
+	rotation   	int32
+	reflectionX	int8
+	reflectionY	int8
+	pad_tail   	array[const[0, int8], 2]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s0 {
+	handle   	array[nvkms_surface, 2]
+	rrParams 	NvKmsRRParams
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s1 {
+	val      	NvKmsSize
+	specified	int8
+	pad_tail 	const[0, int8]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s2 {
+	val      	NvKmsSize
+	specified	int8
+	pad_tail 	const[0, int8]
+} [packed]
+
+NvKmsSignedPoint {
+	x   	int16
+	y   	int16
+} [packed]
+
+NvKmsFlipCommonParams_s10_s3 {
+	val      	NvKmsSignedPoint
+	specified	int8
+	pad_tail 	const[0, int8]
+} [packed]
+
+NvKmsNIsoSurface {
+	surfaceHandle	nvkms_surface
+	format       	int32
+	offsetInWords	int16
+	pad_tail     	array[const[0, int8], 2]
+} [packed]
+
+NvKmsCompletionNotifierDescription {
+	surface 	NvKmsNIsoSurface
+	awaken  	int8
+	pad_tail	array[const[0, int8], 3]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s4 {
+	val      	NvKmsCompletionNotifierDescription
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsSemaphore {
+	surface	NvKmsNIsoSurface
+	value  	int32
+} [packed]
+
+NvKmsChannelSyncObjects_u1_s0 {
+	acquire	NvKmsSemaphore
+	release	NvKmsSemaphore
+} [packed]
+
+NvKmsSyncpt_u1_s1 {
+	id   	int32
+	value	int32
+} [packed]
+
+NvKmsSyncpt_u1 {
+	fd  	int32
+	raw 	NvKmsSyncpt_u1_s1
+} [packed]
+
+NvKmsSyncpt {
+	type	int32
+	u   	NvKmsSyncpt_u1
+} [packed]
+
+NvKmsChannelSyncObjects_u1_s1 {
+	pre              	NvKmsSyncpt
+	requestedPostType	int32
+} [packed]
+
+NvKmsChannelSyncObjects_u1 {
+	semaphores	NvKmsChannelSyncObjects_u1_s0
+	syncpts   	NvKmsChannelSyncObjects_u1_s1
+} [packed]
+
+NvKmsChannelSyncObjects {
+	useSyncpt	int8
+	pad1     	array[const[0, int8], 3]
+	u        	NvKmsChannelSyncObjects_u1
+} [packed]
+
+NvKmsFlipCommonParams_s10_s5 {
+	val      	NvKmsChannelSyncObjects
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s6 {
+	vertical  	int16
+	horizontal	int16
+	specified 	int8
+	pad_tail  	const[0, int8]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s11 {
+	val      	NvKmsCompositionParams
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s12 {
+	specified	int8
+	enabled  	int8
+	pad2     	array[const[0, int8], 6]
+	lut      	NvKmsLUTSurfaceParams
+} [packed]
+
+NvKmsFlipCommonParams_s10_s13 {
+	specified	int8
+	enabled  	int8
+	pad2     	array[const[0, int8], 6]
+	lut      	NvKmsLUTSurfaceParams
+} [packed]
+
+NvKmsCscMatrix {
+	m   	array[int32, 12]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s14 {
+	specified	int8
+	useMain  	int8
+	pad2     	array[const[0, int8], 2]
+	matrix   	NvKmsCscMatrix
+} [packed]
+
+NvKmsFlipCommonParams_s10_s16 {
+	specified     	int8
+	enabled       	int8
+	staticMetadata	NvKmsHDRStaticMetadata
+} [packed]
+
+NvKmsFlipCommonParams_s10_s17 {
+	val      	int32
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s18 {
+	val      	int32
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s19 {
+	val      	int32
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s20 {
+	matrix   	NvKmsCscMatrix
+	enabled  	int8
+	specified	int8
+	pad_tail 	array[const[0, int8], 2]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s21 {
+	matrix   	NvKmsCscMatrix
+	enabled  	int8
+	specified	int8
+	pad_tail 	array[const[0, int8], 2]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s22 {
+	matrix   	NvKmsCscMatrix
+	enabled  	int8
+	specified	int8
+	pad_tail 	array[const[0, int8], 2]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s23 {
+	matrix   	NvKmsCscMatrix
+	enabled  	int8
+	specified	int8
+	pad_tail 	array[const[0, int8], 2]
+} [packed]
+
+NvKmsFlipCommonParams_s10_s24 {
+	matrix   	NvKmsCscMatrix
+	enabled  	int8
+	specified	int8
+	pad_tail 	array[const[0, int8], 2]
+} [packed]
+
+NvKmsFlipCommonParams_s10 {
+	surface            	NvKmsFlipCommonParams_s10_s0
+	sizeIn             	NvKmsFlipCommonParams_s10_s1
+	sizeOut            	NvKmsFlipCommonParams_s10_s2
+	outputPosition     	NvKmsFlipCommonParams_s10_s3
+	pad4               	array[const[0, int8], 2]
+	completionNotifier 	NvKmsFlipCommonParams_s10_s4
+	syncObjects        	NvKmsFlipCommonParams_s10_s5
+	maxDownscaleFactors	NvKmsFlipCommonParams_s10_s6
+	tearing            	int8
+	perEyeStereoFlip   	int8
+	pad9               	array[const[0, int8], 4]
+	timeStamp          	int64
+	minPresentInterval 	int8
+	pad11              	array[const[0, int8], 3]
+	compositionParams  	NvKmsFlipCommonParams_s10_s11
+	pad12              	array[const[0, int8], 4]
+	ilut               	NvKmsFlipCommonParams_s10_s12
+	tmo                	NvKmsFlipCommonParams_s10_s13
+	csc                	NvKmsFlipCommonParams_s10_s14
+	skipPendingFlips   	int8
+	pad16              	const[0, int8]
+	hdr                	NvKmsFlipCommonParams_s10_s16
+	colorRange         	NvKmsFlipCommonParams_s10_s17
+	colorSpace         	NvKmsFlipCommonParams_s10_s18
+	tf                 	NvKmsFlipCommonParams_s10_s19
+	fmtOverride        	NvKmsFlipCommonParams_s10_s20
+	csc00Override      	NvKmsFlipCommonParams_s10_s21
+	csc01Override      	NvKmsFlipCommonParams_s10_s22
+	csc10Override      	NvKmsFlipCommonParams_s10_s23
+	csc11Override      	NvKmsFlipCommonParams_s10_s24
+	pad_tail           	array[const[0, int8], 4]
+} [packed]
+
+NvKmsFlipCommonParams {
+	allowVrr       	int8
+	pad1           	const[0, int8]
+	viewPortIn     	NvKmsFlipCommonParams_s1
+	cursor         	NvKmsFlipCommonParams_s2
+	tf             	NvKmsFlipCommonParams_s3
+	pad4           	array[const[0, int8], 4]
+	lut            	NvKmsSetLutCommonParams
+	olut           	NvKmsFlipCommonParams_s5
+	olutFpNormScale	NvKmsFlipCommonParams_s6
+	hdrInfoFrame   	NvKmsFlipCommonParams_s7
+	colorimetry    	NvKmsFlipCommonParams_s8
+	dithering      	NvKmsFlipCommonParams_s9
+	pad10          	array[const[0, int8], 4]
+	layer          	array[NvKmsFlipCommonParams_s10, 8]
+} [packed]
+
+NvKmsMatrix {
+	m   	array[int32, 9]
+} [packed]
+
+NvKmsSetModeHeadSurfaceParams_s13 {
+	surfaceHandle	nvkms_surface
+	vertexCount  	int32
+	dataType     	int32
+} [packed]
+
+NvKmsSetModeHeadSurfaceParams {
+	forceCompositionPipeline    	int8
+	forceFullCompositionPipeline	int8
+	fakeOverlay                 	int8
+	blendAfterWarp              	int8
+	transformSpecified          	int8
+	reflectionX                 	int8
+	reflectionY                 	int8
+	pad7                        	const[0, int8]
+	rotation                    	int32
+	pixelShift                  	int32
+	resamplingMethod            	int32
+	transform                   	NvKmsMatrix
+	blendTexSurfaceHandle       	nvkms_surface
+	offsetTexSurfaceHandle      	nvkms_surface
+	warpMesh                    	NvKmsSetModeHeadSurfaceParams_s13
+} [packed]
+
+NvKmsSetModeOneHeadRequest {
+	dpyIdList                	NVDpyIdList
+	pad1                     	array[const[0, int8], 4]
+	mode                     	NvKmsMode
+	modeValidationParams     	NvKmsModeValidationParams
+	viewPortOut              	NvKmsRect
+	viewPortSizeIn           	NvKmsSize
+	pad5                     	array[const[0, int8], 4]
+	flip                     	NvKmsFlipCommonParams
+	headSurface              	NvKmsSetModeHeadSurfaceParams
+	viewPortOutSpecified     	int8
+	allowGsync               	int8
+	pad9                     	array[const[0, int8], 2]
+	allowAdaptiveSync        	int32
+	vrrOverrideMinRefreshRate	int32
+	colorFormat              	int32
+	colorFormatSpecified     	int8
+	pad13                    	array[const[0, int8], 3]
+	colorBpc                 	int32
+	colorBpcSpecified        	int8
+	pad15                    	array[const[0, int8], 3]
+	colorRange               	int32
+	colorRangeSpecified      	int8
+	pad_tail                 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsSetModeOneDispRequest {
+	requestedHeadsBitMask	int32
+	pad1                 	array[const[0, int8], 4]
+	head                 	array[NvKmsSetModeOneHeadRequest, 4]
+} [packed]
+
+NvKmsSetModeRequest {
+	deviceHandle           	nvkms_device
+	commit                 	int8
+	pad2                   	array[const[0, int8], 3]
+	requestedDispsBitMask  	int32
+	pad3                   	array[const[0, int8], 4]
+	disp                   	array[NvKmsSetModeOneDispRequest, 8]
+	allowHeadSurfaceInNvKms	int8
+	pad_tail               	array[const[0, int8], 7]
+} [packed]
+
+NvKmsFlipCommonReplyOneHead_s0 {
+	postSyncpt	NvKmsSyncpt
+} [packed]
+
+NvKmsFlipCommonReplyOneHead {
+	layer	array[NvKmsFlipCommonReplyOneHead_s0, 8]
+} [packed]
+
+NvKmsSetModeOneHeadReply {
+	status          	int32
+	hwHead          	int32
+	possibleUsage   	NvKmsUsageBounds
+	guaranteedUsage 	NvKmsUsageBounds
+	usingHeadSurface	int8
+	vrrEnabled      	int8
+	pad6            	array[const[0, int8], 2]
+	flipReply       	NvKmsFlipCommonReplyOneHead
+	pad_tail        	array[const[0, int8], 4]
+} [packed]
+
+NvKmsSetModeOneDispReply {
+	status	int32
+	pad1  	array[const[0, int8], 4]
+	head  	array[NvKmsSetModeOneHeadReply, 4]
+} [packed]
+
+NvKmsSetModeReply {
+	status	int32
+	pad1  	array[const[0, int8], 4]
+	disp  	array[NvKmsSetModeOneDispReply, 8]
+} [packed]
+
+NvKmsSetModeParams {
+	request	NvKmsSetModeRequest
+	reply  	NvKmsSetModeReply
+} [packed]
+
+nvkms_params_set_mode {
+	cmd    	const[9, int32]
+	size   	const[186784, int32]
+	address	ptr64[inout, NvKmsSetModeParams]
+} [packed]
+
+NvKmsSetCursorImageRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+	common      	NvKmsSetCursorImageCommonParams
+} [packed]
+
+NvKmsSetCursorImageReply {
+	padding	int32
+} [packed]
+
+NvKmsSetCursorImageParams {
+	request	NvKmsSetCursorImageRequest
+	reply  	NvKmsSetCursorImageReply
+} [packed]
+
+nvkms_params_set_cursor_image {
+	cmd    	const[10, int32]
+	size   	const[52, int32]
+	address	ptr64[inout, NvKmsSetCursorImageParams]
+} [packed]
+
+NvKmsMoveCursorRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+	common      	NvKmsMoveCursorCommonParams
+} [packed]
+
+NvKmsMoveCursorReply {
+	padding	int32
+} [packed]
+
+NvKmsMoveCursorParams {
+	request	NvKmsMoveCursorRequest
+	reply  	NvKmsMoveCursorReply
+} [packed]
+
+nvkms_params_move_cursor {
+	cmd    	const[11, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsMoveCursorParams]
+} [packed]
+
+NvKmsSetLutRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+	pad3        	array[const[0, int8], 4]
+	common      	NvKmsSetLutCommonParams
+} [packed]
+
+NvKmsSetLutReply {
+	padding	int32
+} [packed]
+
+NvKmsSetLutParams {
+	request 	NvKmsSetLutRequest
+	reply   	NvKmsSetLutReply
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+nvkms_params_set_lut {
+	cmd    	const[12, int32]
+	size   	const[72, int32]
+	address	ptr64[inout, NvKmsSetLutParams]
+} [packed]
+
+NvKmsCheckLutNotifierRequest {
+	deviceHandle     	nvkms_device
+	dispHandle       	nvkms_disp
+	head             	int32
+	waitForCompletion	int8
+	pad_tail         	array[const[0, int8], 3]
+} [packed]
+
+NvKmsCheckLutNotifierReply {
+	complete	int8
+} [packed]
+
+NvKmsCheckLutNotifierParams {
+	request 	NvKmsCheckLutNotifierRequest
+	reply   	NvKmsCheckLutNotifierReply
+	pad_tail	array[const[0, int8], 3]
+} [packed]
+
+nvkms_params_check_lut_notifier {
+	cmd    	const[13, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsCheckLutNotifierParams]
+} [packed]
+
+NvKmsIdleBaseChannelRequest {
+	deviceHandle     	nvkms_device
+	subDevicesPerHead	array[int32, 4]
+} [packed]
+
+NvKmsIdleBaseChannelReply {
+	stopSubDevicesPerHead	array[int32, 4]
+} [packed]
+
+NvKmsIdleBaseChannelParams {
+	request	NvKmsIdleBaseChannelRequest
+	reply  	NvKmsIdleBaseChannelReply
+} [packed]
+
+nvkms_params_idle_base_channel {
+	cmd    	const[14, int32]
+	size   	const[36, int32]
+	address	ptr64[inout, NvKmsIdleBaseChannelParams]
+} [packed]
+
+NvKmsFlipRequest {
+	deviceHandle	nvkms_device
+	pad1        	array[const[0, int8], 4]
+	pFlipHead   	int64
+	numFlipHeads	int32
+	commit      	int8
+	pad_tail    	array[const[0, int8], 3]
+} [packed]
+
+NvKmsFlipReply {
+	vrrFlipType	int32
+	flipResult 	int32
+	flipHead   	array[NvKmsFlipCommonReplyOneHead, 32]
+} [packed]
+
+NvKmsFlipParams {
+	request	NvKmsFlipRequest
+	reply  	NvKmsFlipReply
+} [packed]
+
+nvkms_params_flip {
+	cmd    	const[15, int32]
+	size   	const[3104, int32]
+	address	ptr64[inout, NvKmsFlipParams]
+} [packed]
+
+NvKmsDeclareDynamicDpyInterestRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+	interest    	int8
+	pad_tail    	array[const[0, int8], 3]
+} [packed]
+
+NvKmsDeclareDynamicDpyInterestReply {
+	padding	int32
+} [packed]
+
+NvKmsDeclareDynamicDpyInterestParams {
+	request	NvKmsDeclareDynamicDpyInterestRequest
+	reply  	NvKmsDeclareDynamicDpyInterestReply
+} [packed]
+
+nvkms_params_declare_dynamic_dpy_interest {
+	cmd    	const[16, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsDeclareDynamicDpyInterestParams]
+} [packed]
+
+NvKmsRegisterSurfaceRequest_s3_u0 {
+	rmObject	int32
+	fd      	int32
+} [packed]
+
+NvKmsRegisterSurfaceRequest_s3 {
+	u                  	NvKmsRegisterSurfaceRequest_s3_u0
+	pad1               	array[const[0, int8], 4]
+	offset             	int64
+	pitch              	int32
+	pad3               	array[const[0, int8], 4]
+	rmObjectSizeInBytes	int64
+} [packed]
+
+NvKmsRegisterSurfaceRequest {
+	deviceHandle           	nvkms_device
+	useFd                  	int8
+	pad2                   	array[const[0, int8], 3]
+	rmClient               	int32
+	pad3                   	array[const[0, int8], 4]
+	planes                 	array[NvKmsRegisterSurfaceRequest_s3, 3]
+	widthInPixels          	int32
+	heightInPixels         	int32
+	layout                 	int32
+	format                 	int32
+	noDisplayHardwareAccess	int8
+	noDisplayCaching       	int8
+	pad10                  	array[const[0, int8], 2]
+	isoType                	int32
+	log2GobsPerBlockY      	int32
+	pad_tail               	array[const[0, int8], 4]
+} [packed]
+
+NvKmsRegisterSurfaceReply {
+	surfaceHandle	nvkms_surface
+} [packed]
+
+NvKmsRegisterSurfaceParams {
+	request 	NvKmsRegisterSurfaceRequest
+	reply   	NvKmsRegisterSurfaceReply
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+nvkms_params_register_surface {
+	cmd    	const[17, int32]
+	size   	const[152, int32]
+	address	ptr64[inout, NvKmsRegisterSurfaceParams]
+} [packed]
+
+NvKmsUnregisterSurfaceRequest {
+	deviceHandle 	nvkms_device
+	surfaceHandle	nvkms_surface
+	skipSync     	int8
+	pad_tail     	array[const[0, int8], 3]
+} [packed]
+
+NvKmsUnregisterSurfaceReply {
+	padding	int32
+} [packed]
+
+NvKmsUnregisterSurfaceParams {
+	request	NvKmsUnregisterSurfaceRequest
+	reply  	NvKmsUnregisterSurfaceReply
+} [packed]
+
+nvkms_params_unregister_surface {
+	cmd    	const[18, int32]
+	size   	const[16, int32]
+	address	ptr64[inout, NvKmsUnregisterSurfaceParams]
+} [packed]
+
+NvKmsGrantSurfaceRequest {
+	deviceHandle 	nvkms_device
+	surfaceHandle	nvkms_surface
+	fd           	int32
+} [packed]
+
+NvKmsGrantSurfaceReply {
+	padding	int32
+} [packed]
+
+NvKmsGrantSurfaceParams {
+	request	NvKmsGrantSurfaceRequest
+	reply  	NvKmsGrantSurfaceReply
+} [packed]
+
+nvkms_params_grant_surface {
+	cmd    	const[19, int32]
+	size   	const[16, int32]
+	address	ptr64[inout, NvKmsGrantSurfaceParams]
+} [packed]
+
+NvKmsAcquireSurfaceRequest {
+	fd  	int32
+} [packed]
+
+NvKmsAcquireSurfaceReply {
+	deviceHandle 	nvkms_device
+	surfaceHandle	nvkms_surface
+} [packed]
+
+NvKmsAcquireSurfaceParams {
+	request	NvKmsAcquireSurfaceRequest
+	reply  	NvKmsAcquireSurfaceReply
+} [packed]
+
+nvkms_params_acquire_surface {
+	cmd    	const[20, int32]
+	size   	const[12, int32]
+	address	ptr64[inout, NvKmsAcquireSurfaceParams]
+} [packed]
+
+NvKmsReleaseSurfaceRequest {
+	deviceHandle 	nvkms_device
+	surfaceHandle	nvkms_surface
+} [packed]
+
+NvKmsReleaseSurfaceReply {
+	padding	int32
+} [packed]
+
+NvKmsReleaseSurfaceParams {
+	request	NvKmsReleaseSurfaceRequest
+	reply  	NvKmsReleaseSurfaceReply
+} [packed]
+
+nvkms_params_release_surface {
+	cmd    	const[21, int32]
+	size   	const[12, int32]
+	address	ptr64[inout, NvKmsReleaseSurfaceParams]
+} [packed]
+
+NvKmsSetDpyAttributeRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+	attribute   	int32
+	value       	int64
+} [packed]
+
+NvKmsSetDpyAttributeReply {
+	padding	int32
+} [packed]
+
+NvKmsSetDpyAttributeParams {
+	request 	NvKmsSetDpyAttributeRequest
+	reply   	NvKmsSetDpyAttributeReply
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+nvkms_params_set_dpy_attribute {
+	cmd    	const[22, int32]
+	size   	const[32, int32]
+	address	ptr64[inout, NvKmsSetDpyAttributeParams]
+} [packed]
+
+NvKmsGetDpyAttributeRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+	attribute   	int32
+} [packed]
+
+NvKmsGetDpyAttributeReply {
+	value	int64
+} [packed]
+
+NvKmsGetDpyAttributeParams {
+	request	NvKmsGetDpyAttributeRequest
+	reply  	NvKmsGetDpyAttributeReply
+} [packed]
+
+nvkms_params_get_dpy_attribute {
+	cmd    	const[23, int32]
+	size   	const[24, int32]
+	address	ptr64[inout, NvKmsGetDpyAttributeParams]
+} [packed]
+
+NvKmsGetDpyAttributeValidValuesRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+	attribute   	int32
+} [packed]
+
+NvKmsAttributeValidValuesCommonReply_u3_s0 {
+	min 	int64
+	max 	int64
+} [packed]
+
+NvKmsAttributeValidValuesCommonReply_u3_s1 {
+	ints	int32
+} [packed]
+
+NvKmsAttributeValidValuesCommonReply_u3 {
+	range	NvKmsAttributeValidValuesCommonReply_u3_s0
+	bits 	NvKmsAttributeValidValuesCommonReply_u3_s1
+} [packed]
+
+NvKmsAttributeValidValuesCommonReply {
+	readable	int8
+	writable	int8
+	pad2    	array[const[0, int8], 2]
+	type    	int32
+	u       	NvKmsAttributeValidValuesCommonReply_u3
+} [packed]
+
+NvKmsGetDpyAttributeValidValuesReply {
+	common	NvKmsAttributeValidValuesCommonReply
+} [packed]
+
+NvKmsGetDpyAttributeValidValuesParams {
+	request	NvKmsGetDpyAttributeValidValuesRequest
+	reply  	NvKmsGetDpyAttributeValidValuesReply
+} [packed]
+
+nvkms_params_get_dpy_attribute_valid_values {
+	cmd    	const[24, int32]
+	size   	const[40, int32]
+	address	ptr64[inout, NvKmsGetDpyAttributeValidValuesParams]
+} [packed]
+
+NvKmsSetDispAttributeRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	attribute   	int32
+	pad3        	array[const[0, int8], 4]
+	value       	int64
+} [packed]
+
+NvKmsSetDispAttributeReply {
+	padding	int32
+} [packed]
+
+NvKmsSetDispAttributeParams {
+	request 	NvKmsSetDispAttributeRequest
+	reply   	NvKmsSetDispAttributeReply
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+nvkms_params_set_disp_attribute {
+	cmd    	const[25, int32]
+	size   	const[32, int32]
+	address	ptr64[inout, NvKmsSetDispAttributeParams]
+} [packed]
+
+NvKmsGetDispAttributeRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	attribute   	int32
+} [packed]
+
+NvKmsGetDispAttributeReply {
+	value	int64
+} [packed]
+
+NvKmsGetDispAttributeParams {
+	request	NvKmsGetDispAttributeRequest
+	pad1   	array[const[0, int8], 4]
+	reply  	NvKmsGetDispAttributeReply
+} [packed]
+
+nvkms_params_get_disp_attribute {
+	cmd    	const[26, int32]
+	size   	const[24, int32]
+	address	ptr64[inout, NvKmsGetDispAttributeParams]
+} [packed]
+
+NvKmsGetDispAttributeValidValuesRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	attribute   	int32
+} [packed]
+
+NvKmsGetDispAttributeValidValuesReply {
+	common	NvKmsAttributeValidValuesCommonReply
+} [packed]
+
+NvKmsGetDispAttributeValidValuesParams {
+	request	NvKmsGetDispAttributeValidValuesRequest
+	pad1   	array[const[0, int8], 4]
+	reply  	NvKmsGetDispAttributeValidValuesReply
+} [packed]
+
+nvkms_params_get_disp_attribute_valid_values {
+	cmd    	const[27, int32]
+	size   	const[40, int32]
+	address	ptr64[inout, NvKmsGetDispAttributeValidValuesParams]
+} [packed]
+
+NvKmsQueryFrameLockRequest {
+	frameLockHandle	nvkms_frame_lock
+} [packed]
+
+NvKmsQueryFrameLockReply {
+	gpuIds	array[int32, 4]
+} [packed]
+
+NvKmsQueryFrameLockParams {
+	request	NvKmsQueryFrameLockRequest
+	reply  	NvKmsQueryFrameLockReply
+} [packed]
+
+nvkms_params_query_framelock {
+	cmd    	const[28, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsQueryFrameLockParams]
+} [packed]
+
+NvKmsSetFrameLockAttributeRequest {
+	frameLockHandle	nvkms_frame_lock
+	attribute      	int32
+	value          	int64
+} [packed]
+
+NvKmsSetFrameLockAttributeReply {
+	padding	int32
+} [packed]
+
+NvKmsSetFrameLockAttributeParams {
+	request 	NvKmsSetFrameLockAttributeRequest
+	reply   	NvKmsSetFrameLockAttributeReply
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+nvkms_params_set_framelock_attribute {
+	cmd    	const[29, int32]
+	size   	const[24, int32]
+	address	ptr64[inout, NvKmsSetFrameLockAttributeParams]
+} [packed]
+
+NvKmsGetFrameLockAttributeRequest {
+	frameLockHandle	nvkms_frame_lock
+	attribute      	int32
+} [packed]
+
+NvKmsGetFrameLockAttributeReply {
+	value	int64
+} [packed]
+
+NvKmsGetFrameLockAttributeParams {
+	request	NvKmsGetFrameLockAttributeRequest
+	reply  	NvKmsGetFrameLockAttributeReply
+} [packed]
+
+nvkms_params_get_framelock_attribute {
+	cmd    	const[30, int32]
+	size   	const[16, int32]
+	address	ptr64[inout, NvKmsGetFrameLockAttributeParams]
+} [packed]
+
+NvKmsGetFrameLockAttributeValidValuesRequest {
+	frameLockHandle	nvkms_frame_lock
+	attribute      	int32
+} [packed]
+
+NvKmsGetFrameLockAttributeValidValuesReply {
+	common	NvKmsAttributeValidValuesCommonReply
+} [packed]
+
+NvKmsGetFrameLockAttributeValidValuesParams {
+	request	NvKmsGetFrameLockAttributeValidValuesRequest
+	reply  	NvKmsGetFrameLockAttributeValidValuesReply
+} [packed]
+
+nvkms_params_get_framelock_attribute_valid_values {
+	cmd    	const[31, int32]
+	size   	const[32, int32]
+	address	ptr64[inout, NvKmsGetFrameLockAttributeValidValuesParams]
+} [packed]
+
+NvKmsGetNextEventRequest {
+	padding	int32
+} [packed]
+
+NvKmsEventDpyChanged {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+} [packed]
+
+NvKmsEventDynamicDpyConnected {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+} [packed]
+
+NvKmsEventDynamicDpyDisconnected {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+} [packed]
+
+NvKmsEventDpyAttributeChanged {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+	attribute   	int32
+	value       	int64
+} [packed]
+
+NvKmsEventFrameLockAttributeChanged {
+	frameLockHandle	nvkms_frame_lock
+	attribute      	int32
+	value          	int64
+} [packed]
+
+NvKmsEventFlipOccurred {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+	layer       	int32
+} [packed]
+
+NvKmsEvent_u1 {
+	dpyChanged               	NvKmsEventDpyChanged
+	dynamicDpyConnected      	NvKmsEventDynamicDpyConnected
+	dynamicDpyDisconnected   	NvKmsEventDynamicDpyDisconnected
+	dpyAttributeChanged      	NvKmsEventDpyAttributeChanged
+	frameLockAttributeChanged	NvKmsEventFrameLockAttributeChanged
+	flipOccurred             	NvKmsEventFlipOccurred
+} [packed]
+
+NvKmsEvent {
+	eventType	int32
+	pad1     	array[const[0, int8], 4]
+	u        	NvKmsEvent_u1
+} [packed]
+
+NvKmsGetNextEventReply {
+	valid	int8
+	pad1 	array[const[0, int8], 7]
+	event	NvKmsEvent
+} [packed]
+
+NvKmsGetNextEventParams {
+	request	NvKmsGetNextEventRequest
+	pad1   	array[const[0, int8], 4]
+	reply  	NvKmsGetNextEventReply
+} [packed]
+
+nvkms_params_get_next_event {
+	cmd    	const[32, int32]
+	size   	const[48, int32]
+	address	ptr64[inout, NvKmsGetNextEventParams]
+} [packed]
+
+NvKmsDeclareEventInterestRequest {
+	interestMask	int32
+} [packed]
+
+NvKmsDeclareEventInterestReply {
+	padding	int32
+} [packed]
+
+NvKmsDeclareEventInterestParams {
+	request	NvKmsDeclareEventInterestRequest
+	reply  	NvKmsDeclareEventInterestReply
+} [packed]
+
+nvkms_params_declare_event_interest {
+	cmd    	const[33, int32]
+	size   	const[8, int32]
+	address	ptr64[inout, NvKmsDeclareEventInterestParams]
+} [packed]
+
+NvKmsClearUnicastEventRequest {
+	unicastEventFd	int32
+} [packed]
+
+NvKmsClearUnicastEventReply {
+	padding	int32
+} [packed]
+
+NvKmsClearUnicastEventParams {
+	request	NvKmsClearUnicastEventRequest
+	reply  	NvKmsClearUnicastEventReply
+} [packed]
+
+nvkms_params_clear_unicast_event {
+	cmd    	const[34, int32]
+	size   	const[8, int32]
+	address	ptr64[inout, NvKmsClearUnicastEventParams]
+} [packed]
+
+NvKmsSetLayerPositionRequest_s2_s1 {
+	layerPosition        	array[NvKmsSignedPoint, 8]
+	requestedLayerBitMask	int32
+} [packed]
+
+NvKmsSetLayerPositionRequest_s2 {
+	requestedHeadsBitMask	int32
+	head                 	array[NvKmsSetLayerPositionRequest_s2_s1, 4]
+} [packed]
+
+NvKmsSetLayerPositionRequest {
+	deviceHandle         	nvkms_device
+	requestedDispsBitMask	int32
+	disp                 	array[NvKmsSetLayerPositionRequest_s2, 8]
+} [packed]
+
+NvKmsSetLayerPositionReply {
+	padding	int32
+} [packed]
+
+NvKmsSetLayerPositionParams {
+	request	NvKmsSetLayerPositionRequest
+	reply  	NvKmsSetLayerPositionReply
+} [packed]
+
+nvkms_params_set_layer_position {
+	cmd    	const[37, int32]
+	size   	const[1196, int32]
+	address	ptr64[inout, NvKmsSetLayerPositionParams]
+} [packed]
+
+NvKmsGrabOwnershipRequest {
+	deviceHandle	nvkms_device
+} [packed]
+
+NvKmsGrabOwnershipReply {
+	padding	int32
+} [packed]
+
+NvKmsGrabOwnershipParams {
+	request	NvKmsGrabOwnershipRequest
+	reply  	NvKmsGrabOwnershipReply
+} [packed]
+
+nvkms_params_grab_ownership {
+	cmd    	const[38, int32]
+	size   	const[8, int32]
+	address	ptr64[inout, NvKmsGrabOwnershipParams]
+} [packed]
+
+NvKmsReleaseOwnershipRequest {
+	deviceHandle	nvkms_device
+} [packed]
+
+NvKmsReleaseOwnershipReply {
+	padding	int32
+} [packed]
+
+NvKmsReleaseOwnershipParams {
+	request	NvKmsReleaseOwnershipRequest
+	reply  	NvKmsReleaseOwnershipReply
+} [packed]
+
+nvkms_params_release_ownership {
+	cmd    	const[39, int32]
+	size   	const[8, int32]
+	address	ptr64[inout, NvKmsReleaseOwnershipParams]
+} [packed]
+
+NvKmsFlipPermissions_s0 {
+	layerMask	int8
+} [packed]
+
+NvKmsFlipPermissions {
+	head	array[NvKmsFlipPermissions_s0, 4]
+} [packed]
+
+NvKmsModesetPermissions_s0 {
+	dpyIdList	NVDpyIdList
+} [packed]
+
+NvKmsModesetPermissions {
+	head	array[NvKmsModesetPermissions_s0, 4]
+} [packed]
+
+NvKmsPermissions_u1 {
+	flip   	NvKmsFlipPermissions
+	modeset	NvKmsModesetPermissions
+} [packed]
+
+NvKmsPermissions {
+	type	int32
+	f1  	NvKmsPermissions_u1
+} [packed]
+
+NvKmsGrantPermissionsRequest {
+	fd          	int32
+	deviceHandle	nvkms_device
+	permissions 	NvKmsPermissions
+} [packed]
+
+NvKmsGrantPermissionsReply {
+	padding	int32
+} [packed]
+
+NvKmsGrantPermissionsParams {
+	request	NvKmsGrantPermissionsRequest
+	reply  	NvKmsGrantPermissionsReply
+} [packed]
+
+nvkms_params_grant_permissions {
+	cmd    	const[40, int32]
+	size   	const[32, int32]
+	address	ptr64[inout, NvKmsGrantPermissionsParams]
+} [packed]
+
+NvKmsAcquirePermissionsRequest {
+	fd  	int32
+} [packed]
+
+NvKmsAcquirePermissionsReply {
+	deviceHandle	nvkms_device
+	permissions 	NvKmsPermissions
+} [packed]
+
+NvKmsAcquirePermissionsParams {
+	request	NvKmsAcquirePermissionsRequest
+	reply  	NvKmsAcquirePermissionsReply
+} [packed]
+
+nvkms_params_acquire_permissions {
+	cmd    	const[41, int32]
+	size   	const[28, int32]
+	address	ptr64[inout, NvKmsAcquirePermissionsParams]
+} [packed]
+
+NvKmsRevokePermissionsRequest {
+	deviceHandle          	nvkms_device
+	permissionsTypeBitmask	int32
+	permissions           	NvKmsPermissions
+} [packed]
+
+NvKmsRevokePermissionsReply {
+	padding	int32
+} [packed]
+
+NvKmsRevokePermissionsParams {
+	request	NvKmsRevokePermissionsRequest
+	reply  	NvKmsRevokePermissionsReply
+} [packed]
+
+nvkms_params_revoke_permissions {
+	cmd    	const[42, int32]
+	size   	const[32, int32]
+	address	ptr64[inout, NvKmsRevokePermissionsParams]
+} [packed]
+
+NvKmsQueryDpyCRC32Request {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+} [packed]
+
+NvKmsDpyCRC32 {
+	value    	int32
+	supported	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsQueryDpyCRC32Reply {
+	compositorCrc32     	NvKmsDpyCRC32
+	rasterGeneratorCrc32	NvKmsDpyCRC32
+	outputCrc32         	NvKmsDpyCRC32
+} [packed]
+
+NvKmsQueryDpyCRC32Params {
+	request	NvKmsQueryDpyCRC32Request
+	reply  	NvKmsQueryDpyCRC32Reply
+} [packed]
+
+nvkms_params_query_dpy_crc32 {
+	cmd    	const[43, int32]
+	size   	const[36, int32]
+	address	ptr64[inout, NvKmsQueryDpyCRC32Params]
+} [packed]
+
+NvKmsRegisterDeferredRequestFifoRequest {
+	deviceHandle 	nvkms_device
+	surfaceHandle	nvkms_surface
+} [packed]
+
+NvKmsRegisterDeferredRequestFifoReply {
+	deferredRequestFifoHandle	nvkms_deferred_request_fifo
+} [packed]
+
+NvKmsRegisterDeferredRequestFifoParams {
+	request	NvKmsRegisterDeferredRequestFifoRequest
+	reply  	NvKmsRegisterDeferredRequestFifoReply
+} [packed]
+
+nvkms_params_register_deferred_request_fifo {
+	cmd    	const[44, int32]
+	size   	const[12, int32]
+	address	ptr64[inout, NvKmsRegisterDeferredRequestFifoParams]
+} [packed]
+
+NvKmsUnregisterDeferredRequestFifoRequest {
+	deviceHandle             	nvkms_device
+	deferredRequestFifoHandle	nvkms_deferred_request_fifo
+} [packed]
+
+NvKmsUnregisterDeferredRequestFifoReply {
+	padding	int32
+} [packed]
+
+NvKmsUnregisterDeferredRequestFifoParams {
+	request	NvKmsUnregisterDeferredRequestFifoRequest
+	reply  	NvKmsUnregisterDeferredRequestFifoReply
+} [packed]
+
+nvkms_params_unregister_deferred_request_fifo {
+	cmd    	const[45, int32]
+	size   	const[12, int32]
+	address	ptr64[inout, NvKmsUnregisterDeferredRequestFifoParams]
+} [packed]
+
+NvKmsSwapGroupConfig {
+	headMask	int32
+} [packed]
+
+NvKmsAllocSwapGroupRequest {
+	deviceHandle	nvkms_device
+	config      	NvKmsSwapGroupConfig
+} [packed]
+
+NvKmsAllocSwapGroupReply {
+	swapGroupHandle	nvkms_swap_group
+} [packed]
+
+NvKmsAllocSwapGroupParams {
+	request	NvKmsAllocSwapGroupRequest
+	reply  	NvKmsAllocSwapGroupReply
+} [packed]
+
+nvkms_params_alloc_swap_group {
+	cmd    	const[46, int32]
+	size   	const[12, int32]
+	address	ptr64[inout, NvKmsAllocSwapGroupParams]
+} [packed]
+
+NvKmsFreeSwapGroupRequest {
+	deviceHandle   	nvkms_device
+	swapGroupHandle	nvkms_swap_group
+} [packed]
+
+NvKmsFreeSwapGroupReply {
+	padding	int32
+} [packed]
+
+NvKmsFreeSwapGroupParams {
+	request	NvKmsFreeSwapGroupRequest
+	reply  	NvKmsFreeSwapGroupReply
+} [packed]
+
+nvkms_params_free_swap_group {
+	cmd    	const[47, int32]
+	size   	const[12, int32]
+	address	ptr64[inout, NvKmsFreeSwapGroupParams]
+} [packed]
+
+NvKmsJoinSwapGroupRequestOneMember_s3 {
+	fd       	int32
+	specified	int8
+	pad_tail 	array[const[0, int8], 3]
+} [packed]
+
+NvKmsJoinSwapGroupRequestOneMember {
+	deviceHandle             	nvkms_device
+	swapGroupHandle          	nvkms_swap_group
+	deferredRequestFifoHandle	nvkms_deferred_request_fifo
+	unicastEvent             	NvKmsJoinSwapGroupRequestOneMember_s3
+} [packed]
+
+NvKmsJoinSwapGroupRequest {
+	numMembers	int32
+	member    	array[NvKmsJoinSwapGroupRequestOneMember, 128]
+} [packed]
+
+NvKmsJoinSwapGroupReply {
+	padding	int32
+} [packed]
+
+NvKmsJoinSwapGroupParams {
+	request	NvKmsJoinSwapGroupRequest
+	reply  	NvKmsJoinSwapGroupReply
+} [packed]
+
+nvkms_params_join_swap_group {
+	cmd    	const[48, int32]
+	size   	const[2568, int32]
+	address	ptr64[inout, NvKmsJoinSwapGroupParams]
+} [packed]
+
+NvKmsLeaveSwapGroupRequestOneMember {
+	deviceHandle             	nvkms_device
+	deferredRequestFifoHandle	nvkms_deferred_request_fifo
+} [packed]
+
+NvKmsLeaveSwapGroupRequest {
+	numMembers	int32
+	member    	array[NvKmsLeaveSwapGroupRequestOneMember, 128]
+} [packed]
+
+NvKmsLeaveSwapGroupReply {
+	padding	int32
+} [packed]
+
+NvKmsLeaveSwapGroupParams {
+	request	NvKmsLeaveSwapGroupRequest
+	reply  	NvKmsLeaveSwapGroupReply
+} [packed]
+
+nvkms_params_leave_swap_group {
+	cmd    	const[49, int32]
+	size   	const[1032, int32]
+	address	ptr64[inout, NvKmsLeaveSwapGroupParams]
+} [packed]
+
+NvKmsSetSwapGroupClipListRequest {
+	deviceHandle   	nvkms_device
+	swapGroupHandle	nvkms_swap_group
+	nClips         	int16
+	pad3           	array[const[0, int8], 6]
+	pClipList      	int64
+} [packed]
+
+NvKmsSetSwapGroupClipListReply {
+	padding	int32
+} [packed]
+
+NvKmsSetSwapGroupClipListParams {
+	request 	NvKmsSetSwapGroupClipListRequest
+	reply   	NvKmsSetSwapGroupClipListReply
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+nvkms_params_set_swap_group_clip_list {
+	cmd    	const[50, int32]
+	size   	const[32, int32]
+	address	ptr64[inout, NvKmsSetSwapGroupClipListParams]
+} [packed]
+
+NvKmsGrantSwapGroupRequest {
+	deviceHandle   	nvkms_device
+	swapGroupHandle	nvkms_swap_group
+	fd             	int32
+} [packed]
+
+NvKmsGrantSwapGroupReply {
+	padding	int32
+} [packed]
+
+NvKmsGrantSwapGroupParams {
+	request	NvKmsGrantSwapGroupRequest
+	reply  	NvKmsGrantSwapGroupReply
+} [packed]
+
+nvkms_params_grant_swap_group {
+	cmd    	const[51, int32]
+	size   	const[16, int32]
+	address	ptr64[inout, NvKmsGrantSwapGroupParams]
+} [packed]
+
+NvKmsAcquireSwapGroupRequest {
+	fd  	int32
+} [packed]
+
+NvKmsAcquireSwapGroupReply {
+	deviceHandle   	nvkms_device
+	swapGroupHandle	nvkms_swap_group
+} [packed]
+
+NvKmsAcquireSwapGroupParams {
+	request	NvKmsAcquireSwapGroupRequest
+	reply  	NvKmsAcquireSwapGroupReply
+} [packed]
+
+nvkms_params_acquire_swap_group {
+	cmd    	const[52, int32]
+	size   	const[12, int32]
+	address	ptr64[inout, NvKmsAcquireSwapGroupParams]
+} [packed]
+
+NvKmsReleaseSwapGroupRequest {
+	deviceHandle   	nvkms_device
+	swapGroupHandle	nvkms_swap_group
+} [packed]
+
+NvKmsReleaseSwapGroupReply {
+	padding	int32
+} [packed]
+
+NvKmsReleaseSwapGroupParams {
+	request	NvKmsReleaseSwapGroupRequest
+	reply  	NvKmsReleaseSwapGroupReply
+} [packed]
+
+nvkms_params_release_swap_group {
+	cmd    	const[53, int32]
+	size   	const[12, int32]
+	address	ptr64[inout, NvKmsReleaseSwapGroupParams]
+} [packed]
+
+NvKmsSwitchMuxRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+	operation   	int32
+	state       	int32
+} [packed]
+
+NvKmsSwitchMuxReply {
+	padding	int32
+} [packed]
+
+NvKmsSwitchMuxParams {
+	request	NvKmsSwitchMuxRequest
+	reply  	NvKmsSwitchMuxReply
+} [packed]
+
+nvkms_params_switch_mux {
+	cmd    	const[54, int32]
+	size   	const[24, int32]
+	address	ptr64[inout, NvKmsSwitchMuxParams]
+} [packed]
+
+NvKmsGetMuxStateRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	dpyId       	NVDpyId
+} [packed]
+
+NvKmsGetMuxStateReply {
+	state	int32
+} [packed]
+
+NvKmsGetMuxStateParams {
+	request	NvKmsGetMuxStateRequest
+	reply  	NvKmsGetMuxStateReply
+} [packed]
+
+nvkms_params_get_mux_state {
+	cmd    	const[55, int32]
+	size   	const[16, int32]
+	address	ptr64[inout, NvKmsGetMuxStateParams]
+} [packed]
+
+NvKmsEnableVblankSyncObjectRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+} [packed]
+
+NvKmsEnableVblankSyncObjectReply {
+	vblankHandle	nvkms_vblank_sync_object
+	syncptId    	int32
+} [packed]
+
+NvKmsEnableVblankSyncObjectParams {
+	request	NvKmsEnableVblankSyncObjectRequest
+	reply  	NvKmsEnableVblankSyncObjectReply
+} [packed]
+
+nvkms_params_enable_vblank_sync_object {
+	cmd    	const[56, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsEnableVblankSyncObjectParams]
+} [packed]
+
+NvKmsDisableVblankSyncObjectRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+	vblankHandle	nvkms_vblank_sync_object
+} [packed]
+
+NvKmsDisableVblankSyncObjectReply {
+	padding	int32
+} [packed]
+
+NvKmsDisableVblankSyncObjectParams {
+	request	NvKmsDisableVblankSyncObjectRequest
+	reply  	NvKmsDisableVblankSyncObjectReply
+} [packed]
+
+nvkms_params_disable_vblank_sync_object {
+	cmd    	const[57, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsDisableVblankSyncObjectParams]
+} [packed]
+
+NvKmsNotifyVblankRequest_s3 {
+	fd  	int32
+} [packed]
+
+NvKmsNotifyVblankRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+	unicastEvent	NvKmsNotifyVblankRequest_s3
+} [packed]
+
+NvKmsNotifyVblankReply {
+	padding	int32
+} [packed]
+
+NvKmsNotifyVblankParams {
+	request	NvKmsNotifyVblankRequest
+	reply  	NvKmsNotifyVblankReply
+} [packed]
+
+nvkms_params_notify_vblank {
+	cmd    	const[58, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsNotifyVblankParams]
+} [packed]
+
+NvKmsSetFlipLockGroupOneDev {
+	deviceHandle         	nvkms_device
+	requestedHeadsBitMask	int32
+} [packed]
+
+NvKmsSetFlipLockGroupRequest {
+	enable	int8
+	pad1  	array[const[0, int8], 3]
+	dev   	array[NvKmsSetFlipLockGroupOneDev, 8]
+} [packed]
+
+NvKmsSetFlipLockGroupReply {
+	padding	int32
+} [packed]
+
+NvKmsSetFlipLockGroupParams {
+	request	NvKmsSetFlipLockGroupRequest
+	reply  	NvKmsSetFlipLockGroupReply
+} [packed]
+
+nvkms_params_set_fliplock_group {
+	cmd    	const[59, int32]
+	size   	const[72, int32]
+	address	ptr64[inout, NvKmsSetFlipLockGroupParams]
+} [packed]
+
+NvKmsEnableVblankSemControlRequest {
+	deviceHandle 	nvkms_device
+	dispHandle   	nvkms_disp
+	surfaceHandle	nvkms_surface
+	pad3         	array[const[0, int8], 4]
+	surfaceOffset	int64
+} [packed]
+
+NvKmsEnableVblankSemControlReply {
+	vblankSemControlHandle	nvkms_vblank_sem_control
+} [packed]
+
+NvKmsEnableVblankSemControlParams {
+	request 	NvKmsEnableVblankSemControlRequest
+	reply   	NvKmsEnableVblankSemControlReply
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+nvkms_params_enable_vblank_sem_control {
+	cmd    	const[60, int32]
+	size   	const[32, int32]
+	address	ptr64[inout, NvKmsEnableVblankSemControlParams]
+} [packed]
+
+NvKmsDisableVblankSemControlRequest {
+	deviceHandle          	nvkms_device
+	dispHandle            	nvkms_disp
+	vblankSemControlHandle	nvkms_vblank_sem_control
+} [packed]
+
+NvKmsDisableVblankSemControlReply {
+	padding	int32
+} [packed]
+
+NvKmsDisableVblankSemControlParams {
+	request	NvKmsDisableVblankSemControlRequest
+	reply  	NvKmsDisableVblankSemControlReply
+} [packed]
+
+nvkms_params_disable_vblank_sem_control {
+	cmd    	const[61, int32]
+	size   	const[16, int32]
+	address	ptr64[inout, NvKmsDisableVblankSemControlParams]
+} [packed]
+
+NvKmsAccelVblankSemControlsRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	headMask    	int32
+} [packed]
+
+NvKmsAccelVblankSemControlsReply {
+	padding	int32
+} [packed]
+
+NvKmsAccelVblankSemControlsParams {
+	request	NvKmsAccelVblankSemControlsRequest
+	reply  	NvKmsAccelVblankSemControlsReply
+} [packed]
+
+nvkms_params_accel_vblank_sem_controls {
+	cmd    	const[62, int32]
+	size   	const[16, int32]
+	address	ptr64[inout, NvKmsAccelVblankSemControlsParams]
+} [packed]
+
+NvKmsFramebufferConsoleDisabledRequest {
+	deviceHandle	nvkms_device
+} [packed]
+
+NvKmsFramebufferConsoleDisabledReply {
+	padding	int32
+} [packed]
+
+NvKmsFramebufferConsoleDisabledParams {
+	request	NvKmsFramebufferConsoleDisabledRequest
+	reply  	NvKmsFramebufferConsoleDisabledReply
+} [packed]
+
+nvkms_params_framebuffer_console_disabled {
+	cmd    	const[63, int32]
+	size   	const[8, int32]
+	address	ptr64[inout, NvKmsFramebufferConsoleDisabledParams]
+} [packed]
+
+NvKmsRegisterVblankIntrCallbackRequest {
+	deviceHandle	nvkms_device
+	dispHandle  	nvkms_disp
+	head        	int32
+	pad3        	array[const[0, int8], 4]
+	pCallback   	int64
+	param       	int64
+} [packed]
+
+NvKmsRegisterVblankIntrCallbackReply {
+	callbackHandle	nvkms_vblank_intr_callback
+} [packed]
+
+NvKmsRegisterVblankIntrCallbackParams {
+	request 	NvKmsRegisterVblankIntrCallbackRequest
+	reply   	NvKmsRegisterVblankIntrCallbackReply
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+nvkms_params_register_vblank_intr_callback {
+	cmd    	const[64, int32]
+	size   	const[40, int32]
+	address	ptr64[inout, NvKmsRegisterVblankIntrCallbackParams]
+} [packed]
+
+NvKmsUnregisterVblankIntrCallbackRequest {
+	deviceHandle  	nvkms_device
+	dispHandle    	nvkms_disp
+	head          	int32
+	callbackHandle	nvkms_vblank_intr_callback
+} [packed]
+
+NvKmsUnregisterVblankIntrCallbackReply {
+	padding	int32
+} [packed]
+
+NvKmsUnregisterVblankIntrCallbackParams {
+	request	NvKmsUnregisterVblankIntrCallbackRequest
+	reply  	NvKmsUnregisterVblankIntrCallbackReply
+} [packed]
+
+nvkms_params_unregister_vblank_intr_callback {
+	cmd    	const[65, int32]
+	size   	const[20, int32]
+	address	ptr64[inout, NvKmsUnregisterVblankIntrCallbackParams]
 } [packed]
