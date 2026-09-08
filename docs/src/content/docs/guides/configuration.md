@@ -38,8 +38,8 @@ Set these first. They bound an unattended run, and they are the spend ceiling.
 ```yaml
 loop:
   max_rounds: 10
-  max_total_run_hours: 216
-  campaign_hours: 24
+  max_total_run_hours: 5000
+  campaign_hours: 1000
 ```
 
 `max_rounds` is a backstop against a runaway loop. Surface completion is the

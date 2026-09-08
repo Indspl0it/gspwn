@@ -8,10 +8,15 @@
 # the same numbers as _IOWR macros for syz-extract to consume on the SUT.
 
 
-# Device nodes. nvidia-drm and /dev/dri/* are out of scope in the
-# threat model, so nothing here opens them. /dev/nvidia-modeset is
-# in scope: libnvidia-container creates it by default
-# (src/nvc.c:317) and withholds it only under OPT_NO_MODESET.
+# Device nodes. /dev/nvidia-modeset is in scope:
+# libnvidia-container creates it by default (src/nvc.c:317) and
+# withholds it only under OPT_NO_MODESET. Both DRM nodes are in
+# scope on the CDI path, which adds every /dev/dri node found for
+# the GPU's PCI bus id with no capability check
+# (nvidia-container-toolkit internal/platform-support/dgpu/
+# nvml.go:48-55). The card node and the render node are separate
+# resources because drm_ioctl_permit refuses a render client any
+# command whose flag word omits DRM_RENDER_ALLOW.
 resource fd_nv[fd]
 resource fd_nvidiactl[fd_nv]
 resource fd_nvidia[fd_nv]
@@ -19,12 +24,17 @@ resource fd_nvidia_uvm[fd]
 resource fd_nvidia_uvm_tools[fd]
 resource fd_nvidia_modeset[fd]
 resource fd_nvidia_uvm_vaspace[fd_nvidia_uvm]
+resource fd_dri[fd]
+resource fd_dri_card[fd_dri]
+resource fd_dri_render[fd_dri]
 
 openat$nvidiactl(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidiactl"]], flags const[0x2], mode const[0]) fd_nvidiactl
 openat$nvidia(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia#"]], flags const[0x2], mode const[0]) fd_nvidia
 openat$nvidia_uvm(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-uvm"]], flags const[0x2], mode const[0]) fd_nvidia_uvm
 openat$nvidia_uvm_tools(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-uvm-tools"]], flags const[0x2], mode const[0]) fd_nvidia_uvm_tools
 openat$nvidia_modeset(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/nvidia-modeset"]], flags const[0x2], mode const[0]) fd_nvidia_modeset
+openat$dri_card(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/dri/card#"]], flags const[0x2], mode const[0]) fd_dri_card
+openat$dri_render(fd const[0xffffffffffffff9c], file ptr[in, string["/dev/dri/renderD#"]], flags const[0x2], mode const[0]) fd_dri_render
 
 # The initialised UVM descriptor. 36 of the 39 uvm commands and
 # uvm_mmap refuse a descriptor that has not been through
@@ -206,6 +216,119 @@ resource nvh_volta_usermode_a[nv_handle]
 
 nvos64_alloc_flags = 0x0, 0x1
 uvm_init_flags = 0x1, 0x2, 0x4
+
+# Value families. Each set holds the constants the driver's own
+# headers define for one field of one parameter struct, recovered by
+# tools/value_families.py and accepted by the committed audit in
+# surface/value-families-audit.json. A field bound to the wrong
+# family is worse than a bare integer, so the audit is the only
+# route from a derived family to a set below.
+# NVB0B5_ALLOCATION_PARAMETERS.version, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/class/clb0b5sw.h
+nvb0b5_allocation_parameters_version = 0x0, 0x1
+# NV_VASPACE_ALLOCATION_PARAMETERS.index, struct-or-stem-anchored, 6 value(s) from src/common/sdk/nvidia/inc/nvos.h
+nv_vaspace_allocation_parameters_index = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5
+# NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS.subFunc, handler-switch, 7 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h
+nv0000_ctrl_system_nvpcf_get_power_mode_info_params_sub_func = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6
+# NV0000_CTRL_SYSTEM_DEBUG_RMMSG_CTRL_PARAMS.cmd, struct-or-stem-anchored+handler-switch, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h
+nv0000_ctrl_system_debug_rmmsg_ctrl_params_cmd = 0x0, 0x1
+# NV0000_CTRL_OS_UNIX_FLUSH_USER_CACHE_PARAMS.cacheOps, handler-switch, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000unix.h
+nv0000_ctrl_os_unix_flush_user_cache_params_cache_ops = 0x1, 0x2, 0x3
+# NV0000_CTRL_NVD_GET_TIMESTAMP_PARAMS.cpuClkId, handler-switch, 4 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000nvd.h
+nv0000_ctrl_nvd_get_timestamp_params_cpu_clk_id = 0x0, 0x1, 0x2, 0x3
+# NV0000_CTRL_CLIENT_GET_HANDLE_INFO_PARAMS.index, handler-switch, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000client.h
+nv0000_ctrl_client_get_handle_info_params_index = 0x1, 0x2
+# NV0000_CTRL_SYSTEM_NOTIFY_EVENT_PARAMS.eventType, handler-switch, 5 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h
+nv0000_ctrl_system_notify_event_params_event_type = 0x0, 0x1, 0x2, 0x3, 0x4
+# NV0000_CTRL_EVENT_SET_NOTIFICATION_PARAMS.action, struct-or-stem-anchored, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000event.h
+nv0000_ctrl_event_set_notification_params_action = 0x0, 0x1, 0x2
+# NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CTRL_PARAMS.cmd, handler-switch, 33 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h
+nv0000_ctrl_system_pfm_req_hndlr_ctrl_params_cmd = 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0x16, 0x17, 0x1a, 0x1b, 0x1c, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49
+# NV00F1_CTRL_FABRIC_EVENT.type, struct-or-stem-anchored, 4 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl00f1.h
+nv00f1_ctrl_fabric_event_type = 0x0, 0x1, 0x2, 0x3
+# NV0000_CTRL_DIAG_PROFILE_RPC_PARAMS.rpcProfileCmd, handler-switch, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000diag.h
+nv0000_ctrl_diag_profile_rpc_params_rpc_profile_cmd = 0x0, 0x1, 0x2
+# NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS.adjust, struct-or-stem-anchored, 9 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h
+nv30f1_ctrl_gsync_get_optimized_timing_params_adjust = 0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x30, 0x40, 0x80
+# NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS.protocol, struct-or-stem-anchored, 8 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h
+nv30f1_ctrl_gsync_get_optimized_timing_params_protocol = 0x0, 0x1, 0x2, 0x4, 0x5, 0x8, 0x9, 0xc
+# NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS.structure, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h
+nv30f1_ctrl_gsync_get_optimized_timing_params_structure = 0x0, 0x1
+# NV30F1_CTRL_GSYNC_GET_CAPS_PARAMS.boardId, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h
+nv30f1_ctrl_gsync_get_caps_params_board_id = 0x2060, 0x2061
+# NV30F1_CTRL_GSYNC_GET_CAPS_PARAMS.capFlags, struct-or-stem-anchored, 11 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h
+nv30f1_ctrl_gsync_get_caps_params_cap_flags = 0x1, 0x2, 0x4, 0x10, 0x20, 0x100000, 0x1000000, 0x2000000, 0x10000000, 0x20000000, 0x40000000
+# NV0080_CTRL_FB_SET_DEFAULT_VIDMEM_PHYSICALITY_PARAMS.value, handler-switch, 4 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fb.h
+nv0080_ctrl_fb_set_default_vidmem_physicality_params_value = 0x0, 0x1, 0x2, 0x3
+# NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_PARAMS.action, struct-or-stem-anchored, 11 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h
+nv30f1_ctrl_gsync_set_event_notification_params_action = 0x0, 0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80, 0x100, 0x1ff
+# NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS.pdeAddrSpace, struct-or-stem-anchored, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h
+nv0080_ctrl_dma_get_pde_info_params_pde_addr_space = 0x0, 0x1, 0x2
+# NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS.pdeSize, struct-or-stem-anchored, 4 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h
+nv0080_ctrl_dma_get_pde_info_params_pde_size = 0x1, 0x2, 0x3, 0x4
+# NV2080_CTRL_GPU_GET_PIDS_PARAMS.idType, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h
+nv2080_ctrl_gpu_get_pids_params_id_type = 0x0, 0x1
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.dp, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_dp = 0x0, 0x1
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.ffma, struct-or-stem-anchored, 6 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_ffma = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.fmla16, struct-or-stem-anchored, 6 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_fmla16 = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.fmla32, struct-or-stem-anchored, 6 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_fmla32 = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.imla0, struct-or-stem-anchored, 7 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla0 = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.imla1, struct-or-stem-anchored, 7 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla1 = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.imla2, struct-or-stem-anchored, 7 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla2 = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.imla3, struct-or-stem-anchored, 7 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla3 = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6
+# NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS.imla4, struct-or-stem-anchored, 7 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h
+nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla4 = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6
+# NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_PARAMS.engineId, struct-or-stem-anchored, 27 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fifo.h
+nv0080_ctrl_fifo_get_engine_context_properties_params_engine_id = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a
+# NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS.bypassMode, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h
+nv2080_ctrl_fb_get_gpu_cache_info_params_bypass_mode = 0x0, 0x1
+# NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS.powerState, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h
+nv2080_ctrl_fb_get_gpu_cache_info_params_power_state = 0x0, 0x1
+# NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS.rcmState, struct-or-stem-anchored, 4 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h
+nv2080_ctrl_fb_get_gpu_cache_info_params_rcm_state = 0x0, 0x1, 0x2, 0x3
+# NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS.writeMode, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h
+nv2080_ctrl_fb_get_gpu_cache_info_params_write_mode = 0x0, 0x1
+# NV2080_CTRL_NVLINK_DEVICE_INFO.deviceIdFlags, struct-or-stem-anchored, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h
+nv2080_ctrl_nvlink_device_info_device_id_flags = 0x0, 0x1, 0x2
+# NV2080_CTRL_NVLINK_DEVICE_INFO.deviceType, struct-or-stem-anchored, 6 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h
+nv2080_ctrl_nvlink_device_info_device_type = 0x0, 0x1, 0x2, 0x3, 0x4, 0xff
+# NV2080_CTRL_FB_GET_SEMAPHORE_SURFACE_LAYOUT_PARAMS.caps, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h
+nv2080_ctrl_fb_get_semaphore_surface_layout_params_caps = 0x1, 0x2
+# NV2080_CTRL_FB_IS_KIND_PARAMS.operation, struct-or-stem-anchored+handler-switch, 9 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h
+nv2080_ctrl_fb_is_kind_params_operation = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8
+# NV2080_CTRL_CMD_GPU_ILLUM_PARAMS.attribute, handler-switch, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h
+nv2080_ctrl_cmd_gpu_illum_params_attribute = 0x0, 0x1
+# NV2080_CTRL_GPU_GET_SIMULATION_INFO_PARAMS.type, struct-or-stem-anchored, 11 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h
+nv2080_ctrl_gpu_get_simulation_info_params_type = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xffffffff
+# NV2080_CTRL_EVENT_SET_NOTIFICATION_PARAMS.action, struct-or-stem-anchored+handler-switch, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080event.h
+nv2080_ctrl_event_set_notification_params_action = 0x0, 0x1, 0x2
+# NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_PARAMS.aperture, struct-or-stem-anchored, 2 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h
+nv2080_ctrl_cmd_fifo_get_userd_location_params_aperture = 0x0, 0x1
+# NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_PARAMS.attribute, struct-or-stem-anchored, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h
+nv2080_ctrl_cmd_fifo_get_userd_location_params_attribute = 0x0, 0x1, 0x2
+# NVA0BD_CTRL_NVFBC_SW_SESSION_UPDATE_INFO_PARAMS.captureCallFlags, handler-switch, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrla0bd.h
+nva0bd_ctrl_nvfbc_sw_session_update_info_params_capture_call_flags = 0x0, 0x1, 0x10
+# NVA084_CTRL_KERNEL_HOST_VGPU_DEVICE_EVENT_SET_NOTIFICATION_PARAMS.action, handler-switch, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrla084.h
+nva084_ctrl_kernel_host_vgpu_device_event_set_notification_params_action = 0x0, 0x1, 0x2
+# NVA081_CTRL_VGPU_CONFIG_EVENT_SET_NOTIFICATION_PARAMS.action, handler-switch, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrla081.h
+nva081_ctrl_vgpu_config_event_set_notification_params_action = 0x0, 0x1, 0x2
+# NVA081_CTRL_VGPU_SET_CAPABILITY_PARAMS.capability, handler-switch, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrla081.h
+nva081_ctrl_vgpu_set_capability_params_capability = 0x0, 0x1, 0xb
+# NVA081_CTRL_VGPU_GET_CAPABILITY_PARAMS.capability, handler-switch, 12 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrla081.h
+nva081_ctrl_vgpu_get_capability_params_capability = 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9, 0xa, 0xb
+# NV0073_CTRL_EVENT_SET_NOTIFICATION_PARAMS.action, struct-or-stem-anchored, 3 value(s) from src/common/sdk/nvidia/inc/ctrl/ctrl0073/ctrl0073event.h
+nv0073_ctrl_event_set_notification_params_action = 0x0, 0x1, 0x2
+# NVOS32_PARAMETERS.function, struct-or-stem-anchored, 11 value(s) from src/common/sdk/nvidia/inc/nvos.h
+nvos32_parameters_function = 0x2, 0x3, 0x5, 0x6, 0xe, 0xf, 0x10, 0x12, 0x13, 0x14, 0x1b
+# NVOS38_PARAMETERS.AccessType, struct-or-stem-anchored, 4 value(s) from src/common/sdk/nvidia/inc/nvos.h
+nvos38_parameters_access_type = 0x1, 0x2, 0x6, 0x7
 
 # Escapes other than the two multiplexers.
 ioctl$NV_ESC_RM_ALLOC_MEMORY(fd fd_nvidia, cmd const[0xc0384627], arg ptr[inout, nv_ioctl_nvos02_parameters_with_fd])
@@ -531,6 +654,18 @@ nv_pollfd_uvm_tools {
 	revents	const[0, int16]
 }
 
+nv_pollfd_dri_card {
+	fd	fd_dri_card
+	events	flags[nv_poll_events, int16]
+	revents	const[0, int16]
+}
+
+nv_pollfd_dri_render {
+	fd	fd_dri_render
+	events	flags[nv_poll_events, int16]
+	revents	const[0, int16]
+}
+
 # nvidia_mmap at kernel-open/nvidia/nv-mmap.c:770 reaches
 # nvidia_mmap_helper, which consumes a mapping context a prior ioctl
 # established. That helper abandons the mapping for any non-zero
@@ -560,3 +695,15 @@ mmap$nvidia_uvm(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[n
 poll$nvidiactl(fds ptr[in, array[nv_pollfd_nvidiactl]], nfds len[fds], timeout int32)
 poll$nvidia(fds ptr[in, array[nv_pollfd_nvidia]], nfds len[fds], timeout int32)
 poll$nvidia_uvm_tools(fds ptr[in, array[nv_pollfd_uvm_tools]], nfds len[fds], timeout int32)
+
+# nv_drm_fops registers mmap and poll on both DRM nodes, so each
+# node carries both calls. nv_drm_mmap at
+# kernel-open/nvidia-drm/nvidia-drm-gem.c:250 looks the GEM object up
+# by vm_pgoff through drm_vma_offset_exact_lookup_locked, so the only
+# offset that reaches an object is the fake one a prior
+# DRM_NVIDIA_GEM_MAP_OFFSET returned and no fixed value satisfies it.
+# The poll side is the DRM core's own drm_poll.
+mmap$dri_card(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[nv_mmap_flags], fd fd_dri_card, offset intptr[0:0xffffffff, 0x1000])
+mmap$dri_render(addr vma, len len[addr], prot flags[nv_mmap_prot], flags flags[nv_mmap_flags], fd fd_dri_render, offset intptr[0:0xffffffff, 0x1000])
+poll$dri_card(fds ptr[in, array[nv_pollfd_dri_card]], nfds len[fds], timeout int32)
+poll$dri_render(fds ptr[in, array[nv_pollfd_dri_render]], nfds len[fds], timeout int32)

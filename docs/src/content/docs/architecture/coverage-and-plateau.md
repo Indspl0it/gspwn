@@ -95,7 +95,7 @@ execution rate.
 | Config key | Default | Effect |
 |---|---|---|
 | `coverage.plateau_new_edges` | 50 | Expected new edges below which the run is `plateaued` |
-| `coverage.horizon_hours` | 24 | How far ahead the extrapolation runs. Matches `loop.campaign_hours`, the unit of spend the decision authorises |
+| `coverage.horizon_hours` | 1000 | How far ahead the extrapolation runs. Matches `loop.campaign_hours`, the unit of spend the decision authorises |
 | `coverage.model_min_r2` | 0.90 | Fit quality below which no extrapolation is reported and the verdict is `unknown` |
 | `coverage.min_fit_samples` | 8 | Points needed inside the tail before extrapolating |
 | `coverage.fit_tail_fraction` | 0.5 | Fraction of the run's executions fitted. 1.0 fits everything |
@@ -251,11 +251,11 @@ does not force `unknown`.
 
 ## The surface curve
 
-The `surface` column of each coverage sample holds how many of the 828
+The `surface` column of each coverage sample holds how many of the 852
 enumerated targets this run's own corpus names. `collect_surface(run_id)`
 unpacks `artifacts/runs/<id>/workdir/corpus.db` through syz-db and matches
 variant names against the inventories, which is a measurement syz-manager's
-stats endpoint cannot supply: it holds no model of the 828 targets.
+stats endpoint cannot supply: it holds no model of the 852 targets.
 
 | Property | Value |
 |---|---|
@@ -268,7 +268,7 @@ stats endpoint cannot supply: it holds no model of the 828 targets.
 
 `surface_growth(rows)` returns `growing`, `flat` or `unknown` and fits nothing.
 Heaps' law is not transferred to this series for three reasons: an unbounded
-power law fitted to a quantity bounded at 828 predicts more new targets than
+power law fitted to a quantity bounded at 852 predicts more new targets than
 remain, the dynamic range makes the `R2` gate close to arbitrary over a
 400-to-410 series, and the question the stop rule asks the second curve is only
 whether it moved, which is subtraction.
@@ -294,7 +294,7 @@ on completion.
 python3 tools/coverage_ctl.py completion [--run-id ID ...] [--corpus DIR] [--ledger PATH] [--top N]
 ```
 
-Completion is the ledger identity `exercised + accounted-for = 828`, computed
+Completion is the ledger identity `exercised + accounted-for = 852`, computed
 as a union of the two sets. A target can be exercised in a later round after an
 earlier one wrote a reason for it, and adding the counts would close the ledger
 while targets remained.

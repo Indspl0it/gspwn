@@ -87,6 +87,51 @@ python3-yaml docker.io kdump-tools pstore-tools mokutil
 |---|---|---|
 | `awscli` | EC2 | hard-hang capture reads the console output, and `crashlog_ctl.py verify` fails without it |
 | `mokutil` | bare metal | reports Secure Boot state to the `build` phase |
+| `docker.io` | every machine | the Track U harnesses run in a container, and the tenant-surface measurement starts one |
+
+## Go toolchain
+
+syzkaller builds on the host, and its pinned revision declares `go 1.26.0` in
+`go.mod`. Go 1.21 and later download that toolchain on demand under the default
+`GOTOOLCHAIN=auto`, so an `apt` package at 1.21 or later works where the module
+proxy is reachable. The upstream tarball installs the declared version directly
+and carries neither condition.
+
+| Consumer | Requirement |
+|---|---|
+| `make` in the syzkaller tree | Go at or above the `go.mod` floor. The build stops on the directive otherwise, and `bin/syz-manager` is never produced |
+| `syzlang_gen.py compile` | `go` on `PATH` in the phase's own shell. Exit 3 means no verdict was reached, which is distinct from a description set that fails to compile |
+
+[Installation](/gspwn/getting-started/installation/) carries the commands.
+
+## Container runtime
+
+The threat model is a container tenant, so the `provision` phase measures which
+device nodes a container on this machine actually receives. That measurement
+runs a container through `--runtime=nvidia`, which the distribution's `docker.io`
+package does not provide. It comes from NVIDIA's own repository.
+
+| Package | Purpose |
+|---|---|
+| `nvidia-container-toolkit` | the `nvidia` runtime and `nvidia-ctk` |
+| `nvidia-container-toolkit-base` | the runtime's shared components |
+| `libnvidia-container-tools` | `nvidia-container-cli`, the legacy injection path |
+| `libnvidia-container1` | the library both paths link against |
+
+Pin all four to one version. The four are released together and a mixed set is
+not a configuration NVIDIA tests. [Installation](/gspwn/getting-started/installation/)
+carries the commands.
+
+Two consequences follow for the campaign, both from
+[Threat model](/gspwn/architecture/threat-model/):
+
+| Consequence | Effect |
+|---|---|
+| The toolkit resolves `mode = auto` to jit-cdi from 1.18.0 onward | The container receives `/dev/nvidia-modeset` and every `/dev/dri` node for the GPU, with no capability check |
+| Docker 29.1.x and older inject the legacy hook for `--gpus` | That path withholds both, so a measurement taken with `--gpus all` on such a host reports a device set the deployment will not see |
+
+`verify_tenant_surface.py runtime-mode` reports which path this machine is
+configured for and reads files only, so it answers before a GPU is present.
 
 ## Source trees
 

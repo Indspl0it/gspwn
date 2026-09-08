@@ -54,8 +54,8 @@ The stopping rules and the round-level policy.
 | Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `loop.max_rounds` | The backstop on rounds. Surface completion is the primary stop and is checked first, so a campaign that reaches this cap has failed to converge. A round-cap stop cannot be overridden | integer | `> 0` | `10` | `pipeline_state.hard_cap_reason` |
-| `loop.max_total_run_hours` | The run-hour budget across every campaign, checked against `state/spend.json`. A budget stop cannot be overridden | number | `> 0`, and at least `loop.campaign_hours` | `216` | `pipeline_state.hard_cap_reason`, `campaign_ctl.check_budget` |
-| `loop.campaign_hours` | How long each campaign runs before its deadline timer stops and disables the units | number | `> 0`, and not above `loop.max_total_run_hours` | `24` | `campaign_ctl.cmd_install_k`, `campaign_ctl.cmd_install_u` |
+| `loop.max_total_run_hours` | The run-hour budget across every campaign, checked against `state/spend.json`. A budget stop cannot be overridden | number | `> 0`, and at least `loop.campaign_hours` | `5000` | `pipeline_state.hard_cap_reason`, `campaign_ctl.check_budget` |
+| `loop.campaign_hours` | How long each campaign runs before its deadline timer stops and disables the units | number | `> 0`, and not above `loop.max_total_run_hours` | `1000` | `campaign_ctl.cmd_install_k`, `campaign_ctl.cmd_install_u` |
 | `loop.stop_on_plateau` | Whether a `plateaued` coverage verdict ends the loop | boolean | `true` or `false`, unquoted. A quoted string is truthy and silently keeps the default behaviour | `true` | `pipeline_state.loop_decision` |
 | `loop.plateau_window_min` | The trailing window the fallback growth test measures over, for runs whose coverage source reports no execution count | integer | `> 0`, and at least three `loop.coverage_sample_min` intervals | `240` | `coverage_ctl.cmd_plateau`, `pipeline_ctl._derive_run` |
 | `loop.plateau_min_growth` | The fractional edge growth below which such a run has plateaued. Unused when execution counts are available | number | `0 < v < 1`. `0` would silently disable the plateau stop | `0.02` | `coverage_ctl._legacy_window_verdict` |
@@ -98,13 +98,13 @@ The content the tools put in front of the agent.
 How the two curves are read. The campaign's stopping rule rests on these
 numbers. The first six govern the edge curve, whose asymptote is unknown and
 has to be extrapolated. The last three govern the surface curve, whose
-denominator is counted at 828, and the completion rule over it invents no
+denominator is counted at 852, and the completion rule over it invents no
 percentage threshold.
 
 | Key | Effect | Type | Accepted values | Default | Read by |
 |---|---|---|---|---|---|
 | `coverage.plateau_new_edges` | Expected new edges over one more campaign, below which the run has plateaued. Set it to what would justify another campaign of machine time | integer | `> 0` | `50` | `coverage_ctl.plateau_verdict` |
-| `coverage.horizon_hours` | How far ahead the fitted curve is extrapolated. Matching `loop.campaign_hours` scopes the verdict to exactly one further campaign | number | `> 0` | `24` | `coverage_ctl.plateau_verdict` |
+| `coverage.horizon_hours` | How far ahead the fitted curve is extrapolated. Matching `loop.campaign_hours` scopes the verdict to exactly one further campaign | number | `> 0` | `1000` | `coverage_ctl.plateau_verdict` |
 | `coverage.model_min_r2` | The fit quality below which no extrapolation is reported and the verdict is `unknown` | number | `0 < v < 1`. `0` would accept any curve and extrapolate from noise | `0.90` | `coverage_ctl.plateau_verdict` |
 | `coverage.min_fit_samples` | Points required inside the fitted tail before extrapolating at all | integer | `>= 3`. A least-squares fit of two points is exact and says nothing about the curve | `8` | `coverage_ctl.plateau_verdict` |
 | `coverage.fit_tail_fraction` | The share of the run's **executions** the fit covers. Fitting the whole run lets the early steep phase dominate | number | `(0, 1]`, where `1.0` fits the whole run | `0.5` | `coverage_ctl.fit_tail` |

@@ -56,6 +56,33 @@ The `p4` and `p5` families come only in multi-GPU sizes. A multi-GPU box does
 not change what is fuzzed. Xid classification strips the PCI bus id from the
 crash identity, so the same driver bug on two cards registers as one bug.
 
+## Container runtime and the injection path
+
+The threat model is a container tenant, so the device nodes a container receives
+on this instance decide what the campaign is entitled to call reachable. Two
+injection paths exist and they hand a container different sets.
+
+| Path | Reached by | Injects `/dev/nvidia-modeset` and `/dev/dri` |
+|---|---|---|
+| jit-cdi | `--runtime=nvidia`, and the ECS and EKS GPU AMIs | Yes, with no capability check |
+| legacy | the prestart hook Docker 29.1.x and older inject for `--gpus` | No. The modeset node needs the `display` capability and `/dev/dri` is never injected |
+
+Docker 29.2.0 and later read a CDI specification for `--gpus` and reach the
+first path again.
+
+| Selection | Requirement |
+|---|---|
+| AMI | Any Debian-family image. No AWS GPU AMI pins the toolkit mode |
+| Toolkit | Installed from NVIDIA's repository, all four packages at one pinned version |
+| Registration | `nvidia-ctk runtime configure --runtime=docker`, then a daemon restart |
+| Confirmation | `verify_tenant_surface.py runtime-mode` before the campaign, `measure` at the `provision` gate |
+
+The toolkit packages write `mode = auto` at install time and resolve it to
+jit-cdi from 1.18.0 onward, so a stock instance lands on the first path. The
+recorded tenant surface assumes it. An instance on the legacy path holds a
+smaller device set than the 852-target denominator covers, and the campaign
+would report coverage against surface no tenant on that instance can reach.
+
 ## Region and quota
 
 Availability moves between regions and over time. Query it directly:

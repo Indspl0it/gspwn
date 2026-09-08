@@ -141,7 +141,7 @@ Evidence is a list of `file.c:line`. `detail` is required for every reason, and
 worklist.
 
 Seven of the eight assert that the target cannot be reached by this campaign as
-configured, and the completion identity `exercised + accounted-for = 828` means
+configured, and the completion identity `exercised + accounted-for = 852` means
 "exercised, or excluded". `deliberately-deferred` asserts the opposite, so
 `surface_completion` subtracts its rows before the union and reports them on
 their own as `deferred`. A round's count of them is `surface_deferred` in the

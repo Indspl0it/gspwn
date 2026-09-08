@@ -164,6 +164,6 @@ still bills the one machine-global budget. See
 
 ## Next
 
-- [Your first campaign](/gspwn/getting-started/first-campaign/) runs round 1 on
+- [First campaign](/gspwn/getting-started/first-campaign/) runs round 1 on
   real hardware.
 - [Command line overview](/gspwn/reference/cli/) lists every tool.

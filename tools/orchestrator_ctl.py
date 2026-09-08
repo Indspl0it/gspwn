@@ -105,6 +105,7 @@ import glob
 import json
 import os
 import pwd
+import shutil
 import signal
 import subprocess
 import sys
@@ -590,6 +591,50 @@ SUDO_COMMANDS = [
     ("coverage_ctl.py install-timer", "installing the coverage sampler"),
 ]
 
+# Host binaries the pipeline invokes, with the phase that stops without each.
+# A binary reached only inside a container is absent from this table: the
+# Track U harnesses build inside the image config/campaign.yaml names, so
+# afl-clang-fast and clang are the image's problem and not the host's.
+#
+# The third field marks a binary every deployment needs. The two that are not
+# universal are still reported, because an absent one is a fact the operator
+# reads differently on EC2 than on bare metal.
+HOST_BINARIES = [
+    ("go", True,
+     "the describe phase builds syzkaller and runs syzlang_gen.py compile, "
+     "which exits 3 when go is absent"),
+    ("docker", True,
+     "the Track U harnesses run in a container, and "
+     "verify_tenant_surface.py measure starts one"),
+    ("gcc", True, "repro_ctl.py extract compiles repro.c"),
+    ("make", True, "the instrumented kernel build and the syzkaller build"),
+    ("git", True,
+     "the inventories record the checkout revision they derived from"),
+    ("nvidia-smi", True,
+     "surface_verify.py reads the running driver version through it"),
+    ("nvidia-ctk", False,
+     "the provision phase registers the nvidia runtime with docker through "
+     "it. Absent on a host that will not start GPU containers"),
+    ("aws", False,
+     "hard-hang capture on EC2 reads the serial console, and "
+     "crashlog_ctl.py verify fails without it. Not needed on bare metal"),
+]
+
+
+def missing_binaries():
+    """-> (missing required, missing optional), each [(binary, why), ...].
+
+    Resolution is by PATH alone. A binary installed outside the PATH the
+    unattended session will run under is absent for this purpose, which is
+    the condition worth reporting: the Go tarball install writes an export
+    line that covers one shell, and a later session reads the profile.
+    """
+    required, optional = [], []
+    for binary, is_required, why in HOST_BINARIES:
+        if shutil.which(binary) is None:
+            (required if is_required else optional).append((binary, why))
+    return required, optional
+
 
 def sudo_ok(user=None):
     """-> (ok, detail). Can the agent use sudo without a password prompt?
@@ -652,6 +697,18 @@ def cmd_preflight(a):
                REPO_ROOT))
     for cmdline, why in SUDO_COMMANDS:
         print("           needs it for: %s (%s)" % (cmdline, why))
+
+    missing_required, missing_optional = missing_binaries()
+    found = [b for b, _r, _w in HOST_BINARIES
+             if shutil.which(b) is not None]
+    print("binaries:  %d of %d on PATH" % (len(found), len(HOST_BINARIES)))
+    for binary, why in missing_required:
+        print("           MISSING %s" % binary)
+        problems.append("%s is not on PATH, and %s" % (binary, why))
+    for binary, why in missing_optional:
+        print("           absent, and not needed by every deployment: %s"
+              % binary)
+        print("           %s" % why)
 
     try:
         import coverage_ctl

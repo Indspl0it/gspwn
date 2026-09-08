@@ -31,7 +31,8 @@ billed 24.00 run-hours for run r2-1 (configured window (no usable coverage sampl
 A run with no samples at all bills nothing, and the tool reports that case
 explicitly:
 
-```  WARNING: run(s) r2-2 had no usable coverage samples and billed 0.0 h. Check the sampler, because unmeasured spend must not pass silently
+```
+  WARNING: run(s) r2-2 had no usable coverage samples and billed 0.0 h. Check the sampler, because unmeasured spend must not pass silently
 ```
 
 ## The write path
@@ -162,7 +163,7 @@ counts.
 `check_budget()` runs on `install-k` and `install-u`:
 
 ```
-refusing to start: 200.0 h already spent + 24.0 h for this campaign exceeds loop.max_total_run_hours (216). Raise the cap in config/campaign.yaml to allow it.
+refusing to start: 4500.0 h already spent + 1000.0 h for this campaign exceeds loop.max_total_run_hours (5000). Raise the cap in config/campaign.yaml to allow it.
 ```
 
 `round-decide` enforces the cap between rounds, and a campaign started directly

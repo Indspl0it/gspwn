@@ -209,4 +209,4 @@ The `provision` phase adds the GSP firmware version to the same file, and the
 ## See also
 
 - [Requirements](/gspwn/getting-started/requirements/)
-- [Your first campaign](/gspwn/getting-started/first-campaign/)
+- [First campaign](/gspwn/getting-started/first-campaign/)

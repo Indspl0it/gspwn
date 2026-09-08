@@ -49,9 +49,11 @@ beyond failure.
 | `repro_ctl.py` | `verify` | 2 | A rate was recorded on fewer counted runs than requested, because the attempt cap fired |
 | `refgen.py` | | 0 | Every page was written |
 | `refgen.py` | | 2 | An artefact this tool needs is absent, unreadable, empty, or carries a schema stamp it does not read |
-| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `pages`, `all` | 0 | The check passed |
-| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `pages`, `all` | 1 | The check found an offending entry |
-| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `pages`, `all` | 2 | An artefact the check needs is absent, unparseable, or shaped in a way the check did not anticipate, or a check raised an unexpected exception |
+| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `all` | 0 | The check passed |
+| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `all` | 1 | The check found an offending entry |
+| `regression_check.py` | `names`, `pins`, `coverage`, `derived`, `families`, `pages`, `stale`, `harnesses`, `agents`, `all` | 2 | An artefact the check needs is absent, unparseable, or shaped in a way the check did not anticipate, or a check raised an unexpected exception |
+| `register_check.py` | | 0 | No non-exempt register hit in any file read |
+| `register_check.py` | | 1 | At least one hit, each printed with its file, line, rule and surrounding text |
 | `surface_cov.py` | | 1 | An inventory is absent, does not parse, names a different driver release, a `--run-id` corpus could not be unpacked, or `--corpus` and `--run-id` were both given |
 | `surface_cov.py` | | 2 | An argparse usage error, including no subcommand |
 | `surface_verify.py` | `check` | 0 | Two or more independent source groups agree, or one group with `--allow-single-source` |
@@ -62,12 +64,17 @@ beyond failure.
 | `trace2seed.py` | `chains` | 1 | No program was written, so the seed bank is empty |
 | `trace2seed.py` | `chains` | 2 | `--max-calls` below the floor of 3, or a non-integer `GSPWN_SEED_MAX_CALLS` |
 | `ioctl_inventory.py` | | 1 | An input is absent or does not parse, or the run measured fewer struct sizes than the inventory it would replace |
+| `nvkms_inventory.py` | | 1 | A source file is absent or does not parse, or the declared or dispatched count disagrees with `--expect-declared` or `--expect-dispatched` |
 | `replay_crashes.sh` | | 0 | The replay ran, whatever the harnesses did |
 | `replay_crashes.sh` | | 2 | The crash root does not exist, or a bound is not numeric |
 | `syzlang_gen.py` | `emit` | 1 | An input is absent, two flags contradict each other, or an emitted selector renders free |
 | `syzlang_gen.py` | `emit --strict` | 2 | A derived struct layout disagrees with its measured size |
 | `syzlang_gen.py` | `compile` | 1 | The description set does not parse or does not compile. The driver's own diagnostics are reproduced unchanged, naming the file and the line |
 | `syzlang_gen.py` | `compile` | 3 | No verdict was reached: Go is not on `PATH`, the pinned syzkaller checkout could not be obtained, or the driver failed to build. Distinct from 1, which is a description set that really fails to compile |
+| `verify_tenant_surface.py` | `expected`, `runtime-mode` | 0 | The record was printed, or the injection path was reported |
+| `verify_tenant_surface.py` | `measure` | 0 | The measured node set matches the recorded tenant surface |
+| `verify_tenant_surface.py` | `measure` | 1 | The measured node set and the record disagree, in either direction |
+| `verify_tenant_surface.py` | any | 2 | The measurement could not be taken, or no subcommand was given. Covers an absent or unparseable `surface/entry-points.json`, a container runtime absent from `PATH`, a failed image pull, and a container that did not start |
 
 ## Code assignments
 
@@ -75,6 +82,7 @@ beyond failure.
 |---|---|
 | 3 | `coverage_ctl.py plateau` uses 3 for `plateaued` and `completion` uses it for `incomplete`, which keeps both distinct from the shell convention of 2 for a usage error. `surface_verify.py check` uses 3 for a version disagreement |
 | 4 | `surface_verify.py check` uses 4 for a verdict reached from fewer than two independent source groups. The value avoids argparse's 2, so a mistyped flag cannot be read as a verdict |
+| 2 | `verify_tenant_surface.py` uses 2 for a measurement it could not take, which keeps it apart from 1, a measurement that disagreed. The `provision` gate blocks on both, and the operator does different work for each: exit 1 means the threat model and the instance disagree, and exit 2 means nothing was measured |
 | 78 | `EX_CONFIG` from `sysexits.h`. `gspwn-orchestrator.service` lists it in `RestartPreventExitStatus`, so systemd stops the unit. Four situations produce it: a tripped breaker, an unset `orchestrator.command`, a blocked phase, and a complete pipeline |
 
 ## Notes on specific verdicts
@@ -88,6 +96,12 @@ cannot end a campaign by claiming it is done.
 different work for each. Exit 3 means the artefacts model a release the target
 is not running, and the fix is to regenerate them. Exit 4 means the guard
 compared nothing, and the fix is to bring a second group up.
+
+`verify_tenant_surface.py measure` keeps 1 and 2 apart for the same reason. An
+unmeasured tenant surface is not a passing one, so exit 2 never reads as
+agreement. The commonest cause on a fresh instance is a container runtime that
+was never installed, and
+[Installation](/gspwn/getting-started/installation/) step 5 covers it.
 
 An unreadable artefact takes `regression_check.py` to exit 2, and exit 1 is
 reserved for an offending entry the check actually found. An unexpected

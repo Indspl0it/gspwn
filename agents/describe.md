@@ -132,12 +132,29 @@ coverage alone.
    python3 tools/object_graph.py chains --src artifacts/src/open-gpu-kernel-modules
    python3 tools/ctrl_rank.py rank --src artifacts/src/open-gpu-kernel-modules
    python3 tools/syzlang_gen.py emit --src artifacts/src/open-gpu-kernel-modules
+   python3 tools/value_families.py --src artifacts/src/open-gpu-kernel-modules
+   python3 tools/syzlang_gen.py emit --src artifacts/src/open-gpu-kernel-modules
    python3 tools/surface_verify.py stamp --src artifacts/src/open-gpu-kernel-modules
    python3 tools/refgen.py
    ```
 
+   `syzlang_gen.py emit` appears twice on purpose. `value_families.py` reads
+   the emitted description set to find the fields a family may bind to, and
+   `syzlang_gen.py emit` reads the families to bind them, so the first emit
+   gives the derivation a set to read against the new driver and the second
+   binds what the audit accepted. A field the emitter already bound stays
+   inside the universe the derivation reads, so a third run changes nothing:
+   the derivation reproduces the same 72 families over its own output.
+
+   `value_families.py` rewrites `surface/value-families.json` and
+   `surface/value-families-audit.json`. The audit's verdicts are written by
+   hand and a regeneration recomputes the mechanical ones, so read the diff
+   on the audit before committing it. A family bound in error reaches none of
+   that field's real values, where a bare integer still reaches them by
+   mutation.
+
    Every command writes to its own default path and runs exactly as printed.
-   The first seven are the list `surface_verify.py check` prints on exit 3,
+   Seven of them are the list `surface_verify.py check` prints on exit 3,
    with `--emit-map` added: `tools/ioctl_map.json` has one writer,
    `ioctl_inventory.py --emit-map PATH`, and without the flag the seeds phase
    converts its trace through the previous release's request numbers.
@@ -197,7 +214,7 @@ coverage alone.
    against what is committed, so a commit that carries the artefacts and not
    the pages fails.
 
-   `python3 tools/regression_check.py all` runs the seven checks CI runs, and
+   `python3 tools/regression_check.py all` runs the nine checks CI runs, and
    each one reads a different pair of artefacts that have to agree:
 
    | Check | Artefact pair compared |
@@ -206,9 +223,11 @@ coverage alone.
    | `names` | every name in `tools/ioctl_map.json` is declared by the descriptions |
    | `pins` | every emitted leaf selector renders as a const, including the `NV_ESC_IOCTL_XFER_CMD` inner `cmd` |
    | `derived` | the chain and ranking artefacts still match the control inventory |
+   | `families` | every field bound to a value family carries one the committed audit accepted, and every accepted family is bound with its own set emitted |
    | `pages` | the generated reference pages still match the surface artefacts |
    | `stale` | every surface artefact `descriptions/generation.json` records still hashes to the recorded digest |
    | `harnesses` | the four Track U target lists still name the same harnesses |
+   | `agents` | every command line in `agents/*.md` resolves against the tool it names |
 
    `derived` fails when the regeneration stopped before `object_graph.py
    chains` or `ctrl_rank.py rank`, and `pages` fails when it stopped before
@@ -226,10 +245,10 @@ coverage alone.
    It builds `tools/gspwn-check` against a pinned syzkaller checkout and
    runs syzkaller's own compiler over `descriptions/*.txt` together with
    `tools/syz-stub/*`. Exit 0 prints the verdict line, of the form
-   `compile: OK, 4 const(s) loaded, 862 syscall(s), ...`. 862 is the 856
+   `compile: OK, 4 const(s) loaded, 957 syscall(s), ...`. 957 is the 951
    the description set declares plus the 6 `syz_builtinN` pseudo-syscalls
-   `pkg/compiler` prepends to every compile. The 856 is 845 `ioctl`
-   variants, 4 `openat`, 6 entry-point calls and `syz_nvidia_uvm_init`.
+   `pkg/compiler` prepends to every compile. The 951 is 933 `ioctl`
+   variants, 7 `openat`, 5 `mmap`, 5 `poll` and `syz_nvidia_uvm_init`.
    That last one needs no `__NR_` constant: `pkg/compiler/consts.go:250`
    assigns no syscall number to a call whose name begins `syz_`, so the
    set compiles against an unpatched checkout while the executor half
@@ -245,7 +264,7 @@ coverage alone.
    and `surface/entry-points.json` records every table it defines with the
    entry points each registers. Entry points are counted beside the command
    denominator and never inside it: an `mmap` or a `poll` carries no method
-   id, no parameter struct and no inventory row, so the 828 counts commands
+   id, no parameter struct and no inventory row, so the 852 counts commands
    alone.
 
    The set also declares one pseudo-syscall, `syz_nvidia_uvm_init`. The
@@ -272,12 +291,12 @@ coverage alone.
    python3 tools/surface_cov.py gaps --stage model --top 40
    ```
 
-   `modelled` reports the share of the 828 targetable commands that have a
-   syzlang variant. The generated baseline already reaches 828 of 828, so this
+   `modelled` reports the share of the 852 targetable commands that have a
+   syzlang variant. The generated baseline already reaches 852 of 852, so this
    number is a regression check. It counts variants declared, never variants
    correct, and a lower number means a variant was lost or renamed. The
-   denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc and
-   64 modeset targets. It excludes the 236 control commands routed to GSP, the
+   denominator is 32 escape, 39 uvm, 7 uvm_tools, 531 control, 155 alloc,
+   64 modeset and 24 drm targets. It excludes the 236 control commands routed to GSP, the
    104 uvm_test commands behind `uvm_enable_builtin_tests=1`, the 3 escapes
    declared with no dispatch case, the 2 multiplexer escapes whose leaves
    already count in the control and alloc families, and the 2 modeset commands
@@ -302,7 +321,7 @@ coverage alone.
    | after | `python3 tools/surface_cov.py gaps --stage corpus --run-id <smoke run id>` | the smoke run's own `workdir/corpus.db`, unpacked through syz-db |
 
    One smoke run answers both, and the "before" reading needs no run at all.
-   In round 1 the bank is empty, so the before reading is 828 by construction
+   In round 1 the bank is empty, so the before reading is 852 by construction
    and the delta measures the smoke run alone. The smoke run takes a run id of
    the form `r<round>-<n>` from the same namespace the fuzz phase allocates
    from, recorded with `pipeline_ctl.py round-add-run`, and the round's
@@ -512,12 +531,12 @@ Record progress with the state tool, never by editing pipeline.json:
   `artifacts/seeds`, and the after reading with `--run-id <smoke run id>`
   against the smoke run's own corpus, with the smoke run id named. That delta
   is this round's measured output.
-- Where a regeneration ran, `regression_check.py all` output with all seven
+- Where a regeneration ran, `regression_check.py all` output with all nine
   checks passing, and the reference pages under
   `docs/src/content/docs/reference/surface/` regenerated and committed with the
   artefacts.
 - The `surface_cov.py modelled` line, which is a regression check and still
-  reads 828/828.
+  reads 852/852.
 - The `NV_ESC_IOCTL_XFER_CMD` `cmd` constraint set quoted from the
   description, with `regression_check.py pins` output beside it.
 - Audit file path with the sampled verdicts and any in-handler capability

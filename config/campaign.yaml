@@ -12,14 +12,18 @@ track_k:
     - "ioctl$UVM_*"
     # /dev/nvidia-modeset. Its own pattern, because every variant is named
     # for an NvKmsIoctlCommand enumerator and NVKMS_ does not match NV_*.
-    # Six families are modelled: escape, uvm, uvm_tools, control, alloc and
-    # modeset, 828 targets in total.
+    # Seven families are modelled: escape, uvm, uvm_tools, control, alloc,
+    # modeset and drm, 852 targets in total.
     - "ioctl$NVKMS_*"
-    # nvidia-drm / /dev/dri are out of scope: a default container tenant
-    # (compute,utility) never receives those nodes. See the README threat
-    # model before adding them back. /dev/nvidia-modeset is not out of scope:
-    # libnvidia-container creates it by default and withholds it only under
-    # OPT_NO_MODESET.
+    # /dev/dri. Its own pattern for the same reason: every variant is named
+    # for a DRM_NVIDIA_ command number macro. Both node types are in scope.
+    # The CDI injection path adds every /dev/dri node found for the GPU's PCI
+    # bus id with no capability check, so a default (compute,utility) tenant
+    # receives them. /dev/nvidia-modeset is in scope too: libnvidia-container
+    # creates it by default and withholds it only under OPT_NO_MODESET.
+    - "ioctl$DRM_NVIDIA_*"
+    - "mmap$dri*"
+    - "poll$dri*"
   sandbox: "namespace"
   procs: 2                 # capped to protect 32GB RAM budget
   memory_max: "12G"        # systemd cgroup MemoryMax for syz-manager
@@ -27,7 +31,10 @@ track_k:
   smoke_window_minutes: 30 # coverage must increase within this window
 
 track_u:
-  docker_image: "aflplusplus/aflplusplus:latest"
+  # Pinned. A floating tag makes a Track U finding irreproducible: the
+  # image carries the compiler and the AFL++ runtime the harness was
+  # built with, and a report cannot state a toolchain that moved.
+  docker_image: "aflplusplus/aflplusplus:v5.02c"
   memory_max: "8G"
   # agent-facing: written by harness phase, read by fuzz phase. Each name is a
   # directory under harnesses/ and the output directory the fuzz
@@ -49,7 +56,7 @@ loop:
   # search, not the bill: this repo has no view of what an instance costs.
   # Watch real money in the AWS console.
   # Backstop against a runaway loop, not the expected termination. The
-  # campaign stops on completion: every one of the 828 enumerated targets is
+  # campaign stops on completion: every one of the 852 enumerated targets is
   # either exercised or carries a written reason in the completion ledger
   # (pipeline_ctl.py surface-account). Against that denominator from an empty
   # corpus, a cap of 3 stopped every campaign long before completion could
@@ -60,15 +67,19 @@ loop:
   # round-end bills every campaign's measured hours there per run id (a run
   # that died early bills only what it sampled), so the cap counts every
   # campaign, not one per round. This, and not max_rounds, is the spend
-  # ceiling: 216 h is 9 campaigns of 24 h, whatever number of rounds they fall
-  # across. Raise it before raising max_rounds buys anything.
-  max_total_run_hours: 216
-  campaign_hours: 24         # each campaign self-stops after this long
+  # ceiling: 5000 h is 5 campaigns of 1000 h, whatever number of rounds they
+  # fall across. Raise it before raising max_rounds buys anything. The cap
+  # binds before max_rounds does at these values, so max_rounds stays a
+  # runaway backstop and never decides a campaign's end.
+  max_total_run_hours: 5000
+  campaign_hours: 1000       # each campaign self-stops after this long
   # Stop early when both curves flatten. Overridable, unlike the completion
   # stop: a plateau is a judgement about what another campaign would buy,
   # while completion is a ledger identity with nothing left to fuzz. A flat
   # edge curve against a still-climbing surface curve is not a plateau and
-  # does not trip this.
+  # does not trip this. The 1000 h horizon raises the bar on its own: the
+  # test asks whether another 1000 h would find fewer than plateau_new_edges
+  # edges, which a still-productive curve clears easily.
   stop_on_plateau: true
   # Plateau test, applied to the trailing window of the coverage curve.
   plateau_window_min: 240    # measure growth over the last 4h
@@ -196,7 +207,7 @@ coverage:
   # report.
   #
   # tools/surface_cov.py measures the other axis, over a denominator the
-  # driver enumerates itself: 828 reachable commands, of which the corpus
+  # driver enumerates itself: 852 reachable commands, of which the corpus
   # names some. That is a claim about the command surface and never about
   # lines of driver code, and it separates the two readings of a plateau.
   # coverage_ctl.py records it as the `surface` column and reads the two
@@ -216,7 +227,7 @@ coverage:
   plateau_new_edges: 50   # expected new edges over one more campaign, below
                           # which the run has plateaued. Set it to what would
                           # actually justify another campaign of machine time
-  horizon_hours: 24       # how far ahead to extrapolate; match campaign_hours
+  horizon_hours: 1000     # how far ahead to extrapolate; match campaign_hours
   model_min_r2: 0.90      # below this the curve is not described well enough
                           # to extrapolate from, and the verdict is unknown
   min_fit_samples: 8      # points required before extrapolating at all

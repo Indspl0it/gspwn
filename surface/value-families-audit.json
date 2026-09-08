@@ -1,0 +1,2912 @@
+{
+  "schema": "gspwn.value-families-audit/1",
+  "source": {
+    "derivation": "surface/value-families.json",
+    "derivation_schema": "gspwn.value-families/1",
+    "src_root": "artifacts/src/open-gpu-kernel-modules",
+    "driver_version": "610.57.04"
+  },
+  "scan": {
+    "families_derived": 72,
+    "families_recorded": 73,
+    "recorded_without_derivation": 1,
+    "verdicts_read_by_hand": 2
+  },
+  "summary": {
+    "accepted": 53,
+    "rejected": 20,
+    "out_of_scope_families": 2
+  },
+  "out_of_scope": [
+    {
+      "family": "drm",
+      "verdict": "out_of_scope",
+      "reason": "Value-family recovery does not run over the drm family. The family landed after the modeset family on the same reasoning and inherits the same exclusion. The exclusion is a decision, not a gap in the derivation.",
+      "bare_int_fields": 86
+    },
+    {
+      "family": "modeset",
+      "verdict": "out_of_scope",
+      "reason": "Value-family recovery does not run over the modeset family. The family landed after the cost of this work was estimated, and re-estimating it is scope growth beyond what folding the family in required. The exclusion is a decision, not a gap in the derivation.",
+      "bare_int_fields": 315
+    }
+  ],
+  "audit": [
+    {
+      "struct": "NV0000_CTRL_CLIENT_GET_HANDLE_INFO_PARAMS",
+      "field": "index",
+      "rule": "handler-switch",
+      "set_name": "nv0000_ctrl_client_get_handle_info_params_index",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000client.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000client.h",
+        "lines": [
+          94,
+          93
+        ],
+        "defines": [
+          "NV0000_CTRL_CMD_CLIENT_GET_HANDLE_INFO_INDEX_CLASSID",
+          "NV0000_CTRL_CMD_CLIENT_GET_HANDLE_INFO_INDEX_PARENT"
+        ],
+        "values": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_DIAG_PROFILE_RPC_PARAMS",
+      "field": "rpcProfileCmd",
+      "rule": "handler-switch",
+      "set_name": "nv0000_ctrl_diag_profile_rpc_params_rpc_profile_cmd",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000diag.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000diag.h",
+        "lines": [
+          281,
+          282,
+          283
+        ],
+        "defines": [
+          "NV0000_CTRL_PROFILE_RPC_CMD_DISABLE",
+          "NV0000_CTRL_PROFILE_RPC_CMD_ENABLE",
+          "NV0000_CTRL_PROFILE_RPC_CMD_RESET"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_EVENT_SET_NOTIFICATION_PARAMS",
+      "field": "action",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0000_ctrl_event_set_notification_params_action",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000event.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000event.h",
+        "lines": [
+          86,
+          88,
+          87
+        ],
+        "defines": [
+          "NV0000_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE",
+          "NV0000_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT",
+          "NV0000_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_GPU_ACTIVE_DEVICE",
+      "field": "gpuId",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0000_ctrl_gpu_active_device_gpu_id",
+      "verdict": "rejected",
+      "verdict_source": "read",
+      "derived": false,
+      "reason": "The 23 NV0000_CTRL_GPU_ID_INFO_* defines at src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000gpu.h:189-211 belong to the gpuId bitfield of NV0000_CTRL_GPU_ID_INFO_PARAMS, a different field in a different struct. They are also not values: NV0000_CTRL_GPU_ID_INFO_IN_USE is the bit range 0:0 and the _FALSE and _TRUE members are that one bit's two states. The gpuId of NV0000_CTRL_GPU_ACTIVE_DEVICE, declared at ctrl0000gpu.h:995, is an opaque identifier the driver returns and carries no enumeration. A class-prefix rule bound the two together; the struct-or-stem anchor does not derive the family at all, and this record states the decision so the defect stays visible.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000gpu.h",
+        "lines": [
+          189,
+          211,
+          995
+        ],
+        "defines": [
+          "NV0000_CTRL_GPU_ID_INFO_IN_USE",
+          "NV0000_CTRL_GPU_ID_INFO_IN_USE_FALSE",
+          "NV0000_CTRL_GPU_ID_INFO_IN_USE_TRUE"
+        ],
+        "values": []
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_NVD_GET_TIMESTAMP_PARAMS",
+      "field": "cpuClkId",
+      "rule": "handler-switch",
+      "set_name": "nv0000_ctrl_nvd_get_timestamp_params_cpu_clk_id",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000nvd.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000nvd.h",
+        "lines": [
+          155,
+          156,
+          158,
+          157
+        ],
+        "defines": [
+          "NV0000_NVD_CPU_TIME_CLK_ID_DEFAULT",
+          "NV0000_NVD_CPU_TIME_CLK_ID_OSTIME",
+          "NV0000_NVD_CPU_TIME_CLK_ID_PLATFORM_API",
+          "NV0000_NVD_CPU_TIME_CLK_ID_TSC"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_PARAMS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0000_ctrl_os_unix_export_object_to_fd_params_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_FLAGS_EMPTY_FD, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000unix.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000unix.h",
+        "lines": [
+          165,
+          166
+        ],
+        "defines": [
+          "NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_FLAGS_EMPTY_FD_FALSE",
+          "NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_FLAGS_EMPTY_FD_TRUE"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_OS_UNIX_FLUSH_USER_CACHE_PARAMS",
+      "field": "cacheOps",
+      "rule": "handler-switch",
+      "set_name": "nv0000_ctrl_os_unix_flush_user_cache_params_cache_ops",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000unix.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000unix.h",
+        "lines": [
+          84,
+          86,
+          85
+        ],
+        "defines": [
+          "NV0000_CTRL_OS_UNIX_FLAGS_USER_CACHE_FLUSH",
+          "NV0000_CTRL_OS_UNIX_FLAGS_USER_CACHE_FLUSH_INVALIDATE",
+          "NV0000_CTRL_OS_UNIX_FLAGS_USER_CACHE_INVALIDATE"
+        ],
+        "values": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_SYSTEM_DEBUG_RMMSG_CTRL_PARAMS",
+      "field": "cmd",
+      "rule": "struct-or-stem-anchored+handler-switch",
+      "set_name": "nv0000_ctrl_system_debug_rmmsg_ctrl_params_cmd",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
+        "lines": [
+          657,
+          658
+        ],
+        "defines": [
+          "NV0000_CTRL_SYSTEM_DEBUG_RMMSG_CTRL_CMD_GET",
+          "NV0000_CTRL_SYSTEM_DEBUG_RMMSG_CTRL_CMD_SET"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_SYSTEM_NOTIFY_EVENT_PARAMS",
+      "field": "eventType",
+      "rule": "handler-switch",
+      "set_name": "nv0000_ctrl_system_notify_event_params_event_type",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
+        "lines": [
+          563,
+          561,
+          562,
+          565,
+          564
+        ],
+        "defines": [
+          "NV0000_CTRL_SYSTEM_EVENT_TYPE_DOCK_STATE",
+          "NV0000_CTRL_SYSTEM_EVENT_TYPE_LID_STATE",
+          "NV0000_CTRL_SYSTEM_EVENT_TYPE_POWER_SOURCE",
+          "NV0000_CTRL_SYSTEM_EVENT_TYPE_TRUST_DOCK",
+          "NV0000_CTRL_SYSTEM_EVENT_TYPE_TRUST_LID"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS",
+      "field": "subFunc",
+      "rule": "handler-switch",
+      "set_name": "nv0000_ctrl_system_nvpcf_get_power_mode_info_params_sub_func",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
+        "lines": [
+          2239,
+          2238,
+          2250,
+          2247,
+          2241,
+          2244,
+          2240
+        ],
+        "defines": [
+          "NVPCF0100_CTRL_CONFIG_DSM_1X_FUNC_GET_DYNAMIC_CASE",
+          "NVPCF0100_CTRL_CONFIG_DSM_1X_FUNC_GET_SUPPORTED_CASE",
+          "NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_CPU_TDP_LIMIT_CONTROL_CASE",
+          "NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_DC_SYSTEM_POWER_LIMITS_CASE",
+          "NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_DYNAMIC_CASE",
+          "NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_STATIC_CASE",
+          "NVPCF0100_CTRL_CONFIG_DSM_2X_FUNC_GET_SUPPORTED_CASE"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    },
+    {
+      "struct": "NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CTRL_PARAMS",
+      "field": "cmd",
+      "rule": "handler-switch",
+      "set_name": "nv0000_ctrl_system_pfm_req_hndlr_ctrl_params_cmd",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
+        "lines": [
+          2856,
+          2913,
+          2906,
+          2850,
+          2903,
+          2919,
+          2830,
+          2798,
+          2822,
+          2806,
+          2838,
+          2814,
+          2880,
+          2896,
+          2873,
+          2888,
+          2787,
+          2916,
+          2910,
+          2867,
+          2900,
+          2923,
+          2834,
+          2802,
+          2826,
+          2810,
+          2841,
+          2818,
+          2876,
+          2892,
+          2870,
+          2884,
+          2794
+        ],
+        "defines": [
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_CALL_ACPI",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_CPU_FREQ_LIMIT",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_CPU_PACKAGE_LIMITS",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_PERF_SENSOR",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_PM1_AVAILABLE",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_PPM",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_CTRL_DISENGAGE_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_CTRL_DOWN_N_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_CTRL_ENGAGE_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_CTRL_HOLD_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_CTRL_STATUS",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_CTRL_UP_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_NUDGE_FACTOR",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_PERF_LIMITS",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_PERIOD",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_TEMP_THRESHOLD_SAMPLES",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_GET_THERM_LIMIT",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_CPU_FREQ_LIMIT",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_CPU_PACKAGE_LIMITS",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_IGPU_TURBO",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_PM1_AVAILABLE",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_PPM",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_CTRL_DISENGAGE_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_CTRL_DOWN_N_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_CTRL_ENGAGE_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_CTRL_HOLD_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_CTRL_STATUS",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_CTRL_UP_DELTA",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_NUDGE_FACTOR",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_PERF_LIMITS",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_PERIOD",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_TEMP_THRESHOLD_SAMPLES",
+          "NV0000_CTRL_PFM_REQ_HNDLR_CMD_TYPE_SET_THERM_LIMIT"
+        ],
+        "values": [
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          22,
+          23,
+          26,
+          27,
+          28,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73
+        ]
+      }
+    },
+    {
+      "struct": "NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_PARAMS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0041_ctrl_surface_flush_gpu_cache_params_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_FLAGS_INVALIDATE, NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_FLAGS_WRITE_BACK, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0041.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0041.h",
+        "lines": [
+          375,
+          376,
+          372,
+          373
+        ],
+        "defines": [
+          "NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_FLAGS_INVALIDATE_NO",
+          "NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_FLAGS_INVALIDATE_YES",
+          "NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_FLAGS_WRITE_BACK_NO",
+          "NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_FLAGS_WRITE_BACK_YES"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV0073_CTRL_EVENT_SET_NOTIFICATION_PARAMS",
+      "field": "action",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0073_ctrl_event_set_notification_params_action",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0073/ctrl0073event.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0073/ctrl0073event.h",
+        "lines": [
+          108,
+          110,
+          109
+        ],
+        "defines": [
+          "NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE",
+          "NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT",
+          "NV0073_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV0080_CTRL_DMA_FLUSH_PARAMS",
+      "field": "targetUnit",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0080_ctrl_dma_flush_params_target_unit",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_COMPTAG, NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_FB, NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_L2, NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_L2_INVALIDATE, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
+        "lines": [
+          276,
+          277,
+          279,
+          280,
+          273,
+          274,
+          287,
+          286
+        ],
+        "defines": [
+          "NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_COMPTAG_DISABLE",
+          "NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_COMPTAG_ENABLE",
+          "NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_FB_DISABLE",
+          "NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_FB_ENABLE",
+          "NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_L2_DISABLE",
+          "NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_L2_ENABLE",
+          "NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_L2_INVALIDATE_PEERMEM",
+          "NV0080_CTRL_DMA_FLUSH_TARGET_UNIT_L2_INVALIDATE_SYSMEM"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS",
+      "field": "pdeAddrSpace",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0080_ctrl_dma_get_pde_info_params_pde_addr_space",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
+        "lines": [
+          448,
+          449,
+          447
+        ],
+        "defines": [
+          "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS_PDE_ADDR_SPACE_SYSTEM_COHERENT_MEMORY",
+          "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS_PDE_ADDR_SPACE_SYSTEM_NON_COHERENT_MEMORY",
+          "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS_PDE_ADDR_SPACE_VIDEO_MEMORY"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS",
+      "field": "pdeSize",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0080_ctrl_dma_get_pde_info_params_pde_size",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
+        "lines": [
+          453,
+          450,
+          451,
+          452
+        ],
+        "defines": [
+          "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS_PDE_SIZE_EIGHTH",
+          "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS_PDE_SIZE_FULL",
+          "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS_PDE_SIZE_HALF",
+          "NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS_PDE_SIZE_QUARTER"
+        ],
+        "values": [
+          1,
+          2,
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "struct": "NV0080_CTRL_DMA_UPDATE_PDE_2_PARAMS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0080_ctrl_dma_update_pde_2_params_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_FLUSH_PDE_CACHE, NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_FORCE_OVERRIDE, NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_PDE_SIZE, NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_SPARSE, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
+        "lines": [
+          689,
+          690,
+          698,
+          699,
+          708,
+          705,
+          706,
+          707,
+          715,
+          716
+        ],
+        "defines": [
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_FLUSH_PDE_CACHE_FALSE",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_FLUSH_PDE_CACHE_TRUE",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_FORCE_OVERRIDE_FALSE",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_FORCE_OVERRIDE_TRUE",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_PDE_SIZE_EIGHTH",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_PDE_SIZE_FULL",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_PDE_SIZE_HALF",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_PDE_SIZE_QUARTER",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_SPARSE_FALSE",
+          "NV0080_CTRL_DMA_UPDATE_PDE_2_FLAGS_SPARSE_TRUE"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "struct": "NV0080_CTRL_FB_SET_DEFAULT_VIDMEM_PHYSICALITY_PARAMS",
+      "field": "value",
+      "rule": "handler-switch",
+      "set_name": "nv0080_ctrl_fb_set_default_vidmem_physicality_params_value",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fb.h",
+        "lines": [
+          261,
+          260,
+          258,
+          259
+        ],
+        "defines": [
+          "NV0080_CTRL_FB_DEFAULT_VIDMEM_PHYSICALITY_ALLOW_NONCONTIGUOUS",
+          "NV0080_CTRL_FB_DEFAULT_VIDMEM_PHYSICALITY_CONTIGUOUS",
+          "NV0080_CTRL_FB_DEFAULT_VIDMEM_PHYSICALITY_DEFAULT",
+          "NV0080_CTRL_FB_DEFAULT_VIDMEM_PHYSICALITY_NONCONTIGUOUS"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "struct": "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_PARAMS",
+      "field": "engineId",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv0080_ctrl_fifo_get_engine_context_properties_params_engine_id",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fifo.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fifo.h",
+        "lines": [
+          126,
+          132,
+          148,
+          127,
+          128,
+          122,
+          141,
+          136,
+          139,
+          145,
+          144,
+          143,
+          135,
+          140,
+          138,
+          131,
+          133,
+          146,
+          137,
+          142,
+          147,
+          134,
+          130,
+          125,
+          129,
+          124,
+          123
+        ],
+        "defines": [
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_CAPTURE",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_COMPUTE_PREEMPT",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_COUNT",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_DISPLAY",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_ENCRYPTION",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_ATTRIBUTE_CB",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_BETACB",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_BUNDLE_CB",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_FECS_EVENT",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_GFXP_CTRL_BLK",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_GFXP_POOL",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_PAGEPOOL",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_PAGEPOOL_GLOBAL",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_PATCH",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_PM",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_PREEMPT",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_PRIV_ACCESS_MAP",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_RTV",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_RTV_CB_GLOBAL",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_SETUP",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_SPILL",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_GRAPHICS_ZCULL",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_MPEG",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_POSTPROCESS",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_VIDEO",
+          "NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID_VLD"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26
+        ]
+      }
+    },
+    {
+      "struct": "NV00F1_CTRL_FABRIC_EVENT",
+      "field": "type",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv00f1_ctrl_fabric_event_type",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl00f1.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl00f1.h",
+        "lines": [
+          60,
+          57,
+          58,
+          59
+        ],
+        "defines": [
+          "NV00F1_CTRL_FABRIC_EVENT_TYPE_CLIQUE_ID_CHANGE",
+          "NV00F1_CTRL_FABRIC_EVENT_TYPE_MEM_IMPORT",
+          "NV00F1_CTRL_FABRIC_EVENT_TYPE_MEM_UNIMPORT",
+          "NV00F1_CTRL_FABRIC_EVENT_TYPE_REMOTE_GPU_ATTACH"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_PARAMS",
+      "field": "aperture",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_cmd_fifo_get_userd_location_params_aperture",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h",
+        "lines": [
+          384,
+          383
+        ],
+        "defines": [
+          "NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_APERTURE_SYSMEM",
+          "NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_APERTURE_VIDMEM"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_PARAMS",
+      "field": "attribute",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_cmd_fifo_get_userd_location_params_attribute",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h",
+        "lines": [
+          386,
+          387,
+          388
+        ],
+        "defines": [
+          "NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_ATTRIBUTE_CACHED",
+          "NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_ATTRIBUTE_UNCACHED",
+          "NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_ATTRIBUTE_WRITECOMBINED"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_CMD_GPU_ILLUM_PARAMS",
+      "field": "attribute",
+      "rule": "handler-switch",
+      "set_name": "nv2080_ctrl_cmd_gpu_illum_params_attribute",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
+        "lines": [
+          1879,
+          1880
+        ],
+        "defines": [
+          "NV2080_CTRL_GPU_ILLUM_ATTRIB_LOGO_BRIGHTNESS",
+          "NV2080_CTRL_GPU_ILLUM_ATTRIB_SLI_BRIGHTNESS"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_DMA_INVALIDATE_TLB_PARAMS",
+      "field": "engine",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_dma_invalidate_tlb_params_engine",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_BAR, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_CAPTURE, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_DISPLAY, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_ENCRYPTION, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_GRAPHICS, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_IFB, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_MPEG, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_MV, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_PERFMON, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_POSTPROCESS, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_VIDEO, NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_VLD, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080dma.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080dma.h",
+        "lines": [
+          103,
+          104,
+          79,
+          80,
+          76,
+          77,
+          94,
+          95,
+          70,
+          71,
+          82,
+          83,
+          88,
+          89,
+          85,
+          86,
+          97,
+          98,
+          100,
+          101,
+          73,
+          74,
+          91,
+          92
+        ],
+        "defines": [
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_BAR_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_BAR_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_CAPTURE_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_CAPTURE_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_DISPLAY_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_DISPLAY_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_ENCRYPTION_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_ENCRYPTION_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_GRAPHICS_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_GRAPHICS_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_IFB_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_IFB_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_MPEG_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_MPEG_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_MV_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_MV_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_PERFMON_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_PERFMON_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_POSTPROCESS_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_POSTPROCESS_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_VIDEO_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_VIDEO_TRUE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_VLD_FALSE",
+          "NV2080_CTRL_DMA_INVALIDATE_TLB_ENGINE_VLD_TRUE"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_EVENT_SET_NOTIFICATION_PARAMS",
+      "field": "action",
+      "rule": "struct-or-stem-anchored+handler-switch",
+      "set_name": "nv2080_ctrl_event_set_notification_params_action",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080event.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080event.h",
+        "lines": [
+          92,
+          94,
+          93
+        ],
+        "defines": [
+          "NV2080_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE",
+          "NV2080_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT",
+          "NV2080_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_FB_FLUSH_GPU_CACHE_PARAMS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_fb_flush_gpu_cache_params_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_APERTURE, NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_FB_FLUSH, NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_FLUSH_MODE, NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_INVALIDATE, NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_WRITE_BACK, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "lines": [
+          684,
+          683,
+          682,
+          695,
+          696,
+          692,
+          693,
+          689,
+          690,
+          686,
+          687
+        ],
+        "defines": [
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_APERTURE_PEER_MEMORY",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_APERTURE_SYSTEM_MEMORY",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_APERTURE_VIDEO_MEMORY",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_FB_FLUSH_NO",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_FB_FLUSH_YES",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_FLUSH_MODE_ADDRESS_ARRAY",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_FLUSH_MODE_FULL_CACHE",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_INVALIDATE_NO",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_INVALIDATE_YES",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_WRITE_BACK_NO",
+          "NV2080_CTRL_FB_FLUSH_GPU_CACHE_FLAGS_WRITE_BACK_YES"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS",
+      "field": "bypassMode",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_fb_get_gpu_cache_info_params_bypass_mode",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "lines": [
+          840,
+          841
+        ],
+        "defines": [
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_BYPASS_MODE_DISABLED",
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_BYPASS_MODE_ENABLED"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS",
+      "field": "powerState",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_fb_get_gpu_cache_info_params_power_state",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "lines": [
+          835,
+          834
+        ],
+        "defines": [
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_POWER_STATE_DISABLED",
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_POWER_STATE_ENABLED"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS",
+      "field": "rcmState",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_fb_get_gpu_cache_info_params_rcm_state",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "lines": [
+          843,
+          845,
+          844,
+          846
+        ],
+        "defines": [
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_RCM_STATE_FULL",
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_RCM_STATE_REDUCED",
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_RCM_STATE_TRANSITIONING",
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_RCM_STATE_ZERO_CACHE"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS",
+      "field": "writeMode",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_fb_get_gpu_cache_info_params_write_mode",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "lines": [
+          838,
+          837
+        ],
+        "defines": [
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_WRITE_MODE_WRITEBACK",
+          "NV2080_CTRL_FB_GET_GPU_CACHE_INFO_WRITE_MODE_WRITETHROUGH"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_FB_GET_OFFLINED_PAGES_PARAMS",
+      "field": "retirementPending",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_fb_get_offlined_pages_params_retirement_pending",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV2080_CTRL_FB_GET_OFFLINED_PAGES_RETIREMENT_PENDING_DBE, NV2080_CTRL_FB_GET_OFFLINED_PAGES_RETIREMENT_PENDING_SBE, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "lines": [
+          1073,
+          1074,
+          1070,
+          1071
+        ],
+        "defines": [
+          "NV2080_CTRL_FB_GET_OFFLINED_PAGES_RETIREMENT_PENDING_DBE_FALSE",
+          "NV2080_CTRL_FB_GET_OFFLINED_PAGES_RETIREMENT_PENDING_DBE_TRUE",
+          "NV2080_CTRL_FB_GET_OFFLINED_PAGES_RETIREMENT_PENDING_SBE_FALSE",
+          "NV2080_CTRL_FB_GET_OFFLINED_PAGES_RETIREMENT_PENDING_SBE_TRUE"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_FB_GET_SEMAPHORE_SURFACE_LAYOUT_PARAMS",
+      "field": "caps",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_fb_get_semaphore_surface_layout_params_caps",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "lines": [
+          2645,
+          2644
+        ],
+        "defines": [
+          "NV2080_CTRL_FB_GET_SEMAPHORE_SURFACE_LAYOUT_CAPS_64BIT_SEMAPHORES_SUPPORTED",
+          "NV2080_CTRL_FB_GET_SEMAPHORE_SURFACE_LAYOUT_CAPS_MONITORED_FENCE_SUPPORTED"
+        ],
+        "values": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_FB_IS_KIND_PARAMS",
+      "field": "operation",
+      "rule": "struct-or-stem-anchored+handler-switch",
+      "set_name": "nv2080_ctrl_fb_is_kind_params_operation",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
+        "lines": [
+          783,
+          784,
+          785,
+          786,
+          782,
+          787,
+          788,
+          789,
+          790
+        ],
+        "defines": [
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_COMPRESSIBLE",
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_COMPRESSIBLE_1",
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_COMPRESSIBLE_2",
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_COMPRESSIBLE_4",
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_SUPPORTED",
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_ZBC",
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_ZBC_ALLOWS_1",
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_ZBC_ALLOWS_2",
+          "NV2080_CTRL_FB_IS_KIND_OPERATION_ZBC_ALLOWS_4"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GPU_GET_PIDS_PARAMS",
+      "field": "idType",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gpu_get_pids_params_id_type",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
+        "lines": [
+          3520,
+          3521
+        ],
+        "defines": [
+          "NV2080_CTRL_GPU_GET_PIDS_ID_TYPE_CLASS",
+          "NV2080_CTRL_GPU_GET_PIDS_ID_TYPE_VGPU_GUEST"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GPU_GET_SIMULATION_INFO_PARAMS",
+      "field": "type",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gpu_get_simulation_info_params_type",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
+        "lines": [
+          486,
+          488,
+          487,
+          484,
+          485,
+          482,
+          481,
+          480,
+          479,
+          483,
+          489
+        ],
+        "defines": [
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_DFPGA",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_DFPGA_FMODEL",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_DFPGA_RTL",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_EMU",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_EMU_LOW_POWER",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_FMODEL",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_LIVE_AMODEL",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_MODS_AMODEL",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_NONE",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_RTL",
+          "NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_UNKNOWN"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          4294967295
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gpu_query_ecc_status_params_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV2080_CTRL_GPU_QUERY_ECC_STATUS_FLAGS_TYPE, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
+        "lines": [
+          1131,
+          1132
+        ],
+        "defines": [
+          "NV2080_CTRL_GPU_QUERY_ECC_STATUS_FLAGS_TYPE_FILTERED",
+          "NV2080_CTRL_GPU_QUERY_ECC_STATUS_FLAGS_TYPE_RAW"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "dp",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_dp",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1583,
+          1584
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_DP_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_DP_REDUCED_SPEED"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "ffma",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_ffma",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1593,
+          1597,
+          1594,
+          1598,
+          1595,
+          1596
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FFMA_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FFMA_REDUCED_SPEED_1_16",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FFMA_REDUCED_SPEED_1_2",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FFMA_REDUCED_SPEED_1_32",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FFMA_REDUCED_SPEED_1_4",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FFMA_REDUCED_SPEED_1_8"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "fmla16",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_fmla16",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1576,
+          1580,
+          1577,
+          1581,
+          1578,
+          1579
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA16_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA16_REDUCED_SPEED_1_16",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA16_REDUCED_SPEED_1_2",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA16_REDUCED_SPEED_1_32",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA16_REDUCED_SPEED_1_4",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA16_REDUCED_SPEED_1_8"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "fmla32",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_fmla32",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1586,
+          1590,
+          1587,
+          1591,
+          1588,
+          1589
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA32_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA32_REDUCED_SPEED_1_16",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA32_REDUCED_SPEED_1_2",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA32_REDUCED_SPEED_1_32",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA32_REDUCED_SPEED_1_4",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_FMLA32_REDUCED_SPEED_1_8"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "imla0",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla0",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1568,
+          1572,
+          1569,
+          1573,
+          1570,
+          1574,
+          1571
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA0_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA0_REDUCED_SPEED_1_16",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA0_REDUCED_SPEED_1_2",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA0_REDUCED_SPEED_1_32",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA0_REDUCED_SPEED_1_4",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA0_REDUCED_SPEED_1_64",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA0_REDUCED_SPEED_1_8"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "imla1",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla1",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1600,
+          1604,
+          1601,
+          1605,
+          1602,
+          1606,
+          1603
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA1_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA1_REDUCED_SPEED_1_16",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA1_REDUCED_SPEED_1_2",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA1_REDUCED_SPEED_1_32",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA1_REDUCED_SPEED_1_4",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA1_REDUCED_SPEED_1_64",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA1_REDUCED_SPEED_1_8"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "imla2",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla2",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1608,
+          1612,
+          1609,
+          1613,
+          1610,
+          1614,
+          1611
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA2_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA2_REDUCED_SPEED_1_16",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA2_REDUCED_SPEED_1_2",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA2_REDUCED_SPEED_1_32",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA2_REDUCED_SPEED_1_4",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA2_REDUCED_SPEED_1_64",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA2_REDUCED_SPEED_1_8"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "imla3",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla3",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1616,
+          1620,
+          1617,
+          1621,
+          1618,
+          1622,
+          1619
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA3_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA3_REDUCED_SPEED_1_16",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA3_REDUCED_SPEED_1_2",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA3_REDUCED_SPEED_1_32",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA3_REDUCED_SPEED_1_4",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA3_REDUCED_SPEED_1_64",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA3_REDUCED_SPEED_1_8"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS",
+      "field": "imla4",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla4",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
+        "lines": [
+          1624,
+          1628,
+          1625,
+          1629,
+          1626,
+          1630,
+          1627
+        ],
+        "defines": [
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA4_FULL_SPEED",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA4_REDUCED_SPEED_1_16",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA4_REDUCED_SPEED_1_2",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA4_REDUCED_SPEED_1_32",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA4_REDUCED_SPEED_1_4",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA4_REDUCED_SPEED_1_64",
+          "NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_IMLA4_REDUCED_SPEED_1_8"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_NVLINK_DEVICE_INFO",
+      "field": "deviceIdFlags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_nvlink_device_info_device_id_flags",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
+        "lines": [
+          215,
+          216,
+          217
+        ],
+        "defines": [
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_ID_FLAGS_NONE",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_ID_FLAGS_PCI",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_ID_FLAGS_UUID"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_NVLINK_DEVICE_INFO",
+      "field": "deviceType",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_nvlink_device_info_device_type",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
+        "lines": [
+          219,
+          221,
+          224,
+          220,
+          222,
+          223
+        ],
+        "defines": [
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_TYPE_EBRIDGE",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_TYPE_GPU",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_TYPE_NONE",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_TYPE_NPU",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_TYPE_SWITCH",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_DEVICE_TYPE_TEGRA"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          255
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_NVLINK_DEVICE_INFO",
+      "field": "fabricRecoveryStatusMask",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_nvlink_device_info_fabric_recovery_status_mask",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV2080_CTRL_NVLINK_DEVICE_INFO_FABRIC_RECOVERY_STATUS_MASK_GPU_DEGRADED, NV2080_CTRL_NVLINK_DEVICE_INFO_FABRIC_RECOVERY_STATUS_MASK_UNCONTAINED_ERROR_RECOVERY, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
+        "lines": [
+          229,
+          230,
+          233,
+          232
+        ],
+        "defines": [
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_FABRIC_RECOVERY_STATUS_MASK_GPU_DEGRADED_FALSE",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_FABRIC_RECOVERY_STATUS_MASK_GPU_DEGRADED_TRUE",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_FABRIC_RECOVERY_STATUS_MASK_UNCONTAINED_ERROR_RECOVERY_ACTIVE",
+          "NV2080_CTRL_NVLINK_DEVICE_INFO_FABRIC_RECOVERY_STATUS_MASK_UNCONTAINED_ERROR_RECOVERY_INACTIVE"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_PERF_BOOST_PARAMS",
+      "field": "duration",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_perf_boost_params_duration",
+      "verdict": "rejected",
+      "verdict_source": "read",
+      "reason": "NV2080_CTRL_PERF_BOOST_DURATION_MAX and NV2080_CTRL_PERF_BOOST_DURATION_INFINITE at src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080perf.h:92-93 are an upper bound and a sentinel, and the header says so: the comment on MAX reads \"The duration can be specified up to 1 hour\" and the comment on INFINITE reads \"If set this way, the boost will last until cleared\". duration is a free integer of seconds over 0 to 3600 plus that sentinel. A set holding 3600 and 0xffffffff would remove every legal duration between them.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080perf.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080perf.h",
+        "lines": [
+          93,
+          92
+        ],
+        "defines": [
+          "NV2080_CTRL_PERF_BOOST_DURATION_INFINITE",
+          "NV2080_CTRL_PERF_BOOST_DURATION_MAX"
+        ],
+        "values": [
+          3600,
+          4294967295
+        ]
+      }
+    },
+    {
+      "struct": "NV2080_CTRL_PERF_BOOST_PARAMS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv2080_ctrl_perf_boost_params_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV2080_CTRL_PERF_BOOST_FLAGS_ASYNC, NV2080_CTRL_PERF_BOOST_FLAGS_CMD, NV2080_CTRL_PERF_BOOST_FLAGS_CUDA, NV2080_CTRL_PERF_BOOST_FLAGS_CUDA_PRIORITY, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080perf.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080perf.h",
+        "lines": [
+          85,
+          86,
+          77,
+          78,
+          76,
+          81,
+          89,
+          90,
+          82
+        ],
+        "defines": [
+          "NV2080_CTRL_PERF_BOOST_FLAGS_ASYNC_NO",
+          "NV2080_CTRL_PERF_BOOST_FLAGS_ASYNC_YES",
+          "NV2080_CTRL_PERF_BOOST_FLAGS_CMD_BOOST_1LEVEL",
+          "NV2080_CTRL_PERF_BOOST_FLAGS_CMD_BOOST_TO_MAX",
+          "NV2080_CTRL_PERF_BOOST_FLAGS_CMD_CLEAR",
+          "NV2080_CTRL_PERF_BOOST_FLAGS_CUDA_NO",
+          "NV2080_CTRL_PERF_BOOST_FLAGS_CUDA_PRIORITY_DEFAULT",
+          "NV2080_CTRL_PERF_BOOST_FLAGS_CUDA_PRIORITY_HIGH",
+          "NV2080_CTRL_PERF_BOOST_FLAGS_CUDA_YES"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NV30F1_CTRL_GSYNC_GET_CAPS_PARAMS",
+      "field": "boardId",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv30f1_ctrl_gsync_get_caps_params_board_id",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "lines": [
+          399,
+          400
+        ],
+        "defines": [
+          "NV30F1_CTRL_GSYNC_GET_CAPS_BOARD_ID_P2060",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_BOARD_ID_P2061"
+        ],
+        "values": [
+          8288,
+          8289
+        ]
+      }
+    },
+    {
+      "struct": "NV30F1_CTRL_GSYNC_GET_CAPS_PARAMS",
+      "field": "capFlags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv30f1_ctrl_gsync_get_caps_params_cap_flags",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "lines": [
+          414,
+          411,
+          402,
+          403,
+          404,
+          410,
+          407,
+          406,
+          418,
+          413,
+          409
+        ],
+        "defines": [
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_ALL_CONNECTOR_EVENT",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_FRAME_COUNT_EVENT",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_FREQ_ACCURACY_2DPS",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_FREQ_ACCURACY_3DPS",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_FREQ_ACCURACY_4DPS",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_HOUSE_SYNC_EVENT",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_MULTIPLY_DIVIDE_SYNC",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_NEED_MASTER_BARRIER_WAR",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_ONLY_GET_VIDEO_MODE",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_ONLY_PRIMARY_CONNECTOR_EVENT",
+          "NV30F1_CTRL_GSYNC_GET_CAPS_CAP_FLAGS_SYNC_LOCK_EVENT"
+        ],
+        "values": [
+          1,
+          2,
+          4,
+          16,
+          32,
+          1048576,
+          16777216,
+          33554432,
+          268435456,
+          536870912,
+          1073741824
+        ]
+      }
+    },
+    {
+      "struct": "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS",
+      "field": "adjust",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv30f1_ctrl_gsync_get_optimized_timing_params_adjust",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "lines": [
+          1219,
+          1220,
+          1212,
+          1214,
+          1210,
+          1216,
+          1213,
+          1215,
+          1211,
+          1217
+        ],
+        "defines": [
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_DEFAULT_CRT",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_DEFAULT_DFP",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_H_ACTIVE_AREA",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_H_BACK_PORCH",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_H_FRONT_PORCH",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_H_RASTER_SYNC",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_V_ACTIVE_AREA",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_V_BACK_PORCH",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_V_FRONT_PORCH",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_ADJUST_V_RASTER_SYNC"
+        ],
+        "values": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          48,
+          64,
+          128
+        ]
+      }
+    },
+    {
+      "struct": "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS",
+      "field": "protocol",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv30f1_ctrl_gsync_get_optimized_timing_params_protocol",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "lines": [
+          1194,
+          1190,
+          1191,
+          1201,
+          1202,
+          1200,
+          1203,
+          1197,
+          1198,
+          1199
+        ],
+        "defines": [
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_DAC_RGB_CRT",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_OUTPUT_DAC",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_OUTPUT_SOR",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_SOR_DP_A",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_SOR_DP_B",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_SOR_DUAL_TMDS",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_SOR_HDMI_FRL",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_SOR_LVDS_CUSTOM",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_SOR_SINGLE_TMDS_A",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PROTOCOL_SOR_SINGLE_TMDS_B"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          8,
+          9,
+          12
+        ]
+      }
+    },
+    {
+      "struct": "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS",
+      "field": "structure",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv30f1_ctrl_gsync_get_optimized_timing_params_structure",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "lines": [
+          1207,
+          1206
+        ],
+        "defines": [
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_STRUCTURE_INTERLACED",
+          "NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_STRUCTURE_PROGRESSIVE"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_PARAMS",
+      "field": "action",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv30f1_ctrl_gsync_set_event_notification_params_action",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
+        "lines": [
+          1293,
+          1303,
+          1302,
+          1298,
+          1299,
+          1300,
+          1301,
+          1297,
+          1296,
+          1295,
+          1294
+        ],
+        "defines": [
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_DISABLE",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_ALL",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_COUNT_MATCH",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_HOUSE_GAIN",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_HOUSE_LOSS",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_RJ45_GAIN",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_RJ45_LOSS",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_STEREO_GAIN",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_STEREO_LOSS",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_SYNC_GAIN",
+          "NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_ACTION_SMART_SYNC_LOSS"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          511
+        ]
+      }
+    },
+    {
+      "struct": "NV503C_ALLOC_PARAMETERS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv503c_alloc_parameters_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV503C_ALLOC_PARAMETERS_FLAGS_TYPE, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/class/cl503c.h",
+        "struct_header": "src/common/sdk/nvidia/inc/class/cl503c.h",
+        "lines": [
+          45,
+          46,
+          44
+        ],
+        "defines": [
+          "NV503C_ALLOC_PARAMETERS_FLAGS_TYPE_BAR1",
+          "NV503C_ALLOC_PARAMETERS_FLAGS_TYPE_NVLINK",
+          "NV503C_ALLOC_PARAMETERS_FLAGS_TYPE_PROPRIETARY"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NVA081_CTRL_VGPU_CONFIG_EVENT_SET_NOTIFICATION_PARAMS",
+      "field": "action",
+      "rule": "handler-switch",
+      "set_name": "nva081_ctrl_vgpu_config_event_set_notification_params_action",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
+        "lines": [
+          453,
+          455,
+          454
+        ],
+        "defines": [
+          "NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE",
+          "NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT",
+          "NVA081_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NVA081_CTRL_VGPU_GET_CAPABILITY_PARAMS",
+      "field": "capability",
+      "rule": "handler-switch",
+      "set_name": "nva081_ctrl_vgpu_get_capability_params_capability",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
+        "lines": [
+          864,
+          866,
+          871,
+          870,
+          869,
+          872,
+          875,
+          874,
+          863,
+          867,
+          865,
+          868
+        ],
+        "defines": [
+          "NVA081_CTRL_VGPU_CAPABILITY_COMPUTE_MEDIA_ENGINE_GPU",
+          "NVA081_CTRL_VGPU_CAPABILITY_DEVICE_STREAMING",
+          "NVA081_CTRL_VGPU_CAPABILITY_FRACTIONAL_MULTI_VGPU",
+          "NVA081_CTRL_VGPU_CAPABILITY_HETEROGENEOUS_TIMESLICE_PROFILES",
+          "NVA081_CTRL_VGPU_CAPABILITY_HETEROGENEOUS_TIMESLICE_SIZES",
+          "NVA081_CTRL_VGPU_CAPABILITY_HOMOGENEOUS_PLACEMENT_ID",
+          "NVA081_CTRL_VGPU_CAPABILITY_MIG_TIMESLICING_MODE_ENABLED",
+          "NVA081_CTRL_VGPU_CAPABILITY_MIG_TIMESLICING_SUPPORTED",
+          "NVA081_CTRL_VGPU_CAPABILITY_MINI_QUARTER_GPU",
+          "NVA081_CTRL_VGPU_CAPABILITY_READ_DEVICE_BUFFER_BW",
+          "NVA081_CTRL_VGPU_CAPABILITY_WARM_UPDATE",
+          "NVA081_CTRL_VGPU_CAPABILITY_WRITE_DEVICE_BUFFER_BW"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ]
+      }
+    },
+    {
+      "struct": "NVA081_CTRL_VGPU_SET_CAPABILITY_PARAMS",
+      "field": "capability",
+      "rule": "handler-switch",
+      "set_name": "nva081_ctrl_vgpu_set_capability_params_capability",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
+        "lines": [
+          864,
+          875,
+          863
+        ],
+        "defines": [
+          "NVA081_CTRL_VGPU_CAPABILITY_COMPUTE_MEDIA_ENGINE_GPU",
+          "NVA081_CTRL_VGPU_CAPABILITY_MIG_TIMESLICING_MODE_ENABLED",
+          "NVA081_CTRL_VGPU_CAPABILITY_MINI_QUARTER_GPU"
+        ],
+        "values": [
+          0,
+          1,
+          11
+        ]
+      }
+    },
+    {
+      "struct": "NVA084_CTRL_KERNEL_HOST_VGPU_DEVICE_EVENT_SET_NOTIFICATION_PARAMS",
+      "field": "action",
+      "rule": "handler-switch",
+      "set_name": "nva084_ctrl_kernel_host_vgpu_device_event_set_notification_params_action",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrla084.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla084.h",
+        "lines": [
+          214,
+          216,
+          215
+        ],
+        "defines": [
+          "NVA084_CTRL_EVENT_SET_NOTIFICATION_ACTION_DISABLE",
+          "NVA084_CTRL_EVENT_SET_NOTIFICATION_ACTION_REPEAT",
+          "NVA084_CTRL_EVENT_SET_NOTIFICATION_ACTION_SINGLE"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NVA0BD_CTRL_NVFBC_SW_SESSION_UPDATE_INFO_PARAMS",
+      "field": "captureCallFlags",
+      "rule": "handler-switch",
+      "set_name": "nva0bd_ctrl_nvfbc_sw_session_update_info_params_capture_call_flags",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/ctrl/ctrla0bd.h",
+        "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla0bd.h",
+        "lines": [
+          96,
+          97,
+          98
+        ],
+        "defines": [
+          "NVA0BD_NVFBC_WITH_WAIT_FALSE",
+          "NVA0BD_NVFBC_WITH_WAIT_INFINITE",
+          "NVA0BD_NVFBC_WITH_WAIT_TIMEOUT"
+        ],
+        "values": [
+          0,
+          1,
+          16
+        ]
+      }
+    },
+    {
+      "struct": "NVB0B5_ALLOCATION_PARAMETERS",
+      "field": "version",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvb0b5_allocation_parameters_version",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/class/clb0b5sw.h",
+        "struct_header": "src/common/sdk/nvidia/inc/class/clb0b5sw.h",
+        "lines": [
+          40,
+          46
+        ],
+        "defines": [
+          "NVB0B5_ALLOCATION_PARAMETERS_VERSION_0",
+          "NVB0B5_ALLOCATION_PARAMETERS_VERSION_1"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NVOS02_PARAMETERS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvos02_parameters_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NVOS02_FLAGS_ALLOC, NVOS02_FLAGS_ALLOC_DEVICE_READ_ONLY, NVOS02_FLAGS_ALLOC_NISO_DISPLAY, NVOS02_FLAGS_ALLOC_TYPE_SYNCPOINT, NVOS02_FLAGS_ALLOC_USER_READ_ONLY, NVOS02_FLAGS_COHERENCY, NVOS02_FLAGS_GPU_CACHEABLE, NVOS02_FLAGS_KERNEL_MAPPING, NVOS02_FLAGS_LOCATION, NVOS02_FLAGS_MAPPING, NVOS02_FLAGS_MEMORY_PROTECTION, NVOS02_FLAGS_PEER_MAP_OVERRIDE, NVOS02_FLAGS_PHYSICALITY, NVOS02_FLAGS_REGISTER_MEMDESC_TO_PHYS_RM, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          232,
+          233,
+          216,
+          217,
+          206,
+          247,
+          224,
+          225,
+          200,
+          199,
+          204,
+          201,
+          203,
+          202,
+          208,
+          209,
+          214,
+          213,
+          196,
+          197,
+          278,
+          280,
+          279,
+          258,
+          259,
+          260,
+          242,
+          243,
+          193,
+          194,
+          267,
+          268
+        ],
+        "defines": [
+          "NVOS02_FLAGS_ALLOC_DEVICE_READ_ONLY_NO",
+          "NVOS02_FLAGS_ALLOC_DEVICE_READ_ONLY_YES",
+          "NVOS02_FLAGS_ALLOC_NISO_DISPLAY_NO",
+          "NVOS02_FLAGS_ALLOC_NISO_DISPLAY_YES",
+          "NVOS02_FLAGS_ALLOC_NONE",
+          "NVOS02_FLAGS_ALLOC_TYPE_SYNCPOINT_APERTURE",
+          "NVOS02_FLAGS_ALLOC_USER_READ_ONLY_NO",
+          "NVOS02_FLAGS_ALLOC_USER_READ_ONLY_YES",
+          "NVOS02_FLAGS_COHERENCY_CACHED",
+          "NVOS02_FLAGS_COHERENCY_UNCACHED",
+          "NVOS02_FLAGS_COHERENCY_WRITE_BACK",
+          "NVOS02_FLAGS_COHERENCY_WRITE_COMBINE",
+          "NVOS02_FLAGS_COHERENCY_WRITE_PROTECT",
+          "NVOS02_FLAGS_COHERENCY_WRITE_THROUGH",
+          "NVOS02_FLAGS_GPU_CACHEABLE_NO",
+          "NVOS02_FLAGS_GPU_CACHEABLE_YES",
+          "NVOS02_FLAGS_KERNEL_MAPPING_MAP",
+          "NVOS02_FLAGS_KERNEL_MAPPING_NO_MAP",
+          "NVOS02_FLAGS_LOCATION_PCI",
+          "NVOS02_FLAGS_LOCATION_VIDMEM",
+          "NVOS02_FLAGS_MAPPING_DEFAULT",
+          "NVOS02_FLAGS_MAPPING_NEVER_MAP",
+          "NVOS02_FLAGS_MAPPING_NO_MAP",
+          "NVOS02_FLAGS_MEMORY_PROTECTION_DEFAULT",
+          "NVOS02_FLAGS_MEMORY_PROTECTION_PROTECTED",
+          "NVOS02_FLAGS_MEMORY_PROTECTION_UNPROTECTED",
+          "NVOS02_FLAGS_PEER_MAP_OVERRIDE_DEFAULT",
+          "NVOS02_FLAGS_PEER_MAP_OVERRIDE_REQUIRED",
+          "NVOS02_FLAGS_PHYSICALITY_CONTIGUOUS",
+          "NVOS02_FLAGS_PHYSICALITY_NONCONTIGUOUS",
+          "NVOS02_FLAGS_REGISTER_MEMDESC_TO_PHYS_RM_FALSE",
+          "NVOS02_FLAGS_REGISTER_MEMDESC_TO_PHYS_RM_TRUE"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "struct": "NVOS30_PARAMETERS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvos30_parameters_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NVOS30_FLAGS_BEHAVIOR, NVOS30_FLAGS_CHANNEL, NVOS30_FLAGS_IDLE, NVOS30_FLAGS_WAIT_FOR_ELPG_ON, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          536,
+          535,
+          534,
+          533,
+          538,
+          539,
+          569,
+          548,
+          542,
+          553,
+          555,
+          556,
+          557,
+          558,
+          559,
+          560,
+          551,
+          543,
+          545,
+          544,
+          562,
+          547,
+          554,
+          549,
+          550,
+          567,
+          568,
+          563,
+          564,
+          565,
+          566,
+          541,
+          552,
+          561,
+          546,
+          594,
+          595
+        ],
+        "defines": [
+          "NVOS30_FLAGS_BEHAVIOR_FORCE_BUSY_CHECK",
+          "NVOS30_FLAGS_BEHAVIOR_QUERY",
+          "NVOS30_FLAGS_BEHAVIOR_SLEEP",
+          "NVOS30_FLAGS_BEHAVIOR_SPIN",
+          "NVOS30_FLAGS_CHANNEL_LIST",
+          "NVOS30_FLAGS_CHANNEL_SINGLE",
+          "NVOS30_FLAGS_IDLE_ACTIVECHANNELS",
+          "NVOS30_FLAGS_IDLE_BITSTREAM_PROCESSOR",
+          "NVOS30_FLAGS_IDLE_CACHE1",
+          "NVOS30_FLAGS_IDLE_CALLBACKS",
+          "NVOS30_FLAGS_IDLE_CE0",
+          "NVOS30_FLAGS_IDLE_CE1",
+          "NVOS30_FLAGS_IDLE_CE2",
+          "NVOS30_FLAGS_IDLE_CE3",
+          "NVOS30_FLAGS_IDLE_CE4",
+          "NVOS30_FLAGS_IDLE_CE5",
+          "NVOS30_FLAGS_IDLE_CIPHER_DMA",
+          "NVOS30_FLAGS_IDLE_GRAPHICS",
+          "NVOS30_FLAGS_IDLE_MOTION_ESTIMATION",
+          "NVOS30_FLAGS_IDLE_MPEG",
+          "NVOS30_FLAGS_IDLE_MSENC",
+          "NVOS30_FLAGS_IDLE_MSPDEC",
+          "NVOS30_FLAGS_IDLE_MSPPP",
+          "NVOS30_FLAGS_IDLE_MSVLD",
+          "NVOS30_FLAGS_IDLE_NVDEC0",
+          "NVOS30_FLAGS_IDLE_NVDEC1",
+          "NVOS30_FLAGS_IDLE_NVDEC2",
+          "NVOS30_FLAGS_IDLE_NVENC0",
+          "NVOS30_FLAGS_IDLE_NVENC1",
+          "NVOS30_FLAGS_IDLE_NVENC2",
+          "NVOS30_FLAGS_IDLE_NVJPG",
+          "NVOS30_FLAGS_IDLE_PUSH_BUFFER",
+          "NVOS30_FLAGS_IDLE_SEC",
+          "NVOS30_FLAGS_IDLE_VIC",
+          "NVOS30_FLAGS_IDLE_VIDEO_PROCESSOR",
+          "NVOS30_FLAGS_WAIT_FOR_ELPG_ON_NO",
+          "NVOS30_FLAGS_WAIT_FOR_ELPG_ON_YES"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096,
+          8192,
+          16384,
+          32768,
+          65536,
+          131072,
+          262144,
+          524288,
+          1048576,
+          2097152,
+          4194304,
+          8388608
+        ]
+      }
+    },
+    {
+      "struct": "NVOS32_PARAMETERS",
+      "field": "function",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvos32_parameters_function",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          646,
+          636,
+          640,
+          639,
+          637,
+          643,
+          644,
+          645,
+          638,
+          641,
+          642
+        ],
+        "defines": [
+          "NVOS32_FUNCTION_ALLOC_OS_DESCRIPTOR",
+          "NVOS32_FUNCTION_ALLOC_SIZE",
+          "NVOS32_FUNCTION_ALLOC_SIZE_RANGE",
+          "NVOS32_FUNCTION_ALLOC_TILED_PITCH_HEIGHT",
+          "NVOS32_FUNCTION_FREE",
+          "NVOS32_FUNCTION_GET_MEM_ALIGNMENT",
+          "NVOS32_FUNCTION_HW_ALLOC",
+          "NVOS32_FUNCTION_HW_FREE",
+          "NVOS32_FUNCTION_INFO",
+          "NVOS32_FUNCTION_REACQUIRE_COMPR",
+          "NVOS32_FUNCTION_RELEASE_COMPR"
+        ],
+        "values": [
+          2,
+          3,
+          5,
+          6,
+          14,
+          15,
+          16,
+          18,
+          19,
+          20,
+          27
+        ]
+      }
+    },
+    {
+      "struct": "NVOS33_PARAMETERS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvos33_parameters_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NVOS33_FLAGS_ACCESS, NVOS33_FLAGS_ALLOW_MAPPING_ON_HCC, NVOS33_FLAGS_BUS, NVOS33_FLAGS_CACHING_TYPE, NVOS33_FLAGS_FIFO_MAPPING, NVOS33_FLAGS_MAPPING, NVOS33_FLAGS_MAP_FIXED, NVOS33_FLAGS_MEM_SPACE, NVOS33_FLAGS_OS_DESCRIPTOR, NVOS33_FLAGS_PERSISTENT, NVOS33_FLAGS_RESERVE_ON_UNMAP, NVOS33_FLAGS_SKIP_SIZE_CHECK, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          1726,
+          1725,
+          1727,
+          1841,
+          1842,
+          1811,
+          1810,
+          1812,
+          1825,
+          1829,
+          1826,
+          1830,
+          1828,
+          1827,
+          1767,
+          1768,
+          1759,
+          1760,
+          1761,
+          1781,
+          1782,
+          1747,
+          1748,
+          1816,
+          1817,
+          1731,
+          1732,
+          1802,
+          1803,
+          1739,
+          1740
+        ],
+        "defines": [
+          "NVOS33_FLAGS_ACCESS_READ_ONLY",
+          "NVOS33_FLAGS_ACCESS_READ_WRITE",
+          "NVOS33_FLAGS_ACCESS_WRITE_ONLY",
+          "NVOS33_FLAGS_ALLOW_MAPPING_ON_HCC_NO",
+          "NVOS33_FLAGS_ALLOW_MAPPING_ON_HCC_YES",
+          "NVOS33_FLAGS_BUS_COHERENT_LINK",
+          "NVOS33_FLAGS_BUS_DEFAULT",
+          "NVOS33_FLAGS_BUS_PCIE",
+          "NVOS33_FLAGS_CACHING_TYPE_CACHED",
+          "NVOS33_FLAGS_CACHING_TYPE_DEFAULT",
+          "NVOS33_FLAGS_CACHING_TYPE_UNCACHED",
+          "NVOS33_FLAGS_CACHING_TYPE_UNCACHED_WEAK",
+          "NVOS33_FLAGS_CACHING_TYPE_WRITEBACK",
+          "NVOS33_FLAGS_CACHING_TYPE_WRITECOMBINED",
+          "NVOS33_FLAGS_FIFO_MAPPING_DEFAULT",
+          "NVOS33_FLAGS_FIFO_MAPPING_ENABLE",
+          "NVOS33_FLAGS_MAPPING_DEFAULT",
+          "NVOS33_FLAGS_MAPPING_DIRECT",
+          "NVOS33_FLAGS_MAPPING_REFLECTED",
+          "NVOS33_FLAGS_MAP_FIXED_DISABLE",
+          "NVOS33_FLAGS_MAP_FIXED_ENABLE",
+          "NVOS33_FLAGS_MEM_SPACE_CLIENT",
+          "NVOS33_FLAGS_MEM_SPACE_USER",
+          "NVOS33_FLAGS_OS_DESCRIPTOR_DISABLE",
+          "NVOS33_FLAGS_OS_DESCRIPTOR_ENABLE",
+          "NVOS33_FLAGS_PERSISTENT_DISABLE",
+          "NVOS33_FLAGS_PERSISTENT_ENABLE",
+          "NVOS33_FLAGS_RESERVE_ON_UNMAP_DISABLE",
+          "NVOS33_FLAGS_RESERVE_ON_UNMAP_ENABLE",
+          "NVOS33_FLAGS_SKIP_SIZE_CHECK_DISABLE",
+          "NVOS33_FLAGS_SKIP_SIZE_CHECK_ENABLE"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          5,
+          6,
+          7
+        ]
+      }
+    },
+    {
+      "struct": "NVOS38_PARAMETERS",
+      "field": "AccessType",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvos38_parameters_access_type",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          1878,
+          1876,
+          1879,
+          1877
+        ],
+        "defines": [
+          "NVOS38_ACCESS_TYPE_READ_BINARY",
+          "NVOS38_ACCESS_TYPE_READ_DWORD",
+          "NVOS38_ACCESS_TYPE_WRITE_BINARY",
+          "NVOS38_ACCESS_TYPE_WRITE_DWORD"
+        ],
+        "values": [
+          1,
+          2,
+          6,
+          7
+        ]
+      }
+    },
+    {
+      "struct": "NVOS46_PARAMETERS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvos46_parameters_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NVOS46_FLAGS_32BIT_POINTER, NVOS46_FLAGS_ACCESS, NVOS46_FLAGS_CACHE_SNOOP, NVOS46_FLAGS_DEFER_TLB_INVALIDATION, NVOS46_FLAGS_DISABLE_ENCRYPTION, NVOS46_FLAGS_DMA_OFFSET_FIXED, NVOS46_FLAGS_DMA_OFFSET_GROWS, NVOS46_FLAGS_DMA_UNICAST_REUSE_ALLOC, NVOS46_FLAGS_ENABLE_FORCE_COMPRESSED_MAP, NVOS46_FLAGS_GPU_CACHEABLE, NVOS46_FLAGS_KERNEL_MAPPING, NVOS46_FLAGS_P2P_ENABLE, NVOS46_FLAGS_PAGE_KIND, NVOS46_FLAGS_PAGE_KIND_OVERRIDE, NVOS46_FLAGS_PAGE_SIZE, NVOS46_FLAGS_SHADER_ACCESS, NVOS46_FLAGS_SYSTEM_L3_ALLOC, NVOS46_FLAGS_TLB_LOCK, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          1986,
+          1987,
+          1977,
+          1976,
+          1978,
+          1994,
+          1995,
+          2151,
+          2152,
+          2100,
+          2101,
+          2096,
+          2097,
+          2069,
+          2068,
+          2134,
+          2135,
+          2142,
+          2143,
+          2109,
+          2112,
+          2111,
+          2110,
+          2002,
+          2001,
+          2121,
+          2123,
+          2125,
+          2124,
+          2122,
+          2115,
+          2116,
+          1990,
+          1991,
+          2039,
+          2043,
+          2040,
+          2041,
+          2038,
+          2042,
+          2010,
+          2011,
+          2013,
+          2012,
+          2064,
+          2065,
+          2131,
+          2132
+        ],
+        "defines": [
+          "NVOS46_FLAGS_32BIT_POINTER_DISABLE",
+          "NVOS46_FLAGS_32BIT_POINTER_ENABLE",
+          "NVOS46_FLAGS_ACCESS_READ_ONLY",
+          "NVOS46_FLAGS_ACCESS_READ_WRITE",
+          "NVOS46_FLAGS_ACCESS_WRITE_ONLY",
+          "NVOS46_FLAGS_CACHE_SNOOP_DISABLE",
+          "NVOS46_FLAGS_CACHE_SNOOP_ENABLE",
+          "NVOS46_FLAGS_DEFER_TLB_INVALIDATION_FALSE",
+          "NVOS46_FLAGS_DEFER_TLB_INVALIDATION_TRUE",
+          "NVOS46_FLAGS_DISABLE_ENCRYPTION_FALSE",
+          "NVOS46_FLAGS_DISABLE_ENCRYPTION_TRUE",
+          "NVOS46_FLAGS_DMA_OFFSET_FIXED_FALSE",
+          "NVOS46_FLAGS_DMA_OFFSET_FIXED_TRUE",
+          "NVOS46_FLAGS_DMA_OFFSET_GROWS_DOWN",
+          "NVOS46_FLAGS_DMA_OFFSET_GROWS_UP",
+          "NVOS46_FLAGS_DMA_UNICAST_REUSE_ALLOC_FALSE",
+          "NVOS46_FLAGS_DMA_UNICAST_REUSE_ALLOC_TRUE",
+          "NVOS46_FLAGS_ENABLE_FORCE_COMPRESSED_MAP_FALSE",
+          "NVOS46_FLAGS_ENABLE_FORCE_COMPRESSED_MAP_TRUE",
+          "NVOS46_FLAGS_GPU_CACHEABLE_DEFAULT",
+          "NVOS46_FLAGS_GPU_CACHEABLE_INVALID",
+          "NVOS46_FLAGS_GPU_CACHEABLE_NO",
+          "NVOS46_FLAGS_GPU_CACHEABLE_YES",
+          "NVOS46_FLAGS_KERNEL_MAPPING_ENABLE",
+          "NVOS46_FLAGS_KERNEL_MAPPING_NONE",
+          "NVOS46_FLAGS_P2P_ENABLE_NO",
+          "NVOS46_FLAGS_P2P_ENABLE_NONE",
+          "NVOS46_FLAGS_P2P_ENABLE_NOSLI",
+          "NVOS46_FLAGS_P2P_ENABLE_SLI",
+          "NVOS46_FLAGS_P2P_ENABLE_YES",
+          "NVOS46_FLAGS_PAGE_KIND_OVERRIDE_NO",
+          "NVOS46_FLAGS_PAGE_KIND_OVERRIDE_YES",
+          "NVOS46_FLAGS_PAGE_KIND_PHYSICAL",
+          "NVOS46_FLAGS_PAGE_KIND_VIRTUAL",
+          "NVOS46_FLAGS_PAGE_SIZE_4KB",
+          "NVOS46_FLAGS_PAGE_SIZE_512M",
+          "NVOS46_FLAGS_PAGE_SIZE_BIG",
+          "NVOS46_FLAGS_PAGE_SIZE_BOTH",
+          "NVOS46_FLAGS_PAGE_SIZE_DEFAULT",
+          "NVOS46_FLAGS_PAGE_SIZE_HUGE",
+          "NVOS46_FLAGS_SHADER_ACCESS_DEFAULT",
+          "NVOS46_FLAGS_SHADER_ACCESS_READ_ONLY",
+          "NVOS46_FLAGS_SHADER_ACCESS_READ_WRITE",
+          "NVOS46_FLAGS_SHADER_ACCESS_WRITE_ONLY",
+          "NVOS46_FLAGS_SYSTEM_L3_ALLOC_DEFAULT",
+          "NVOS46_FLAGS_SYSTEM_L3_ALLOC_ENABLE_HINT",
+          "NVOS46_FLAGS_TLB_LOCK_DISABLE",
+          "NVOS46_FLAGS_TLB_LOCK_ENABLE"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "struct": "NVOS46_PARAMETERS",
+      "field": "flags2",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvos46_parameters_flags2",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NVOS46_FLAGS2_GPU_CACHE_SNOOP, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          2163,
+          2165,
+          2164
+        ],
+        "defines": [
+          "NVOS46_FLAGS2_GPU_CACHE_SNOOP_DEFAULT",
+          "NVOS46_FLAGS2_GPU_CACHE_SNOOP_DISABLE",
+          "NVOS46_FLAGS2_GPU_CACHE_SNOOP_ENABLE"
+        ],
+        "values": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "struct": "NVOS47_PARAMETERS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nvos47_parameters_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NVOS47_FLAGS_DEFER_TLB_INVALIDATION, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          2192,
+          2193
+        ],
+        "defines": [
+          "NVOS47_FLAGS_DEFER_TLB_INVALIDATION_FALSE",
+          "NVOS47_FLAGS_DEFER_TLB_INVALIDATION_TRUE"
+        ],
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "struct": "NV_CTXSHARE_ALLOCATION_PARAMETERS",
+      "field": "flags",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv_ctxshare_allocation_parameters_flags",
+      "verdict": "rejected",
+      "verdict_source": "mechanical",
+      "reason": "Every define in this set is a state of the bit range NV_CTXSHARE_ALLOCATION_FLAGS_SUBCONTEXT, so the set describes bit positions inside the word and never the values the field takes. Emitting it would constrain the whole field to those bits' states.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          3232,
+          3234,
+          3233,
+          3231
+        ],
+        "defines": [
+          "NV_CTXSHARE_ALLOCATION_FLAGS_SUBCONTEXT_ASYNC",
+          "NV_CTXSHARE_ALLOCATION_FLAGS_SUBCONTEXT_ASYNC_PREFER_LOWER",
+          "NV_CTXSHARE_ALLOCATION_FLAGS_SUBCONTEXT_SPECIFIED",
+          "NV_CTXSHARE_ALLOCATION_FLAGS_SUBCONTEXT_SYNC"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "struct": "NV_VASPACE_ALLOCATION_PARAMETERS",
+      "field": "index",
+      "rule": "struct-or-stem-anchored",
+      "set_name": "nv_vaspace_allocation_parameters_index",
+      "verdict": "accepted",
+      "verdict_source": "mechanical",
+      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "evidence": {
+        "header": "src/common/sdk/nvidia/inc/nvos.h",
+        "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
+        "lines": [
+          3178,
+          3179,
+          3177,
+          3176,
+          3180,
+          3175
+        ],
+        "defines": [
+          "NV_VASPACE_ALLOCATION_INDEX_GPU_DEVICE",
+          "NV_VASPACE_ALLOCATION_INDEX_GPU_FLA",
+          "NV_VASPACE_ALLOCATION_INDEX_GPU_GLOBAL",
+          "NV_VASPACE_ALLOCATION_INDEX_GPU_HOST",
+          "NV_VASPACE_ALLOCATION_INDEX_GPU_MAX",
+          "NV_VASPACE_ALLOCATION_INDEX_GPU_NEW"
+        ],
+        "values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    }
+  ]
+}

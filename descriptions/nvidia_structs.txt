@@ -182,7 +182,7 @@ nvos64_alloc_ampere_compute_b {
 } [packed]
 
 NVB0B5_ALLOCATION_PARAMETERS {
-	version   	int32
+	version   	flags[nvb0b5_allocation_parameters_version, int32]
 	engineType	int32
 } [packed]
 
@@ -588,7 +588,7 @@ nvos64_alloc_fermi_twod_a {
 } [packed]
 
 NV_VASPACE_ALLOCATION_PARAMETERS {
-	index          	int32
+	index          	flags[nv_vaspace_allocation_parameters_index, int32]
 	flags          	int32
 	vaSize         	int64
 	vaStartInternal	int64
@@ -3385,7 +3385,7 @@ NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS {
 	gpuId                             	int32
 	tpp                               	int32
 	ratedTgp                          	int32
-	subFunc                           	int32
+	subFunc                           	flags[nv0000_ctrl_system_nvpcf_get_power_mode_info_params_sub_func, int32]
 	ctgpOffsetmW                      	int32
 	targetTppOffsetmW                 	int32
 	maxOutputOffsetmW                 	int32
@@ -3456,7 +3456,7 @@ nvos54_ctrl_cliresCtrlCmdOsUnixImportObjectsFromFd {
 } [packed]
 
 NV0000_CTRL_SYSTEM_DEBUG_RMMSG_CTRL_PARAMS {
-	cmd  	int32
+	cmd  	flags[nv0000_ctrl_system_debug_rmmsg_ctrl_params_cmd, int32]
 	count	int32
 	data 	array[int8, 512]
 } [packed]
@@ -3945,7 +3945,7 @@ nvos54_ctrl_cliresCtrlCmdGpuGetIdInfo {
 NV0000_CTRL_OS_UNIX_FLUSH_USER_CACHE_PARAMS {
 	offset      	int64
 	length      	int64
-	cacheOps    	int32
+	cacheOps    	flags[nv0000_ctrl_os_unix_flush_user_cache_params_cache_ops, int32]
 	hDevice     	int32
 	hObject     	int32
 	pad5        	array[const[0, int8], 4]
@@ -4120,7 +4120,7 @@ nvos54_ctrl_cliresCtrlCmdGsyncGetAttachedIds {
 
 NV0000_CTRL_NVD_GET_TIMESTAMP_PARAMS {
 	timestamp	int64
-	cpuClkId 	int8
+	cpuClkId 	flags[nv0000_ctrl_nvd_get_timestamp_params_cpu_clk_id, int8]
 	pad_tail 	array[const[0, int8], 7]
 } [packed]
 
@@ -4141,7 +4141,7 @@ NV0000_CTRL_CLIENT_GET_HANDLE_INFO_PARAMS_u2 {
 
 NV0000_CTRL_CLIENT_GET_HANDLE_INFO_PARAMS {
 	hObject	int32
-	index  	int32
+	index  	flags[nv0000_ctrl_client_get_handle_info_params_index, int32]
 	data   	NV0000_CTRL_CLIENT_GET_HANDLE_INFO_PARAMS_u2
 } [packed]
 
@@ -4199,7 +4199,7 @@ nvos54_ctrl_cliresCtrlCmdClientSubscribeToImexChannel {
 } [packed]
 
 NV0000_CTRL_SYSTEM_NOTIFY_EVENT_PARAMS {
-	eventType       	int32
+	eventType       	flags[nv0000_ctrl_system_notify_event_params_event_type, int32]
 	eventData       	int32
 	bEventDataForced	int8
 	pad_tail        	array[const[0, int8], 3]
@@ -4477,7 +4477,7 @@ nvos54_ctrl_cliresCtrlCmdGpuGetInitStatus {
 
 NV0000_CTRL_EVENT_SET_NOTIFICATION_PARAMS {
 	event 	int32
-	action	int32
+	action	flags[nv0000_ctrl_event_set_notification_params_action, int32]
 } [packed]
 
 nvos54_ctrl_cliresCtrlCmdEventSetNotification {
@@ -5010,7 +5010,7 @@ nvos54_ctrl_cliresCtrlCmdSystemGpsCtrl {
 } [packed]
 
 NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CTRL_PARAMS {
-	cmd   	int32
+	cmd   	flags[nv0000_ctrl_system_pfm_req_hndlr_ctrl_params_cmd, int32]
 	input 	array[int32, 2]
 	result	array[int32, 4]
 } [packed]
@@ -5249,7 +5249,7 @@ NV00F1_CTRL_FABRIC_EVENT_u3 {
 } [packed]
 
 NV00F1_CTRL_FABRIC_EVENT {
-	type       	int8
+	type       	flags[nv00f1_ctrl_fabric_event_type, int8]
 	pad1       	array[const[0, int8], 7]
 	id         	int64
 	imexChannel	int32
@@ -5275,7 +5275,7 @@ nvos54_ctrl_imexsessionapiCtrlCmdGetFabricEvents {
 } [packed]
 
 NV0000_CTRL_DIAG_PROFILE_RPC_PARAMS {
-	rpcProfileCmd	int32
+	rpcProfileCmd	flags[nv0000_ctrl_diag_profile_rpc_params_rpc_profile_cmd, int32]
 } [packed]
 
 nvos54_ctrl_cliresCtrlCmdDiagProfileRpc {
@@ -5331,9 +5331,9 @@ nvos54_ctrl_ksmdbgssnCtrlCmdDebugReadMMUFaultInfo {
 NV30F1_CTRL_GSYNC_GET_OPTIMIZED_TIMING_PARAMS {
 	gpuId                	int32
 	output               	int32
-	protocol             	int32
-	structure            	int32
-	adjust               	int32
+	protocol             	flags[nv30f1_ctrl_gsync_get_optimized_timing_params_protocol, int32]
+	structure            	flags[nv30f1_ctrl_gsync_get_optimized_timing_params_structure, int32]
+	adjust               	flags[nv30f1_ctrl_gsync_get_optimized_timing_params_adjust, int32]
 	hDeltaStep           	int32
 	hDeltaMax            	int32
 	vDeltaStep           	int32
@@ -5447,13 +5447,13 @@ nvos54_ctrl_gsyncapiCtrlCmdGsyncGetStatus {
 
 NV30F1_CTRL_GSYNC_GET_CAPS_PARAMS {
 	revId                	int32
-	boardId              	int32
+	boardId              	flags[nv30f1_ctrl_gsync_get_caps_params_board_id, int32]
 	minRevRequired       	int32
 	isFirmwareRevMismatch	int8
 	pad4                 	array[const[0, int8], 3]
 	revision             	int32
 	extendedRevision     	int32
-	capFlags             	int32
+	capFlags             	flags[nv30f1_ctrl_gsync_get_caps_params_cap_flags, int32]
 	maxSyncSkew          	int32
 	syncSkewResolution   	int32
 	maxStartDelay        	int32
@@ -6098,7 +6098,7 @@ nvos54_ctrl_subdeviceCtrlCmdGpuGetNvfbcSwSessionInfo {
 } [packed]
 
 NV0080_CTRL_FB_SET_DEFAULT_VIDMEM_PHYSICALITY_PARAMS {
-	value	int32
+	value	flags[nv0080_ctrl_fb_set_default_vidmem_physicality_params_value, int32]
 } [packed]
 
 nvos54_ctrl_deviceCtrlCmdSetDefaultVidmemPhysicality {
@@ -6178,7 +6178,7 @@ nvos54_ctrl_gsyncapiCtrlCmdGsyncGetControlSwapLockWindow {
 } [packed]
 
 NV30F1_CTRL_GSYNC_SET_EVENT_NOTIFICATION_PARAMS {
-	action	int32
+	action	flags[nv30f1_ctrl_gsync_set_event_notification_params_action, int32]
 } [packed]
 
 nvos54_ctrl_gsyncapiCtrlCmdGsyncSetEventNotification {
@@ -6301,8 +6301,8 @@ NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS {
 	gpuAddr     	int64
 	pdeVirtAddr 	int64
 	pdeEntrySize	int32
-	pdeAddrSpace	int32
-	pdeSize     	int32
+	pdeAddrSpace	flags[nv0080_ctrl_dma_get_pde_info_params_pde_addr_space, int32]
+	pdeSize     	flags[nv0080_ctrl_dma_get_pde_info_params_pde_size, int32]
 	subDeviceId 	int32
 	pteBlocks   	array[NV0080_CTRL_DMA_PDE_INFO_PTE_BLOCK, 5]
 	pdbAddr     	int64
@@ -6406,7 +6406,7 @@ nvos54_ctrl_subdeviceCtrlCmdKGrGetCapsV2 {
 } [packed]
 
 NV2080_CTRL_GPU_GET_PIDS_PARAMS {
-	idType     	int32
+	idType     	flags[nv2080_ctrl_gpu_get_pids_params_id_type, int32]
 	id         	int32
 	pidTblCount	int32
 	pidTbl     	array[int32, 950]
@@ -6498,15 +6498,15 @@ nvos54_ctrl_subdeviceCtrlCmdKGrGetEngineContextProperties {
 
 NV2080_CTRL_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS {
 	grRouteInfo	NV0080_CTRL_GR_ROUTE_INFO
-	imla0      	int8
-	fmla16     	int8
-	dp         	int8
-	fmla32     	int8
-	ffma       	int8
-	imla1      	int8
-	imla2      	int8
-	imla3      	int8
-	imla4      	int8
+	imla0      	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla0, int8]
+	fmla16     	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_fmla16, int8]
+	dp         	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_dp, int8]
+	fmla32     	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_fmla32, int8]
+	ffma       	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_ffma, int8]
+	imla1      	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla1, int8]
+	imla2      	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla2, int8]
+	imla3      	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla3, int8]
+	imla4      	flags[nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla4, int8]
 	pad_tail   	array[const[0, int8], 7]
 } [packed]
 
@@ -7410,7 +7410,7 @@ nvos54_ctrl_deviceCtrlCmdGpuGetSparseTextureComputeMode {
 } [packed]
 
 NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_PARAMS {
-	engineId 	int32
+	engineId 	flags[nv0080_ctrl_fifo_get_engine_context_properties_params_engine_id, int32]
 	alignment	int32
 	size     	int32
 } [packed]
@@ -7749,10 +7749,10 @@ nvos54_ctrl_confComputeApiCtrlCmdGpuGetKeyRotationState {
 } [packed]
 
 NV2080_CTRL_FB_GET_GPU_CACHE_INFO_PARAMS {
-	powerState	int32
-	writeMode 	int32
-	bypassMode	int32
-	rcmState  	int32
+	powerState	flags[nv2080_ctrl_fb_get_gpu_cache_info_params_power_state, int32]
+	writeMode 	flags[nv2080_ctrl_fb_get_gpu_cache_info_params_write_mode, int32]
+	bypassMode	flags[nv2080_ctrl_fb_get_gpu_cache_info_params_bypass_mode, int32]
+	rcmState  	flags[nv2080_ctrl_fb_get_gpu_cache_info_params_rcm_state, int32]
 } [packed]
 
 nvos54_ctrl_subdeviceCtrlCmdFbGetGpuCacheInfo {
@@ -7785,7 +7785,7 @@ nvos54_ctrl_confComputeApiCtrlCmdSystemGetCapabilities {
 } [packed]
 
 NV2080_CTRL_NVLINK_DEVICE_INFO {
-	deviceIdFlags           	int32
+	deviceIdFlags           	flags[nv2080_ctrl_nvlink_device_info_device_id_flags, int32]
 	domain                  	int32
 	bus                     	int16
 	device                  	int16
@@ -7793,7 +7793,7 @@ NV2080_CTRL_NVLINK_DEVICE_INFO {
 	pad5                    	array[const[0, int8], 2]
 	pciDeviceId             	int32
 	pad6                    	array[const[0, int8], 4]
-	deviceType              	int64
+	deviceType              	flags[nv2080_ctrl_nvlink_device_info_device_type, int64]
 	deviceUUID              	array[int8, 16]
 	fabricRecoveryStatusMask	int32
 	pad_tail                	array[const[0, int8], 4]
@@ -8341,7 +8341,7 @@ NV2080_CTRL_FB_GET_SEMAPHORE_SURFACE_LAYOUT_PARAMS {
 	maxSubmittedSemaphoreValueOffset	int64
 	monitoredFenceThresholdOffset   	int64
 	size                            	int64
-	caps                            	int32
+	caps                            	flags[nv2080_ctrl_fb_get_semaphore_surface_layout_params_caps, int32]
 	pad_tail                        	array[const[0, int8], 4]
 } [packed]
 
@@ -8800,7 +8800,7 @@ nvos54_ctrl_subdeviceCtrlCmdGpuGetNvfbcSwSessionStats {
 } [packed]
 
 NV2080_CTRL_FB_IS_KIND_PARAMS {
-	operation	int32
+	operation	flags[nv2080_ctrl_fb_is_kind_params_operation, int32]
 	kind     	int32
 	result   	int8
 	pad_tail 	array[const[0, int8], 3]
@@ -8873,7 +8873,7 @@ nvos54_ctrl_subdeviceCtrlCmdGpuGetFermiZcullInfo {
 } [packed]
 
 NV2080_CTRL_CMD_GPU_ILLUM_PARAMS {
-	attribute	int32
+	attribute	flags[nv2080_ctrl_cmd_gpu_illum_params_attribute, int32]
 	value    	int32
 } [packed]
 
@@ -9025,7 +9025,7 @@ nvos54_ctrl_subdeviceCtrlCmdGpuGetSdm {
 } [packed]
 
 NV2080_CTRL_GPU_GET_SIMULATION_INFO_PARAMS {
-	type	int32
+	type	flags[nv2080_ctrl_gpu_get_simulation_info_params_type, int32]
 } [packed]
 
 nvos54_ctrl_subdeviceCtrlCmdGpuGetSimulationInfo {
@@ -9967,7 +9967,7 @@ nvos54_ctrl_subdeviceCtrlCmdFlaRange {
 
 NV2080_CTRL_EVENT_SET_NOTIFICATION_PARAMS {
 	event       	int32
-	action      	int32
+	action      	flags[nv2080_ctrl_event_set_notification_params_action, int32]
 	bNotifyState	int8
 	pad3        	array[const[0, int8], 3]
 	info32      	int32
@@ -10480,8 +10480,8 @@ nvos54_ctrl_subdeviceCtrlCmdGetPhysicalChannelCount {
 } [packed]
 
 NV2080_CTRL_CMD_FIFO_GET_USERD_LOCATION_PARAMS {
-	aperture 	int32
-	attribute	int32
+	aperture 	flags[nv2080_ctrl_cmd_fifo_get_userd_location_params_aperture, int32]
+	attribute	flags[nv2080_ctrl_cmd_fifo_get_userd_location_params_attribute, int32]
 } [packed]
 
 nvos54_ctrl_subdeviceCtrlCmdFifoGetUserdLocation {
@@ -11404,7 +11404,7 @@ NVA0BD_CTRL_NVFBC_TIMESTAMP {
 NVA0BD_CTRL_NVFBC_SW_SESSION_UPDATE_INFO_PARAMS {
 	hResolution        	int32
 	vResolution        	int32
-	captureCallFlags   	int32
+	captureCallFlags   	flags[nva0bd_ctrl_nvfbc_sw_session_update_info_params_capture_call_flags, int32]
 	totalGrabCalls     	int32
 	averageLatency     	int32
 	averageFPS         	int32
@@ -12094,7 +12094,7 @@ nvos54_ctrl_vgpuconfigapiCtrlCmdPgpuGetMultiVgpuSupportInfo {
 
 NVA084_CTRL_KERNEL_HOST_VGPU_DEVICE_EVENT_SET_NOTIFICATION_PARAMS {
 	event       	int32
-	action      	int32
+	action      	flags[nva084_ctrl_kernel_host_vgpu_device_event_set_notification_params_action, int32]
 	bNotifyState	int8
 	pad_tail    	array[const[0, int8], 3]
 } [packed]
@@ -12154,7 +12154,7 @@ nvos54_ctrl_tsemaCtrlCmdGetTime {
 
 NVA081_CTRL_VGPU_CONFIG_EVENT_SET_NOTIFICATION_PARAMS {
 	event 	int32
-	action	int32
+	action	flags[nva081_ctrl_vgpu_config_event_set_notification_params_action, int32]
 } [packed]
 
 nvos54_ctrl_vgpuconfigapiCtrlCmdVgpuConfigEventSetNotification {
@@ -12183,7 +12183,7 @@ nvos54_ctrl_vgpuconfigapiCtrlCmdGetVgpuDriversCaps {
 } [packed]
 
 NVA081_CTRL_VGPU_SET_CAPABILITY_PARAMS {
-	capability	int32
+	capability	flags[nva081_ctrl_vgpu_set_capability_params_capability, int32]
 	state     	int8
 	pad_tail  	array[const[0, int8], 3]
 } [packed]
@@ -12199,7 +12199,7 @@ nvos54_ctrl_vgpuconfigapiCtrlCmdVgpuConfigSetCapability {
 } [packed]
 
 NVA081_CTRL_VGPU_GET_CAPABILITY_PARAMS {
-	capability	int32
+	capability	flags[nva081_ctrl_vgpu_get_capability_params_capability, int32]
 	state     	int32
 } [packed]
 
@@ -12781,7 +12781,7 @@ NV0073_CTRL_EVENT_SET_NOTIFICATION_PARAMS {
 	subDeviceInstance	int32
 	hEvent           	int32
 	event            	int32
-	action           	int32
+	action           	flags[nv0073_ctrl_event_set_notification_params_action, int32]
 } [packed]
 
 nvos54_ctrl_nvdispapiCtrlCmdEventSetNotification {
@@ -13144,7 +13144,7 @@ NVOS32_PARAMETERS_u8 {
 NVOS32_PARAMETERS {
 	hRoot        	nvh_nv01_root
 	hObjectParent	nv_handle
-	function     	int32
+	function     	flags[nvos32_parameters_function, int32]
 	hVASpace     	int32
 	ivcHeapNumber	int16
 	pad5         	array[const[0, int8], 2]
@@ -13157,7 +13157,7 @@ NVOS32_PARAMETERS {
 NVOS38_PARAMETERS {
 	hClient         	nvh_nv01_root
 	hObject         	nv_handle
-	AccessType      	int32
+	AccessType      	flags[nvos38_parameters_access_type, int32]
 	DevNodeLength   	int32
 	pDevNode        	int64
 	ParmStrLength   	int32
@@ -16318,4 +16318,167 @@ nvkms_params_unregister_vblank_intr_callback {
 	cmd    	const[65, int32]
 	size   	const[20, int32]
 	address	ptr64[inout, NvKmsUnregisterVblankIntrCallbackParams]
+} [packed]
+
+drm_nvidia_get_crtc_crc32_params {
+	crtc_id	int32
+	crc32  	int32
+} [packed]
+
+drm_nvidia_gem_import_nvkms_memory_params {
+	mem_size         	int64
+	nvkms_params_ptr 	int64
+	nvkms_params_size	int64
+	handle           	int32
+	__pad            	int32
+} [packed]
+
+drm_nvidia_gem_import_userspace_memory_params {
+	size    	int64
+	address 	int64
+	handle  	int32
+	pad_tail	array[const[0, int8], 4]
+} [packed]
+
+drm_nvidia_get_dev_info_params {
+	gpu_id              	int32
+	mig_device          	int32
+	primary_index       	int32
+	supports_alloc      	int32
+	generic_page_kind   	int32
+	page_kind_generation	int32
+	sector_layout       	int32
+	supports_sync_fd    	int32
+	supports_semsurf    	int32
+} [packed]
+
+drm_nvidia_prime_fence_context_create_params {
+	handle                      	int32
+	index                       	int32
+	size                        	int64
+	import_mem_nvkms_params_ptr 	int64
+	import_mem_nvkms_params_size	int64
+	event_nvkms_params_ptr      	int64
+	event_nvkms_params_size     	int64
+} [packed]
+
+drm_nvidia_gem_prime_fence_attach_params {
+	handle              	int32
+	fence_context_handle	int32
+	sem_thresh          	int32
+	__pad               	int32
+} [packed]
+
+drm_nvidia_get_client_capability_params {
+	capability	int64
+	value     	int64
+} [packed]
+
+drm_nvidia_gem_export_nvkms_memory_params {
+	handle           	int32
+	__pad            	int32
+	nvkms_params_ptr 	int64
+	nvkms_params_size	int64
+} [packed]
+
+drm_nvidia_gem_map_offset_params {
+	handle	int32
+	__pad 	int32
+	offset	int64
+} [packed]
+
+drm_nvidia_gem_alloc_nvkms_memory_params {
+	handle      	int32
+	block_linear	int8
+	compressible	int8
+	__pad0      	int16
+	memory_size 	int64
+	flags       	int32
+	__pad1      	int32
+} [packed]
+
+drm_nvidia_crtc_crc32 {
+	value    	int32
+	supported	int8
+	__pad0   	int8
+	__pad1   	int16
+} [packed]
+
+drm_nvidia_crtc_crc32_v2_out {
+	compositorCrc32     	drm_nvidia_crtc_crc32
+	rasterGeneratorCrc32	drm_nvidia_crtc_crc32
+	outputCrc32         	drm_nvidia_crtc_crc32
+} [packed]
+
+drm_nvidia_get_crtc_crc32_v2_params {
+	crtc_id	int32
+	crc32  	drm_nvidia_crtc_crc32_v2_out
+} [packed]
+
+drm_nvidia_gem_export_dmabuf_memory_params {
+	handle           	int32
+	__pad            	int32
+	nvkms_params_ptr 	int64
+	nvkms_params_size	int64
+} [packed]
+
+drm_nvidia_gem_identify_object_params {
+	handle     	int32
+	object_type	int32
+} [packed]
+
+drm_nvidia_get_dpy_id_for_connector_id_params {
+	connectorId	int32
+	dpyId      	int32
+} [packed]
+
+drm_nvidia_get_connector_id_for_dpy_id_params {
+	dpyId      	int32
+	connectorId	int32
+} [packed]
+
+drm_nvidia_grant_permissions_params {
+	fd   	int32
+	dpyId	int32
+	type 	int32
+} [packed]
+
+drm_nvidia_revoke_permissions_params {
+	dpyId	int32
+	type 	int32
+} [packed]
+
+drm_nvidia_semsurf_fence_ctx_create_params {
+	index            	int64
+	nvkms_params_ptr 	int64
+	nvkms_params_size	int64
+	handle           	int32
+	__pad            	int32
+} [packed]
+
+drm_nvidia_semsurf_fence_create_params {
+	fence_context_handle	int32
+	timeout_value_ms    	int32
+	wait_value          	int64
+	fd                  	int32
+	__pad               	int32
+} [packed]
+
+drm_nvidia_semsurf_fence_wait_params {
+	fence_context_handle	int32
+	fd                  	int32
+	pre_wait_value      	int64
+	post_wait_value     	int64
+} [packed]
+
+drm_nvidia_semsurf_fence_attach_params {
+	handle              	int32
+	fence_context_handle	int32
+	timeout_value_ms    	int32
+	shared              	int32
+	wait_value          	int64
+} [packed]
+
+drm_nvidia_get_drm_file_unique_id_params {
+	id  	int64
 } [packed]

@@ -22,7 +22,7 @@ python3 tools/register_check.py
 | `pyflakes` | Undefined names, bad imports, unused imports left by a deletion | No output, exit status 0 |
 | `bash -n` | Syntax errors in the build script, which has no offline test | No output, exit status 0 |
 | `gspwn_config.py` | A shipped configuration that no longer validates | The effective configuration and the stopping rules, exit status 0 |
-| `regression_check.py` | Two committed artefacts that have to agree and no longer do, and a generated reference page that no longer follows from them | Five sections, each ending `OK`, exit status 0 |
+| `regression_check.py` | Two committed artefacts that have to agree and no longer do, a generated reference page that no longer follows from them, and a phase brief command line the tool it names does not accept | Eight sections, each ending `OK`, exit status 0 |
 | `register_check.py` | Documentation prose that breaks the writing register | A file and hit count, exit status 0 |
 
 `regression_check.py` and `register_check.py` read committed files only, so

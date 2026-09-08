@@ -27,7 +27,13 @@ modeset call therefore names the family and never the command, and no
 extension of the map recovers it. Build a modeset seed from
 `surface/nvkms-command-inventory.json`, which carries the dispatch ordinal and
 the parameter struct of every command, and never from a trace. The 64 modeset
-variants are the sixth family of the 828-target denominator.
+variants are the sixth family of the 852-target denominator. The seventh
+is drm: 24 commands on `/dev/dri/cardN` and `/dev/dri/renderDN`, each
+carrying its own request number, so a traced DRM call does name its
+command and `tools/trace2seed.py` converts it. Build one from
+`surface/drm-command-inventory.json`, which records the node each command
+reaches: 21 carry `DRM_RENDER_ALLOW` and reach either node, and the other
+3 reach `cardN` alone.
 
 The chain is the unit of work and a command is not, because a command becomes
 reachable when the chain that owns it exists.

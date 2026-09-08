@@ -35,7 +35,7 @@ file.
 | `install` | Write and enable the supervisor unit |
 | `run` | One supervised launch: harvest, breaker check, session resolution, launch |
 | `status` | Report breaker counts and the stored session |
-| `preflight` | Check what an unattended run needs and nothing else verifies |
+| `preflight` | Check what an unattended run needs and nothing else verifies: a valid configuration, a set agent command, passwordless sudo, the host binaries the phases invoke, and disk headroom |
 | `reset` | Clear a tripped breaker and its counted history |
 | `remove` | Disable and remove the unit |
 
@@ -105,7 +105,35 @@ Exported constant: `BLOCKED_EXIT = 78`.
 | Never bake the command into the unit | Editing `config/campaign.yaml` and rebooting must not keep running the old invocation |
 | Never let a harvest failure stop the pipeline | Refusing to resume because pstore was empty costs a whole run |
 | Never make preflight part of `run` | A preflight that blocked the supervisor would turn a warning into an outage |
+| Never resolve a host binary by anything except `PATH` | The unattended session runs under its own `PATH`, and a toolchain installed into a shell that has since exited is absent for every phase that follows |
+| Never treat a binary reached inside a container as a host requirement | The Track U harnesses build inside the image `config/campaign.yaml` names, so `afl-clang-fast` and `clang` are the image's requirement |
 | Never kill only the immediate child on a stall | The launch goes through a shell, so killing the child leaves the agent running, detached and still stuck |
+
+## Host binaries
+
+`HOST_BINARIES` names each binary the pipeline invokes, the phase that stops
+without it, and whether every deployment needs it. `missing_binaries` resolves
+each through `shutil.which` and returns the required and the optional
+absences apart.
+
+| Binary | Needed by | Universal |
+|---|---|---|
+| `go` | The `describe` phase builds syzkaller and runs `syzlang_gen.py compile` | Yes |
+| `docker` | The Track U harnesses, and `verify_tenant_surface.py measure` | Yes |
+| `gcc` | `repro_ctl.py extract` compiles `repro.c` | Yes |
+| `make` | The instrumented kernel build and the syzkaller build | Yes |
+| `git` | The inventories record the checkout revision they derived from | Yes |
+| `nvidia-smi` | `surface_verify.py` reads the running driver version | Yes |
+| `nvidia-ctk` | The `provision` phase registers the `nvidia` runtime with Docker | No |
+| `aws` | Hard-hang capture on EC2 reads the serial console | No |
+
+A required absence is a problem and fails the gate. An optional absence is
+reported with the deployment it applies to, because the same missing binary
+reads differently on EC2 than on bare metal.
+
+The table exists because two host dependencies reached documentation review
+with no offline check noticing either. Every check ran on a machine that
+already carried both.
 
 ## Design notes
 

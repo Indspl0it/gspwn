@@ -189,7 +189,7 @@ Value sets: [Closed vocabularies](/gspwn/reference/vocabularies/).
 | `surface_verdict` | string | `complete`, `incomplete` or `unknown` |
 | `surface_exercised` | integer or null | Targets the measured corpus names |
 | `surface_accounted` | integer or null | Targets carrying a written reason that closes them |
-| `surface_deferred` | integer or null | Accounted rows written under a reason that does not close a target. One integer per round, and it does not scale with 828 |
+| `surface_deferred` | integer or null | Accounted rows written under a reason that does not close a target. One integer per round, and it does not scale with 852 |
 | `surface_closed` | integer or null | The union of exercised and accounted, never their sum |
 | `surface_total` | integer or null | The denominator at this driver release |
 | `notes` | string | The derived per-run detail lines |

@@ -172,6 +172,8 @@ release.
 | `ctrl-param-sizes.json` | `syzlang_gen.py emit-probe` and its runner | `syzlang_gen.py emit` as the `--ctrl-sizes` default, `ctrl_rank.py` |
 | `rm-chains.json` | `object_graph.py chains` | `trace2seed.py chains`, `ctrl_rank.py`, `refgen.py` |
 | `rm-control-rank.json` | `ctrl_rank.py rank` | `syzlang_gen.py emit` as the `--ctrl-rank` default, `trace2seed.py chains`, `refgen.py` |
+| `value-families.json` | `value_families.py` | `syzlang_gen.py emit` as the `--value-families` default, `regression_check.py families`. 72 derived families, one per parameter field a sound rule binds to a set of constants |
+| `value-families-audit.json` | `value_families.py` | `syzlang_gen.py emit` as the `--value-audit` default, `regression_check.py families`. 73 entries, 53 accepted and 20 rejected. Nothing reaches the emitter that this file does not accept |
 | `cve-hotspots.json`, `prior-cves.json` | `cve_patch_map.py` | `ctrl_rank.py` reads the hot spots. `refgen.py` joins both |
 | `completion-ledger.json` | `pipeline_ctl.py surface-account` | `coverage_ctl.py completion`, `pipeline_ctl.py surface-ledger` |
 | `worklist-round1.md` | `cve_patch_map.py worklist` | The round-1 `describe` and `seeds` phases |
@@ -212,7 +214,7 @@ every crash registration. `GSPWN_SURFACE_LEDGER` overrides the path.
 |---|---|---|
 | `artifacts/**` | No | Campaign output. `.gitkeep` alone is committed, to version-control the tree shape |
 | `state/**` | No | Machine state. `.gitkeep` alone is committed |
-| `surface/*.json` | Yes | The four inventories are the 828-target denominator, the derived artefacts key on them, and CI computes neither without a driver source tree it does not have |
+| `surface/*.json` | Yes | The five inventories are the 852-target denominator, the derived artefacts key on them, and CI computes neither without a driver source tree it does not have |
 | `surface/worklist-round1.md` | Yes | Round 1 reads it before any campaign has run |
 | `descriptions/*.txt`, `nvidia_gspwn.h`, `generation.json` | Yes | The numerator CI compares against the denominator, and the digests the set was emitted at |
 | `harnesses/**` | Yes | Hand-written C and Go that no phase regenerates |
