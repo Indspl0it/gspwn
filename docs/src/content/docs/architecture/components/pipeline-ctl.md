@@ -138,7 +138,7 @@ resolves through the inventories as `surface-account` does. `--key` names the
 stored ABI key, and it is the only handle on a row whose target no inventory
 contains any more, which is the state a driver bump leaves behind. Without a
 removal operation, a wrong accounting was recoverable only by hand-editing
-`surface/completion-ledger.json`, and 828 wrong rows fire a
+`surface/completion-ledger.json`, and 852 wrong rows fire a
 non-overridable completion stop.
 
 `cmd_round_end` takes the completion reading before `ps.transaction()` opens.

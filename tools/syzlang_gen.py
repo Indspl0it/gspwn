@@ -88,7 +88,10 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,21 @@ DEFAULT_OUT = os.path.join(REPO_ROOT, "descriptions" )
 # generation.json.
 DEFAULT_CTRL_SIZES = os.path.join(DEFAULT_SURFACE, "ctrl-param-sizes.json")
 DEFAULT_CTRL_RANK = os.path.join(DEFAULT_SURFACE, "rm-control-rank.json")
+
+# The two halves of the value-family record: the derivation and the audit that
+# accepted or rejected each of its families. Both are read, because
+# value_families.accepted_families joins them and returns the accepted records
+# alone. Binding a field to a family the audit rejected is worse than leaving
+# it a bare integer, because the bare integer still reaches its real values by
+# mutation and a wrong family never does.
+#
+# Spelled out here and not read off value_families.DEFAULT_OUT, because that
+# module imports this one for scan_headers and strip_comments, so a top-level
+# import back would be circular and neither module would load. The two
+# spellings are held together by a self-test that compares them.
+DEFAULT_VALUE_FAMILIES = os.path.join(DEFAULT_SURFACE, "value-families.json")
+DEFAULT_VALUE_AUDIT = os.path.join(DEFAULT_SURFACE,
+                                   "value-families-audit.json")
 
 SCHEMA = "gspwn.syzlang-generation/1"
 
@@ -165,6 +183,7 @@ INCLUDE_ROOTS = [
     os.path.join("src", "common", "unix", "common", "inc"),
     os.path.join("src", "nvidia-modeset", "interface"),
     os.path.join("src", "nvidia", "arch", "nvalloc", "unix", "include"),
+    os.path.join("kernel-open", "nvidia-drm"),
 ]
 
 # The include search path the probe compiles against. The SDK include
@@ -186,6 +205,7 @@ PROBE_INCLUDES = [
     os.path.join("src", "common", "unix", "common", "inc"),
     os.path.join("src", "nvidia", "arch", "nvalloc", "unix", "include"),
     os.path.join("src", "nvidia-modeset", "interface"),
+    os.path.join("kernel-open", "nvidia-drm"),
 ]
 
 # Base type sizes and alignments for x86-64 System V, which is the only
@@ -291,6 +311,47 @@ def nvkms_resource(typedef):
 
 
 NVKMS_HANDLE_RESOURCES = {t: nvkms_resource(t) for t in NVKMS_HANDLE_TYPEDEFS}
+
+
+# ---------------------------------------------------------------------------
+# /dev/dri
+# ---------------------------------------------------------------------------
+
+# nvidia-drm is a DRM driver, so the core owns the request-number encoding and
+# every command carries its own number. drm_ioctl() recovers the driver
+# command with _IOC_NR minus DRM_COMMAND_BASE, and both bases live in the
+# kernel's include/uapi/drm/drm.h, which this repository does not vendor.
+# surface/drm-command-inventory.json records the pair it was built against,
+# and the two values below are checked against it before anything is emitted.
+DRM_IOCTL_BASE = ord("d")
+DRM_COMMAND_BASE = 0x40
+
+# The DRM direction macros, the _IOC direction bits each expands to, and the
+# syzlang pointer direction that matches. DRM_IO names no parameter struct.
+DRM_DIRECTIONS = {
+    "DRM_IO": (0, None),
+    "DRM_IOW": (1, "in"),
+    "DRM_IOR": (2, "out"),
+    "DRM_IOWR": (3, "inout"),
+}
+
+# Both nodes the CDI path injects. drm.GetDeviceNodesByBusID globs the DRM
+# directory of the GPU's PCI device and maps every entry into /dev/dri, so a
+# default tenant holds a primary node and a render node alike.
+DRM_CARD_NODE = "/dev/dri/card#"
+DRM_RENDER_NODE = "/dev/dri/renderD#"
+
+# Three resources, because the two nodes do not grant the same command set.
+# drm_ioctl_permit() refuses a render client any command whose flag word omits
+# DRM_RENDER_ALLOW, so the 21 flagged commands take the common base and accept
+# either node, and the 3 that are card-only take the card subtype and accept
+# nothing else. The split is a compile-time type error and never a runtime
+# EACCES burned on an execution.
+DRM_FD_RESOURCE = "fd_dri"
+DRM_CARD_FD_RESOURCE = "fd_dri_card"
+DRM_RENDER_FD_RESOURCE = "fd_dri_render"
+
+DRM_VARIANT_PREFIX = "DRM_NVIDIA_"
 # kernel-open/common/inc/nv.h:76. nv.c:2513 rejects a larger inner argument
 # before it validates the inner command.
 #
@@ -1095,6 +1156,63 @@ def render_opaque(name, size):
     return "%s {\n\topaque\tarray[int8, %d]\n} [packed]" % (name, size)
 
 
+def load_value_families(families_path, audit_path):
+    """-> {struct: [accepted record]} for the emitter to bind fields through.
+
+    value_families.accepted_families joins the derivation against the audit on
+    (struct, field) and returns the accepted records alone, so a family the
+    audit rejected has no route from here to a rendered field.
+
+    The import is deferred because value_families imports this module for
+    scan_headers and strip_comments.
+    """
+    import value_families
+    try:
+        derivation = value_families.load_json(families_path,
+                                              "the derived value families")
+        audit_doc = value_families.load_json(audit_path,
+                                             "the value-family audit")
+    except value_families.SourceError as exc:
+        raise SystemExit(
+            "the value families could not be read, so no field can be bound "
+            "to one and the emitted set would silently lose every constraint "
+            "the audit accepted: %s\nRegenerate both with "
+            "`python3 tools/value_families.py derive` and "
+            "`python3 tools/value_families.py audit`, or restore them." % exc)
+    by_struct = collections.OrderedDict()
+    for record in value_families.accepted_families(derivation, audit_doc):
+        by_struct.setdefault(record["struct"], []).append(record)
+    logger.info("%d accepted value family/families over %d struct(s)",
+                sum(len(v) for v in by_struct.values()), len(by_struct))
+    return by_struct
+
+
+def value_overrides(struct, layout, families):
+    """-> ({field: flags type}, [(record, width)]) for one struct.
+
+    The width comes from the layout and never from the record. A field the
+    driver declares as NvU8 renders as int8 today, and binding it to
+    flags[..., int32] would move three bytes of the struct and change its
+    size.
+
+    The second member holds the records the layout cannot carry: a field name
+    the struct no longer declares, a field that renders as padding, or a width
+    with no syzlang integer. Each is a family the audit accepted and the
+    emitter did not bind, which the caller reports.
+    """
+    sizes = {field.name: field.size for field in layout.fields
+             if field.syz is not None}
+    overrides, unbound = {}, []
+    for record in families.get(struct, ()):
+        size = sizes.get(record["field"])
+        if size not in SYZ_INT:
+            unbound.append((record, size))
+            continue
+        overrides[record["field"]] = "flags[%s, %s]" % (record["set_name"],
+                                                        SYZ_INT[size])
+    return overrides, unbound
+
+
 PINNED_PATTERNS = {}
 POINTER_PATTERNS = {}
 
@@ -1172,7 +1290,7 @@ def require_pinned(emitter, variant, field, what):
 class Emitter:
     """Accumulates syzlang struct definitions and reports what went opaque."""
 
-    def __init__(self, index, sizes):
+    def __init__(self, index, sizes, value_families_by_struct=None):
         self.index = index
         self.sizes = sizes
         self.rendered = {}
@@ -1181,6 +1299,17 @@ class Emitter:
         self.size_mismatch = []
         self.opaque = []
         self.unresolved = []
+        # Keyed on the canonical struct name, because ensure canonicalises
+        # before it looks anything up. A family naming a typedef and a family
+        # naming the struct behind it would otherwise reach different keys and
+        # one of the two would bind nothing.
+        self.value_families = collections.OrderedDict()
+        for struct, records in (value_families_by_struct or {}).items():
+            key = index.canonical_struct(struct)
+            self.value_families.setdefault(key, []).extend(records)
+        self.value_bound = []
+        self.value_collisions = []
+        self.value_unbound = []
 
     def measured(self, struct_name):
         size = self.sizes.get(struct_name)
@@ -1236,10 +1365,37 @@ class Emitter:
             for referenced in re.findall(r"[A-Za-z_]\w*", field.syz):
                 if referenced in self.index.structs and referenced != struct_name:
                     self.ensure(referenced)
-        self.rendered[struct_name] = render_struct(struct_name, layout,
-                                                   overrides)
+        self.rendered[struct_name] = render_struct(
+            struct_name, layout, self.merge_value_overrides(
+                struct_name, layout, overrides))
         self.order.append(struct_name)
         return struct_name
+
+    def merge_value_overrides(self, struct_name, layout, overrides):
+        """-> the caller's override map with the accepted value families in.
+
+        Where both name one field the caller's override wins and the
+        collision is recorded. The existing overrides carry the handle
+        resources, the pinned selectors and the typed descriptors, all derived
+        from the driver's own dispatch, and this phase has not examined any of
+        them. Resolving a collision in favour of the newer source would retype
+        one of those from a rule that never looked at it.
+        """
+        bound, unbound = value_overrides(struct_name, layout,
+                                         self.value_families)
+        for record, width in unbound:
+            self.value_unbound.append((struct_name, record["field"], width))
+        merged = dict(bound)
+        for field, syz in (overrides or {}).items():
+            if field in merged:
+                self.value_collisions.append(
+                    (struct_name, field, merged.pop(field), syz))
+            merged[field] = syz
+        for record in self.value_families.get(struct_name, ()):
+            field = record["field"]
+            if field in bound and merged.get(field) == bound[field]:
+                self.value_bound.append((struct_name, record))
+        return merged
 
     def add_raw(self, name, text):
         if name in self.rendered:
@@ -1300,6 +1456,9 @@ def build_openat_block():
         "resource fd_nvidia_uvm_tools[fd]",
         "resource %s[fd]" % NVKMS_FD_RESOURCE,
         "resource %s[%s]" % (UVM_VASPACE_RESOURCE, UVM_FD_RESOURCE),
+        "resource %s[fd]" % DRM_FD_RESOURCE,
+        "resource %s[%s]" % (DRM_CARD_FD_RESOURCE, DRM_FD_RESOURCE),
+        "resource %s[%s]" % (DRM_RENDER_FD_RESOURCE, DRM_FD_RESOURCE),
         "",
     ]
     opens = [
@@ -1309,6 +1468,8 @@ def build_openat_block():
         ("openat$nvidia_uvm_tools", "/dev/nvidia-uvm-tools",
          UVM_TOOLS_FD_RESOURCE),
         ("openat$nvidia_modeset", NVKMS_NODE, NVKMS_FD_RESOURCE),
+        ("openat$dri_card", DRM_CARD_NODE, DRM_CARD_FD_RESOURCE),
+        ("openat$dri_render", DRM_RENDER_NODE, DRM_RENDER_FD_RESOURCE),
     ]
     for name, path, res in opens:
         lines.append(
@@ -2153,6 +2314,117 @@ def emit_modeset(emitter, nvkms):
     return "\n".join(blocks), records, dict(skipped), request
 
 
+def drm_request(command, param_size):
+    """-> the kernel request number for one nvidia-drm command.
+
+    Built the way include/uapi/drm/drm.h builds it: the direction bits of the
+    DRM_IO* macro the header names, the measured size of the parameter struct,
+    DRM_IOCTL_BASE as the type, and the command number offset from
+    DRM_COMMAND_BASE. Derived per command from the scraped direction and the
+    measured size, so a driver that widens a parameter struct or reverses a
+    direction moves the number and leaves no stale literal behind.
+    """
+    name = command["command"]
+    entry = DRM_DIRECTIONS.get(command["direction"])
+    if entry is None:
+        raise SystemExit(
+            "%s names direction macro %r, which is not one of %s, so its "
+            "request number cannot be derived."
+            % (name, command["direction"], ", ".join(sorted(DRM_DIRECTIONS))))
+    direction, _pointer = entry
+    if param_size > IOC_SIZE_MAX:
+        raise SystemExit(
+            "the parameter struct for %s measures %d bytes, which does not "
+            "fit the %d-bit _IOC_SIZE field, so the derived request number "
+            "would be truncated." % (name, param_size, IOC_SIZE_BITS))
+    number = ((direction << IOC_DIRECTION_SHIFT)
+              | (param_size << IOC_SIZE_SHIFT)
+              | (DRM_IOCTL_BASE << IOC_TYPE_SHIFT)
+              | (DRM_COMMAND_BASE + command["nr"]))
+    return "0x%08x" % number
+
+
+def emit_drm(emitter, drm):
+    """One ioctl$DRM_NVIDIA_* variant per dispatched nvidia-drm command.
+
+    drm is the record set of surface/drm-command-inventory.json. The fd
+    resource each variant takes is read off the record's own render_allow
+    field, so the 21 commands a render node reaches accept either node and
+    the 3 it does not accept the card node alone.
+    """
+    scan = drm.get("scan") or {}
+    if (scan.get("command_base") != DRM_COMMAND_BASE
+            or scan.get("ioctl_base") != DRM_IOCTL_BASE):
+        raise SystemExit(
+            "the DRM inventory was built against ioctl base %r and command "
+            "base %r, and this tool derives request numbers from %r and %r. "
+            "Every emitted number would be wrong; regenerate the inventory "
+            "with tools/drm_inventory.py against the same checkout."
+            % (scan.get("ioctl_base"), scan.get("command_base"),
+               DRM_IOCTL_BASE, DRM_COMMAND_BASE))
+
+    dispatched = [c for c in drm["commands"] if c["dispatched"]]
+    expected = drm["summary"]["dispatched"]
+    if len(dispatched) != expected:
+        raise SystemExit(
+            "the DRM inventory carries %d dispatched record(s) against a "
+            "summary claiming %d. The artefact disagrees with itself and the "
+            "denominator would be wrong either way; regenerate it with "
+            "tools/drm_inventory.py." % (len(dispatched), expected))
+
+    blocks, records = [], []
+    skipped = collections.Counter()
+    for command in dispatched:
+        name = command["number_macro"]
+        struct = command["param_struct"]
+        fd_res = (DRM_FD_RESOURCE if command["render_allow"]
+                  else DRM_CARD_FD_RESOURCE)
+        pointer = DRM_DIRECTIONS[command["direction"]][1]
+        if struct is None or pointer is None:
+            # DRM_IO carries no parameter at all, so the call takes no arg.
+            blocks.append("ioctl$%s(fd %s, cmd const[%s])"
+                          % (name, fd_res, drm_request(command, 0)))
+            records.append({"command": name, "nr": command["nr"],
+                            "handler": command["handler"],
+                            "param_struct": None, "param_size": 0,
+                            "render_allow": command["render_allow"],
+                            "resource": fd_res, "emitted": True})
+            continue
+        emitted = emitter.ensure(struct)
+        if emitted is None:
+            skipped["parameter struct has no layout and no measured "
+                    "size"] += 1
+            records.append({"command": name, "nr": command["nr"],
+                            "emitted": False,
+                            "reason": "no layout and no measured size for %s"
+                                      % struct})
+            continue
+        try:
+            params_size = emitter.index.layout(emitted).size
+        except LayoutError:
+            params_size = emitter.measured(emitted)
+        if params_size is None:
+            skipped["parameter size unknown"] += 1
+            records.append({"command": name, "nr": command["nr"],
+                            "emitted": False,
+                            "reason": "no measured size for %s" % emitted})
+            continue
+        blocks.append(
+            "ioctl$%s(fd %s, cmd const[%s], arg ptr[%s, %s])"
+            % (name, fd_res, drm_request(command, params_size), pointer,
+               emitted))
+        records.append({"command": name, "nr": command["nr"],
+                        "handler": command["handler"],
+                        "param_struct": struct, "param_size": params_size,
+                        "render_allow": command["render_allow"],
+                        "resource": fd_res, "emitted": True})
+    for reason, count in sorted(skipped.items()):
+        logger.info("DRM commands skipped, %s: %d", reason, count)
+    logger.info("%d DRM variants emitted of %d dispatched",
+                len(blocks), len(dispatched))
+    return "\n".join(blocks), records, dict(skipped)
+
+
 def emit_nvkms_resources(emitter):
     """The ten flat modeset handle resources, and the members that carry them.
 
@@ -2462,6 +2734,18 @@ def emit_entry_points():
         "\trevents\tconst[0, int16]",
         "}",
         "",
+        "nv_pollfd_dri_card {",
+        "\tfd\t%s" % DRM_CARD_FD_RESOURCE,
+        "\tevents\tflags[nv_poll_events, int16]",
+        "\trevents\tconst[0, int16]",
+        "}",
+        "",
+        "nv_pollfd_dri_render {",
+        "\tfd\t%s" % DRM_RENDER_FD_RESOURCE,
+        "\tevents\tflags[nv_poll_events, int16]",
+        "\trevents\tconst[0, int16]",
+        "}",
+        "",
         "# nvidia_mmap at kernel-open/nvidia/nv-mmap.c:770 reaches",
         "# nvidia_mmap_helper, which consumes a mapping context a prior ioctl",
         "# established. That helper abandons the mapping for any non-zero",
@@ -2507,6 +2791,24 @@ def emit_entry_points():
         "timeout int32)",
         "poll$nvidia_uvm_tools(fds ptr[in, array[nv_pollfd_uvm_tools]], "
         "nfds len[fds], timeout int32)",
+        "",
+        "# nv_drm_fops registers mmap and poll on both DRM nodes, so each",
+        "# node carries both calls. nv_drm_mmap at",
+        "# kernel-open/nvidia-drm/nvidia-drm-gem.c:250 looks the GEM object up",
+        "# by vm_pgoff through drm_vma_offset_exact_lookup_locked, so the only",
+        "# offset that reaches an object is the fake one a prior",
+        "# DRM_NVIDIA_GEM_MAP_OFFSET returned and no fixed value satisfies it.",
+        "# The poll side is the DRM core's own drm_poll.",
+        "mmap$dri_card(addr vma, len len[addr], prot flags[nv_mmap_prot], "
+        "flags flags[nv_mmap_flags], fd %s, offset %s)"
+        % (DRM_CARD_FD_RESOURCE, NV_MMAP_OFFSET),
+        "mmap$dri_render(addr vma, len len[addr], prot flags[nv_mmap_prot], "
+        "flags flags[nv_mmap_flags], fd %s, offset %s)"
+        % (DRM_RENDER_FD_RESOURCE, NV_MMAP_OFFSET),
+        "poll$dri_card(fds ptr[in, array[nv_pollfd_dri_card]], "
+        "nfds len[fds], timeout int32)",
+        "poll$dri_render(fds ptr[in, array[nv_pollfd_dri_render]], "
+        "nfds len[fds], timeout int32)",
     ]
     records.append({"call": "mmap$nvidia_uvm", "operation": "mmap",
                     "resource": UVM_VASPACE_RESOURCE,
@@ -2521,6 +2823,18 @@ def emit_entry_points():
     records.append({"call": "poll$nvidia_uvm_tools", "operation": "poll",
                     "resource": UVM_TOOLS_FD_RESOURCE, "offset_pinned": None,
                     "offset_value": None, "offset_authority": None})
+    for call, resource in (("mmap$dri_card", DRM_CARD_FD_RESOURCE),
+                           ("mmap$dri_render", DRM_RENDER_FD_RESOURCE)):
+        records.append({"call": call, "operation": "mmap",
+                        "resource": resource, "offset_pinned": False,
+                        "offset_value": None,
+                        "offset_authority":
+                            "kernel-open/nvidia-drm/nvidia-drm-gem.c:260"})
+    for call, resource in (("poll$dri_card", DRM_CARD_FD_RESOURCE),
+                           ("poll$dri_render", DRM_RENDER_FD_RESOURCE)):
+        records.append({"call": call, "operation": "poll",
+                        "resource": resource, "offset_pinned": None,
+                        "offset_value": None, "offset_authority": None})
     return "\n".join(lines), records
 
 
@@ -2629,6 +2943,41 @@ def emit_flags_sets(index):
             "--src points at an open-gpu-kernel-modules checkout.")
     sets.append("uvm_init_flags = %s" % ", ".join("0x%x" % v for v in init))
     return "\n".join(sets)
+
+
+def emit_value_flags_sets(emitter):
+    """The flags sets for the value families the emitter bound to a field.
+
+    One set per bound family, in the order the structs rendered, each named by
+    the record's own set_name. Reading that name here and recomputing it in
+    the check would give the emitted identifier and the checked identifier two
+    sources, and the two then drift apart.
+
+    A family the emitter did not bind emits no set, so the compiler never sees
+    a definition no field references.
+    """
+    if not emitter.value_bound:
+        return ("# No value family was bound to a field in this run. "
+                "surface/value-families-audit.json\n"
+                "# accepted none, or every accepted one names a field the "
+                "rendered layouts do not carry.")
+    lines = [
+        "# Value families. Each set holds the constants the driver's own",
+        "# headers define for one field of one parameter struct, recovered by",
+        "# tools/value_families.py and accepted by the committed audit in",
+        "# surface/value-families-audit.json. A field bound to the wrong",
+        "# family is worse than a bare integer, so the audit is the only",
+        "# route from a derived family to a set below.",
+    ]
+    for struct, record in emitter.value_bound:
+        lines.append("# %s.%s, %s, %d value(s) from %s"
+                     % (struct, record["field"], record["rule"],
+                        len(record["values"]),
+                        record["source_file"] or "no recorded header"))
+        lines.append("%s = %s"
+                     % (record["set_name"],
+                        ", ".join("0x%x" % v for v in record["values"])))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -2882,11 +3231,14 @@ def load_all(args):
     nvkms = load_json(args.nvkms, "the modeset command inventory")
     require_keys(nvkms, ["commands", "summary", "source"],
                  "the modeset command inventory", args.nvkms)
+    drm = load_json(args.drm, "the DRM command inventory")
+    require_keys(drm, ["commands", "summary", "source", "scan"],
+                 "the DRM command inventory", args.drm)
     if not inventory["nodes"]:
         raise SystemExit(
             "the escape inventory names no device nodes at %s; regenerate it"
             % args.inventory)
-    return inventory, control, graph, nvkms
+    return inventory, control, graph, nvkms, drm
 
 
 def rel(path):
@@ -3039,7 +3391,7 @@ def merged_sizes(inventory, extra_paths):
 
 def build(args):
     """Everything both `emit` and `verify` need. Returns a result dict."""
-    inventory, control, graph, nvkms = load_all(args)
+    inventory, control, graph, nvkms, drm = load_all(args)
     index = scan_headers(args.src)
     ctrl_sizes_paths = resolve_ctrl_sizes(args)
     sizes = merged_sizes(inventory, ctrl_sizes_paths)
@@ -3063,7 +3415,9 @@ def build(args):
     # census that moved has to stop the run here.
     uvm_fd_census(inventory)
 
-    emitter = Emitter(index, sizes)
+    emitter = Emitter(index, sizes,
+                      load_value_families(args.value_families,
+                                          args.value_audit))
     resources = emit_resources(graph, class_map, not args.all_classes)
     flags = emit_flags_sets(index)
     alloc_text, alloc_records, alloc_skipped = emit_alloc(
@@ -3080,10 +3434,31 @@ def build(args):
     # After emission, so the count of members carrying each resource is read
     # off the structs the run actually rendered.
     modeset_resources = emit_nvkms_resources(emitter)
+    drm_text, drm_records, drm_skipped = emit_drm(emitter, drm)
     entry_text, entry_records = emit_entry_points()
 
+    # After every emit_* call, so the sets emitted are the sets a rendered
+    # field references. Reading emitter.value_bound before the structs are
+    # rendered would emit nothing at all.
+    value_flags = emit_value_flags_sets(emitter)
+    for struct, field, rendered, existing in emitter.value_collisions:
+        logger.warning(
+            "%s.%s carries both an accepted value family and an existing "
+            "override; the existing %s is kept and %s is dropped. Part 1 "
+            "measured no collision across the whole set, so this one is a "
+            "finding and not a case to resolve here",
+            struct, field, existing, rendered)
+    for struct, field, width in emitter.value_unbound:
+        logger.warning(
+            "%s.%s was accepted by the value-family audit and the rendered "
+            "layout carries no integer field of that name (width %r), so "
+            "nothing was bound", struct, field, width)
+
     return {
-        "nvkms": nvkms,
+        "value_flags": value_flags,
+        "nvkms": nvkms, "drm": drm,
+        "drm_text": drm_text, "drm_records": drm_records,
+        "drm_skipped": drm_skipped,
         "modeset_text": modeset_text, "modeset_records": modeset_records,
         "modeset_skipped": modeset_skipped,
         "modeset_request": modeset_request,
@@ -3127,16 +3502,22 @@ def cmd_emit(args):
 
     core = "\n\n".join([
         banner,
-        "# Device nodes. nvidia-drm and /dev/dri/* are out of scope in the\n"
-        "# threat model, so nothing here opens them. /dev/nvidia-modeset is\n"
-        "# in scope: libnvidia-container creates it by default\n"
-        "# (src/nvc.c:317) and withholds it only under OPT_NO_MODESET.\n"
+        "# Device nodes. /dev/nvidia-modeset is in scope:\n"
+        "# libnvidia-container creates it by default (src/nvc.c:317) and\n"
+        "# withholds it only under OPT_NO_MODESET. Both DRM nodes are in\n"
+        "# scope on the CDI path, which adds every /dev/dri node found for\n"
+        "# the GPU's PCI bus id with no capability check\n"
+        "# (nvidia-container-toolkit internal/platform-support/dgpu/\n"
+        "# nvml.go:48-55). The card node and the render node are separate\n"
+        "# resources because drm_ioctl_permit refuses a render client any\n"
+        "# command whose flag word omits DRM_RENDER_ALLOW.\n"
         + build_openat_block(),
         "# One resource per RM object class. Every handle derives from\n"
         "# nv_handle, so a field typed nv_handle accepts any of them and a\n"
         "# field typed to one class accepts only that class's handle.\n"
         + result["resources"],
         result["flags"],
+        result["value_flags"],
         "# Escapes other than the two multiplexers.\n"
         + result["escape_text"],
         "# The re-entrant NV_ESC_IOCTL_XFER_CMD path. nv.c:2499 unwraps the\n"
@@ -3217,12 +3598,54 @@ def cmd_emit(args):
         + result["modeset_text"],
     ]) + "\n"
 
+    drm_summary = result["drm"]["summary"]
+
+    def _drm_names(items):
+        """One comment line per wrapped run of DRM_ names."""
+        names = ", ".join("DRM_%s" % i["command"] for i in items)
+        return "\n".join("# %s" % line
+                          for line in textwrap.wrap(names, width=68)) or "# none"
+
+    drm_text = "\n\n".join([
+        banner,
+        "# /dev/dri. nvidia-drm is a DRM driver, so the core owns the\n"
+        "# request-number encoding and every command carries its own number.\n"
+        "# Each is _IOC-built from the direction macro the header names, the\n"
+        "# measured parameter size, DRM_IOCTL_BASE 'd' and the command\n"
+        "# number offset from DRM_COMMAND_BASE 0x%02x. Both bases come from\n"
+        "# the kernel's include/uapi/drm/drm.h, which this repository does\n"
+        "# not vendor.\n"
+        "#\n"
+        "# %d of the %d declared commands carry no entry in\n"
+        "# nv_drm_ioctls[] and are absent here:\n"
+        "%s\n"
+        "#\n"
+        "# The two nodes do not grant the same set. drm_ioctl_permit at\n"
+        "# drm_ioctl.c:611 refuses a render client any command whose flag\n"
+        "# word omits DRM_RENDER_ALLOW, so the %d flagged commands take\n"
+        "# %s and accept either node, and the %d that are card-only take\n"
+        "# %s. Of those, these carry DRM_MASTER and reach a handler only\n"
+        "# while the opening file is the current DRM master, which\n"
+        "# drm_master_open at drm_auth.c:326 grants when the device has\n"
+        "# none:\n"
+        "%s\n"
+        % (DRM_COMMAND_BASE,
+           drm_summary["undispatched"], drm_summary["declared"],
+           _drm_names(drm_summary["undispatched_commands"]),
+           drm_summary["reachable_render"], DRM_FD_RESOURCE,
+           drm_summary["dispatched"] - drm_summary["reachable_render"],
+           DRM_CARD_FD_RESOURCE,
+           _drm_names(drm_summary["conditional_on_card"]))
+        + result["drm_text"],
+    ]) + "\n"
+
     out = args.out_dir
     write_file(os.path.join(out, "nvidia.txt"), core)
     write_file(os.path.join(out, "nvidia_structs.txt"), structs)
     write_file(os.path.join(out, "nvidia_ctrl.txt"), ctrl)
     write_file(os.path.join(out, "nvidia_uvm.txt"), uvm)
     write_file(os.path.join(out, "nvidia_modeset.txt"), modeset)
+    write_file(os.path.join(out, "nvidia_drm.txt"), drm_text)
     write_file(os.path.join(out, args.header_name),
                emit_header(inventory, result["modeset_request"]))
 
@@ -3233,6 +3656,16 @@ def cmd_emit(args):
             "control_inventory": json_source_record(args.control, "methods"),
             "object_graph": json_source_record(args.graph, "records"),
             "nvkms_inventory": json_source_record(args.nvkms, "commands"),
+            "drm_inventory": json_source_record(args.drm, "commands"),
+            # Both halves of the value-family record, because the emitter
+            # reads both: the derivation carries the values and the audit
+            # decides which of them a field may be bound to. A derivation
+            # regenerated without this record moving would leave `stale`
+            # reporting success over an artefact it does not read.
+            "value_families": json_source_record(args.value_families,
+                                                 "families"),
+            "value_families_audit": json_source_record(args.value_audit,
+                                                       "audit"),
             "ctrl_sizes": [size_source_record(p)
                            for p in result["ctrl_sizes_paths"]],
             "ctrl_rank": (rank_source_record(result["ranking"])
@@ -3272,6 +3705,13 @@ def cmd_emit(args):
             "modeset_dispatched": result["nvkms"]["summary"]["dispatched"],
             "modeset_declared": result["nvkms"]["summary"]["declared"],
             "modeset_handle_resources": len(NVKMS_HANDLE_TYPEDEFS),
+            "drm_variants": sum(1 for r in result["drm_records"]
+                                if r.get("emitted")),
+            "drm_dispatched": result["drm"]["summary"]["dispatched"],
+            "drm_declared": result["drm"]["summary"]["declared"],
+            "drm_reachable_render":
+                result["drm"]["summary"]["reachable_render"],
+            "drm_reachable_card": result["drm"]["summary"]["reachable_card"],
             # Entry points and the initialisation pseudo-syscall are counted
             # here and never joined into the command families above. An mmap
             # or poll call has no method id and no inventory row, so folding
@@ -3282,6 +3722,9 @@ def cmd_emit(args):
                 result["entry_text"]),
             "pseudo_syscalls": 1,
             "structs_emitted": len(emitter.order),
+            "value_families_bound": len(emitter.value_bound),
+            "value_family_collisions": len(emitter.value_collisions),
+            "value_families_unbound": len(emitter.value_unbound),
             "size_match": len(emitter.size_match),
             "size_mismatch": len(emitter.size_mismatch),
             "opaque": len(emitter.opaque),
@@ -3293,9 +3736,20 @@ def cmd_emit(args):
                    for n, s, r in sorted(emitter.opaque)],
         "unresolved": [{"struct": n, "reason": r}
                        for n, r in sorted(emitter.unresolved)],
+        "value_families": [{"struct": s, "field": r["field"],
+                            "set": r["set_name"], "rule": r["rule"],
+                            "values": len(r["values"])}
+                           for s, r in emitter.value_bound],
+        "value_family_collisions": [
+            {"struct": s, "field": f, "value_family": v, "kept": k}
+            for s, f, v, k in emitter.value_collisions],
+        "value_families_unbound": [
+            {"struct": s, "field": f, "width": w}
+            for s, f, w in emitter.value_unbound],
         "skipped": {"allocation": result["alloc_skipped"],
                     "control": result["ctrl_skipped"],
-                    "modeset": result["modeset_skipped"]},
+                    "modeset": result["modeset_skipped"],
+                    "drm": result["drm_skipped"]},
         "missing_class_numbers": sorted(result["missing_class_numbers"]),
         "escapes": result["escape_records"],
         "xfer": result["xfer_records"],
@@ -3303,6 +3757,7 @@ def cmd_emit(args):
         "control": result["ctrl_records"],
         "uvm": result["uvm_records"],
         "modeset": result["modeset_records"],
+        "drm": result["drm_records"],
         # Their own key, separate from the five command families, because
         # they are not commands and are not in the 764.
         "entry_points": {
@@ -3345,6 +3800,17 @@ def cmd_emit(args):
     print("  structs            %d emitted, %d size-matched, %d mismatched, "
           "%d opaque" % (counts["structs_emitted"], counts["size_match"],
                          counts["size_mismatch"], counts["opaque"]))
+    print("  value families     %d field(s) bound, %d collision(s), "
+          "%d accepted and unbound"
+          % (counts["value_families_bound"],
+             counts["value_family_collisions"],
+             counts["value_families_unbound"]))
+    for struct, field, rendered, existing in emitter.value_collisions:
+        print("  collision          %s.%s kept %s, dropped %s"
+              % (struct, field, existing, rendered))
+    for struct, field, width in emitter.value_unbound:
+        print("  unbound            %s.%s renders at width %r"
+              % (struct, field, width))
     if emitter.size_mismatch:
         print("size mismatches (parsed layout against measured sizeof):")
         for name, parsed, measured in sorted(emitter.size_mismatch):
@@ -3415,10 +3881,18 @@ def add_common(parser):
                         default=os.path.join(DEFAULT_SURFACE,
                                              "rm-object-graph.json"),
                         help="output of tools/object_graph.py extract")
+    parser.add_argument("--drm",
+                        default=os.path.join(REPO_ROOT, "surface",
+                                             "drm-command-inventory.json"),
+                        help="output of tools/drm_inventory.py")
     parser.add_argument("--nvkms",
                         default=os.path.join(DEFAULT_SURFACE,
                                              "nvkms-command-inventory.json"),
                         help="output of tools/nvkms_inventory.py")
+    parser.add_argument("--value-families", default=DEFAULT_VALUE_FAMILIES,
+                        help="output of tools/value_families.py derive")
+    parser.add_argument("--value-audit", default=DEFAULT_VALUE_AUDIT,
+                        help="output of tools/value_families.py audit")
     parser.add_argument("--ctrl-sizes", action="append",
                         help="JSON of measured struct sizes from the probe "
                              "runner; may be given more than once. Defaults "

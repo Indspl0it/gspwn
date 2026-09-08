@@ -1,16 +1,16 @@
 ---
 title: Components
-description: The twenty-eight modules in tools/, what each owns, and the dependencies between them.
+description: The thirty modules in tools/, what each owns, and the dependencies between them.
 ---
 
-Twenty-eight files live in `tools/`, plus two data files. Twenty-five are
+Thirty files live in `tools/`, plus two data files. Twenty-seven are
 commands, two are libraries, and one is the test runner.
 
-Eleven of the commands read source trees and committed artefacts and never
-touch a device. `ioctl_inventory.py`, `ctrl_surface.py` and `object_graph.py`
-derive the ioctl surface, the control command space and the object allocation
-DAG from a driver checkout, and `syzlang_gen.py` turns all three into a first
-description set. `ctrl_rank.py` orders the control commands on chain length,
+Twelve of the commands read source trees and committed artefacts and never
+touch a device. `ioctl_inventory.py`, `ctrl_surface.py`, `object_graph.py` and
+`nvkms_inventory.py` derive the ioctl surface, the control command space, the
+object allocation DAG and the NVKMS command space from a driver checkout, and
+`syzlang_gen.py` turns them into a first description set. `ctrl_rank.py` orders the control commands on chain length,
 fix history and parameter size. `surface_verify.py` confirms the artefacts
 describe the driver actually under test, `surface_cov.py` counts how much of
 the enumerated surface a description set and a corpus reach, `refgen.py`
@@ -38,18 +38,20 @@ empirical signal available before a campaign has run.
 | [`ctrl_surface.py`](/gspwn/architecture/components/ctrl-surface/) | Command | The RM control command space and its privilege classification |
 | [`object_graph.py`](/gspwn/architecture/components/object-graph/) | Command | The RM object allocation DAG, its chaining depth, and the allocation chain per owning class |
 | [`ctrl_rank.py`](/gspwn/architecture/components/ctrl-rank/) | Command | The measured ordering of the 531 targetable control commands |
+| [`nvkms_inventory.py`](/gspwn/architecture/components/nvkms-inventory/) | Command | The NVKMS command space, reconciled between the declaring enum and the dispatch table |
 | [`syzlang_gen.py`](/gspwn/architecture/components/syzlang-gen/) | Command | The generated description set, and the per-struct size check on it |
 | [`surface_verify.py`](/gspwn/architecture/components/surface-verify/) | Command | The version guard on every statically derived artefact |
 | [`surface_cov.py`](/gspwn/architecture/components/surface-cov/) | Command | The share of the enumerated command surface a description set models and a corpus reaches |
+| [`verify_tenant_surface.py`](/gspwn/architecture/components/verify-tenant-surface/) | Command | The measured device nodes a container receives, compared against the recorded tenant surface |
 | [`cve_patch_map.py`](/gspwn/architecture/components/cve-patch-map/) | Command | The CVE to release-diff join, and the round-1 history worklist |
 | [`patch_mine.py`](/gspwn/architecture/components/patch-mine/) | Command | The container-stack fix history, and the Track U target ranking |
 | [`gitmine.py`](/gspwn/architecture/components/gitmine/) | Library | The git wrapper, the diff parser, the function attribution and the release-tag mapping both miners share |
-| [`refgen.py`](/gspwn/architecture/components/refgen/) | Command and library | The five generated reference pages under `reference/surface/` |
-| [`regression_check.py`](/gspwn/architecture/components/regression-check/) | Command | The five CI checks over the committed surface artefacts and the pages generated from them |
+| [`refgen.py`](/gspwn/architecture/components/refgen/) | Command and library | The five generated reference pages under `reference/surface/` and the index over them |
+| [`regression_check.py`](/gspwn/architecture/components/regression-check/) | Command | The nine CI checks over the committed surface artefacts, the pages generated from them, and the phase briefs' command lines |
 | [`exec.py`](/gspwn/architecture/components/exec/) | Command | Logged command execution with retries |
 | [`build_kernel.sh`](/gspwn/architecture/components/build-kernel/) | Script | The instrumented kernel build |
 | [`selftest.py`](/gspwn/architecture/components/selftest/) | Test runner | The offline suite |
-| `register_check.py` | Command | The writing-register linter run in CI. No page yet |
+| [`register_check.py`](/gspwn/architecture/components/register-check/) | Command | The writing-register linter run in CI |
 
 Two files in `tools/` are data. `ioctl_map.json` maps ioctl request
 numbers to syzlang description names. `cve_fix_verdicts.json` records the

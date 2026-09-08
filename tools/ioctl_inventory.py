@@ -8,7 +8,11 @@ tool re-reads a checkout on every run and carries no table of its own.
 
 Three device-node families are in scope for the command inventory (docs threat
 model): /dev/nvidiactl and /dev/nvidiaN, /dev/nvidia-uvm,
-/dev/nvidia-uvm-tools. nvidia-drm and /dev/dri/* are excluded.
+/dev/nvidia-uvm-tools. The other two families a tenant reaches are enumerated
+by their own tools, because each multiplexes or numbers its commands
+differently: tools/nvkms_inventory.py for /dev/nvidia-modeset and
+tools/drm_inventory.py for /dev/dri/cardN and /dev/dri/renderDN. This tool
+still records their entry points through --emit-entry-points.
 
 /dev/nvidia-modeset is handled by `--emit-map` alone. Its whole command set
 multiplexes through one kernel request number, so the map records that number
@@ -1393,8 +1397,10 @@ ENTRY_POINTS_SCHEMA = "gspwn.entry-points/1"
 RE_FOPS_MEMBER = re.compile(r"^\s*\.\s*(\w+)\s*=\s*([A-Za-z_]\w*)\s*,?\s*$")
 
 # `.owner = THIS_MODULE` names the module holding a reference on the table and
-# dispatches no call, so it is not an entry point.
-FOPS_NON_ENTRY = frozenset(["owner"])
+# dispatches no call, so it is not an entry point. `.fop_flags` is an unsigned
+# bitmask the VFS reads, added in 6.12 and set to FOP_UNSIGNED_OFFSET by
+# nv_drm_fops, and it carries no function pointer either.
+FOPS_NON_ENTRY = frozenset(["owner", "fop_flags"])
 
 NVLINK_C = "kernel-open/nvidia/nvlink_linux.c"
 NVSWITCH_C = "kernel-open/nvidia/linux_nvswitch.c"
@@ -1426,6 +1432,55 @@ OUTSIDE_TENANT_SURFACE = (
 # /dev/nvidia-modeset is inside the tenant surface and its commands are
 # modelled, while the mmap and poll this table registers are not, so it is
 # recorded here as unmodelled and its `reason` says which half is which.
+# /dev/dri reaches a default tenant on the CDI injection path, and the
+# campaign models its command surface. nv_drm_fops is recorded as modelled,
+# its 24 dispatched commands are inside the denominator, and the 4 declared
+# without an entry in nv_drm_ioctls[] are counted as drm_undispatched
+# outside it. Both halves are stated here because reachable surface that no
+# description covers is surface every coverage figure is measured against
+# wrongly, and that was the condition this pair recorded until the drm
+# family landed.
+#
+# The CDI path adds every DRM node found for a GPU's PCI bus id to that
+# device's spec, with no capability argument anywhere on the call chain:
+# nvidia-container-toolkit/internal/platform-support/dgpu/nvml.go:48 calls
+# drm.GetDeviceNodesByBusID, :53 appends the result beside the nvidia node
+# and :55 makes char device discoverers of all of them. The only capability
+# check for DRM nodes, internal/modifier/graphics.go:71, sits behind the
+# "graphics" modifier, and internal/modifier/mode.go:26 omits that modifier
+# from both CDI modes, so internal/modifier/factory.go:117 is unreachable
+# there. internal/edits/device.go:76 grants the injected nodes rwm.
+#
+# The nodes exist whenever nvidia-drm registers a device, which it does for
+# every GPU nvidia-modeset enumerates
+# (kernel-open/nvidia-drm/nvidia-drm-drv.c:2176). The modeset module
+# parameter that upgrades the driver past PRIME-only defaults to true at
+# kernel-open/nvidia-drm/nvidia-drm-os-interface.c:45, and registration at
+# :2079 does not depend on it.
+#
+# 24 driver ioctls are declared in nv_drm_ioctls[] at
+# kernel-open/nvidia-drm/nvidia-drm-drv.c:1806. 21 carry DRM_RENDER_ALLOW
+# and are reachable on a render node by a client holding no master, 2 carry
+# DRM_MASTER, and NVIDIA_GET_CLIENT_CAPABILITY carries neither.
+#
+# Whether one host actually presents the nodes is a measurement, not a
+# reading: tools/verify_tenant_surface.py takes it, and agents/provision.md
+# runs it before a campaign spends anything.
+DRM_TENANT_SURFACE = (
+    "the CDI injection path adds every /dev/dri node found for the GPU's PCI "
+    "bus id to that device's spec with no capability check, at "
+    "nvidia-container-toolkit/internal/platform-support/dgpu/nvml.go:48-55, "
+    "and internal/edits/device.go:76 grants them rwm. The legacy path never "
+    "injects them: libnvidia-container carries no reference to /dev/dri. "
+    "nvidia-drm registers a device for every GPU nvidia-modeset enumerates "
+    "(kernel-open/nvidia-drm/nvidia-drm-drv.c:2176). The campaign models the "
+    "24 dispatched driver ioctls at nvidia-drm-drv.c:1806 as the drm family, "
+    "and they are inside the denominator. 21 carry DRM_RENDER_ALLOW and are "
+    "reachable on both node types; the other 3 are reachable on cardN alone, "
+    "2 of them only while the opening file is the current DRM master"
+)
+
+
 FOPS_TABLES = (
     {
         "fops": "nvidia_fops",
@@ -1556,11 +1611,12 @@ FOPS_TABLES = (
         "source": NV_DRM_C,
         "module": "nvidia-drm",
         "paths": ["/dev/dri/cardN", "/dev/dri/renderDN"],
-        "modelled": False,
-        "tenant_surface": False,
-        "reason": OUTSIDE_TENANT_SURFACE,
+        "modelled": True,
+        "tenant_surface": True,
+        "reason": DRM_TENANT_SURFACE,
     },
 )
+
 
 
 def _fops_initialiser(symbol):

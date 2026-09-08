@@ -143,6 +143,8 @@ def load_all():
         "ioctl": _load(surface_cov.IOCTL_INV, "the ioctl inventory"),
         "nvkms": _load(surface_cov.NVKMS_INV,
                        "the modeset command inventory"),
+        "drm": _load(surface_cov.DRM_INV,
+                     "the DRM command inventory"),
         "ctrl": _load(surface_cov.CTRL_INV, "the RM control inventory"),
         "graph": _load(surface_cov.OBJ_GRAPH, "the RM object graph"),
         "rank": _load(CTRL_RANK, "the control command ranking"),
@@ -154,6 +156,7 @@ def load_all():
     }
     _need(docs["ioctl"], surface_cov.IOCTL_INV, "nodes")
     _need(docs["nvkms"], surface_cov.NVKMS_INV, "commands")
+    _need(docs["drm"], surface_cov.DRM_INV, "commands")
     _need(docs["entry"], surface_cov.ENTRY_POINTS, "tables")
     _need(docs["ctrl"], surface_cov.CTRL_INV, "methods")
     _need(docs["graph"], surface_cov.OBJ_GRAPH, "records")
@@ -1191,6 +1194,156 @@ def page_modeset(docs):
 
 
 # --------------------------------------------------------------------------
+# drm-commands.md
+# --------------------------------------------------------------------------
+
+def page_drm(docs):
+    drm = docs["drm"]
+    commands = drm["commands"]
+    summary = drm["summary"]
+    scan = drm.get("scan", {})
+    source = drm.get("source", {})
+    dispatched = [c for c in commands if c["dispatched"]]
+    undispatched = [c for c in commands if not c["dispatched"]]
+
+    def node(command):
+        """-> the node column for one dispatched command."""
+        reach = command.get("reachable_on") or {}
+        if (reach.get("render") or {}).get("reachable"):
+            return "cardN, renderDN"
+        if (reach.get("card") or {}).get("condition"):
+            return "cardN, while master"
+        return "cardN"
+
+    parts = [
+        frontmatter("DRM commands",
+                    "The %d dispatched commands of /dev/dri, their command "
+                    "numbers, handler symbols and permission flags, the node "
+                    "each reaches, and the %d the dispatch table omits."
+                    % (len(dispatched), len(undispatched))),
+        "",
+        provenance(["surface/drm-command-inventory.json"]),
+        "",
+        "`/dev/dri/cardN` and `/dev/dri/renderDN` reach a default "
+        "`compute,utility` container on the CDI injection path, which is the "
+        "current default. `GetDeviceNodesByBusID` at "
+        "`nvidia-container-toolkit/internal/info/drm/drm_devices.go:27` globs "
+        "the DRM directory of the GPU's PCI device and maps every entry into "
+        "`/dev/dri`, with no capability check, and "
+        "`internal/edits/device.go:76` grants them `rwm`. The legacy path "
+        "never injects them: `libnvidia-container` carries no reference to "
+        "`/dev/dri`. These commands are the seventh family of the surface "
+        "denominator.",
+        "",
+        "## Dispatch",
+        "",
+        "nvidia-drm is a DRM driver, so the core owns the request-number "
+        "encoding and every command carries its own number. `drm_ioctl` "
+        "recovers the driver command with `_IOC_NR` minus "
+        "`DRM_COMMAND_BASE`, so the command number is the ABI identity of a "
+        "DRM target and the completion ledger is keyed on it. `_IOC_SIZE` "
+        "bounds the copy and selects no handler.",
+        "",
+        table(["Quantity", "Value", "Source"],
+              [["Declared command numbers", summary["declared"],
+                code(source.get("ioctl_header"))],
+               ["Populated table entries", summary["dispatched"],
+                code(source.get("dispatch_source"))],
+               ["Entries with DRM_RENDER_ALLOW", summary["render_allow"],
+                code("DRM_RENDER_ALLOW")],
+               ["Entries with DRM_MASTER", summary["master"],
+                code("DRM_MASTER")],
+               ["Entries with no permission flag", summary["flagless"],
+                code("0")],
+               ["Command number base", code("0x%02x"
+                                            % scan.get("command_base", 0)),
+                code("DRM_COMMAND_BASE")],
+               ["ioctl type byte", code("'%s'"
+                                        % scan.get("ioctl_base_char", "")),
+                code("DRM_IOCTL_BASE")],
+               ["Missing table entries", summary["undispatched"],
+                code("nv_drm_ioctls[]")]]),
+        "",
+        "## Reachability by node",
+        "",
+        "The two nodes do not grant the same set. `drm_ioctl_permit` at "
+        "`drm_ioctl.c:611` refuses a render client any command whose flag "
+        "word omits `DRM_RENDER_ALLOW`, and refuses any caller a "
+        "`DRM_MASTER` command unless it is the current master. A tenant "
+        "holds both nodes, so the family denominator is the union and counts "
+        "%d; the per-node figures are carried apart because %d and %d are "
+        "true of different things."
+        % (summary["dispatched"], summary["reachable_card"],
+           summary["reachable_render"]),
+        "",
+        table(["Node", "Reachable", "Basis"],
+              [["`/dev/dri/cardN`", summary["reachable_card"],
+                "a primary client is subject to neither the render test nor, "
+                "for %d of them, the master test"
+                % summary["reachable_card_unconditional"]],
+               ["`/dev/dri/renderDN`", summary["reachable_render"],
+                "the %d commands carrying `DRM_RENDER_ALLOW`"
+                % summary["render_allow"]]]),
+        "",
+        "%d command(s) reach a handler on `cardN` only while the opening "
+        "file is the current DRM master. `drm_master_open` at "
+        "`drm_auth.c:326` makes the opening file the master when the device "
+        "has none, which is likely on a host running no display server and "
+        "is not guaranteed."
+        % summary["reachable_card_conditional"],
+        "",
+        table(["Number", "Command", "Condition"],
+              [[code("0x%02x" % c["nr"]), code("DRM_%s" % c["command"]),
+                c["condition"]]
+               for c in summary["conditional_on_card"]]),
+        "",
+        "## Commands",
+        "",
+        "Ordered by command number, which is the offset from "
+        "`DRM_COMMAND_BASE` that `drm_ioctl` indexes the driver table with.",
+        "",
+        table(["Number", "Command", "Handler", "Direction",
+               "Parameter struct", "Flags", "Nodes"],
+              [[code("0x%02x" % c["nr"]), code("DRM_%s" % c["command"]),
+                code(c["handler"]), code(c["direction"]),
+                code(c["param_struct"]) if c["param_struct"] else "none",
+                # Joined with a comma. A literal pipe inside a table cell
+                # is escaped, and the determinism check reads a backslash
+                # in a generated page as a machine-specific path.
+                code(", ".join(c["flags"])) if c["flags"] else "",
+                node(c)]
+               for c in dispatched]),
+        "",
+        "## Commands outside the denominator",
+        "",
+        "%d of the %d declared command numbers carry no entry in "
+        "`nv_drm_ioctls[]`. Each has a request-number macro in the header "
+        "and no handler behind it, and nothing else in the nvidia-drm tree "
+        "refers to any of them, so none is a target and the family "
+        "contributes %d and not %d."
+        % (len(undispatched), summary["declared"], len(dispatched),
+           summary["declared"]),
+        "",
+        table(["Number", "Command", "Reason"],
+              [[code("0x%02x" % c["nr"]), code("DRM_%s" % c["command"]),
+                c["undispatched_reason"]]
+               for c in undispatched]),
+        "",
+        "The declared range also has a hole in it. %s carries no "
+        "`DRM_NVIDIA_` define at all, so the declared count is not the "
+        "highest number plus one."
+        % ", ".join(code("0x%02x" % u["nr"])
+                    for u in summary.get("unused_numbers") or []),
+        "",
+        "## See also",
+        "",
+        "- [Enumerated surface](/gspwn/reference/surface/)",
+        "- [Attack surface](/gspwn/architecture/attack-surface/)",
+    ]
+    return "\n".join(parts).rstrip() + "\n", len(commands)
+
+
+# --------------------------------------------------------------------------
 # index.md
 # --------------------------------------------------------------------------
 
@@ -1205,6 +1358,7 @@ PAGE_SOURCES = {
     "driver-cves.md": ["surface/prior-cves.json",
                        "surface/cve-hotspots.json"],
     "modeset-commands.md": ["surface/nvkms-command-inventory.json"],
+    "drm-commands.md": ["surface/drm-command-inventory.json"],
 }
 
 # index.md renders the entry-point census beside the command totals, so its
@@ -1229,6 +1383,10 @@ PAGE_TITLES = {
                             "The dispatched commands of "
                             "/dev/nvidia-modeset, their dispatch ordinals "
                             "and parameter structs"),
+    "drm-commands.md": ("DRM commands", "drm-commands",
+                        "The dispatched commands of /dev/dri, their command "
+                        "numbers, permission flags and the node each "
+                        "reaches"),
 }
 
 
@@ -1309,7 +1467,9 @@ def page_index(docs, rows):
                 ("control", "one leaf of `NV_ESC_RM_CONTROL`"),
                 ("alloc", "one leaf of `NV_ESC_RM_ALLOC`"),
                 ("modeset", "one leaf of the single `/dev/nvidia-modeset` "
-                            "request number")]
+                            "request number"),
+                ("drm", "one command of `/dev/dri`, reachable on the card "
+                        "node and, for the flagged ones, the render node")]
                if name in families]),
         "",
         table(["Excluded family", "Records", "Reason"],
@@ -1324,7 +1484,10 @@ def page_index(docs, rows):
                                 "nothing"),
                 ("modeset_undispatched", "declared in "
                                          "`enum NvKmsIoctlCommand` with an "
-                                         "empty dispatch entry")]
+                                         "empty dispatch entry"),
+                ("drm_undispatched", "declared in "
+                                     "`nv_drm_common_ioctl.h` with no entry "
+                                     "in `nv_drm_ioctls[]`")]
                if name in excluded]),
         "",
         "Total targets: %d." % len(targets),
@@ -1354,7 +1517,7 @@ def page_index(docs, rows):
         "`%s` regenerates all %d pages into a temporary directory and "
         "compares them against the committed copies, naming the page and the "
         "first differing line when they disagree. It runs in the same offline "
-        "CI job as the other six artefact checks, so an artefact "
+        "CI job as the other seven artefact checks, so an artefact "
         "regenerated against a new driver release without regenerating these "
         "pages fails the build." % (CHECK, len(BUILDERS) + 1),
         "",
@@ -1377,6 +1540,7 @@ BUILDERS = [
     ("allocation-classes.md", page_alloc),
     ("driver-cves.md", page_cves),
     ("modeset-commands.md", page_modeset),
+    ("drm-commands.md", page_drm),
 ]
 
 

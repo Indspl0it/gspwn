@@ -54,7 +54,7 @@ attempt cap.
 | An information leak that never faults | KASAN reports a bad access. A correct read of data that should not have been returned produces no report |
 | Symlink TOCTOU and mount-escape logic on Track U | Fuzzing finds these poorly. Recorded in the report as future work |
 | Memory corruption in the Go toolkit | Go is memory-safe. A panic there supports a denial-of-service finding only |
-| Anything behind an excluded device node | `/dev/dri/*` sits outside the attacker definition and is not modelled |
+| Anything behind an unmodelled device node | No description declares a call on it. `/dev/nvidia-nvlink`, the nvswitch nodes and the `nvidia-caps` nodes reach no default tenant. `/dev/dri/card*` and `/dev/dri/renderD*` do reach one and are modelled, so they left this row when the drm family landed |
 | Anything behind an ioctl with no syzlang description | syzkaller generates what the grammar describes |
 
 The information-leak row is the widest gap on Track K. A driver returning
@@ -107,7 +107,7 @@ series` and `coverage_ctl.py plateau` print both on every invocation.
 | No total-coverage claim | The aggregate edge counter supports a fitted discovery curve and an extrapolation from it. A fraction-of-driver-covered figure needs per-edge frequency counts that syz-manager does not report |
 
 A second curve carries a denominator the edge curve cannot. `surface_cov.py`
-counts the distinct targets of the 828 the run's corpus has a program for, so
+counts the distinct targets of the 852 the run's corpus has a program for, so
 its reading is a fraction and its ceiling is known. That answers whether the
 round is still reaching new targets, and the edge curve answers whether it is
 still reaching new code inside the targets it already has. See

@@ -39,30 +39,29 @@ refuses it: the value must be a list of non-empty strings.
 | `/dev/nvidia-uvm` | Yes | Same |
 | `/dev/nvidia-uvm-tools` | Yes | Same |
 | `/dev/nvidia-modeset` | Yes | Injected by the CDI generator with no capability check |
-| `/dev/dri/*` | No | Withheld under the default capability set on the legacy path. Untraced under CDI |
+| `/dev/dri/card*` and `/dev/dri/renderD*` | Yes | Injected by the CDI generator with no capability check. Withheld on the legacy path alone |
 
-The injection path decides the modeset node. The CDI generator lists it beside
-the other control nodes and applies no capability test, and `jit-cdi` is the
-default runtime mode, so a default tenant holds it. The legacy path withholds
-it unless the `display` value is set. The
+The injection path decides the modeset node and the DRM nodes. The CDI
+generator lists the modeset node beside the other control nodes and applies
+no capability test, and it adds every `/dev/dri` node found for the GPU's PCI
+bus id. `jit-cdi` is the default runtime mode, so a default tenant holds both.
+The legacy path withholds the modeset node unless the `display` value is set,
+and withholds the DRM nodes under the default `compute,utility` set. The
 [threat model](/gspwn/architecture/threat-model/#device-node-injection-paths)
 carries both mechanisms with their source citations.
 
 `NVIDIA_DRIVER_CAPABILITIES` gates the legacy path. The default that CUDA
 images request, `compute,utility`, yields no `/dev/dri` and no `nvidia-drm`
-nodes there. The equivalent CDI path for DRM nodes has not been traced, so the
-`/dev/dri/*` exclusion holds provisionally in this branch. An ioctl surface
-reachable only through those nodes is outside a default tenant's reach, so a
-crash found there falls outside the threat model and the descriptions for it
-are not written.
+nodes there. That exclusion is a property of a deployment pinned to `legacy`
+mode. `internal/info/auto.go:89` resolves the default mode `auto` to
+`jit-cdi`, so a stock instance takes the CDI path and its tenant holds the DRM
+nodes.
 
-The `/dev/dri/*` exclusion is enforced in two places. The `describe` sub-agent
-is told to skip those nodes, and `tools/trace2seed.py` refuses to emit a seed
-referencing an out-of-scope device:
-
-```
-# skipped: nvidia-modeset out of scope
-```
+The DRM nodes sit inside the tenant surface and outside the modelled set.
+`surface/entry-points.json` records `nv_drm_fops` with `tenant_surface` true
+and `modelled` false. The `describe` sub-agent is told to skip those nodes and
+`tools/trace2seed.py` refuses to emit a seed referencing them, so they are
+measured as reachable surface outside the campaign's denominator.
 
 A seed referencing an unmodelled node fails the syzkaller-parse gate anyway,
 because no description declares a call against it.

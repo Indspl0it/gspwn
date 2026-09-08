@@ -30,6 +30,14 @@ import re
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The documentation site alone. `agents/*.md` and `AGENTS.md` are deliberately
+# outside this list and are not a gap to be closed. A phase brief is an
+# instruction addressed to the agent executing it, so it opens "You are the
+# provision-phase agent" and stays in the second person throughout. The
+# register's ban on addressing the reader governs documentation written about
+# the system, and applying it here would rewrite 48 hits across 13 files into
+# prose that no longer instructs anyone. The rest of the register does apply to
+# a brief; nothing mechanical checks it, and that is the accepted position.
 DOC_ROOTS = [
     os.path.join("docs", "src", "content", "docs"),
     os.path.join("docs", "src", "components"),
@@ -256,7 +264,11 @@ def check_file(path, rel_path):
     for rule, pattern in PATTERNS:
         if exemption(rel_path, rule):
             continue
-        flags = 0 if rule == "second person" else re.I
+        # Every rule is case-insensitive. The second-person rule was the one
+        # exception and the exception cost it its main target: "You" and
+        # "Your" opening a sentence are the commonest form the construction
+        # takes, and a case-sensitive pattern reads straight past them.
+        flags = re.I
         for match in re.finditer(wrap_tolerant(pattern), prose, flags):
             context = prose[max(0, match.start() - 40): match.end() + 40]
             hits.append((rule, line_of(match.start()),

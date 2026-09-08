@@ -36,6 +36,7 @@ The git-mining classes skip themselves when git is absent from PATH.
 Usage: python3 tools/selftest.py [-v]      exit 0 = all passed
 """
 import ast
+import collections
 import contextlib
 import csv
 import fcntl
@@ -82,6 +83,7 @@ import surface_cov
 import surface_verify
 import syzlang_gen
 import trace2seed
+import value_families
 
 
 def csv_line(ts, edges=None, source="test", gpu="ok", **extra):
@@ -1875,6 +1877,74 @@ class TestBudgetGuard(StateTempMixin, unittest.TestCase):
         # No ledger AND no recorded hours is a new machine, not a lost
         # ledger — it must still be able to start its first campaign.
         self.assertEqual(campaign_ctl.check_budget(24, 216), 0.0)
+
+    def lose_a_bill(self, run_id, hours):
+        """Bill `hours` the way a failed ledger write leaves them.
+
+        campaign_ctl.bill_run catches OSError from record_run_hours, warns and
+        returns, so the round keeps the hours and the ledger never sees them.
+        Reproduced by recording the round directly.
+        """
+        st = ps.load(ps.DEFAULT_STATE_PATH)
+        st["rounds"][-1]["run_ids"] = (st["rounds"][-1].get("run_ids") or []) + [run_id]
+        st["rounds"][-1]["run_hours"] = (st["rounds"][-1].get("run_hours") or 0.0) + hours
+        ps.save(st, ps.DEFAULT_STATE_PATH)
+
+    def test_hours_lost_to_a_failed_ledger_write_still_count_against_the_cap(
+            self):
+        """The expensive direction to be wrong in.
+
+        bill_run catches OSError, warns and returns without billing, and an
+        unattended loop reads no warnings. The ledger then sits below the
+        hours the state file recorded and the guard hands back headroom that
+        was already spent. Three campaigns of 100 h reached the round history
+        and one reached the ledger; the cap must see 300, not 100.
+        """
+        ps.record_run_hours("r1-k1", 100.0)
+        self.lose_a_bill("r1-k1", 100.0)
+        self.lose_a_bill("r2-k1", 100.0)
+        self.lose_a_bill("r3-k1", 100.0)
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(ps.spend_for_budget(), 300.0)
+
+    def test_the_reconciled_figure_is_what_refuses_the_next_campaign(self):
+        """The reconciliation has to reach the guard, not just the reader."""
+        ps.record_run_hours("r1-k1", 100.0)
+        self.lose_a_bill("r2-k1", 200.0)
+        with redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as cm:
+                campaign_ctl.check_budget(24, 216)
+        self.assertIn("max_total_run_hours", str(cm.exception))
+        self.assertIn("never reached the ledger", err.getvalue())
+
+    def test_a_ledger_above_the_state_file_says_nothing_and_stands(self):
+        """The ordinary case, and it must stay silent.
+
+        The ledger is machine-global while the state file is one pipeline, so
+        a ledger holding more than this pipeline recorded is what a second
+        pipeline on the same box looks like. Warning on it would fire on
+        every healthy multi-pipeline machine.
+        """
+        ps.record_run_hours("r1-k1", 100.0)
+        ps.record_run_hours("other-pipeline-1", 50.0)
+        self.lose_a_bill("r1-k1", 100.0)
+        with redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(ps.spend_for_budget(), 150.0)
+        self.assertEqual(err.getvalue(), "")
+
+    def test_reconciliation_reads_the_default_state_not_the_redirect(self):
+        """A fresh GSPWN_STATE must not hide recorded hours from the cap.
+
+        Reading STATE_PATH here would reopen the redirect bypass one level
+        below the guard: point GSPWN_STATE at an empty file, and the
+        reconciliation would find nothing to reconcile against.
+        """
+        self.lose_a_bill("r1-k1", 300.0)
+        ps.record_run_hours("r1-k1", 100.0)
+        ps.STATE_PATH = os.path.join(self.tmp.name, "state", "side.json")
+        ps.save(ps.default_state(), ps.STATE_PATH)
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(ps.spend_for_budget(), 300.0)
 
 
 class TestPlateauAcrossRestarts(unittest.TestCase):
@@ -5504,6 +5574,7 @@ ioctl$NV_ESC_RM_CONTROL_fooCtrlCmdBar(fd fd_nvidiactl, cmd const[0xc020462a], ar
 ioctl$NV_ESC_RM_ALLOC_FOO_A(fd fd_nv, cmd const[0xc030462b], arg ptr[inout, nvos64_alloc_foo_a])
 ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])
 ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, cmd const[0xc0106d00], arg ptr[inout, nvkms_params_alloc_device])
+ioctl$DRM_NVIDIA_GET_DEV_INFO(fd fd_dri, cmd const[0xc0246443], arg ptr[inout, drm_nvidia_get_dev_info_params])
 
 nvos54_ctrl_fooCtrlCmdBar {
 \thClient\tnvh_nv01_root
@@ -5525,6 +5596,11 @@ nv_xfer_rm_free {
 nvkms_params_alloc_device {
 \tcmd\tconst[0, int32]
 \tsize\tconst[1440, int32]
+} [packed]
+
+drm_nvidia_get_dev_info_params {
+\tgpu_id\tint32
+\tinterface_version\tint32
 } [packed]
 """
 
@@ -5783,7 +5859,7 @@ class TestDenominatorCoverage(Phase4Fixtures):
         code, out = _run_check("coverage")
         self.assertEqual(code, 0, out)
         self.assertIn("coverage: OK", out)
-        self.assertIn("828 targetable", out)
+        self.assertIn("852 targetable", out)
 
     def test_an_unmodified_copy_of_the_set_still_covers_every_target(self):
         old = _patched(DESC_DIR=self.desc_copy())
@@ -5798,7 +5874,7 @@ class TestDenominatorCoverage(Phase4Fixtures):
         code, out = self._without(victim)
         self.assertEqual(code, 1)
         self.assertIn(victim, out)
-        self.assertIn("827 modelled", out)
+        self.assertIn("851 modelled", out)
 
     def test_the_family_the_gap_falls_in_is_reported(self):
         victim = self._first_target_in("alloc")
@@ -7055,7 +7131,7 @@ class TestSurfaceTargetKeys(unittest.TestCase):
     def test_every_target_has_a_distinct_key(self):
         keys = [t["abi_key"] for t in self.targets.values()]
         self.assertEqual(len(keys), len(set(keys)))
-        self.assertEqual(len(keys), 828)
+        self.assertEqual(len(keys), 852)
 
     def test_the_composite_holds_531_distinct_control_targets(self):
         control = [t for t in self.targets.values()
@@ -9037,7 +9113,7 @@ static const RS_ENTRY g_resourceClassInfo[] =
 
     def test_every_reader_of_the_committed_artefact_still_loads_it(self):
         targets, _excluded, meta = surface_cov.load_targets()
-        self.assertEqual(len(targets), 828)
+        self.assertEqual(len(targets), 852)
         self.assertEqual(meta.get("driver_version"), "610.57.04")
 
 
@@ -12805,6 +12881,8 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
         "cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])\n"
         "ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, "
         "cmd const[0xc0106d00], arg ptr[inout, nvkms_params_foo])\n"
+        "ioctl$DRM_NVIDIA_FENCE_SUPPORTED(fd fd_dri, "
+        "cmd const[0x00006444])\n"
         "\n"
         "nvos54_ctrl_foo {\n\tcmd\tconst[0x00000102, int32]\n} [packed]\n"
         "\n"
@@ -12890,6 +12968,8 @@ class TestPinsChecksTheValueAndNotOnlyTheForm(unittest.TestCase):
            "const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])\n"
            "ioctl$NVKMS_IOCTL_THING(fd fd_nvidia_modeset, cmd "
            "const[0xc0106d00], arg ptr[inout, nvkms_params_thing])\n"
+           "ioctl$DRM_NVIDIA_FENCE_SUPPORTED(fd fd_dri, cmd "
+           "const[0x00006444])\n"
            "\n"
            "nvos54_ctrl_foo {\n\tcmd\tconst[%s, int32]\n} [packed]\n"
            "\n"
@@ -13017,7 +13097,7 @@ class TestCoverageNoticesAShrinkingDenominator(unittest.TestCase):
                          sorted(surface_cov.FAMILIES))
 
     def test_the_floor_sums_to_the_number_the_docstring_used_to_name(self):
-        self.assertEqual(sum(regression_check.TARGET_FLOOR.values()), 828)
+        self.assertEqual(sum(regression_check.TARGET_FLOOR.values()), 852)
 
     def test_the_function_docstring_no_longer_names_a_bare_count(self):
         self.assertNotIn("764", regression_check.check_coverage.__doc__)
@@ -13255,8 +13335,9 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
 
     def test_all_runs_the_checks_in_the_documented_order(self):
         self.assertEqual(regression_check.check_order(),
-                         ["names", "pins", "coverage", "derived", "pages",
-                          "stale", "harnesses"])
+                         ["names", "pins", "coverage", "derived",
+                          "families", "pages", "stale", "harnesses",
+                          "agents"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -13397,6 +13478,30 @@ class TestTheRegisterCheckSeesAcrossALineWrap(unittest.TestCase):
         for rule, pattern in register_check.PATTERNS:
             for klass in re.findall(r"\[[^\]]*\]", pattern):
                 self.assertNotIn(" ", klass, rule)
+
+    def test_second_person_opening_a_sentence_is_caught(self):
+        # The second-person rule ran case-sensitively and read straight past
+        # the form the construction most often takes.
+        for text in ("You hold the descriptor after this call.",
+                     "Your campaign records the verdict.",
+                     "We record the verdict here.",
+                     "Our reading of the flag was wrong."):
+            self.assertTrue(self.hits(text, "second person"), text)
+
+    def test_second_person_mid_sentence_is_still_caught(self):
+        self.assertTrue(self.hits("The tool hands you the descriptor.",
+                                  "second person"))
+
+    def test_every_rule_is_case_insensitive(self):
+        # One rule ran with flags=0 and the exception was undocumented. A rule
+        # that matches only lowercase misses a sentence opening.
+        for rule, _ in register_check.PATTERNS:
+            if rule in ("emoji", "curly quote", "em dash", "en dash"):
+                continue
+            upper = len(self.hits("filler RATHER filler", "rather"))
+            lower = len(self.hits("filler rather filler", "rather"))
+            self.assertEqual(upper, lower, rule)
+            self.assertEqual(upper, 1, rule)
 
     def test_every_pattern_still_compiles_after_the_rewrite(self):
         # Asserts by the absence of re.error, and still discriminates:
@@ -13844,16 +13949,16 @@ class TestHarnessTargetListsAgree(Phase0Fixtures):
 class TestTheTwoGuardsAreRegistered(unittest.TestCase):
     """Both guards run under `regression_check.py all`."""
 
-    def test_the_registry_holds_seven_checks(self):
-        self.assertEqual(len(regression_check.check_order()), 7)
+    def test_the_registry_holds_nine_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 9)
 
     def test_both_guards_are_registered_and_ordered(self):
-        for name in ("stale", "harnesses"):
+        for name in ("stale", "harnesses", "agents"):
             self.assertIn(name, regression_check.CHECKS, name)
             self.assertIn(name, regression_check.CHECK_ORDER, name)
 
-    def test_the_module_docstring_names_seven_checks(self):
-        self.assertIn("Seven CI checks", regression_check.__doc__)
+    def test_the_module_docstring_names_nine_checks(self):
+        self.assertIn("Nine CI checks", regression_check.__doc__)
 
     def test_the_workflow_runs_both_guards(self):
         with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
@@ -13861,9 +13966,289 @@ class TestTheTwoGuardsAreRegistered(unittest.TestCase):
             workflow = fh.read()
         # Asserted as a membership test and not with assertIn, because the
         # workflow is one long string and a failure would print all of it.
-        for name in ("stale", "harnesses"):
+        for name in ("stale", "harnesses", "agents"):
             self.assertTrue("regression_check.py %s" % name in workflow,
                             "the workflow runs no %s step" % name)
+
+
+class AgentBriefFixtures(Phase0Fixtures):
+    """A scratch agents/ tree holding one brief, read through AGENTS_DIR.
+
+    Every fixture names a tool that exists in this repository, because the
+    check resolves each command against the tool's own argparse parser and a
+    made-up tool would only ever report as one that is absent.
+    """
+
+    def brief(self, body, name="phase.md"):
+        """One scratch brief, with AGENTS_DIR pointed at the tree holding it."""
+        root = self.tempdir()
+        directory = os.path.join(root, "agents")
+        os.makedirs(directory)
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as fh:
+            fh.write(body)
+        self.use(AGENTS_DIR=directory)
+        return directory
+
+
+class TestAgentCommandsAreExtracted(AgentBriefFixtures):
+    """regression_check agents: every command shape a brief carries is read.
+
+    The briefs write commands in fenced blocks, in inline code spans that wrap
+    across a line break, and as bare indented lines inside a numbered step. A
+    shape the extractor does not read is a command line nothing checks, and
+    the tool would report a clean run over the ones it happened to match.
+    """
+
+    def commands(self, body):
+        """-> every command the extractor reads out of one brief body."""
+        return [command for _number, command
+                in regression_check.agent_commands(body)]
+
+    def test_a_fenced_command_is_read(self):
+        got = self.commands("```\npython3 tools/knowledge_ctl.py show\n```\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_an_inline_span_is_read(self):
+        got = self.commands("Run `python3 tools/knowledge_ctl.py show` now.\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_an_inline_span_wrapped_across_a_line_break_is_read(self):
+        got = self.commands("Run `python3 tools/knowledge_ctl.py show\n"
+                            "--phase seeds` now.\n")
+        self.assertEqual(got,
+                         ["python3 tools/knowledge_ctl.py show --phase seeds"])
+
+    def test_a_bare_line_inside_a_numbered_step_is_read(self):
+        got = self.commands("2. Parse them:\n"
+                            "   python3 tools/knowledge_ctl.py show\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_a_prose_sentence_naming_a_tool_is_not_read_as_a_command(self):
+        self.assertEqual(
+            self.commands("The parser in tools/knowledge_ctl.py reads it.\n"),
+            [])
+
+    def test_a_backslash_continuation_joins_the_lines(self):
+        got = self.commands("```\npython3 tools/knowledge_ctl.py show \\\n"
+                            "  --phase seeds\n```\n")
+        self.assertEqual(got,
+                         ["python3 tools/knowledge_ctl.py show --phase seeds"])
+
+    def test_a_trailing_comment_is_dropped(self):
+        got = self.commands("```\npython3 tools/knowledge_ctl.py show  "
+                            "# both tracks\n```\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_a_heredoc_marker_is_dropped(self):
+        got = self.commands("```\npython3 tools/knowledge_ctl.py show "
+                            "<<'JSON'\n{}\nJSON\n```\n")
+        self.assertEqual(got, ["python3 tools/knowledge_ctl.py show"])
+
+    def test_a_shell_loop_body_is_read_as_its_own_command(self):
+        got = self.commands(
+            "2. Parse them:\n"
+            "   for f in <path>/dmesg-*; do python3 tools/crash_parse.py "
+            "--dmesg \"$f\"; done\n")
+        self.assertEqual(got,
+                         ["python3 tools/crash_parse.py --dmesg \"$f\""])
+
+    def test_a_command_behind_a_test_and_a_pipe_is_read(self):
+        got = self.commands(
+            "2. Parse it:\n"
+            "   [ -e <path>/console.log ] && python3 tools/crash_parse.py "
+            "--dmesg <path>/console.log\n")
+        self.assertEqual(
+            got, ["python3 tools/crash_parse.py --dmesg <path>/console.log"])
+
+    def test_every_committed_brief_is_read(self):
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+        for name in ("build.md", "describe.md", "eval.md", "fuzz.md",
+                     "harness.md", "poc.md", "provision.md", "rca.md",
+                     "refine.md", "report.md", "seeds.md", "triage.md"):
+            self.assertIn(name, out)
+
+    def test_an_agents_tree_with_no_brief_cannot_run(self):
+        root = self.tempdir()
+        directory = os.path.join(root, "agents")
+        os.makedirs(directory)
+        self.use(AGENTS_DIR=directory)
+        code, out = self.check("agents")
+        self.assertEqual(code, 2, out)
+        self.assertIn("no .md", out)
+
+    def test_a_brief_set_carrying_no_command_cannot_run(self):
+        self.brief("# A brief\n\nProse and nothing else.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 2, out)
+        self.assertIn("no command line", out)
+
+
+class TestAgentCommandsResolve(AgentBriefFixtures):
+    """regression_check agents: every command a brief carries resolves.
+
+    Twelve phase briefs tell a coding agent which commands to run on a metered
+    instance. A wrong subcommand or a wrong flag stalls the campaign there and
+    needs a human to notice it, so the claim is checked against the parser the
+    tool declares.
+    """
+
+    def test_the_committed_briefs_resolve(self):
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+        self.assertIn("agents: OK", out)
+
+    def test_a_tool_that_does_not_exist_is_reported(self):
+        self.brief("```\npython3 tools/no_such_ctl.py show\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("tools/no_such_ctl.py", out)
+        self.assertIn("no such tool", out)
+
+    def test_a_subcommand_the_tool_does_not_declare_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py recite\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("recite", out)
+        self.assertIn("no such subcommand", out)
+
+    def test_a_report_on_a_subcommand_names_the_ones_declared(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py recite\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("note", out)
+        self.assertIn("show", out)
+
+    def test_a_flag_the_subcommand_does_not_declare_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show --stage model\n"
+                   "```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--stage", out)
+        self.assertIn("no such flag", out)
+
+    def test_a_flag_declared_on_another_subcommand_is_still_reported(self):
+        # --tags is declared on `note` and not on `show`.
+        self.brief("```\npython3 tools/knowledge_ctl.py show --tags abi\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--tags", out)
+
+    def test_a_value_outside_the_declared_choices_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show --kind rumour\n"
+                   "```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("rumour", out)
+        self.assertIn("choice", out)
+
+    def test_every_alternative_in_a_piped_value_is_checked(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show "
+                   "--kind learning|rumour\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("rumour", out)
+
+    def test_a_literal_the_declared_type_rejects_is_reported(self):
+        # --last is typed int on `show`.
+        self.brief("```\npython3 tools/knowledge_ctl.py show --last many\n"
+                   "```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--last", out)
+        self.assertIn("int", out)
+
+    def test_a_placeholder_is_not_measured_against_the_declared_type(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show --last <n>\n"
+                   "```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_a_value_flag_left_without_a_value_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show --phase\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--phase", out)
+        self.assertIn("needs a value", out)
+
+    def test_a_valueless_flag_given_a_value_is_reported(self):
+        # --json on surface_cov.py report is store_true.
+        self.brief("```\npython3 tools/surface_cov.py report --json=yes\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("--json", out)
+        self.assertIn("takes no value", out)
+
+    def test_a_flag_declared_on_the_main_parser_is_accepted(self):
+        self.brief("```\npython3 tools/regression_check.py names -v\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_a_sudo_prefix_does_not_hide_the_command(self):
+        self.brief("```\nsudo python3 tools/knowledge_ctl.py recite\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("recite", out)
+
+    def test_a_tool_named_with_no_subcommand_is_accepted(self):
+        self.brief("The generator is `tools/knowledge_ctl.py` alone.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_a_declared_exclusion_is_reported_and_not_resolved(self):
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+        for name in regression_check.AGENT_TOOL_EXCLUSIONS:
+            self.assertIn(name, out)
+
+    def test_every_declared_exclusion_carries_a_reason(self):
+        for name, reason in regression_check.AGENT_TOOL_EXCLUSIONS.items():
+            self.assertTrue(reason.strip(), name)
+
+    def test_every_declared_exclusion_names_a_file_that_exists(self):
+        for name in regression_check.AGENT_TOOL_EXCLUSIONS:
+            self.assertTrue(
+                os.path.isfile(os.path.join(os.path.dirname(HERE), name)),
+                name)
+
+
+class TestAgentExitCodesAreReachable(AgentBriefFixtures):
+    """regression_check agents: an exit code a brief states, the tool returns.
+
+    A brief states what a non-zero exit means and what the operator does about
+    it. A code no `return` and no `sys.exit` in the tool produces is a gate
+    the operator waits on and never reaches.
+    """
+
+    def test_an_exit_code_the_tool_cannot_return_is_reported(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show\n```\n"
+                   "Exit 97 means the note file is locked.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 1, out)
+        self.assertIn("97", out)
+        self.assertIn("cannot exit", out)
+
+    def test_an_exit_code_returned_through_a_named_constant_is_accepted(self):
+        # surface_verify.py returns DISAGREE and INSUFFICIENT, never 3 and 4
+        # as literals, so a check reading literals alone would report both.
+        self.brief("```\npython3 tools/surface_verify.py check\n```\n"
+                   "Exit 3 means they disagree, and exit 4 means fewer than "
+                   "two sources answered.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_an_exit_code_binds_to_the_tool_named_before_it(self):
+        self.brief("```\npython3 tools/knowledge_ctl.py show\n```\n"
+                   "```\npython3 tools/surface_verify.py check\n```\n"
+                   "Exit 3 means they disagree.\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
+
+    def test_an_exit_code_stated_before_any_tool_is_not_bound(self):
+        self.brief("Exit 97 means the note file is locked.\n"
+                   "```\npython3 tools/knowledge_ctl.py show\n```\n")
+        code, out = self.check("agents")
+        self.assertEqual(code, 0, out)
 
 # A syzlang `const` argument, as this generator writes one: a decimal or hex
 # literal, or the format placeholder that will carry one. The filter keeps
@@ -14328,17 +14713,19 @@ class TestTheEntryPointArtefactShape(unittest.TestCase):
         self.assertEqual(self.artefact()["schema"],
                          ioctl_inventory.ENTRY_POINTS_SCHEMA)
 
-    def test_three_tables_are_modelled(self):
-        # nvidia_fops serves two nodes, so four modelled nodes sit on three
-        # tables.
+    def test_four_tables_are_modelled(self):
+        # nvidia_fops serves two nodes and nv_drm_fops serves two, so six
+        # modelled nodes sit on four tables.
         tables = [t for t in self.artefact()["tables"] if t["modelled"]]
         self.assertEqual(sorted(t["fops"] for t in tables),
-                         ["nvidia_fops", "uvm_fops", "uvm_tools_fops"])
+                         ["nv_drm_fops", "nvidia_fops", "uvm_fops",
+                          "uvm_tools_fops"])
 
-    def test_the_modelled_nodes_are_the_four_the_set_opens(self):
+    def test_the_modelled_nodes_are_the_six_the_set_opens(self):
         paths = sorted(p for t in self.artefact()["tables"] if t["modelled"]
                        for p in t["paths"])
-        self.assertEqual(paths, ["/dev/nvidia-uvm", "/dev/nvidia-uvm-tools",
+        self.assertEqual(paths, ["/dev/dri/cardN", "/dev/dri/renderDN",
+                                 "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools",
                                  "/dev/nvidiaN", "/dev/nvidiactl"])
 
     def test_every_unmodelled_table_states_a_reason(self):
@@ -14382,12 +14769,12 @@ class TestTheEntryPointArtefactShape(unittest.TestCase):
                       if t["modelled"])
         self.assertEqual(doc["counts"]["modelled_entry_points"], counted)
 
-    def test_the_three_modelled_tables_carry_sixteen_entry_points(self):
-        # nvidia_fops 6, uvm_fops 5, uvm_tools_fops 5. The figure is asserted
-        # so a driver release that adds or drops an entry point fails here
-        # rather than moving a reported number silently.
+    def test_the_four_modelled_tables_carry_twentyfour_entry_points(self):
+        # nvidia_fops 6, uvm_fops 5, uvm_tools_fops 5, nv_drm_fops 8. The
+        # figure is asserted so a driver release that adds or drops an entry
+        # point fails here and never moves a reported number silently.
         self.assertEqual(self.artefact()["counts"]["modelled_entry_points"],
-                         16)
+                         24)
 
     def test_uvm_fops_registers_mmap_and_no_poll(self):
         ops = {e["operation"] for e in self.table("uvm_fops")["entry_points"]}
@@ -14643,9 +15030,10 @@ class TestTheEntryPointCalls(unittest.TestCase):
         declared = [l.split("(")[0] for l in self.read().splitlines()
                     if l.startswith(("mmap$", "poll$"))]
         self.assertEqual(sorted(declared),
-                         ["mmap$nvidia", "mmap$nvidia_uvm", "mmap$nvidiactl",
-                          "poll$nvidia", "poll$nvidia_uvm_tools",
-                          "poll$nvidiactl"])
+                         ["mmap$dri_card", "mmap$dri_render", "mmap$nvidia",
+                          "mmap$nvidia_uvm", "mmap$nvidiactl",
+                          "poll$dri_card", "poll$dri_render", "poll$nvidia",
+                          "poll$nvidia_uvm_tools", "poll$nvidiactl"])
 
     def test_each_mmap_takes_the_resource_its_node_declares(self):
         self.assertIn("fd fd_nvidia,", self.call("mmap$nvidia"))
@@ -14691,20 +15079,20 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
 
     def test_the_loader_reports_the_artefact_counts(self):
         modelled, registered, tables = surface_cov.load_entry_points()
-        self.assertEqual(modelled, 16)
-        self.assertEqual(registered, 43)
-        self.assertEqual(len(tables), 3)
+        self.assertEqual(modelled, 24)
+        self.assertEqual(registered, 42)
+        self.assertEqual(len(tables), 4)
 
     def test_the_denominator_is_unchanged_by_the_counter(self):
         targets, _excluded, _meta = surface_cov.load_targets()
-        self.assertEqual(len(targets), 828)
+        self.assertEqual(len(targets), 852)
 
-    def test_the_six_families_still_carry_the_whole_denominator(self):
+    def test_the_seven_families_still_carry_the_whole_denominator(self):
         targets, _excluded, _meta = surface_cov.load_targets()
         self.assertEqual(
             sum(1 for t in targets.values()
-                if t["family"] in surface_cov.FAMILIES), 828)
-        self.assertEqual(len(surface_cov.FAMILIES), 6)
+                if t["family"] in surface_cov.FAMILIES), 852)
+        self.assertEqual(len(surface_cov.FAMILIES), 7)
 
     def test_an_entry_point_inside_the_denominator_is_refused(self):
         with self.assertRaises(surface_cov.SurfaceError) as caught:
@@ -14731,7 +15119,7 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
             code = _surface_cov_modelled()
         self.assertEqual(code, 0)
         text = out.getvalue()
-        self.assertIn("828", text)
+        self.assertIn("852", text)
         self.assertIn("entry points", text)
         # The two totals sit on different lines, so neither reading can be
         # taken for the other.
@@ -14746,12 +15134,12 @@ class TestTheEntryPointCounterStaysOutsideTheDenominator(unittest.TestCase):
         self.assertIn("not part of the", out.getvalue())
 
     def test_the_sum_of_the_two_is_never_printed(self):
-        # 828 + 16 is 844 and names nothing. A reader who found it on this
+        # 852 + 24 is 876 and names nothing. A reader who found it on this
         # page would take it for a denominator.
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             _surface_cov_modelled()
-        self.assertNotIn("844", out.getvalue())
+        self.assertNotIn("876", out.getvalue())
 
 
 class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
@@ -14762,9 +15150,10 @@ class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
     def test_the_expected_calls_are_derived_from_the_artefact(self):
         _m, _r, tables = surface_cov.load_entry_points()
         self.assertEqual(sorted(surface_cov.entry_point_calls(tables)),
-                         ["mmap$nvidia", "mmap$nvidia_uvm", "mmap$nvidiactl",
-                          "poll$nvidia", "poll$nvidia_uvm_tools",
-                          "poll$nvidiactl"])
+                         ["mmap$dri_card", "mmap$dri_render", "mmap$nvidia",
+                          "mmap$nvidia_uvm", "mmap$nvidiactl",
+                          "poll$dri_card", "poll$dri_render", "poll$nvidia",
+                          "poll$nvidia_uvm_tools", "poll$nvidiactl"])
 
     def test_a_node_with_no_suffix_is_refused(self):
         # A device node the mapping does not name cannot have its call name
@@ -14786,13 +15175,13 @@ class TestTheCoverageCheckReadsTheEntryPointArtefact(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             regression_check.check_coverage()
-        self.assertIn("16", out.getvalue())
+        self.assertIn("24", out.getvalue())
 
     def test_the_check_still_reports_the_command_denominator(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             regression_check.check_coverage()
-        self.assertIn("828 targetable across 6 families", out.getvalue())
+        self.assertIn("852 targetable across 7 families", out.getvalue())
 
 
 def _surface_cov_modelled():
@@ -16374,53 +16763,58 @@ class TestEveryCallDevDescReturnsIsDeclared(unittest.TestCase):
         self.assertEqual(overlap, [])
 
 
-class TestDriNodesAreRefusedAndNotNamed(unittest.TestCase):
-    """/dev/dri/* is refused, and the refusal states what is known.
+class TestDriNodesConvertToTheirOwnCalls(unittest.TestCase):
+    """/dev/dri/* converts, and the two node types convert apart.
 
-    dev_desc() returned `openat$dri` for these paths, a call the description
-    set has never declared, so a trace touching a render node converted into
-    a seed bank that failed the parse gate. The threat model excludes these
-    nodes, so the fix is a refusal carrying a reason and not a new call.
+    dev_desc() once returned `openat$dri` for these paths, a call the
+    description set has never declared, so a trace touching a render node
+    converted into a seed bank that failed the parse gate. The nodes are
+    inside the model now and each type has a call of its own, so the fix
+    holds in the other direction: the names are real and they are two.
 
-    The path is a prefix over a directory whose members carry a card or
-    render-node index, so the exact-match table cannot hold it.
+    The paths are regex branches over a directory whose members carry a card
+    or render-node index, so the exact-match table cannot hold them.
     """
 
-    def test_the_undeclared_call_is_gone_from_dev_desc(self):
+    def test_the_undeclared_singular_call_is_gone_from_dev_desc(self):
         # Named pin for the defect itself, beside the general check that
-        # every name dev_desc() spells is declared. Scoped to the function,
-        # because out_of_scope()'s docstring cites the name on purpose.
-        self.assertNotIn("openat$dri",
-                         inspect.getsource(trace2seed.dev_desc))
+        # every name dev_desc() spells is declared. The two real names both
+        # carry a node-type suffix, so the bare name appears nowhere.
+        source = inspect.getsource(trace2seed.dev_desc)
+        self.assertNotIn('"openat$dri"', source)
 
-    def test_dev_desc_names_no_call_for_a_dri_node(self):
+    def test_dev_desc_names_a_call_for_each_node_type(self):
+        self.assertEqual(trace2seed.dev_desc("/dev/dri/card0"),
+                         "openat$dri_card")
+        self.assertEqual(trace2seed.dev_desc("/dev/dri/renderD128"),
+                         "openat$dri_render")
+
+    def test_the_two_node_types_never_share_a_call(self):
+        """One call name would model the union on both nodes, and a render
+        node refuses 3 of the 24 before any handler runs."""
+        self.assertNotEqual(trace2seed.dev_desc("/dev/dri/card0"),
+                            trace2seed.dev_desc("/dev/dri/renderD128"))
+
+    def test_a_dri_node_is_no_longer_refused(self):
         for path in ("/dev/dri/card0", "/dev/dri/renderD128"):
-            self.assertIsNone(trace2seed.dev_desc(path), path)
-
-    def test_a_dri_node_is_refused_with_a_reason(self):
-        for path in ("/dev/dri/card0", "/dev/dri/renderD128"):
-            self.assertIn("/dev/dri/*", trace2seed.out_of_scope(path) or "")
-
-    def test_the_reason_leaves_tenant_reachability_open(self):
-        # Recorded as an open question. Asserting these nodes are unreachable
-        # would be a claim this tool has no source for.
-        reason = trace2seed.out_of_scope("/dev/dri/card0")
-        self.assertIn("open question", reason)
-        self.assertIn("outside the modelled surface", reason)
+            self.assertIsNone(trace2seed.out_of_scope(path), path)
 
     def test_a_modelled_node_is_not_refused(self):
         for path in trace2seed.DEV_TO_DESC:
             self.assertIsNone(trace2seed.out_of_scope(path), path)
         self.assertIsNone(trace2seed.out_of_scope("/dev/nvidia0"))
 
-    def test_a_traced_dri_open_becomes_a_skip_and_opens_nothing(self):
+    def test_a_traced_dri_open_becomes_the_render_call(self):
         prog = trace2seed.convert(
-            'openat(AT_FDCWD, "/dev/dri/renderD128", O_RDWR) = 3\n'
-            'ioctl(3, 0xc0106d00, 0x7ffd) = 0\n', {}, {})
-        self.assertIn("# skipped:", prog)
-        self.assertNotIn("openat$", prog)
-        # The fd was never tracked, so its ioctl is dropped with it.
-        self.assertNotIn("0xc0106d00", prog)
+            'openat(AT_FDCWD, "/dev/dri/renderD128", O_RDWR) = 3\n', {}, {})
+        self.assertIn("openat$dri_render", prog)
+        self.assertNotIn("# skipped:", prog)
+
+    def test_a_traced_card_open_becomes_the_card_call(self):
+        prog = trace2seed.convert(
+            'openat(AT_FDCWD, "/dev/dri/card0", O_RDWR) = 3\n', {}, {})
+        self.assertIn("openat$dri_card", prog)
+        self.assertNotIn("# skipped:", prog)
 # The struct that motivated the bitfield fix, reproduced from
 # src/nvidia-modeset/interface/nvkms-api-types.h:499 with the two nested
 # aggregates reduced to their measured sizes. gcc on x86-64 gives the real
@@ -16729,7 +17123,7 @@ class TestTheModesetFamilyEntersTheDenominator(ModesetDenominator):
 
     def test_modeset_is_a_reported_family(self):
         self.assertIn("modeset", surface_cov.FAMILIES)
-        self.assertEqual(len(surface_cov.FAMILIES), 6)
+        self.assertEqual(len(surface_cov.FAMILIES), 7)
 
     def test_a_dispatched_command_is_a_target_under_its_own_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -16797,17 +17191,17 @@ class TestTheCommittedModesetDenominator(unittest.TestCase):
             raise unittest.SkipTest("committed inventories not present")
         cls.targets, cls.excluded, _meta = surface_cov.load_targets()
 
-    def test_the_denominator_reads_828_across_six_families(self):
-        self.assertEqual(len(self.targets), 828)
+    def test_the_denominator_reads_852_across_seven_families(self):
+        self.assertEqual(len(self.targets), 852)
         self.assertEqual(
-            len({t["family"] for t in self.targets.values()}), 6)
+            len({t["family"] for t in self.targets.values()}), 7)
 
     def test_the_modeset_family_carries_64_targets(self):
         modeset = [t for t in self.targets.values()
                    if t["family"] == "modeset"]
         self.assertEqual(len(modeset), 64)
 
-    def test_the_other_five_families_are_unmoved(self):
+    def test_the_other_six_families_are_unmoved(self):
         counted = {}
         for target in self.targets.values():
             counted[target["family"]] = counted.get(target["family"], 0) + 1
@@ -16816,6 +17210,7 @@ class TestTheCommittedModesetDenominator(unittest.TestCase):
         self.assertEqual(counted["uvm_tools"], 7)
         self.assertEqual(counted["control"], 531)
         self.assertEqual(counted["alloc"], 155)
+        self.assertEqual(counted["modeset"], 64)
 
     def test_both_undispatched_ordinals_are_excluded_by_name(self):
         undispatched = sorted(
@@ -16834,7 +17229,9 @@ class TestTheCommittedModesetDenominator(unittest.TestCase):
 class TestTheValueCheckReadsAsAList(unittest.TestCase):
     """The pin check's value comparison was one hardcoded tuple naming the
     control prefix, so no second family could ever be compared against an
-    authority. The list form is the fix, and modeset is the second entry."""
+    authority. The list form is the fix, modeset is the second entry and drm
+    the third. drm keeps its selector somewhere else, the row says so, and
+    the check never branches on the family name."""
 
     def test_the_groups_carry_a_lookup_beside_the_prefix(self):
         for entry in regression_check.GROUPS:
@@ -16842,31 +17239,63 @@ class TestTheValueCheckReadsAsAList(unittest.TestCase):
 
     def test_both_checked_families_are_reporting_groups(self):
         groups = {name for name, _prefix, _lookup in regression_check.GROUPS}
-        for family, _field, _lookup in regression_check.VALUE_CHECKED:
+        for family, _f, _loc, _lookup in regression_check.VALUE_CHECKED:
             self.assertIn(family, groups)
 
-    def test_control_and_modeset_are_both_value_checked(self):
-        checked = {family for family, _f, _l in regression_check.VALUE_CHECKED}
-        self.assertEqual(checked, {"control", "modeset"})
+    def test_control_modeset_and_drm_are_all_value_checked(self):
+        checked = {family
+                   for family, _f, _loc, _l in regression_check.VALUE_CHECKED}
+        self.assertEqual(checked, {"control", "modeset", "drm"})
 
     def test_each_checked_family_names_the_field_it_compares(self):
-        fields = {family: field
-                  for family, field, _l in regression_check.VALUE_CHECKED}
+        fields = {family: field for family, field, _loc, _l
+                  in regression_check.VALUE_CHECKED}
         self.assertEqual(fields["control"], "cmd")
         self.assertEqual(fields["modeset"], "cmd")
+        self.assertEqual(fields["drm"], "request")
 
-    def test_every_checked_field_is_a_selector_the_check_examines(self):
+    def test_each_checked_family_names_where_its_selector_lives(self):
+        """A family whose selector is not a struct field is the case the
+        hardcoded form could not express. The row carries the location so a
+        fourth family joins by adding a row."""
+        located = {family: location for family, _f, location, _l
+                   in regression_check.VALUE_CHECKED}
+        self.assertEqual(located["control"],
+                         regression_check.SELECTOR_IN_STRUCT)
+        self.assertEqual(located["modeset"],
+                         regression_check.SELECTOR_IN_STRUCT)
+        self.assertEqual(located["drm"],
+                         regression_check.SELECTOR_IN_REQUEST)
+
+    def test_every_struct_located_field_is_a_selector_the_check_examines(self):
         # A family compared on a field SELECTORS never reaches is a check
-        # that reports a clean run over nothing.
-        for _family, field, _lookup in regression_check.VALUE_CHECKED:
-            self.assertIn(field, regression_check.SELECTORS)
+        # that reports a clean run over nothing. A request-located family is
+        # read from the call line and never from SELECTORS.
+        for _family, field, location, _lookup in \
+                regression_check.VALUE_CHECKED:
+            if location == regression_check.SELECTOR_IN_STRUCT:
+                self.assertIn(field, regression_check.SELECTORS)
 
     def test_the_lookups_are_callables_taking_no_argument(self):
-        for _family, _field, lookup in regression_check.VALUE_CHECKED:
+        for _f, _fl, _loc, lookup in regression_check.VALUE_CHECKED:
             self.assertTrue(callable(lookup))
 
+    def test_the_drm_lookup_is_the_request_number_without_the_size(self):
+        """drm_ioctl dispatches on _IOC_NR, so the size field selects no
+        leaf and is left out of the value the check compares."""
+        if not os.path.isfile(surface_cov.DRM_INV):
+            self.skipTest("committed inventory not present")
+        numbers = regression_check.drm_request_numbers()
+        self.assertEqual(len(numbers), 24)
+        # GET_DEV_INFO is DRM_IOWR at command number 0x03, so the value is
+        # direction 3, type 'd' and 0x40 + 3, with no size.
+        self.assertEqual(numbers["DRM_NVIDIA_GET_DEV_INFO"],
+                         (3 << 30) | (ord("d") << 8) | 0x43)
+        for value in numbers.values():
+            self.assertEqual(value & regression_check.IOC_SIZE_MASK, 0)
+
     def test_the_modeset_lookup_is_the_dispatch_ordinal(self):
-        lookup = dict((f, l) for f, _fl, l in
+        lookup = dict((f, l) for f, _fl, _loc, l in
                       regression_check.VALUE_CHECKED)["modeset"]
         if not os.path.isfile(surface_cov.NVKMS_INV):
             self.skipTest("committed inventory not present")
@@ -16880,9 +17309,10 @@ class TestTheValueCheckReadsAsAList(unittest.TestCase):
         self.assertEqual(
             ordinals["NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS"], 36)
 
-    def test_the_modeset_floor_is_recorded_beside_the_other_five(self):
+    def test_the_modeset_and_drm_floors_are_recorded_beside_the_rest(self):
         self.assertEqual(regression_check.TARGET_FLOOR["modeset"], 64)
-        self.assertEqual(len(regression_check.TARGET_FLOOR), 6)
+        self.assertEqual(regression_check.TARGET_FLOOR["drm"], 24)
+        self.assertEqual(len(regression_check.TARGET_FLOOR), 7)
 
 
 class TestTheModesetPinsAreCheckedAgainstTheOrdinal(unittest.TestCase):
@@ -16906,7 +17336,7 @@ class TestTheModesetPinsAreCheckedAgainstTheOrdinal(unittest.TestCase):
 
 class TestTheModesetReferencePage(unittest.TestCase):
     """The sixth family gets a page of its own and the index counts it, so a
-    reader browsing the enumerated surface sees 828 and not 764."""
+    reader browsing the enumerated surface sees 852 and not 764."""
 
     @classmethod
     def setUpClass(cls):
@@ -16935,7 +17365,7 @@ class TestTheModesetReferencePage(unittest.TestCase):
 
     def test_the_index_states_the_new_total_and_family_count(self):
         index = self.pages["index.md"]
-        self.assertIn("Total targets: 828.", index)
+        self.assertIn("Total targets: 852.", index)
         self.assertIn("`modeset`", index)
         self.assertIn("`modeset_undispatched`", index)
 
@@ -16978,6 +17408,1700 @@ class TestTheEnumMemberLayout(BitfieldFixture):
         self.assertEqual(offsets["source"], 24)
         self.assertEqual(offsets["tail"], 28)
         self.assertEqual(layout.size, 32)
+
+
+class TenantSurfaceFixture(unittest.TestCase):
+    """Shared entry-point artefact for the verifier classes below."""
+
+    TABLES = [
+        {"fops": "nv_frontend_fops",
+         "paths": ["/dev/nvidiactl", "/dev/nvidiaN"],
+         "tenant_surface": True},
+        {"fops": "nv_drm_fops",
+         "paths": ["/dev/dri/cardN", "/dev/dri/renderDN"],
+         "tenant_surface": True},
+        {"fops": "nv_caps_fops",
+         "paths": ["/dev/nvidia-caps/nvidia-cap1"],
+         "tenant_surface": False},
+    ]
+
+    def surface(self):
+        import verify_tenant_surface as vts
+        return vts.expected_surface(self.TABLES)
+
+
+class TestTenantSurfaceComparison(TenantSurfaceFixture):
+    """What the verifier calls a disagreement, and which way round."""
+
+    def compare(self, measured):
+        import verify_tenant_surface as vts
+        inside, outside = self.surface()
+        return vts.compare(measured, inside, outside)
+
+    def test_a_node_recorded_outside_the_surface_reads_as_unmodelled(self):
+        # The finding that invalidates a threat model: the tenant holds a
+        # node the campaign assumed it could not reach.
+        unmodelled, unreachable, _ = self.compare(
+            ["/dev/nvidiactl", "/dev/nvidia0", "/dev/dri/card0",
+             "/dev/dri/renderD128", "/dev/nvidia-caps/nvidia-cap1"])
+        self.assertEqual(len(unmodelled), 1)
+        self.assertIn("/dev/nvidia-caps/nvidia-cap1", unmodelled[0])
+        self.assertIn("outside the tenant surface", unmodelled[0])
+        self.assertEqual(unreachable, [])
+
+    def test_a_node_no_table_covers_reads_as_unmodelled(self):
+        unmodelled, _, _ = self.compare(["/dev/nvidia-uvm"])
+        self.assertEqual(len(unmodelled), 1)
+        self.assertIn("no fops table", unmodelled[0])
+
+    def test_a_recorded_node_the_container_never_received_reads_as_unreachable(self):
+        # Budgeted effort no attacker can use. It must not be reported as the
+        # same condition as the case above.
+        unmodelled, unreachable, _ = self.compare(
+            ["/dev/nvidiactl", "/dev/nvidia0"])
+        self.assertEqual(unmodelled, [])
+        self.assertEqual(len(unreachable), 2)
+        self.assertTrue(all("inside the tenant surface" in line
+                            for line in unreachable))
+
+    def test_the_full_tenant_set_agrees_with_the_artefact(self):
+        unmodelled, unreachable, matched = self.compare(
+            ["/dev/nvidiactl", "/dev/nvidia0", "/dev/dri/card0",
+             "/dev/dri/renderD128"])
+        self.assertEqual((unmodelled, unreachable), ([], []))
+        self.assertEqual(len(matched), 4)
+
+    def test_a_numbered_path_matches_every_device_index(self):
+        import verify_tenant_surface as vts
+        pattern = vts.path_to_pattern("/dev/nvidiaN")
+        for node in ("/dev/nvidia0", "/dev/nvidia7", "/dev/nvidia11"):
+            self.assertTrue(pattern.match(node), node)
+        for node in ("/dev/nvidia", "/dev/nvidiactl", "/dev/nvidia0x"):
+            self.assertIsNone(pattern.match(node), node)
+
+    def test_an_unnumbered_path_matches_itself_alone(self):
+        import verify_tenant_surface as vts
+        pattern = vts.path_to_pattern("/dev/nvidiactl")
+        self.assertTrue(pattern.match("/dev/nvidiactl"))
+        self.assertIsNone(pattern.match("/dev/nvidiactl0"))
+
+
+class TestTenantSurfaceInjectionPath(unittest.TestCase):
+    """The verdict `runtime-mode` reaches for each mode the toolkit writes."""
+
+    def verdict(self, mode):
+        import verify_tenant_surface as vts
+        args = types.SimpleNamespace()
+        buf = io.StringIO()
+        original = vts.detect_runtime_mode
+        vts.detect_runtime_mode = lambda: (mode, "fixture")
+        try:
+            with redirect_stdout(buf):
+                code = vts.cmd_runtime_mode(args)
+        finally:
+            vts.detect_runtime_mode = original
+        self.assertEqual(code, 0)
+        return buf.getvalue()
+
+    def test_auto_names_the_path_it_resolves_to(self):
+        # `mode = "auto"` is what the toolkit packages write at install time,
+        # so this is the reading a stock instance produces. A verdict that
+        # said nothing here would leave the most common case unanswered.
+        out = self.verdict("auto")
+        self.assertIn("auto", out)
+        self.assertIn("jit-cdi", out)
+        self.assertIn("/dev/nvidia-modeset", out)
+
+    def test_legacy_names_what_it_withholds(self):
+        out = self.verdict("legacy")
+        self.assertIn("/dev/nvidia-modeset", out)
+        self.assertIn("display", out)
+
+    def test_cdi_names_the_absent_capability_check(self):
+        for mode in ("cdi", "jit-cdi"):
+            out = self.verdict(mode)
+            self.assertIn("capability", out, mode)
+
+    def test_an_unreadable_mode_still_reaches_a_verdict(self):
+        out = self.verdict(None)
+        self.assertIn("not stated", out)
+        self.assertIn("/dev/nvidia-modeset", out)
+
+    def test_every_mode_reaches_a_verdict(self):
+        # The guard over the four cases above: a mode string the toolkit adds
+        # later must not fall through to silence.
+        for mode in ("auto", "legacy", "cdi", "jit-cdi", "csv", None):
+            out = self.verdict(mode)
+            body = out.split("evidence")[-1]
+            self.assertTrue(len(body.strip().splitlines()) > 1,
+                            "mode %r reached no verdict" % (mode,))
+
+
+class TestDockerGpusFlagBoundary(unittest.TestCase):
+    """Which injection path `--gpus` reaches, by Docker server version."""
+
+    def path(self, version):
+        import verify_tenant_surface as vts
+        return vts.gpus_flag_path(version)
+
+    def test_below_the_boundary_the_hook_and_legacy_are_named(self):
+        self.assertIn("legacy", self.path((29, 1, 9)))
+        self.assertIn("/dev/nvidia-modeset", self.path((29, 1, 9)))
+
+    def test_at_the_boundary_the_cdi_specification_is_named(self):
+        self.assertIn("CDI", self.path((29, 2, 0)))
+
+    def test_above_the_boundary_the_cdi_specification_is_named(self):
+        self.assertIn("CDI", self.path((30, 0, 0)))
+
+    def test_an_unreadable_version_states_the_uncertainty(self):
+        self.assertIn("unknown", self.path(None))
+
+
+class TestTenantSurfaceArtefactErrors(unittest.TestCase):
+    """What the verifier tells an operator when the artefact cannot be read."""
+
+    def load(self, contents):
+        import verify_tenant_surface as vts
+        with tempfile.TemporaryDirectory() as root:
+            if contents is not None:
+                os.makedirs(os.path.join(root, "surface"))
+                with open(os.path.join(root, "surface", "entry-points.json"),
+                          "w", encoding="utf-8") as fh:
+                    fh.write(contents)
+            with self.assertRaises(vts.VerifyError) as caught:
+                vts.load_tables(root)
+        return str(caught.exception)
+
+    def test_an_absent_artefact_names_the_command_that_writes_it(self):
+        message = self.load(None)
+        self.assertIn("entry-points.json", message)
+        self.assertIn("--emit-entry-points", message)
+
+    def test_unparseable_json_names_the_file(self):
+        message = self.load("{not json")
+        self.assertIn("entry-points.json", message)
+        self.assertIn("valid JSON", message)
+
+    def test_a_record_without_tables_is_refused(self):
+        message = self.load('{"schema": "something.else/1"}')
+        self.assertIn("tables", message)
+
+    def test_the_committed_artefact_records_a_tenant_surface(self):
+        # The comparison is vacuous if nothing is recorded inside, and it
+        # would pass on any measurement at all.
+        import verify_tenant_surface as vts
+        inside, outside = vts.expected_surface(vts.load_tables())
+        self.assertTrue(inside)
+        self.assertTrue(outside)
+
+
+class TestTheDrmInventoryScrape(unittest.TestCase):
+    """The scrape reconciles two sources, and the counts it asserts are the
+    ones the denominator is built from. A table read that silently lost an
+    entry would shrink the surface and inflate every later ratio."""
+
+    @classmethod
+    def setUpClass(cls):
+        import drm_inventory
+        cls.mod = drm_inventory
+        if not os.path.isfile(surface_cov.DRM_INV):
+            raise unittest.SkipTest("committed inventory not present")
+        with open(surface_cov.DRM_INV, encoding="utf-8") as fh:
+            cls.doc = json.load(fh)
+        cls.commands = cls.doc["commands"]
+        cls.summary = cls.doc["summary"]
+
+    def test_24_dispatched_of_28_declared(self):
+        self.assertEqual(self.summary["declared"], 28)
+        self.assertEqual(self.summary["dispatched"], 24)
+        self.assertEqual(self.summary["undispatched"], 4)
+        self.assertEqual(len(self.commands), 28)
+
+    def test_the_flag_split_is_21_render_allow_2_master_1_flagless(self):
+        self.assertEqual(self.summary["render_allow"], 21)
+        self.assertEqual(self.summary["master"], 2)
+        self.assertEqual(self.summary["flagless"], 1)
+
+    def test_the_four_roi_commands_are_excluded_by_name(self):
+        self.assertEqual(
+            sorted(c["command"]
+                   for c in self.summary["undispatched_commands"]),
+            ["NVIDIA_GET_CRTC_ROI_CRCS", "NVIDIA_GET_ROI_CAPABILITIES",
+             "NVIDIA_REGISTER_ROI", "NVIDIA_UNREGISTER_ROI"])
+        for item in self.summary["undispatched_commands"]:
+            self.assertEqual(item["reason"], "no entry in nv_drm_ioctls[]")
+
+    def test_the_declared_range_records_its_own_hole(self):
+        """0x07 is claimed by no define, so 28 is not the highest number
+        plus one and a reader needs the gap named to close the arithmetic."""
+        self.assertEqual([u["nr"] for u in self.summary["unused_numbers"]],
+                         [0x07])
+
+    def test_the_encoding_bases_are_recorded_for_a_consumer(self):
+        scan = self.doc["scan"]
+        self.assertEqual(scan["ioctl_base"], ord("d"))
+        self.assertEqual(scan["command_base"], 0x40)
+
+    def test_a_changed_dispatched_count_is_a_hard_failure(self):
+        """The count feeds a published figure, so drift stops the run and
+        never rewrites the artefact."""
+        src = os.path.join(os.path.dirname(os.path.dirname(HERE)),
+                           "artifacts", "src", "open-gpu-kernel-modules")
+        if not os.path.isdir(src):
+            self.skipTest("driver source tree not present")
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.collect(src, expect_declared=28, expect_dispatched=23)
+        self.assertIn("expected 23", str(caught.exception))
+
+    def test_a_command_setting_both_permission_flags_is_refused(self):
+        """The per-node denominator reads DRM_RENDER_ALLOW and DRM_MASTER as
+        exclusive, so an entry carrying both would be counted twice."""
+        entries = [{"command": "NVIDIA_X", "handler": "h",
+                    "flags": ["DRM_RENDER_ALLOW", "DRM_MASTER"], "line": 1}]
+        declared = [{"command": "NVIDIA_X", "nr": 0, "line": 1}]
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.cross_check(declared, entries, 1, 1)
+        self.assertIn("set both", str(caught.exception))
+
+
+class TestDrmPerNodeReachability(unittest.TestCase):
+    """renderDN and cardN do not grant the same set, so the artefact carries
+    both figures. Collapsing them would state one number for two things."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.DRM_INV):
+            raise unittest.SkipTest("committed inventory not present")
+        with open(surface_cov.DRM_INV, encoding="utf-8") as fh:
+            cls.doc = json.load(fh)
+        cls.summary = cls.doc["summary"]
+
+    def test_a_render_node_reaches_21_and_a_card_node_reaches_24(self):
+        self.assertEqual(self.summary["reachable_render"], 21)
+        self.assertEqual(self.summary["reachable_card"], 24)
+
+    def test_the_card_node_carries_2_conditional_on_master(self):
+        self.assertEqual(self.summary["reachable_card_conditional"], 2)
+        self.assertEqual(self.summary["reachable_card_unconditional"], 22)
+        self.assertEqual(
+            sorted(c["command"] for c in self.summary["conditional_on_card"]),
+            ["NVIDIA_GRANT_PERMISSIONS", "NVIDIA_REVOKE_PERMISSIONS"])
+
+    def test_the_three_a_render_node_refuses_are_named_with_the_reason(self):
+        refused = self.summary["unreachable_on_render"]
+        self.assertEqual(
+            sorted(c["command"] for c in refused),
+            ["NVIDIA_GET_CLIENT_CAPABILITY", "NVIDIA_GRANT_PERMISSIONS",
+             "NVIDIA_REVOKE_PERMISSIONS"])
+        for item in refused:
+            self.assertIn("DRM_RENDER_ALLOW", item["reason"])
+
+    def test_a_conditional_command_is_never_recorded_as_plainly_reachable(self):
+        """Claiming the master commands are simply reachable would overstate
+        what drm_master_open guarantees."""
+        for command in self.doc["commands"]:
+            if not command["dispatched"] or not command["master"]:
+                continue
+            card = command["reachable_on"]["card"]
+            self.assertTrue(card["reachable"])
+            self.assertIn("master", card["condition"])
+
+
+class TestTheCommittedDrmDenominator(unittest.TestCase):
+    """The seventh family enters the denominator from the DRM inventory, and
+    only the dispatched commands do."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.DRM_INV):
+            raise unittest.SkipTest("committed inventories not present")
+        cls.targets, cls.excluded, _meta = surface_cov.load_targets()
+
+    def test_the_drm_family_carries_24_targets(self):
+        drm = [t for t in self.targets.values() if t["family"] == "drm"]
+        self.assertEqual(len(drm), 24)
+
+    def test_the_four_undispatched_are_excluded_by_name(self):
+        self.assertEqual(
+            sorted(name for name, r in self.excluded.items()
+                   if r["family"] == "drm_undispatched"),
+            ["DRM_NVIDIA_GET_CRTC_ROI_CRCS",
+             "DRM_NVIDIA_GET_ROI_CAPABILITIES",
+             "DRM_NVIDIA_REGISTER_ROI",
+             "DRM_NVIDIA_UNREGISTER_ROI"])
+
+    def test_every_drm_target_carries_a_distinct_abi_key(self):
+        keys = [t["abi_key"] for t in self.targets.values()
+                if t["family"] == "drm"]
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_the_abi_key_is_the_command_number_and_not_the_handler(self):
+        """drm_ioctl indexes the driver table by the number, and a driver
+        refactor renames a handler freely."""
+        drm = [t for t in self.targets.values() if t["family"] == "drm"]
+        for target in drm:
+            self.assertEqual(target["abi_key"], "drm/%s" % target["nr"])
+
+    def test_the_denominator_reason_names_the_dispatch_table(self):
+        self.assertIn("nv_drm_ioctls[]",
+                      surface_cov.EXCLUSION_REASON["drm_undispatched"])
+
+
+class TestTheDrmEmission(unittest.TestCase):
+    """The description set carries the 21-of-24 split as separate resources,
+    so a program calling a card-only command on a render node does not
+    compile. Modelling the union on both nodes would spend executions on a
+    guaranteed EACCES and count them as surface reached."""
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia_drm.txt")
+        if not os.path.isfile(path):
+            raise unittest.SkipTest("description set not present")
+        with open(path, encoding="utf-8") as fh:
+            cls.text = fh.read()
+        cls.calls = dict(re.findall(
+            r"^ioctl\$(DRM_NVIDIA_[A-Z0-9_]+)\(fd (fd_dri[a-z_]*),",
+            cls.text, re.M))
+
+    def test_24_variants_are_declared(self):
+        self.assertEqual(len(self.calls), 24)
+
+    def test_the_three_card_only_commands_take_the_card_resource(self):
+        card_only = sorted(n for n, r in self.calls.items()
+                           if r == "fd_dri_card")
+        self.assertEqual(card_only,
+                         ["DRM_NVIDIA_GET_CLIENT_CAPABILITY",
+                          "DRM_NVIDIA_GRANT_PERMISSIONS",
+                          "DRM_NVIDIA_REVOKE_PERMISSIONS"])
+
+    def test_the_other_21_take_the_resource_both_nodes_satisfy(self):
+        shared = [n for n, r in self.calls.items() if r == "fd_dri"]
+        self.assertEqual(len(shared), 21)
+
+    def test_both_nodes_are_opened_by_calls_of_their_own(self):
+        core = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia.txt")
+        with open(core, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("openat$dri_card", text)
+        self.assertIn("openat$dri_render", text)
+        self.assertIn("resource fd_dri_card[fd_dri]", text)
+        self.assertIn("resource fd_dri_render[fd_dri]", text)
+
+    def test_every_request_number_matches_the_inventory(self):
+        """The emitted constant decides which handler a call reaches, so it
+        is checked against the artefact and never against itself."""
+        if not os.path.isfile(surface_cov.DRM_INV):
+            self.skipTest("committed inventory not present")
+        expected = regression_check.drm_request_numbers()
+        rendered = dict(re.findall(
+            r"^ioctl\$(DRM_NVIDIA_[A-Z0-9_]+)\([^)]*cmd const\[(0x[0-9a-f]+)\]",
+            self.text, re.M))
+        self.assertEqual(len(rendered), 24)
+        for name, value in rendered.items():
+            self.assertEqual(int(value, 16) & ~regression_check.IOC_SIZE_MASK,
+                             expected[name], name)
+
+    def test_the_two_parameterless_commands_take_no_arg(self):
+        """DRM_IO names no struct, so the call carries a request number and
+        nothing else."""
+        for name in ("DRM_NVIDIA_FENCE_SUPPORTED",
+                     "DRM_NVIDIA_DMABUF_SUPPORTED"):
+            line = [l for l in self.text.splitlines()
+                    if l.startswith("ioctl$%s(" % name)]
+            self.assertEqual(len(line), 1, name)
+            self.assertNotIn("arg ptr", line[0])
+
+    def test_no_undispatched_command_is_emitted(self):
+        for name in ("REGISTER_ROI", "UNREGISTER_ROI", "GET_CRTC_ROI_CRCS",
+                     "GET_ROI_CAPABILITIES"):
+            self.assertNotIn("ioctl$DRM_NVIDIA_%s(" % name, self.text)
+
+
+class TestTheDrmEntryPointsAndTrace(unittest.TestCase):
+    """nv_drm_fops registers mmap and poll on both nodes, so both carry both
+    calls, and a traced open on either converts to the right one."""
+
+    def test_dev_desc_maps_both_node_types_apart(self):
+        self.assertEqual(trace2seed.dev_desc("/dev/dri/card0"),
+                         "openat$dri_card")
+        self.assertEqual(trace2seed.dev_desc("/dev/dri/renderD128"),
+                         "openat$dri_render")
+
+    def test_the_dri_prefix_is_no_longer_refused(self):
+        self.assertIsNone(trace2seed.out_of_scope("/dev/dri/card0"))
+        self.assertIsNone(trace2seed.out_of_scope("/dev/dri/renderD128"))
+
+    def test_a_path_neither_branch_claims_is_still_unmapped(self):
+        self.assertIsNone(trace2seed.dev_desc("/dev/dri/controlD64"))
+
+    def test_the_entry_point_calls_are_required_and_declared(self):
+        if not os.path.isfile(surface_cov.ENTRY_POINTS):
+            self.skipTest("entry-point census not present")
+        _modelled, _registered, tables = surface_cov.load_entry_points()
+        required = surface_cov.entry_point_calls(tables)
+        for name in ("mmap$dri_card", "mmap$dri_render",
+                     "poll$dri_card", "poll$dri_render"):
+            self.assertIn(name, required)
+
+    def test_the_fops_record_no_longer_claims_the_family_is_unmodelled(self):
+        """The reason string closed by stating the surface sat outside the
+        denominator. Both halves became false when the family landed."""
+        import ioctl_inventory
+        record = [t for t in ioctl_inventory.FOPS_TABLES
+                  if t["fops"] == "nv_drm_fops"][0]
+        self.assertTrue(record["modelled"])
+        self.assertTrue(record["tenant_surface"])
+        self.assertNotIn("outside the denominator", record["reason"])
+        self.assertNotIn("does not model", record["reason"])
+
+
+class TestTheDrmReferencePage(unittest.TestCase):
+    """The seventh family gets a page of its own and the index counts it."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.isfile(surface_cov.DRM_INV):
+            raise unittest.SkipTest("committed inventories not present")
+        cls.pages, cls.rows = refgen.render()
+
+    def test_a_drm_page_is_generated(self):
+        self.assertIn("drm-commands.md", self.pages)
+        self.assertEqual(self.rows["drm-commands.md"], 28)
+
+    def test_the_page_names_all_four_undispatched_commands(self):
+        page = self.pages["drm-commands.md"]
+        for name in ("REGISTER_ROI", "UNREGISTER_ROI", "GET_CRTC_ROI_CRCS",
+                     "GET_ROI_CAPABILITIES"):
+            self.assertIn("DRM_NVIDIA_%s" % name, page)
+
+    def test_the_page_states_both_per_node_figures(self):
+        page = self.pages["drm-commands.md"]
+        self.assertIn("`/dev/dri/cardN`", page)
+        self.assertIn("`/dev/dri/renderDN`", page)
+
+    def test_the_index_counts_the_seventh_family(self):
+        index = self.pages["index.md"]
+        self.assertIn("`drm`", index)
+        self.assertIn("`drm_undispatched`", index)
+
+
+def value_index(defines):
+    """A TypeIndex carrying nothing but the macro table a test needs."""
+    index = syzlang_gen.TypeIndex()
+    index.defines.update(defines)
+    return index
+
+
+class TestValueFamilyAnchoredRule(unittest.TestCase):
+    """Rule 1 binds a define to a field only through the struct's own name."""
+
+    NAMES = sorted([
+        "NV2080_CTRL_FB_GET_CACHE_MODE_DISABLED",
+        "NV2080_CTRL_FB_GET_CACHE_MODE_ENABLED",
+        "NV2080_CTRL_FB_GET_CACHE_PARAMS_MODE_LEGACY",
+        "NV2080_CTRL_FB_GET_CACHE_WRITE_MODE_BACK",
+        "NV2080_CTRL_FB_GET_CACHE_WRITE_MODE_THROUGH",
+        "NV2080_CTRL_FB_GET_CACHE_MODE",
+        "NV2080_CTRL_FB_SET_CACHE_MODE_DISABLED",
+        "NV2080_CTRL_GPU_GET_PIDS_ID_TYPE_CLASS",
+        "NV2080_CTRL_GPU_GET_PIDS_ID_TYPE_VGPU_GUEST",
+    ])
+
+    def test_a_define_anchored_on_the_stem_joins_the_family(self):
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "mode", self.NAMES)
+        self.assertIn("NV2080_CTRL_FB_GET_CACHE_MODE_ENABLED", hits)
+        self.assertIn("NV2080_CTRL_FB_GET_CACHE_MODE_DISABLED", hits)
+
+    def test_a_define_anchored_on_the_whole_struct_name_joins_the_family(self):
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "mode", self.NAMES)
+        self.assertIn("NV2080_CTRL_FB_GET_CACHE_PARAMS_MODE_LEGACY", hits)
+
+    def test_a_define_of_a_neighbouring_command_stays_out(self):
+        """NV2080_CTRL_FB_SET_CACHE_* belongs to the SET command."""
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "mode", self.NAMES)
+        self.assertNotIn("NV2080_CTRL_FB_SET_CACHE_MODE_DISABLED", hits)
+
+    def test_a_define_naming_the_field_without_a_separator_stays_out(self):
+        """The bare anchor names the field and never one of its values."""
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "mode", self.NAMES)
+        self.assertNotIn("NV2080_CTRL_FB_GET_CACHE_MODE", hits)
+
+    def test_the_field_name_is_matched_in_upper_snake_case(self):
+        hits = value_families.anchored_defines(
+            "NV2080_CTRL_FB_GET_CACHE_PARAMS", "writeMode", self.NAMES)
+        self.assertEqual(hits, ["NV2080_CTRL_FB_GET_CACHE_WRITE_MODE_BACK",
+                                "NV2080_CTRL_FB_GET_CACHE_WRITE_MODE_THROUGH"])
+
+    def test_upper_snake_splits_a_trailing_acronym(self):
+        self.assertEqual(value_families.upper_snake("idType"), "ID_TYPE")
+        self.assertEqual(value_families.upper_snake("cpuClkId"), "CPU_CLK_ID")
+
+    def test_only_the_three_named_suffixes_make_a_stem(self):
+        self.assertEqual(value_families.stems("NV0000_X_PARAMS"),
+                         ["NV0000_X_PARAMS", "NV0000_X"])
+        self.assertEqual(value_families.stems("NV0000_X_INFO"),
+                         ["NV0000_X_INFO", "NV0000_X"])
+        self.assertEqual(value_families.stems("NV0000_X_PARAMS_V2"),
+                         ["NV0000_X_PARAMS_V2"])
+
+    def test_a_longer_anchored_sibling_field_owns_its_defines(self):
+        """`id` and `idType` share the anchor <STEM>_ID_; idType owns it."""
+        names = value_families.anchored_defines(
+            "NV2080_CTRL_GPU_GET_PIDS_PARAMS", "id", self.NAMES)
+        self.assertEqual(len(names), 2)
+        owned = value_families.sibling_owned(
+            "NV2080_CTRL_GPU_GET_PIDS_PARAMS", "id",
+            ["idType", "id", "pidTblCount"], names)
+        self.assertEqual(sorted(owned), names)
+
+    def test_a_sibling_of_an_unrelated_name_owns_nothing(self):
+        names = value_families.anchored_defines(
+            "NV2080_CTRL_GPU_GET_PIDS_PARAMS", "idType", self.NAMES)
+        owned = value_families.sibling_owned(
+            "NV2080_CTRL_GPU_GET_PIDS_PARAMS", "idType",
+            ["idType", "id", "pidTblCount"], names)
+        self.assertEqual(owned, set())
+
+
+class TestValueFamilySwitchRule(unittest.TestCase):
+    """Rule 2 reads a handler body and binds through the inventory row."""
+
+    SOURCE = """
+NV_STATUS
+subdeviceCtrlCmdFooBar_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_FOO_BAR_PARAMS *pFooParams
+)
+{
+    switch (pFooParams->mode)
+    {
+        case NV2080_CTRL_FOO_BAR_MODE_A:
+            break;
+        case NV2080_CTRL_FOO_BAR_MODE_B:
+        {
+            switch (pOther->inner)
+            {
+                case NV2080_NESTED_VALUE:
+                    break;
+            }
+            break;
+        }
+    }
+    switch (pSubdevice->someOtherField)
+    {
+        case NV2080_NOT_A_PARAM_VALUE:
+            break;
+    }
+    return NV_OK;
+}
+"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        root = os.path.join(self.dir, "src", "nvidia")
+        os.makedirs(root)
+        with open(os.path.join(root, "handler.c"), "w") as fh:
+            fh.write(self.SOURCE)
+        self.handlers = {"subdeviceCtrlCmdFooBar": "NV2080_CTRL_FOO_BAR_PARAMS"}
+
+    def scan(self):
+        return value_families.scan_switches(self.dir, self.handlers)
+
+    def test_a_switch_over_the_params_argument_is_read(self):
+        found, _counters = self.scan()
+        self.assertEqual(
+            found[("NV2080_CTRL_FOO_BAR_PARAMS", "mode")],
+            ["NV2080_CTRL_FOO_BAR_MODE_A", "NV2080_CTRL_FOO_BAR_MODE_B"])
+
+    def test_the_impl_suffix_reaches_the_body(self):
+        """NVOC puts the body in <handler>_IMPL and the inventory records
+        the exported name. A scan anchored on the exported name alone reads
+        3 of the 1315 handlers."""
+        _found, counters = self.scan()
+        self.assertEqual(counters["handler_definitions"], 1)
+
+    def test_a_nested_switch_contributes_no_case_to_the_outer_family(self):
+        found, _counters = self.scan()
+        self.assertNotIn(
+            "NV2080_NESTED_VALUE",
+            found[("NV2080_CTRL_FOO_BAR_PARAMS", "mode")])
+
+    def test_a_switch_over_another_pointer_is_skipped(self):
+        """Only the argument declared with the inventory row's struct binds."""
+        found, _counters = self.scan()
+        self.assertNotIn(("NV2080_CTRL_FOO_BAR_PARAMS", "someOtherField"),
+                         found)
+
+    def test_a_handler_with_no_argument_of_that_struct_is_counted(self):
+        self.handlers = {"subdeviceCtrlCmdFooBar": "NV2080_CTRL_OTHER_PARAMS"}
+        found, counters = self.scan()
+        self.assertEqual(found, {})
+        self.assertEqual(
+            counters["handlers_without_a_typed_params_argument"], 1)
+
+    def test_the_params_argument_is_found_by_its_declared_type(self):
+        self.assertEqual(
+            value_families.params_variable(
+                "Subdevice *pSubdevice, NV2080_CTRL_FOO_BAR_PARAMS *pFooParams",
+                "NV2080_CTRL_FOO_BAR_PARAMS"),
+            "pFooParams")
+
+    def test_a_handler_named_by_two_param_structs_is_omitted(self):
+        """Binding one of two would be a choice, and choosing is the defect
+        this rule exists to avoid."""
+        inventory = {"methods": [
+            {"handler": "h1", "param_struct": "A"},
+            {"handler": "h1", "param_struct": "B"},
+            {"handler": "h2", "param_struct": "C"},
+            {"handler": "h2", "param_struct": "C"},
+        ]}
+        self.assertEqual(value_families.handler_param_structs(inventory),
+                         {"h2": "C"})
+
+
+class TestValueFamilyExclusions(unittest.TestCase):
+    """The four rules that drop a candidate before it becomes a family."""
+
+    SITES = {
+        "NV_X_MODE_A": [value_families.DefineSite(
+            "NV_X_MODE_A", "(0x1)", "src/common/sdk/x.h", 10)],
+        "NV_X_MODE_B": [value_families.DefineSite(
+            "NV_X_MODE_B", "(0x2)", "src/common/sdk/x.h", 11)],
+        "NV_X_MODE_ALIAS": [value_families.DefineSite(
+            "NV_X_MODE_ALIAS", "(0x1)", "src/common/sdk/x.h", 12)],
+        "NV_X_MODE_PARAMS_MESSAGE_ID": [value_families.DefineSite(
+            "NV_X_MODE_PARAMS_MESSAGE_ID", "(0x9)", "src/common/sdk/x.h", 13)],
+        "NV_X_MODE_ALIAS_ONE": [value_families.DefineSite(
+            "NV_X_MODE_ALIAS_ONE", "(0x1)", "src/common/sdk/x.h", 14)],
+        "NV_X_MODE_ALIAS_TWO": [value_families.DefineSite(
+            "NV_X_MODE_ALIAS_TWO", "(0x2)", "src/common/sdk/x.h", 15)],
+    }
+    DEFINES = {"NV_X_MODE_A": "(0x1)", "NV_X_MODE_B": "(0x2)",
+               "NV_X_MODE_ALIAS": "(0x1)",
+               "NV_X_MODE_PARAMS_MESSAGE_ID": "(0x9)",
+               "NV_X_MODE_ALIAS_ONE": "(0x1)",
+               "NV_X_MODE_ALIAS_TWO": "(0x2)"}
+
+    def build(self, names, bit_range=(), siblings=()):
+        return value_families.build_family(
+            "NV_X_PARAMS", "mode", value_families.RULE_ANCHORED, list(names),
+            value_index(self.DEFINES), self.SITES, set(bit_range), siblings)
+
+    def test_a_message_id_define_never_joins_a_family(self):
+        record = self.build(["NV_X_MODE_A", "NV_X_MODE_B",
+                             "NV_X_MODE_PARAMS_MESSAGE_ID"])
+        self.assertNotIn("NV_X_MODE_PARAMS_MESSAGE_ID", record["defines"])
+        self.assertEqual(record["excluded"]["message_id"], 1)
+
+    def test_a_family_of_one_distinct_value_is_dropped(self):
+        self.assertIsNone(self.build(["NV_X_MODE_A"]))
+
+    def test_two_names_for_one_value_count_as_one_value(self):
+        """Deduplication runs on the value, so an alias adds no value."""
+        self.assertIsNone(self.build(["NV_X_MODE_A", "NV_X_MODE_ALIAS"]))
+
+    def test_two_names_for_two_values_make_a_family(self):
+        record = self.build(["NV_X_MODE_A", "NV_X_MODE_B"])
+        self.assertEqual(record["values"], [1, 2])
+
+    def test_a_bit_range_body_is_detected(self):
+        self.assertTrue(value_families.is_bit_range("0:0"))
+        self.assertTrue(value_families.is_bit_range("4:3"))
+        self.assertTrue(value_families.is_bit_range(" (8:7) "))
+        self.assertFalse(value_families.is_bit_range("(0x00000001U)"))
+        self.assertFalse(value_families.is_bit_range("3600"))
+
+    def test_a_bit_range_define_is_dropped_from_a_family(self):
+        record = self.build(["NV_X_MODE_A", "NV_X_MODE_B"],
+                            bit_range=["NV_X_MODE_B"])
+        self.assertIsNone(record)
+
+    def test_a_define_owned_by_a_longer_anchored_sibling_is_dropped(self):
+        """`mode` matches <STEM>_MODE_ALIAS_*, which `modeAlias` owns."""
+        record = self.build(["NV_X_MODE_ALIAS_ONE", "NV_X_MODE_ALIAS_TWO"],
+                            siblings=["mode", "modeAlias"])
+        self.assertIsNone(record)
+
+    def test_a_define_no_sibling_claims_stays_in_the_family(self):
+        record = self.build(["NV_X_MODE_A", "NV_X_MODE_B"],
+                            siblings=["mode", "modeAlias"])
+        self.assertEqual(record["values"], [1, 2])
+        self.assertEqual(record["excluded"]["sibling_owned"], 0)
+
+
+class TestValueFamilyBitfieldShape(unittest.TestCase):
+    """A bit range naming the field keeps its values; a bit inside it does
+    not."""
+
+    def record(self, rule, stems):
+        return {
+            "struct": "NV_X_PARAMS", "field": "flags", "rule": rule,
+            "defines": sorted(stems), "values": [0, 1],
+            "define_sites": [{"define": name, "value": i, "header": "x.h",
+                              "line": 1, "bitfield_stem": stem}
+                             for i, (name, stem) in enumerate(sorted(stems.items()))],
+        }
+
+    def test_a_bit_below_the_field_anchor_makes_a_bitfield(self):
+        """NV2080_CTRL_PERF_BOOST_FLAGS_ASYNC is the range 5:5, one bit
+        inside the flags word."""
+        rec = self.record(value_families.RULE_ANCHORED,
+                          {"NV_X_FLAGS_ASYNC_NO": "NV_X_FLAGS_ASYNC",
+                           "NV_X_FLAGS_ASYNC_YES": "NV_X_FLAGS_ASYNC"})
+        self.assertTrue(value_families.is_bitfield_family(rec))
+        verdict, reason = value_families.mechanical_verdict(rec)
+        self.assertEqual(verdict, "rejected")
+        self.assertIn("NV_X_FLAGS_ASYNC", reason)
+
+    def test_a_bit_range_naming_the_field_keeps_its_values(self):
+        """NV0080_CTRL_FIFO_GET_ENGINE_CONTEXT_PROPERTIES_ENGINE_ID is the
+        range 4:0 and spans the whole of engineId."""
+        rec = self.record(value_families.RULE_ANCHORED,
+                          {"NV_X_FLAGS_A": "NV_X_FLAGS",
+                           "NV_X_FLAGS_B": "NV_X_FLAGS"})
+        self.assertFalse(value_families.is_bitfield_family(rec))
+        self.assertEqual(value_families.mechanical_verdict(rec)[0], "accepted")
+
+    def test_the_switch_rule_outranks_the_bitfield_shape(self):
+        """The handler compares the field itself against those values."""
+        rec = self.record(value_families.RULE_SWITCH,
+                          {"NV_X_FLAGS_ASYNC_NO": "NV_X_FLAGS_ASYNC",
+                           "NV_X_FLAGS_ASYNC_YES": "NV_X_FLAGS_ASYNC"})
+        self.assertFalse(value_families.is_bitfield_family(rec))
+
+    def test_a_family_with_no_bit_range_member_is_no_bitfield(self):
+        rec = self.record(value_families.RULE_ANCHORED,
+                          {"NV_X_FLAGS_A": None, "NV_X_FLAGS_B": None})
+        self.assertFalse(value_families.is_bitfield_family(rec))
+
+
+class TestValueFamilyScope(unittest.TestCase):
+    """The modeset and drm families take no part in the derivation."""
+
+    def test_the_drm_interface_header_is_out_of_scope(self):
+        self.assertEqual(value_families.scope_of(
+            "kernel-open/nvidia-drm/nv_drm_common_ioctl.h"), "drm")
+
+    def test_the_modeset_interface_tree_is_out_of_scope(self):
+        self.assertEqual(value_families.scope_of(
+            "src/nvidia-modeset/interface/nvkms-api.h"), "modeset")
+
+    def test_an_nvkms_header_outside_that_tree_is_out_of_scope(self):
+        """nvkms-api-types.h reaches the description set from kernel-open."""
+        self.assertEqual(value_families.scope_of(
+            "kernel-open/common/inc/nvkms-api-types.h"), "modeset")
+
+    def test_the_two_display_headers_are_out_of_scope(self):
+        for header in ("src/common/unix/common/inc/nv_mode_timings.h",
+                       "kernel-open/common/inc/nv_dpy_id.h"):
+            self.assertEqual(value_families.scope_of(header), "modeset")
+
+    def test_an_sdk_control_header_is_in_scope(self):
+        self.assertIsNone(value_families.scope_of(
+            "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000gpu.h"))
+
+    def test_the_uvm_ioctl_header_is_in_scope(self):
+        self.assertIsNone(value_families.scope_of(
+            "kernel-open/nvidia-uvm/uvm_ioctl.h"))
+
+
+class TestValueFamilyArtefacts(unittest.TestCase):
+    """The two committed artefacts, read as a consumer reads them."""
+
+    @classmethod
+    def setUpClass(cls):
+        for path in (value_families.DEFAULT_OUT,
+                     value_families.DEFAULT_AUDIT_OUT):
+            if not os.path.isfile(path):
+                raise unittest.SkipTest("committed artefacts not present")
+        with open(value_families.DEFAULT_OUT, encoding="utf-8") as fh:
+            cls.derivation = json.load(fh)
+        with open(value_families.DEFAULT_AUDIT_OUT, encoding="utf-8") as fh:
+            cls.audit = json.load(fh)
+
+    def test_both_artefacts_carry_their_schema(self):
+        self.assertEqual(self.derivation["schema"], "gspwn.value-families/1")
+        self.assertEqual(self.audit["schema"], "gspwn.value-families-audit/1")
+
+    def test_the_derivation_records_what_it_read(self):
+        for key in ("src_root", "driver_version", "descriptions",
+                    "control_inventory"):
+            self.assertIn(key, self.derivation["source"])
+        for key in ("headers_read", "define_names",
+                    "bit_range_defines_dropped", "bare_int_fields_in_scope"):
+            self.assertIn(key, self.derivation["scan"])
+
+    def test_the_summary_counts_agree_with_the_records(self):
+        self.assertEqual(self.derivation["summary"]["families"],
+                         len(self.derivation["families"]))
+        counts = collections.Counter(e["verdict"] for e in self.audit["audit"])
+        self.assertEqual(self.audit["summary"]["accepted"],
+                         counts["accepted"])
+        self.assertEqual(self.audit["summary"]["rejected"],
+                         counts["rejected"])
+
+    def test_every_derived_family_appears_in_the_audit(self):
+        derived = {(r["struct"], r["field"])
+                   for r in self.derivation["families"]}
+        recorded = {(e["struct"], e["field"]) for e in self.audit["audit"]}
+        self.assertEqual(derived - recorded, set())
+
+    def test_every_verdict_is_accepted_or_rejected(self):
+        for entry in self.audit["audit"]:
+            self.assertIn(entry["verdict"], ("accepted", "rejected"))
+
+    def test_every_entry_carries_a_reason_and_header_evidence(self):
+        for entry in self.audit["audit"]:
+            self.assertTrue(entry["reason"].strip())
+            self.assertNotEqual(entry["reason"].strip().lower(),
+                                "not a match")
+            self.assertTrue(entry["evidence"]["defines"])
+
+    def test_every_record_carries_its_rule_and_source(self):
+        rules = (value_families.RULE_ANCHORED, value_families.RULE_SWITCH)
+        for record in self.derivation["families"]:
+            self.assertTrue(any(r in record["rule"] for r in rules))
+            self.assertTrue(record["source_file"])
+            self.assertEqual(len(record["defines"]),
+                             len(record["define_sites"]))
+            for site in record["define_sites"]:
+                self.assertTrue(site["header"])
+                self.assertIsInstance(site["line"], int)
+
+    def test_both_out_of_scope_families_are_recorded_with_a_reason(self):
+        families = {e["family"]: e for e in self.audit["out_of_scope"]}
+        self.assertEqual(sorted(families), ["drm", "modeset"])
+        for entry in families.values():
+            self.assertEqual(entry["verdict"], "out_of_scope")
+            self.assertIn("does not run over", entry["reason"])
+
+    def test_no_accepted_family_holds_fewer_than_two_distinct_values(self):
+        for record in value_families.accepted_families(self.derivation,
+                                                       self.audit):
+            self.assertGreaterEqual(len(set(record["values"])), 2)
+
+    def test_no_accepted_family_holds_a_message_id_define(self):
+        for record in value_families.accepted_families(self.derivation,
+                                                       self.audit):
+            for name in record["defines"]:
+                self.assertFalse(name.endswith("_MESSAGE_ID"))
+
+    def test_accepted_families_drops_what_the_audit_rejected(self):
+        accepted = value_families.accepted_families(self.derivation,
+                                                    self.audit)
+        self.assertEqual(len(accepted), self.audit["summary"]["accepted"])
+        rejected = {(e["struct"], e["field"]) for e in self.audit["audit"]
+                    if e["verdict"] == "rejected"}
+        for record in accepted:
+            self.assertNotIn((record["struct"], record["field"]), rejected)
+
+    def test_a_family_recorded_without_a_derivation_is_never_accepted(self):
+        """The gpuId entry is recorded so the defect stays visible. Nothing
+        reaches the emitter through it."""
+        derived = {(r["struct"], r["field"])
+                   for r in self.derivation["families"]}
+        for entry in self.audit["audit"]:
+            if (entry["struct"], entry["field"]) not in derived:
+                self.assertEqual(entry["verdict"], "rejected")
+
+    def test_the_gpu_active_device_gpu_id_family_is_rejected(self):
+        """The regression case for the class-prefix rule, which bound gpuId
+        to the bit definitions of a different field in a different struct."""
+        entries = [e for e in self.audit["audit"]
+                   if e["struct"] == "NV0000_CTRL_GPU_ACTIVE_DEVICE"
+                   and e["field"] == "gpuId"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["verdict"], "rejected")
+        self.assertIn("NV0000_CTRL_GPU_ID_INFO", entries[0]["reason"])
+        self.assertIn("different field", entries[0]["reason"])
+
+    def test_no_accepted_family_lands_on_a_field_that_is_not_a_bare_integer(
+            self):
+        """A field already emitted as a pinned const, a handle or an array is
+        outside the universe, so an accepted family never displaces one."""
+        bare = value_families.load_bare_int_fields(
+            value_families.DEFAULT_DESCRIPTIONS)
+        for record in value_families.accepted_families(self.derivation,
+                                                       self.audit):
+            self.assertIn(record["field"], bare.get(record["struct"], []))
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 part 2: the accepted value families reaching the emitter, the check
+# that reads both directions, and the host binary preflight.
+#
+# The emitter tests build layouts and family records directly, so they need
+# neither a driver checkout nor the committed artefacts. The committed-set
+# tests read the real description set, and fail on a checkout missing it for
+# the same reason the CI step fails.
+# ---------------------------------------------------------------------------
+
+
+def _field(name, size, syz):
+    return syzlang_gen.Field(name=name, offset=0, size=size, syz=syz)
+
+
+def _layout(*fields):
+    return syzlang_gen.Layout(size=sum(f.size for f in fields), align=4,
+                              fields=list(fields))
+
+
+def _record(struct, field, set_name, values, rule="struct-or-stem-anchored",
+            source_file="ctrl/ctrl0000/ctrl0000system.h"):
+    """One derived family record, in the shape value_families writes."""
+    return {
+        "struct": struct, "field": field, "rule": rule,
+        "set_name": set_name,
+        "defines": ["D%d" % index for index in range(len(values))],
+        "values": list(values),
+        "source_file": source_file, "source_files": [source_file],
+        "struct_header": source_file,
+        "define_sites": [{"define": "D%d" % index, "value": value,
+                          "header": source_file, "line": 10 + index,
+                          "bitfield_stem": None}
+                         for index, value in enumerate(values)],
+        "excluded": {"sibling_owned": 0, "message_id": 0, "bit_range": 0,
+                     "unresolved": []},
+    }
+
+
+class _StubIndex:
+    """The two TypeIndex methods the emitter reaches on this path."""
+
+    def __init__(self, layouts, aliases=None):
+        self.layouts = dict(layouts)
+        self.structs = set(self.layouts)
+        self.aliases = dict(aliases or {})
+
+    def canonical_struct(self, name):
+        return self.aliases.get(name, name)
+
+    def layout(self, name):
+        return self.layouts[name]
+
+
+class ValueFamilyEmissionFixtures(unittest.TestCase):
+    """An emitter over stub layouts, with the accepted families supplied."""
+
+    def emitter(self, layouts, families, aliases=None, sizes=None):
+        return syzlang_gen.Emitter(_StubIndex(layouts, aliases), sizes or {},
+                                   families)
+
+
+class TestTheValueOverrideMap(ValueFamilyEmissionFixtures):
+    """syzlang_gen.value_overrides: the width comes from the layout and the
+    identifier from the record."""
+
+    LAYOUT = _layout(_field("cacheOps", 4, "int32"),
+                     _field("cpuClkId", 1, "int8"),
+                     _field("pad", 3, None))
+
+    FAMILIES = {"P": [_record("P", "cacheOps", "p_cache_ops", [1, 2]),
+                      _record("P", "cpuClkId", "p_cpu_clk_id", [0, 1, 2])]}
+
+    def test_a_four_byte_field_binds_at_int32(self):
+        bound, _unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                      self.FAMILIES)
+        self.assertEqual(bound["cacheOps"], "flags[p_cache_ops, int32]")
+
+    def test_a_one_byte_field_binds_at_int8(self):
+        """A field the driver declares as NvU8 renders as int8 today, and
+        flags[..., int32] in its place would move three bytes of the struct."""
+        bound, _unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                      self.FAMILIES)
+        self.assertEqual(bound["cpuClkId"], "flags[p_cpu_clk_id, int8]")
+
+    def test_the_identifier_is_the_records_own_set_name(self):
+        """Two sources for one identifier let the emitted name and the
+        checked name drift apart, so the record carries it."""
+        families = {"P": [_record("P", "cacheOps", "a_name_of_its_own",
+                                  [1, 2])]}
+        bound, _unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                      families)
+        self.assertEqual(bound["cacheOps"], "flags[a_name_of_its_own, int32]")
+
+    def test_a_field_the_layout_does_not_carry_is_reported_unbound(self):
+        families = {"P": [_record("P", "renamed", "p_renamed", [1, 2])]}
+        bound, unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                     families)
+        self.assertEqual(bound, {})
+        self.assertEqual([r["field"] for r, _w in unbound], ["renamed"])
+
+    def test_a_padding_field_is_reported_unbound(self):
+        """Padding renders as const[0, int8] and carries no value of its own,
+        so a family naming it binds nothing."""
+        families = {"P": [_record("P", "pad", "p_pad", [1, 2])]}
+        bound, unbound = syzlang_gen.value_overrides("P", self.LAYOUT,
+                                                     families)
+        self.assertEqual(bound, {})
+        self.assertEqual(unbound[0][1], None)
+
+    def test_a_width_with_no_syzlang_integer_is_reported_unbound(self):
+        layout = _layout(_field("odd", 3, "int32"))
+        families = {"P": [_record("P", "odd", "p_odd", [1, 2])]}
+        bound, unbound = syzlang_gen.value_overrides("P", layout, families)
+        self.assertEqual(bound, {})
+        self.assertEqual(unbound[0][1], 3)
+
+    def test_a_struct_with_no_accepted_family_binds_nothing(self):
+        bound, unbound = syzlang_gen.value_overrides("Q", self.LAYOUT,
+                                                     self.FAMILIES)
+        self.assertEqual((bound, unbound), ({}, []))
+
+
+class TestTheValueOverrideMerge(ValueFamilyEmissionFixtures):
+    """Emitter.merge_value_overrides: the existing override wins, and the
+    collision is reported for a reader to settle."""
+
+    LAYOUT = _layout(_field("mode", 4, "int32"), _field("hClient", 4, "int32"))
+
+    def test_the_family_binds_where_no_existing_override_names_the_field(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", [0, 1])]})
+        merged = emitter.merge_value_overrides("P", self.LAYOUT,
+                                               {"hClient": "nv_handle"})
+        self.assertEqual(merged, {"mode": "flags[p_mode, int32]",
+                                  "hClient": "nv_handle"})
+        self.assertEqual(emitter.value_collisions, [])
+        self.assertEqual([r["field"] for _s, r in emitter.value_bound],
+                         ["mode"])
+
+    def test_an_existing_override_wins_a_collision(self):
+        """The existing overrides carry the handle resources, the pinned
+        selectors and the typed descriptors, none of which this rule has
+        examined."""
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "hClient", "p_h_client", [0, 1])]})
+        merged = emitter.merge_value_overrides("P", self.LAYOUT,
+                                               {"hClient": "nv_handle"})
+        self.assertEqual(merged["hClient"], "nv_handle")
+
+    def test_a_collision_is_recorded_with_both_renderings(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "hClient", "p_h_client", [0, 1])]})
+        emitter.merge_value_overrides("P", self.LAYOUT,
+                                      {"hClient": "nv_handle"})
+        self.assertEqual(emitter.value_collisions,
+                         [("P", "hClient", "flags[p_h_client, int32]",
+                           "nv_handle")])
+
+    def test_a_collision_leaves_the_family_unbound(self):
+        """The set is not emitted for a field the existing override kept, so
+        the families check reports the accepted family as unbound."""
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "hClient", "p_h_client", [0, 1])]})
+        emitter.merge_value_overrides("P", self.LAYOUT,
+                                      {"hClient": "nv_handle"})
+        self.assertEqual(emitter.value_bound, [])
+
+    def test_an_unbound_record_is_recorded_on_the_emitter(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "renamed", "p_renamed", [0, 1])]})
+        emitter.merge_value_overrides("P", self.LAYOUT, {})
+        self.assertEqual(emitter.value_unbound, [("P", "renamed", None)])
+
+    def test_a_family_naming_an_alias_reaches_the_canonical_struct(self):
+        """ensure canonicalises before it looks anything up, so a family
+        keyed on a typedef would otherwise bind nothing."""
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P_ALIAS": [_record("P_ALIAS", "mode", "p_mode", [0, 1])]},
+            aliases={"P_ALIAS": "P"})
+        merged = emitter.merge_value_overrides("P", self.LAYOUT, {})
+        self.assertEqual(merged, {"mode": "flags[p_mode, int32]"})
+
+
+class TestTheEmitterBindsThroughEnsure(ValueFamilyEmissionFixtures):
+    """The override reaches every call site that renders a parameter struct,
+    because the merge happens inside ensure."""
+
+    LAYOUT = _layout(_field("mode", 4, "int32"), _field("count", 4, "int32"))
+
+    def test_ensure_renders_an_accepted_family_as_a_flags_field(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", [0, 1])]})
+        emitter.ensure("P")
+        self.assertIn("flags[p_mode, int32]", emitter.rendered["P"])
+
+    def test_ensure_leaves_a_field_with_no_family_a_bare_integer(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", [0, 1])]})
+        emitter.ensure("P")
+        self.assertRegex(emitter.rendered["P"], r"count\s+int32")
+
+    def test_ensure_keeps_the_callers_override_on_a_collision(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", [0, 1])]})
+        emitter.ensure("P", {"mode": "const[7, int32]"})
+        self.assertIn("const[7, int32]", emitter.rendered["P"])
+        self.assertNotIn("flags[p_mode", emitter.rendered["P"])
+
+
+class TestTheValueFlagsSetEmission(ValueFamilyEmissionFixtures):
+    """syzlang_gen.emit_value_flags_sets: one set per bound family."""
+
+    LAYOUT = _layout(_field("mode", 4, "int32"))
+
+    def bound(self, values):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "p_mode", values)]})
+        emitter.ensure("P")
+        return emitter
+
+    def test_one_definition_is_emitted_per_bound_family(self):
+        text = syzlang_gen.emit_value_flags_sets(self.bound([0, 1, 5]))
+        self.assertIn("p_mode = 0x0, 0x1, 0x5", text)
+
+    def test_the_definition_carries_the_records_own_set_name(self):
+        emitter = self.emitter(
+            {"P": self.LAYOUT},
+            {"P": [_record("P", "mode", "a_name_of_its_own", [0, 1])]})
+        emitter.ensure("P")
+        text = syzlang_gen.emit_value_flags_sets(emitter)
+        self.assertIn("a_name_of_its_own = 0x0, 0x1", text)
+
+    def test_the_provenance_of_each_set_is_stated_beside_it(self):
+        text = syzlang_gen.emit_value_flags_sets(self.bound([0, 1]))
+        self.assertIn("# P.mode, struct-or-stem-anchored, 2 value(s) from",
+                      text)
+
+    def test_a_run_that_bound_nothing_defines_no_set(self):
+        emitter = self.emitter({"P": self.LAYOUT}, {})
+        emitter.ensure("P")
+        text = syzlang_gen.emit_value_flags_sets(emitter)
+        self.assertNotIn(" = ", text)
+        self.assertTrue(text.startswith("#"))
+
+
+class TestTheValueFamilyLoader(unittest.TestCase):
+    """syzlang_gen.load_value_families: accepted_families is the only door."""
+
+    def tempdir(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return holder.name
+
+    def artefacts(self, families, audit):
+        root = self.tempdir()
+        one = os.path.join(root, "families.json")
+        two = os.path.join(root, "audit.json")
+        with open(one, "w", encoding="utf-8") as fh:
+            json.dump({"schema": value_families.SCHEMA,
+                       "families": families}, fh)
+        with open(two, "w", encoding="utf-8") as fh:
+            json.dump({"schema": value_families.AUDIT_SCHEMA,
+                       "audit": audit}, fh)
+        return one, two
+
+    def test_only_the_records_the_audit_accepted_are_returned(self):
+        one, two = self.artefacts(
+            [_record("P", "mode", "p_mode", [0, 1]),
+             _record("P", "other", "p_other", [2, 3])],
+            [{"struct": "P", "field": "mode", "verdict": "accepted"},
+             {"struct": "P", "field": "other", "verdict": "rejected"}])
+        loaded = syzlang_gen.load_value_families(one, two)
+        self.assertEqual([r["field"] for r in loaded["P"]], ["mode"])
+
+    def test_a_struct_with_no_accepted_family_is_absent_from_the_map(self):
+        one, two = self.artefacts(
+            [_record("Q", "mode", "q_mode", [0, 1])],
+            [{"struct": "Q", "field": "mode", "verdict": "rejected"}])
+        self.assertEqual(syzlang_gen.load_value_families(one, two), {})
+
+    def test_an_absent_artefact_stops_the_run(self):
+        """A run that emitted no family in silence would lose every
+        constraint the audit accepted and still report success."""
+        one, two = self.artefacts([], [])
+        with self.assertRaises(SystemExit) as caught:
+            syzlang_gen.load_value_families(os.path.join(one, "gone"), two)
+        self.assertIn("value families could not be read", str(caught.exception))
+
+    def test_the_default_paths_match_the_value_families_module(self):
+        """syzlang_gen spells them out because value_families imports it, so
+        the two spellings are held together here."""
+        self.assertEqual(syzlang_gen.DEFAULT_VALUE_FAMILIES,
+                         value_families.DEFAULT_OUT)
+        self.assertEqual(syzlang_gen.DEFAULT_VALUE_AUDIT,
+                         value_families.DEFAULT_AUDIT_OUT)
+
+
+class TestTheCommittedValueFamilyEmission(unittest.TestCase):
+    """The committed description set against the committed audit."""
+
+    @classmethod
+    def setUpClass(cls):
+        for path in (value_families.DEFAULT_OUT,
+                     value_families.DEFAULT_AUDIT_OUT):
+            if not os.path.isfile(path):
+                raise unittest.SkipTest("committed artefacts not present")
+        with open(value_families.DEFAULT_OUT, encoding="utf-8") as fh:
+            cls.derivation = json.load(fh)
+        with open(value_families.DEFAULT_AUDIT_OUT, encoding="utf-8") as fh:
+            cls.audit = json.load(fh)
+        cls.accepted = value_families.accepted_families(cls.derivation,
+                                                        cls.audit)
+        cls.structs = {}
+        cls.defined = collections.Counter()
+        for name in sorted(os.listdir(value_families.DEFAULT_DESCRIPTIONS)):
+            if not name.endswith(".txt"):
+                continue
+            path = os.path.join(value_families.DEFAULT_DESCRIPTIONS, name)
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            cls.structs.update(regression_check.parse_structs(text))
+            for match in regression_check.FLAGS_DEFINE_RE.finditer(text):
+                cls.defined[match.group(1)] += 1
+
+    def test_every_accepted_family_renders_as_its_own_flags_set(self):
+        for record in self.accepted:
+            rendered = self.structs[record["struct"]][record["field"]]
+            match = regression_check.FLAGS_FIELD_RE.match(rendered)
+            self.assertIsNotNone(match, "%s.%s renders as %s"
+                                 % (record["struct"], record["field"],
+                                    rendered))
+            self.assertEqual(match.group(1), record["set_name"])
+
+    def test_every_emitted_set_is_defined_exactly_once(self):
+        for record in self.accepted:
+            self.assertEqual(self.defined[record["set_name"]], 1,
+                             record["set_name"])
+
+    def test_every_value_fits_the_width_the_field_binds_at(self):
+        """A set holding a value wider than its field would not compile."""
+        for record in self.accepted:
+            rendered = self.structs[record["struct"]][record["field"]]
+            width = int(regression_check.FLAGS_FIELD_RE.match(rendered)
+                        .group(2)[3:])
+            self.assertLess(max(record["values"]), 1 << width,
+                            "%s.%s" % (record["struct"], record["field"]))
+
+    def test_no_family_the_audit_rejected_reaches_a_field(self):
+        accepted = {(r["struct"], r["field"]) for r in self.accepted}
+        for record in self.derivation["families"]:
+            key = (record["struct"], record["field"])
+            if key in accepted:
+                continue
+            self.assertEqual(self.defined[record["set_name"]], 0, key)
+
+    def test_generation_records_both_value_family_artefacts(self):
+        path = os.path.join(value_families.DEFAULT_DESCRIPTIONS,
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("generation.json not present")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)["generated_from"]
+        for key, artefact in (("value_families", value_families.DEFAULT_OUT),
+                              ("value_families_audit",
+                               value_families.DEFAULT_AUDIT_OUT)):
+            self.assertIn(key, record)
+            with open(artefact, "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+            self.assertEqual(record[key]["sha256"], digest, key)
+
+    def test_generation_counts_the_families_the_run_bound(self):
+        path = os.path.join(value_families.DEFAULT_DESCRIPTIONS,
+                            "generation.json")
+        if not os.path.isfile(path):
+            self.skipTest("generation.json not present")
+        with open(path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(manifest["counts"]["value_families_bound"],
+                         len(self.accepted))
+        self.assertEqual(manifest["counts"]["value_family_collisions"], 0)
+        self.assertEqual(manifest["counts"]["value_families_unbound"], 0)
+
+
+class TestTheValueFamilyUniverseIsAFixedPoint(unittest.TestCase):
+    """value_families.in_scope_field: a field the emitter already bound is
+    still in the universe the next derivation reads.
+
+    Reading a bare integer alone made each emission shrink the universe: the
+    committed derivation fell from 72 families to 19, and from 53 accepted to
+    0, on the first run after the emitter bound them.
+    """
+
+    def test_a_bare_integer_is_in_scope(self):
+        self.assertTrue(value_families.in_scope_field("P", "mode", "int32"))
+
+    def test_a_field_bound_to_its_own_set_is_in_scope(self):
+        name = value_families.set_name("NV0000_CTRL_X_PARAMS", "cacheOps")
+        self.assertTrue(value_families.in_scope_field(
+            "NV0000_CTRL_X_PARAMS", "cacheOps",
+            "flags[%s, int32]" % name))
+
+    def test_a_field_bound_to_a_set_written_by_hand_is_out_of_scope(self):
+        """NVOS64_PARAMETERS.flags carries nvos64_alloc_flags, which this rule
+        did not derive and must not claim."""
+        self.assertFalse(value_families.in_scope_field(
+            "NVOS64_PARAMETERS", "flags", "flags[nvos64_alloc_flags, int32]"))
+
+    def test_a_handle_a_const_and_an_array_stay_out_of_scope(self):
+        for rendered in ("nv_handle", "const[0, int32]",
+                         "array[int8, 32]", "ptr64[inout, P]"):
+            self.assertFalse(value_families.in_scope_field("P", "mode",
+                                                           rendered),
+                             rendered)
+
+    def test_the_universe_reader_carries_a_bound_field(self):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        name = value_families.set_name("ALPHA_PARAMS", "mode")
+        body = ("ALPHA_PARAMS {\n"
+                "\tmode\tflags[%s, int32]\n"
+                "\tcount\tint32\n"
+                "\thClient\tnv_handle\n"
+                "} [packed]\n" % name)
+        for member in value_families.DESCRIPTION_FILES:
+            with open(os.path.join(root.name, member), "w",
+                      encoding="utf-8") as fh:
+                fh.write(body if member == "nvidia_structs.txt" else "")
+        fields = value_families.load_bare_int_fields(root.name)
+        self.assertEqual(fields["ALPHA_PARAMS"], ["mode", "count"])
+
+
+class ValueFamilyCheckFixtures(Phase0Fixtures):
+    """A scratch description set and a scratch pair of value-family artefacts,
+    read through the module constants."""
+
+    STRUCT = ("ALPHA_PARAMS {\n"
+              "\tmode\tflags[alpha_params_mode, int32]\n"
+              "\tother\tint32\n"
+              "\thClient\tnv_handle\n"
+              "} [packed]\n")
+    DEFINE = "alpha_params_mode = 0x0, 0x1\n"
+
+    FAMILIES = [_record("ALPHA_PARAMS", "mode", "alpha_params_mode", [0, 1]),
+                _record("ALPHA_PARAMS", "other", "alpha_params_other",
+                        [2, 3])]
+    AUDIT = [{"struct": "ALPHA_PARAMS", "field": "mode",
+              "verdict": "accepted", "reason": "the values of this field"},
+             {"struct": "ALPHA_PARAMS", "field": "other",
+              "verdict": "rejected",
+              "reason": "the defines belong to a sibling field"}]
+
+    def scratch(self, description=None, families=None, audit=None):
+        """Point DESC_DIR and the two artefact paths at a scratch tree."""
+        root = self.tempdir()
+        descriptions = os.path.join(root, "descriptions")
+        os.makedirs(descriptions)
+        with open(os.path.join(descriptions, "nvidia.txt"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(self.STRUCT + "\n" + self.DEFINE
+                     if description is None else description)
+        one = os.path.join(root, "value-families.json")
+        two = os.path.join(root, "value-families-audit.json")
+        with open(one, "w", encoding="utf-8") as fh:
+            json.dump({"schema": value_families.SCHEMA,
+                       "families": self.FAMILIES if families is None
+                       else families}, fh)
+        with open(two, "w", encoding="utf-8") as fh:
+            json.dump({"schema": value_families.AUDIT_SCHEMA,
+                       "audit": self.AUDIT if audit is None else audit}, fh)
+        self.use(DESC_DIR=descriptions, VALUE_FAMILIES=one,
+                 VALUE_FAMILIES_AUDIT=two)
+        return root
+
+
+class TestTheAcceptedFamilyCheckPasses(ValueFamilyCheckFixtures):
+    """regression_check families, on a set that agrees with its audit."""
+
+    def test_the_committed_set_passes(self):
+        code, text = self.check("families")
+        self.assertEqual(code, 0, text)
+        self.assertIn("families: OK", text)
+
+    def test_the_committed_set_reports_what_it_read(self):
+        _code, text = self.check("families")
+        self.assertRegex(text, r"families: \d+ derived, \d+ accepted by the "
+                               r"audit, \d+ bound to a field")
+
+    def test_a_scratch_set_that_agrees_passes(self):
+        self.scratch()
+        code, text = self.check("families")
+        self.assertEqual(code, 0, text)
+
+
+class TestTheAcceptedFamilyCheckFails(ValueFamilyCheckFixtures):
+    """Each direction reported separately. One direction alone leaves the
+    other failure invisible."""
+
+    def test_an_accepted_family_that_lost_its_binding_is_reported(self):
+        self.scratch(description="ALPHA_PARAMS {\n\tmode\tint32\n"
+                                 "\tother\tint32\n} [packed]\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("ALPHA_PARAMS.mode was accepted and is not bound", text)
+        self.assertIn("renders as int32", text)
+
+    def test_an_accepted_family_whose_struct_is_absent_is_reported(self):
+        self.scratch(description="BETA_PARAMS {\n\tmode\tint32\n} [packed]\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("no field of that name in the emitted struct", text)
+
+    def test_a_field_bound_to_another_familys_set_is_reported(self):
+        self.scratch(description="ALPHA_PARAMS {\n"
+                                 "\tmode\tflags[other_set, int32]\n"
+                                 "\tother\tint32\n} [packed]\n"
+                                 "other_set = 0x0, 0x1\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("is bound to other_set and the audit accepted "
+                      "alpha_params_mode", text)
+
+    def test_a_family_the_audit_rejected_reaching_a_field_is_reported(self):
+        """The case the whole phase exists to prevent. A field bound to the
+        wrong family never reaches its real values, where a bare integer
+        still reaches them by mutation."""
+        self.scratch(description="ALPHA_PARAMS {\n"
+                                 "\tmode\tflags[alpha_params_mode, int32]\n"
+                                 "\tother\tflags[alpha_params_other, int32]\n"
+                                 "} [packed]\n"
+                                 "alpha_params_mode = 0x0, 0x1\n"
+                                 "alpha_params_other = 0x2, 0x3\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("ALPHA_PARAMS.other reaches the description set and "
+                      "the audit did not accept it", text)
+        self.assertIn("the field is bound to it", text)
+
+    def test_a_rejected_family_defining_a_set_is_reported(self):
+        self.scratch(description=self.STRUCT + "\n" + self.DEFINE
+                     + "alpha_params_other = 0x2, 0x3\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("nvidia.txt defines the set", text)
+
+    def test_a_set_referenced_with_no_definition_is_reported(self):
+        self.scratch(description=self.STRUCT)
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("no file defines it", text)
+
+    def test_a_set_defined_with_no_reference_is_reported(self):
+        self.scratch(description="ALPHA_PARAMS {\n"
+                                 "\tmode\tflags[alpha_params_mode, int32]\n"
+                                 "} [packed]\n"
+                                 + self.DEFINE + "orphan_set = 0x1, 0x2\n")
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("orphan_set is defined in nvidia.txt and no field "
+                      "references it", text)
+
+    def test_an_accepted_entry_with_no_derived_record_is_reported(self):
+        """accepted_families joins on (struct, field) and returns derived
+        records alone, so such an entry binds nothing and reports nothing."""
+        self.scratch(audit=self.AUDIT + [{"struct": "GAMMA_PARAMS",
+                                          "field": "id",
+                                          "verdict": "accepted",
+                                          "reason": "recorded in error"}])
+        code, text = self.check("families")
+        self.assertEqual(code, 1)
+        self.assertIn("the audit accepts GAMMA_PARAMS.id and no derived "
+                      "record carries it", text)
+
+    def test_the_remedy_names_both_regenerating_commands(self):
+        self.scratch(description=self.STRUCT)
+        _code, text = self.check("families")
+        self.assertIn("tools/value_families.py", text)
+        self.assertIn("tools/syzlang_gen.py emit", text)
+
+
+class TestTheAcceptedFamilyCheckInputs(ValueFamilyCheckFixtures):
+    """An artefact the check cannot read is exit 2 and never exit 1."""
+
+    def test_an_absent_derivation_exits_two(self):
+        root = self.scratch()
+        os.unlink(os.path.join(root, "value-families.json"))
+        code, text = self.check("families")
+        self.assertEqual(code, 2)
+        self.assertIn("cannot run:", text)
+
+    def test_an_absent_audit_exits_two(self):
+        root = self.scratch()
+        os.unlink(os.path.join(root, "value-families-audit.json"))
+        code, text = self.check("families")
+        self.assertEqual(code, 2)
+
+    def test_a_derivation_with_no_families_array_exits_two(self):
+        root = self.scratch()
+        with open(os.path.join(root, "value-families.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"schema": value_families.SCHEMA}, fh)
+        code, text = self.check("families")
+        self.assertEqual(code, 2)
+        self.assertIn("carries no families array", text)
+
+    def test_an_unparseable_audit_exits_two(self):
+        root = self.scratch()
+        with open(os.path.join(root, "value-families-audit.json"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("{not json")
+        code, text = self.check("families")
+        self.assertEqual(code, 2)
+
+
+class TestTheFamiliesCheckIsRegistered(unittest.TestCase):
+    """The check runs under `all` and under its own CI step."""
+
+    def test_it_is_in_the_registry_and_the_order(self):
+        self.assertIn("families", regression_check.CHECKS)
+        self.assertIn("families", regression_check.CHECK_ORDER)
+
+    def test_the_docstring_describes_it(self):
+        self.assertIn("\n    families    ", regression_check.__doc__)
+
+    def test_the_parser_accepts_it_as_a_subcommand(self):
+        args = regression_check.build_parser().parse_args(["families"])
+        self.assertEqual(args.check, "families")
+
+    def test_the_workflow_runs_it(self):
+        with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
+                               "selftest.yml"), encoding="utf-8") as fh:
+            workflow = fh.read()
+        self.assertTrue("regression_check.py families" in workflow,
+                        "the workflow runs no families step")
+
+
+class TestTheHostBinaryPreflight(unittest.TestCase):
+    """orchestrator_ctl.HOST_BINARIES and missing_binaries.
+
+    Resolution is by PATH alone, so the tests patch shutil.which. A binary
+    installed outside the PATH the unattended session runs under is absent for
+    this purpose, which is the condition worth reporting.
+    """
+
+    CONFIG = {"orchestrator": {"command": "agent --drive",
+                               "resume_command": "",
+                               "session_transcript_glob": ""}}
+
+    def resolving(self, present):
+        """Patch shutil.which so only the named binaries resolve."""
+        original = shutil.which
+        self.addCleanup(setattr, shutil, "which", original)
+        shutil.which = lambda name, *a, **k: ("/usr/bin/" + name
+                                              if name in present else None)
+
+    def preflight(self, present):
+        """-> (exit code, output) with the environment made deterministic."""
+        import coverage_ctl
+        self.resolving(present)
+        for module, name, value in (
+                (orchestrator_ctl, "sudo_ok",
+                 lambda user=None: (True, "sudo -n succeeds")),
+                (orchestrator_ctl.gspwn_config, "load",
+                 lambda *a, **k: self.CONFIG),
+                (coverage_ctl, "disk_free_mb", lambda *a, **k: 400000.0)):
+            self.addCleanup(setattr, module, name, getattr(module, name))
+            setattr(module, name, value)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = orchestrator_ctl.cmd_preflight(
+                types.SimpleNamespace(user=None))
+        return code, out.getvalue() + err.getvalue()
+
+    def all_names(self):
+        return [name for name, _required, _why in orchestrator_ctl.HOST_BINARIES]
+
+    def required_names(self):
+        return [name for name, required, _why
+                in orchestrator_ctl.HOST_BINARIES if required]
+
+    def optional_names(self):
+        return [name for name, required, _why
+                in orchestrator_ctl.HOST_BINARIES if not required]
+
+    def test_the_table_declares_both_kinds(self):
+        self.assertTrue(self.required_names())
+        self.assertTrue(self.optional_names())
+
+    def test_every_entry_carries_a_written_reason(self):
+        for name, _required, why in orchestrator_ctl.HOST_BINARIES:
+            self.assertTrue(why.strip(), name)
+
+    def test_nothing_is_missing_when_every_binary_resolves(self):
+        self.resolving(set(self.all_names()))
+        self.assertEqual(orchestrator_ctl.missing_binaries(), ([], []))
+
+    def test_every_binary_is_missing_when_nothing_resolves(self):
+        self.resolving(set())
+        required, optional = orchestrator_ctl.missing_binaries()
+        self.assertEqual([b for b, _w in required], self.required_names())
+        self.assertEqual([b for b, _w in optional], self.optional_names())
+
+    def test_a_required_absence_lands_in_the_required_list_alone(self):
+        self.resolving(set(self.all_names()) - {"nvidia-smi"})
+        required, optional = orchestrator_ctl.missing_binaries()
+        self.assertEqual([b for b, _w in required], ["nvidia-smi"])
+        self.assertEqual(optional, [])
+
+    def test_an_optional_absence_lands_in_the_optional_list_alone(self):
+        self.resolving(set(self.all_names()) - {"aws"})
+        required, optional = orchestrator_ctl.missing_binaries()
+        self.assertEqual(required, [])
+        self.assertEqual([b for b, _w in optional], ["aws"])
+
+    def test_each_missing_entry_carries_its_reason(self):
+        self.resolving(set(self.all_names()) - {"nvidia-smi"})
+        required, _optional = orchestrator_ctl.missing_binaries()
+        self.assertEqual(required[0][1],
+                         dict((n, w) for n, _r, w
+                              in orchestrator_ctl.HOST_BINARIES)["nvidia-smi"])
+
+    def test_resolution_is_through_shutil_which(self):
+        """A binary present on the real PATH is absent here, because the
+        resolver and nothing else decides."""
+        self.resolving(set())
+        required, _optional = orchestrator_ctl.missing_binaries()
+        self.assertIn("git", [b for b, _w in required])
+
+    def test_a_clean_host_passes_the_gate(self):
+        code, text = self.preflight(set(self.all_names()))
+        self.assertEqual(code, 0, text)
+        self.assertIn("preflight clean", text)
+
+    def test_a_required_absence_becomes_a_preflight_problem(self):
+        code, text = self.preflight(set(self.all_names()) - {"nvidia-smi"})
+        self.assertEqual(code, 1)
+        self.assertIn("MISSING nvidia-smi", text)
+        self.assertIn("nvidia-smi is not on PATH, and", text)
+
+    def test_a_required_absence_states_what_it_costs(self):
+        _code, text = self.preflight(set(self.all_names()) - {"go"})
+        self.assertIn("exits 3 when go is absent", text)
+
+    def test_an_optional_absence_is_reported(self):
+        _code, text = self.preflight(set(self.all_names()) - {"aws"})
+        self.assertIn("not needed by every deployment: aws", text)
+
+    def test_an_optional_absence_does_not_fail_the_gate(self):
+        code, text = self.preflight(set(self.all_names()) - {"aws"})
+        self.assertEqual(code, 0, text)
+        self.assertNotIn("aws is not on PATH", text)
+
+    def test_the_count_line_reads_what_resolved(self):
+        total = len(orchestrator_ctl.HOST_BINARIES)
+        _code, text = self.preflight(set(self.all_names()) - {"aws"})
+        self.assertIn("binaries:  %d of %d on PATH" % (total - 1, total), text)
 
 
 def pipeline_ctl_cmd_round_end(args):

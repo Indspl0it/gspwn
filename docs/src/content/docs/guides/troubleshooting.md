@@ -124,6 +124,23 @@ cannot end a campaign by claiming it is finished.
 | `WARN: could not measure the previous transcript` | `orchestrator.session_transcript_glob` is unset or matches nothing | Rotation falls back to the resume count, which does not track transcript growth |
 | The agent's usage is billed to the API account | `ANTHROPIC_API_KEY` is set in the unit environment | The variable takes precedence over a subscription login. Unset it for the unit. The generated unit does not set it |
 
+## The tenant surface gate
+
+`verify_tenant_surface.py measure` exits 1 when the record and the instance
+disagree, and 2 when nothing was measured. The `provision` phase blocks on
+both.
+
+| Symptom | Cause | Action |
+|---|---|---|
+| `'docker' is not on PATH` | No container runtime installed | Install `docker.io`, or pass `--runtime` with the runtime this host uses |
+| `the container did not run` and the error names an unknown runtime `nvidia` | The NVIDIA container toolkit is absent, or `nvidia-ctk runtime configure` was never run | [Installation](/gspwn/getting-started/installation/) step 5. The distribution's `docker.io` package carries no `nvidia` runtime |
+| `could not pull ubuntu:22.04` | The instance has no registry access | Pre-load the image and pass `--no-pull`, or set `GSPWN_VERIFY_IMAGE` to one already present |
+| `REACHABLE AND NOT MODELLED` | The container received a node the record places outside the tenant surface | Stop. The threat model understates the attacker, and every coverage figure would be measured against the wrong denominator. Widen the model before spending |
+| `MODELLED AND NOT REACHABLE` naming the modeset and DRM nodes | The measurement reached the legacy injection path | Check `runtime-mode`. A `legacy` verdict means this host withholds those nodes; a measurement taken with `--via gpus` on Docker 29.1.x or older reports legacy whatever the host is configured for |
+| `MODELLED AND NOT REACHABLE` naming `/dev/nvidia-nvswitch*` | Those nodes are conditional on `NVIDIA_NVSWITCH` | Expected on a host without NVSwitch. Record the condition and continue |
+| `runtime-mode` reports `not stated on this host` | No `config.toml` was found | The toolkit default applies. `measure` settles what the host actually does |
+| `surface/entry-points.json does not exist` | The artefact was never generated | `python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules --emit-entry-points surface/entry-points.json` |
+
 ## The build
 
 | Symptom | Cause | Action |
@@ -134,6 +151,9 @@ cannot end a campaign by claiming it is finished.
 | `WARNING: mokutil is not installed` | Secure Boot state is unknown | Install `mokutil`, or confirm Secure Boot is off in firmware |
 | `ERROR: no GRUB menu entry for <kver>` | The kernel installed but nothing would boot it | The next reboot would come back on the old kernel and fail the build gate for a reason that looks like the build |
 | The NVIDIA module build drops the instrumentation flags | `conftest.sh` strips unknown CFLAGS from the environment | Patch `kernel-open/conftest.sh` minimally to append them, log the patch, retry once per rung |
+| `make: go: No such file or directory` in the syzkaller tree | No Go toolchain is installed. `build-essential` carries none, and syzkaller builds on the host | [Installation](/gspwn/getting-started/installation/) step 7 |
+| `go.mod requires go >= 1.26.0` from `make` or from `syzlang_gen.py compile` | The toolchain is below the floor and did not switch. Go 1.21 and later download it under `GOTOOLCHAIN=auto`, so this means a toolchain below 1.21, `GOTOOLCHAIN=local`, or no route to `proxy.golang.org` | Install the upstream tarball, [Installation](/gspwn/getting-started/installation/) step 7 |
+| `syzlang_gen.py compile` exits 3 with `go` installed | The phase's shell has no `/usr/local/go/bin` on `PATH`. The install step's `export` covers one shell | Add the `PATH` line to the campaign user's shell profile |
 
 ## Disk
 

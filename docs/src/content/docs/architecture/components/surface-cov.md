@@ -11,7 +11,7 @@ of it.
 
 The inventories supply a denominator that has been measured.
 `ioctl_inventory.py`, `ctrl_surface.py`, `object_graph.py` and
-`nvkms_inventory.py` enumerate the 828 targets a default tenant may call,
+`nvkms_inventory.py` enumerate the 852 targets a default tenant may call,
 across escapes, UVM commands, RM control commands, class allocations and
 modeset commands. Counting how many of those a corpus names is a ratio over
 that denominator, and the ratio is a claim about the command surface and never
@@ -33,15 +33,17 @@ no syz-manager and no GPU.
 | control | 531 | Non-privileged RM control commands carrying a kernel-side handler |
 | alloc | 155 | Unprivileged allocatable classes, plus the three root classes the file descriptor itself gates |
 | modeset | 64 | Commands on `/dev/nvidia-modeset` carrying a dispatch entry |
-| total | 828 | |
+| drm | 24 | |
+| total | 852 | |
 
-Five groups are counted and reported outside the denominator. Folding any of
+Six groups are counted and reported outside the denominator. Folding any of
 them in would move the ratio with no campaign changing.
 
 | Group | Count | Exclusion reason |
 |---|---|---|
 | control_gsp | 236 | The handler is compiled out and the parameter buffer crosses the RPC queue to GSP, where KCOV cannot follow |
 | uvm_test | 104 | Reachable only under `uvm_enable_builtin_tests=1`, which the target does not set |
+| drm_undispatched | 4 | Declared in the `DRM_NVIDIA_*` command range at 0x19 to 0x1c with no entry in `nv_drm_ioctls[]`, so the DRM core finds no handler for them |
 | escape_dead | 3 | Declared in `nv_escape.h` with no dispatch case |
 | escape_mux | 2 | `NV_ESC_RM_CONTROL` and `NV_ESC_RM_ALLOC`, multiplexers whose leaves are counted in the control and alloc families |
 | modeset_undispatched | 2 | Declared in `enum NvKmsIoctlCommand` with an empty dispatch entry, so `nvKmsIoctl` returns before any handler runs |
@@ -64,7 +66,7 @@ exercised over modelled measures whether the fuzzer builds programs valid
 enough to emit the call at all. A headline ratio on its own hides which stage
 lost the surface.
 
-The generated baseline models 828 of 828 targets, 100.0% in every family. The
+The generated baseline models 852 of 852 targets, 100.0% in every family. The
 exercised column reads 0 because no campaign has run, and `report` states that
 an empty corpus says nothing about the descriptions.
 

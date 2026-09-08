@@ -37,7 +37,7 @@ before it would drop off the budget.
 
 The ledger sits beside the inventories it is counted against and not in the
 state file, because `pipeline_state.save()` rewrites the whole state under a
-lock on every phase transition, and the ledger carries 828 targets against a
+lock on every phase transition, and the ledger carries 852 targets against a
 state file of about 1200 bytes.
 
 ## Configured values one variable overrides
@@ -82,6 +82,30 @@ trace2seed: GSPWN_SEED_MAX_CALLS must be a whole number of calls per program, an
 below 3 is refused by `chains` for the same reason: three calls is one
 `openat`, one allocation and one control command, and below that every path is
 dropped and the run writes an empty bank while exiting 0.
+
+## Tenant surface measurement
+
+`verify_tenant_surface.py` reads five variables. None has a configuration key,
+because the measurement describes the host it runs on and travels with no
+campaign.
+
+| Variable | Effect | Default |
+|---|---|---|
+| `GSPWN_VERIFY_RUNTIME` | Container runtime binary to invoke | `docker` |
+| `GSPWN_VERIFY_IMAGE` | Image the measurement starts | `ubuntu:22.04` |
+| `GSPWN_VERIFY_VIA` | How the container is given the GPU: `runtime`, `gpus`, or `both` | `runtime` |
+| `GSPWN_VERIFY_RUN_TIMEOUT` | Seconds the container may take to start and list its device nodes | `120` |
+| `GSPWN_VERIFY_PULL_TIMEOUT` | Seconds the image pull may take, timed separately because a cold instance is slower | `600` |
+
+`GSPWN_VERIFY_VIA` defaults to `runtime` because the two ways of giving a
+container a GPU reach different injection code. `--gpus all` on Docker Engine
+29.1.x and older injects the prestart hook, which defaults to legacy and
+withholds `/dev/nvidia-modeset` and every `/dev/dri` node. A measurement taken
+that way reports a device set the deployment will not see. Set it to `both` to
+measure each path and report them apart.
+
+The image needs no CUDA runtime. Device nodes are injected before any process
+in the container starts, so listing `/dev` is enough.
 
 ## Read from the environment
 
