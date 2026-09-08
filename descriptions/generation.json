@@ -3882,6 +3882,28 @@
   },
   {
    "emitted": true,
+   "handler": "profilerBaseCtrlCmdPmaStreamUpdateGetPut",
+   "method_id": "0xb0cc0109",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 48,
+   "param_struct": "NVB0CC_CTRL_PMA_STREAM_UPDATE_GET_PUT_PARAMS",
+   "routed_to_physical": true,
+   "sdk_prefix": "NVB0CC"
+  },
+  {
+   "emitted": true,
+   "handler": "profilerBaseCtrlCmdInternalSriovPromotePmaStream",
+   "method_id": "0xb0cc0202",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 48,
+   "param_struct": "NVB0CC_CTRL_INTERNAL_SRIOV_PROMOTE_PMA_STREAM_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NVB0CC"
+  },
+  {
+   "emitted": true,
    "handler": "memoryexportCtrlExportMem",
    "method_id": "0x00e00101",
    "object_resource": "nvh_nv_memory_export",
@@ -4143,6 +4165,17 @@
    "param_struct": "NV0080_CTRL_FB_GET_CAPS_V2_PARAMS",
    "routed_to_physical": false,
    "sdk_prefix": "NV0080"
+  },
+  {
+   "emitted": true,
+   "handler": "profilerBaseCtrlCmdRequestCgControls",
+   "method_id": "0xb0cc0301",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 12,
+   "param_struct": "NVB0CC_CTRL_POWER_REQUEST_FEATURES_PARAMS",
+   "routed_to_physical": true,
+   "sdk_prefix": "NVB0CC"
   },
   {
    "emitted": true,
@@ -4476,6 +4509,17 @@
   },
   {
    "emitted": true,
+   "handler": "profilerBaseCtrlCmdAllocPmaStream",
+   "method_id": "0xb0cc0105",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 56,
+   "param_struct": "NVB0CC_CTRL_ALLOC_PMA_STREAM_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NVB0CC"
+  },
+  {
+   "emitted": true,
    "handler": "subdeviceCtrlCmdKGrGetCtxBufferSize",
    "method_id": "0x20801218",
    "object_resource": "nvh_nv20_subdevice_0",
@@ -4718,6 +4762,28 @@
   },
   {
    "emitted": true,
+   "handler": "memCtrlCmdGetSurfaceInfoLvm",
+   "method_id": "0x00410110",
+   "object_resource": "nvh_any_memory",
+   "owning_class": "Memory",
+   "param_size": 16,
+   "param_struct": "NV0041_CTRL_GET_SURFACE_INFO_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NV0041"
+  },
+  {
+   "emitted": true,
+   "handler": "memCtrlCmdGetSurfaceCompressionCoverageLvm",
+   "method_id": "0x00410112",
+   "object_resource": "nvh_any_memory",
+   "owning_class": "Memory",
+   "param_size": 16,
+   "param_struct": "NV0041_CTRL_GET_SURFACE_COMPRESSION_COVERAGE_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NV0041"
+  },
+  {
+   "emitted": true,
    "handler": "deviceCtrlCmdGpuGetClasslist",
    "method_id": "0x00800201",
    "object_resource": "nvh_nv01_device_0",
@@ -4927,6 +4993,17 @@
   },
   {
    "emitted": true,
+   "handler": "memCtrlCmdGetMemPageSize",
+   "method_id": "0x00410118",
+   "object_resource": "nvh_any_memory",
+   "owning_class": "Memory",
+   "param_size": 8,
+   "param_struct": "NV0041_CTRL_GET_MEM_PAGE_SIZE_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NV0041"
+  },
+  {
+   "emitted": true,
    "handler": "deviceCtrlCmdGpuGetVirtualizationMode",
    "method_id": "0x00800289",
    "object_resource": "nvh_nv01_device_0",
@@ -5081,6 +5158,17 @@
   },
   {
    "emitted": true,
+   "handler": "profilerBaseCtrlCmdFreePmaStream",
+   "method_id": "0xb0cc0106",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 4,
+   "param_struct": "NVB0CC_CTRL_FREE_PMA_STREAM_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NVB0CC"
+  },
+  {
+   "emitted": true,
    "handler": "ctxdmaCtrlCmdBindContextdma",
    "method_id": "0x00020102",
    "object_resource": "nvh_nv01_context_dma",
@@ -5100,6 +5188,39 @@
    "param_struct": "NV0002_CTRL_UNBIND_CONTEXTDMA_PARAMS",
    "routed_to_physical": false,
    "sdk_prefix": "NV0002"
+  },
+  {
+   "emitted": true,
+   "handler": "memCtrlCmdSurfaceFlushGpuCache",
+   "method_id": "0x00410116",
+   "object_resource": "nvh_any_memory",
+   "owning_class": "Memory",
+   "param_size": 4,
+   "param_struct": "NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NV0041"
+  },
+  {
+   "emitted": true,
+   "handler": "memCtrlCmdSetTag",
+   "method_id": "0x00410120",
+   "object_resource": "nvh_any_memory",
+   "owning_class": "Memory",
+   "param_size": 4,
+   "param_struct": "NV0041_CTRL_CMD_SET_TAG_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NV0041"
+  },
+  {
+   "emitted": true,
+   "handler": "memCtrlCmdGetTag",
+   "method_id": "0x00410121",
+   "object_resource": "nvh_any_memory",
+   "owning_class": "Memory",
+   "param_size": 4,
+   "param_struct": "NV0041_CTRL_CMD_GET_TAG_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NV0041"
   },
   {
    "emitted": true,
@@ -5375,6 +5496,17 @@
    "param_struct": "NV2080_CTRL_FB_GET_SEMAPHORE_SURFACE_LAYOUT_PARAMS",
    "routed_to_physical": false,
    "sdk_prefix": "NV2080"
+  },
+  {
+   "emitted": true,
+   "handler": "profilerBaseCtrlCmdBindPmResources",
+   "method_id": "0xb0cc0107",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 0,
+   "param_struct": null,
+   "routed_to_physical": false,
+   "sdk_prefix": "NVB0CC"
   },
   {
    "emitted": true,
@@ -5895,6 +6027,17 @@
   },
   {
    "emitted": true,
+   "handler": "profilerBaseCtrlCmdUnbindPmResources",
+   "method_id": "0xb0cc0108",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 0,
+   "param_struct": null,
+   "routed_to_physical": false,
+   "sdk_prefix": "NVB0CC"
+  },
+  {
+   "emitted": true,
    "handler": "subdeviceCtrlCmdBifGetData",
    "method_id": "0x20803b01",
    "object_resource": "nvh_nv20_subdevice_0",
@@ -6233,6 +6376,17 @@
    "param_struct": "NV2080_CTRL_GPU_GET_ACTIVE_PARTITION_IDS_PARAMS",
    "routed_to_physical": false,
    "sdk_prefix": "NV2080"
+  },
+  {
+   "emitted": true,
+   "handler": "profilerBaseCtrlCmdReserveHwpmLegacy",
+   "method_id": "0xb0cc0101",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 1,
+   "param_struct": "NVB0CC_CTRL_RESERVE_HWPM_LEGACY_PARAMS",
+   "routed_to_physical": false,
+   "sdk_prefix": "NVB0CC"
   },
   {
    "emitted": true,
@@ -7875,6 +8029,17 @@
   },
   {
    "emitted": true,
+   "handler": "profilerBaseCtrlCmdReleaseCgControls",
+   "method_id": "0xb0cc0302",
+   "object_resource": "nvh_any_profilerbase",
+   "owning_class": "ProfilerBase",
+   "param_size": 4,
+   "param_struct": "NVB0CC_CTRL_POWER_RELEASE_FEATURES_PARAMS",
+   "routed_to_physical": true,
+   "sdk_prefix": "NVB0CC"
+  },
+  {
+   "emitted": true,
    "handler": "lockStressObjCtrlCmdPerformLockStressAllRmLocks",
    "method_id": "0x01000102",
    "object_resource": "nvh_lock_stress_object",
@@ -8106,116 +8271,6 @@
   },
   {
    "emitted": true,
-   "handler": "profilerBaseCtrlCmdPmaStreamUpdateGetPut",
-   "method_id": "0xb0cc0109",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 48,
-   "param_struct": "NVB0CC_CTRL_PMA_STREAM_UPDATE_GET_PUT_PARAMS",
-   "routed_to_physical": true,
-   "sdk_prefix": "NVB0CC"
-  },
-  {
-   "emitted": true,
-   "handler": "profilerBaseCtrlCmdInternalSriovPromotePmaStream",
-   "method_id": "0xb0cc0202",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 48,
-   "param_struct": "NVB0CC_CTRL_INTERNAL_SRIOV_PROMOTE_PMA_STREAM_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NVB0CC"
-  },
-  {
-   "emitted": true,
-   "handler": "profilerBaseCtrlCmdRequestCgControls",
-   "method_id": "0xb0cc0301",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 12,
-   "param_struct": "NVB0CC_CTRL_POWER_REQUEST_FEATURES_PARAMS",
-   "routed_to_physical": true,
-   "sdk_prefix": "NVB0CC"
-  },
-  {
-   "emitted": true,
-   "handler": "profilerBaseCtrlCmdAllocPmaStream",
-   "method_id": "0xb0cc0105",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 56,
-   "param_struct": "NVB0CC_CTRL_ALLOC_PMA_STREAM_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NVB0CC"
-  },
-  {
-   "emitted": true,
-   "handler": "profilerBaseCtrlCmdFreePmaStream",
-   "method_id": "0xb0cc0106",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 4,
-   "param_struct": "NVB0CC_CTRL_FREE_PMA_STREAM_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NVB0CC"
-  },
-  {
-   "emitted": true,
-   "handler": "profilerBaseCtrlCmdBindPmResources",
-   "method_id": "0xb0cc0107",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 0,
-   "param_struct": null,
-   "routed_to_physical": false,
-   "sdk_prefix": "NVB0CC"
-  },
-  {
-   "emitted": true,
-   "handler": "profilerBaseCtrlCmdUnbindPmResources",
-   "method_id": "0xb0cc0108",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 0,
-   "param_struct": null,
-   "routed_to_physical": false,
-   "sdk_prefix": "NVB0CC"
-  },
-  {
-   "emitted": true,
-   "handler": "profilerBaseCtrlCmdReserveHwpmLegacy",
-   "method_id": "0xb0cc0101",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 1,
-   "param_struct": "NVB0CC_CTRL_RESERVE_HWPM_LEGACY_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NVB0CC"
-  },
-  {
-   "emitted": true,
-   "handler": "memCtrlCmdGetSurfaceInfoLvm",
-   "method_id": "0x00410110",
-   "object_resource": "nvh_any_memory",
-   "owning_class": "Memory",
-   "param_size": 16,
-   "param_struct": "NV0041_CTRL_GET_SURFACE_INFO_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NV0041"
-  },
-  {
-   "emitted": true,
-   "handler": "memCtrlCmdGetSurfaceCompressionCoverageLvm",
-   "method_id": "0x00410112",
-   "object_resource": "nvh_any_memory",
-   "owning_class": "Memory",
-   "param_size": 16,
-   "param_struct": "NV0041_CTRL_GET_SURFACE_COMPRESSION_COVERAGE_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NV0041"
-  },
-  {
-   "emitted": true,
    "handler": "nvdispapiCtrlCmdEventSetNotification",
    "method_id": "0xc3700901",
    "object_resource": "nv_handle",
@@ -8227,50 +8282,6 @@
   },
   {
    "emitted": true,
-   "handler": "memCtrlCmdGetMemPageSize",
-   "method_id": "0x00410118",
-   "object_resource": "nvh_any_memory",
-   "owning_class": "Memory",
-   "param_size": 8,
-   "param_struct": "NV0041_CTRL_GET_MEM_PAGE_SIZE_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NV0041"
-  },
-  {
-   "emitted": true,
-   "handler": "memCtrlCmdSurfaceFlushGpuCache",
-   "method_id": "0x00410116",
-   "object_resource": "nvh_any_memory",
-   "owning_class": "Memory",
-   "param_size": 4,
-   "param_struct": "NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NV0041"
-  },
-  {
-   "emitted": true,
-   "handler": "memCtrlCmdSetTag",
-   "method_id": "0x00410120",
-   "object_resource": "nvh_any_memory",
-   "owning_class": "Memory",
-   "param_size": 4,
-   "param_struct": "NV0041_CTRL_CMD_SET_TAG_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NV0041"
-  },
-  {
-   "emitted": true,
-   "handler": "memCtrlCmdGetTag",
-   "method_id": "0x00410121",
-   "object_resource": "nvh_any_memory",
-   "owning_class": "Memory",
-   "param_size": 4,
-   "param_struct": "NV0041_CTRL_CMD_GET_TAG_PARAMS",
-   "routed_to_physical": false,
-   "sdk_prefix": "NV0041"
-  },
-  {
-   "emitted": true,
    "handler": "faultbufCtrlCmdFaultbufferGetSize",
    "method_id": "0xb0690105",
    "object_resource": "nv_handle",
@@ -8279,17 +8290,6 @@
    "param_struct": "NVB069_CTRL_FAULTBUFFER_GET_SIZE_PARAMS",
    "routed_to_physical": false,
    "sdk_prefix": "NVB069"
-  },
-  {
-   "emitted": true,
-   "handler": "profilerBaseCtrlCmdReleaseCgControls",
-   "method_id": "0xb0cc0302",
-   "object_resource": "nvh_any_profilerbase",
-   "owning_class": "ProfilerBase",
-   "param_size": 4,
-   "param_struct": "NVB0CC_CTRL_POWER_RELEASE_FEATURES_PARAMS",
-   "routed_to_physical": true,
-   "sdk_prefix": "NVB0CC"
   }
  ],
  "counts": {
@@ -8915,32 +8915,32 @@
  ],
  "generated": {
   "descriptions/nvidia.txt": {
-   "bytes": 65794,
-   "sha256": "75617a24764f77950b0b1e75d85469dde85c9a1053842a80edfddf121c69f75e"
+   "bytes": 65795,
+   "sha256": "2ab662e21a5a0c634c5321a7a451291a54065d575f2ce70a612a47568126d282"
   },
   "descriptions/nvidia_ctrl.txt": {
-   "bytes": 88525,
-   "sha256": "038e756606f6a252a2c136b962847544fb6226321fd278d364f594f122412727"
+   "bytes": 88526,
+   "sha256": "d7d14e475512efc175eeb107e82e19dbb222d70ee1c91c32ded5fb9ab7862eb0"
   },
   "descriptions/nvidia_drm.txt": {
-   "bytes": 4606,
-   "sha256": "b421f6a033e52fb5f70227f9b8935109fcb729c9556d6a32eefdf71198ad3826"
+   "bytes": 4607,
+   "sha256": "8c4e8d67ab47369e7b25b3040d325b6714d1764b7a6b46ab5ecbbaf5e37bacc4"
   },
   "descriptions/nvidia_gspwn.h": {
    "bytes": 12836,
    "sha256": "e77f01895f41137ee9418943d6f895766cac526f91e32da2c1be1b1838d95dab"
   },
   "descriptions/nvidia_modeset.txt": {
-   "bytes": 11080,
-   "sha256": "f159ab1bef6813d1427af8899c20a05ba0c99f5cd6beaa8f119e1689d3e90b07"
+   "bytes": 11081,
+   "sha256": "f189ed9357e850f6fef5ce8fd66c8ceb214b9e85a78b51520c0427381ec64168"
   },
   "descriptions/nvidia_structs.txt": {
-   "bytes": 449425,
-   "sha256": "ae28db6a1fd75428be2d27f7d157fe8e32abbbffe80a8348db6a74fa877382d4"
+   "bytes": 449426,
+   "sha256": "42ccaab4b7e6b8632b12d5684e54b1f6fe4782c531495132cb19a76c648b5e3f"
   },
   "descriptions/nvidia_uvm.txt": {
-   "bytes": 6221,
-   "sha256": "b28b4c21890eac4e29bca55eec9839d882794e65c21813956c99d01a625beea2"
+   "bytes": 6222,
+   "sha256": "1f759846e7589b5ca9d88752c37f5f3520195f6474a79555597f8b83df424757"
   }
  },
  "generated_from": {
@@ -8952,7 +8952,7 @@
   "ctrl_rank": {
    "commands": 531,
    "path": "surface/rm-control-rank.json",
-   "sha256": "806ccdccab548f2640023df76e17b78314b42b98efab698fe203f8e0b655ef4d",
+   "sha256": "42db74fa007d7dfa5bf4b6a3b5ed60c64295c0141bf54666c8745c226c898532",
    "weighting": {
     "cve": 0.3,
     "depth": 0.5,
@@ -8967,7 +8967,7 @@
     "sha256": "504fd70b44e57e88aff52847c27da617ef35865c99356c7e86744fb80485be1a"
    }
   ],
-  "driver_commit": "e4a5faa",
+  "driver_commit": "e4a5faa2",
   "driver_version": "610.57.04",
   "drm_inventory": {
    "path": "surface/drm-command-inventory.json",

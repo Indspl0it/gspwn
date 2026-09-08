@@ -183,12 +183,12 @@ python3 tools/trace2seed.py chains --out-dir artifacts/seeds/
 ```
 
 ```
-wrote 44 chain-shaped program(s) to artifacts/seeds: 36 prologue(s) over 38 distinct chain(s), carrying 514 control command(s)
-531 control command(s) accounted for: 514 emitted, 0 dropped before emission, 17 with no chain
+wrote 45 chain-shaped program(s) to artifacts/seeds: 37 prologue(s) over 40 distinct chain(s), carrying 529 control command(s)
+531 control command(s) accounted for: 529 emitted, 0 dropped before emission, 2 with no chain
 ```
 
-Four `no chain for <class>` lines appear between the two shown, one per owning
-class. Those 17 commands belong in the completion ledger.
+Two `no chain for <class>` lines appear between the two shown, one per owning
+class. Those 2 commands belong in the completion ledger.
 
 ### harness
 

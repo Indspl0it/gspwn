@@ -60,6 +60,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+import checkout_meta  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -144,16 +145,14 @@ def checkout_version(src):
 
 
 def checkout_commit(src):
-    if not os.path.isdir(os.path.join(src, ".git")):
-        return None
-    try:
-        out = subprocess.run(["git", "-C", src, "rev-parse", "--short", "HEAD"],
-                             capture_output=True, text=True,
-                             timeout=QUERY_TIMEOUT_SEC)
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("git rev-parse failed for %s: %s", src, exc)
-        return None
-    return out.stdout.strip() or None
+    """Short HEAD of the checkout, under this module's own query timeout.
+
+    The resolution lives in `checkout_meta`, shared with the generators whose
+    artefacts this guard compares. The wrapper exists to apply
+    QUERY_TIMEOUT_ENV, which bounds every query `check` makes and belongs to
+    the guard and not to the generators.
+    """
+    return checkout_meta.checkout_commit(src, timeout=QUERY_TIMEOUT_SEC)
 
 
 def _find_driver_version(obj, depth=0):

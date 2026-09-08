@@ -116,12 +116,24 @@ name, to `internal_class` on every record of this table.
 | `target_external_class` | The one the chain reaches, cheapest over all of them |
 | `chain` | Ordered from the file descriptor, each step carrying `external_class`, `alloc_param_struct`, `alloc_param_kind` and `alloc_privilege` |
 | `chain_length` | Prologue cost in allocations |
+| `chain_borrowed_from` | The class deriving from this one whose chain the record carries, null where the chain is the class's own |
 | `unclassified_steps` | Steps whose `RS_ENTRY` names no `RS_FLAGS_ALLOC_*` flag |
 | `unallocatable_reason` | Why there is no chain, null when there is one |
 | `commands`, `command_count` | The targetable control commands this class owns |
 
-The artefact carries 98 records, 82 of them chained. 514 of the 531 targetable
-control commands resolve to a chain.
+`resource_list.h` names one internal class per allocatable class and never a
+base, so a control command compiled into a base class matches no row of the
+table. The NVOC ancestor chain the generated headers state supplies the missing
+edge: a base gets a record whose chain is the cheapest over every external
+class of the classes deriving from it, and `chain_borrowed_from` names the
+class that chain belongs to. `syzlang_gen.py` types `hObject` on the same edge,
+so the two answer the same question the same way. `Memory` borrows
+`NoDeviceMemory`'s two-step chain to `NV01_MEMORY_DEVICELESS`, and
+`ProfilerBase` borrows `ProfilerCtx`'s four-step chain to
+`MAXWELL_PROFILER_CONTEXT`.
+
+The artefact carries 100 records, 2 of them borrowed and 84 chained. 529 of the
+531 targetable control commands resolve to a chain.
 
 ```mermaid
 flowchart LR
@@ -145,27 +157,30 @@ already built costs nothing further.
 | 1 | 91 | 17% | RmClientResource |
 | 3 | 315 | 59% | Device |
 | 4 | 337 | 63% | VgpuConfigApi |
-| 11 | 429 | 81% | ConfidentialComputeApi |
-| 15 | 455 | 86% | SemaphoreSurface |
-| 38 | 514 | 97% | ZbcApi |
+| 11 | 430 | 81% | ProfilerBase |
+| 16 | 464 | 87% | Memory |
+| 40 | 529 | 100% | ZbcApi |
 
-Beyond 38 allocations nothing further unlocks.
+Beyond 40 allocations nothing further unlocks.
 
-17 commands reach no chain. Two properties of the driver's own class model
-account for all of them, and `unresolved_owning_classes` records the class, the
+2 commands reach no chain. One property of the driver's own class model
+accounts for both, and `unresolved_owning_classes` records the class, the
 reason and the handler names for each.
 
 | Owning class | Commands | Cause |
 |---|---|---|
-| `Memory` | 6 | NVOC base class, no `RS_ENTRY` row |
-| `ProfilerBase` | 9 | NVOC base class, no `RS_ENTRY` row |
 | `MmuFaultBuffer` | 1 | Its one external class, `MMU_FAULT_BUFFER`, carries `RS_FLAGS_ALLOC_KERNEL_PRIVILEGED` |
 | `NvDispApi` | 1 | All 8 of its external classes carry `RS_FLAGS_ALLOC_PRIVILEGED` |
+
+Neither class derives a subclass that `resource_list.h` names, so the ancestor
+edge reaches nothing they could borrow, and the chain walk runs over
+allocatable classes only, so a borrowed chain never passes through a privileged
+step.
 
 The chain walk blocks on `privileged` and `kernel` and admits `unclassified`.
 `NV01_ROOT`, `NV01_ROOT_NON_PRIV` and `NV01_ROOT_CLIENT` name no
 `RS_FLAGS_ALLOC_*` flag, and every chain starts at one of the three, so a strict
-test blocks every chain at its first step: 82 chains become 0, no command
+test blocks every chain at its first step: 84 chains become 0, no command
 resolves to a chain, and the cumulative-reach curve is empty. Every chain
 carrying such a step lists it in `unclassified_steps`, so an admitted step is
 distinguishable from a verified unprivileged one.
@@ -188,9 +203,14 @@ Three limits bound the graph and everything derived from it.
   is gated, with at most 2 of its 8 members appearing together on any one part.
 - Nothing in CI runs `chains`, so the artefact goes stale against a driver
   bump. `regression_check.py derived` reports the drift against the control
-  inventory and does not repair it.
+  inventory and does not repair it. `regression_check.py reach` reports a
+  chain record whose reachability verdict disagrees with the handle type the
+  description set gives that owning class's commands, which is the disagreement
+  the `RS_ENTRY`-only join produced over the 15 `Memory` and `ProfilerBase`
+  commands.
 - No chain has been allocated. The cumulative-reach curve, the chain lengths
-  and the 514 count are arithmetic over the `RS_ENTRY` table. No GPU was
+  and the 529 count are arithmetic over the `RS_ENTRY` table and the NVOC
+  hierarchy. No GPU was
   involved, no allocation was issued and no emitted program was executed, so
   the reach these numbers describe is unverified.
 

@@ -74,23 +74,24 @@ A command is aimed at an object, so the owning class has to be allocated before
 the command can be sent at all. The cost of reaching a control command is
 therefore the cost of building its allocation chain.
 
-Three counts describe how far that gets, over the same 531 commands.
+Four counts describe how far that gets, over the same 531 commands.
 
 | Measure | Commands | The remainder |
 | --- | --- | --- |
 | Naming an owning class in the export tables | 531 | |
 | Whose owning class has an `RS_ENTRY` row | 516 | The 15 absent belong to `ProfilerBase`, 9 of them, and `Memory`, 6, both NVOC base classes |
-| With a chain an unprivileged process can build | 514 | The 2 absent are on `MmuFaultBuffer` and `NvDispApi`, whose every external class requires allocation privilege |
+| Whose owning class has an `RS_ENTRY` row or a subclass that does | 531 | A command compiled into a base class reaches an object allocated as any class deriving from it, so those 15 borrow a subclass's chain |
+| With a chain an unprivileged process can build | 529 | The 2 absent are on `MmuFaultBuffer` and `NvDispApi`, whose every external class requires allocation privilege |
 
-The chain lengths concentrate at the short end. 418 of the 514 are reachable
+The chain lengths concentrate at the short end. 424 of the 529 are reachable
 within three allocations, and no chain runs longer than five.
 
 | Chain length, allocations | Commands |
 | --- | --- |
 | 1 | 91 |
-| 2 | 92 |
+| 2 | 98 |
 | 3 | 235 |
-| 4 | 95 |
+| 4 | 104 |
 | 5 | 1 |
 
 Every figure here is arithmetic over the `RS_ENTRY` table, so a chain the table
