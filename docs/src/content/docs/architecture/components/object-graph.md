@@ -9,13 +9,13 @@ checkout. The `describe` phase needs the legal parent of every allocatable
 class to chain syzlang resources. The driver declares that relation in one
 table, and this module reads it.
 
-The module runs entirely off the source tree. It reaches no device, opens no
-socket, and needs no GPU.
+The module runs entirely off the source tree. It reaches no device and needs no
+GPU.
 
 ## Responsibility
 
 The module owns the parse of `RS_ENTRY` records and the graph derived from
-them. It writes only the JSON file it is given.
+them, and writes only the JSON file it is given.
 
 | Invariant | Enforced by |
 |---|---|
@@ -28,49 +28,21 @@ them. It writes only the JSON file it is given.
 | A table format change fails loudly | Zero `RS_ENTRY` matches exits with a message naming the file |
 | An unresolved parent is visible | Unresolved internal class names are counted and logged as a warning |
 
-## Interface
+## Outputs
 
-| Subcommand | Output |
-|---|---|
-| `extract [--out PATH]` | One JSON record per class: external and internal class, parents, alloc param kind and struct, allocation privilege, flags, access rights, depth |
-| `summary` | Privilege split, alloc-param split, depth distribution, widest parents |
-| `chain CLASS` | The shortest allocation chain from the device node to one class, with each step's privilege and parameter struct |
-| `targets [--top N]` | Parents ranked by reachable subtree size, with the unprivileged count in each subtree |
-| `chains [--control PATH] [--out PATH]` | `surface/rm-chains.json`: one chain record per NVOC internal class, joined to the control commands that class owns, plus the cumulative-reach curve and the owning classes no chain reaches |
+The parse writes one record per class, carrying the external and internal class
+name, the legal parents, the allocation parameter kind and struct, the
+allocation privilege, and the depth from the device node. A second artefact,
+`surface/rm-chains.json`, joins each class to the control commands it owns and
+carries the allocation chain that reaches it.
 
-`--src` selects the checkout and defaults to
-`artifacts/src/open-gpu-kernel-modules`. `chains` also reads
-`surface/rm-control-inventory.json`, which `--control` overrides.
+Alongside those, the tool reports the privilege split, the depth distribution,
+the widest parent sets, the shortest chain to a named class, and the parents
+ranked by reachable subtree size.
 
-| Function | Returns |
-|---|---|
-| `parse_entries(src)` | One dict per `RS_ENTRY` record |
-| `build_graph(entries)` | The class-to-parents map, and the internal-to-external class map, which holds every external class an internal class exports |
-| `depths(graph)` | Depth from the device node, the sentinel root being 0 |
-| `privilege(rec)` | `unprivileged`, `privileged`, `kernel` or `unclassified` |
-| `alloc_param(rec)` | The requirement kind and the struct name |
-| `shortest_chain(graph, depth, cls)` | The allocation chain, shallowest parent at each step |
-| `allocatable_depths(graph, by_ext)` | Depth over the classes an unprivileged process can allocate, blocking on `privileged` and `kernel` |
-| `chain_records(...)` | One chain record per internal class, with its commands and its per-step allocation parameter |
-| `cumulative_reach(recs)` | The greedy curve of commands unlocked against allocations built |
-
-## Callers
-
-| Direction | Modules |
-|---|---|
-| Imports this module | Nothing at run time. The `describe` phase invokes it as a command |
-| This module imports | Nothing in `tools/` |
-
-## Failure modes
-
-| Condition | Behaviour | Exit |
-|---|---|---|
-| `resource_list.h` absent under `--src` | Message naming the expected path and the flag to override it | 1 |
-| No `RS_ENTRY` record matches | Message stating the table format has changed and the parser needs updating | 1 |
-| `chain` names a class with no record | Message on stderr | 2 |
-| A field label does not match | The field reads as null, and the count per field is logged as a warning | 0 |
-| A parent's internal class resolves to no external class | Counted and logged as a warning, and the edge is dropped | 0 |
-| The output directory does not exist | Created, and the creation is logged | 0 |
+A table format change fails loudly. Zero `RS_ENTRY` matches stops the run with
+a message naming the file, because a parser that silently matched nothing would
+report an empty allocation graph as a driver with no allocatable classes.
 
 ## Concurrency and durability
 
@@ -91,8 +63,8 @@ sequentially.
 
 ## Design notes
 
-The source carries two inconsistencies that a straightforward parser mishandles
-without warning. 15 records label the final field `Required Access Right`
+The source carries two inconsistencies a straightforward parser mishandles. 15
+records label the final field `Required Access Right`
 without the plural. 5 records declare `RS_ANY_PARENT` where the rest declare
 `RS_LIST(classId(...))`, and those five are the event and context-DMA classes,
 which attach under any allocated object and are therefore the cheapest way to
@@ -112,26 +84,22 @@ and a collapsed map manufactures that condition: 63 allocation variants pinned
 their parent to `GF100_CHANNEL_GPFIFO` alone, where the widened map gives those
 same 63 a parent set of 11 channel classes. No check reported the narrowing,
 because the set compiled, the counts held, and `surface_cov.py` measured 155 of
-155 modelled. What a single wrong pin costs a campaign is unverified: no chain
-has been allocated, no GPU was involved, and no syzkaller tree executed any of
-these variants.
+155 modelled. What a single wrong pin costs a campaign is unverified.
 
 No class changed depth when the map was widened. The recovered edges run from a
 class to siblings of the parent it already had, and those siblings sit at the
 same depth.
 
 Depth is measured from the open file descriptor. 151 of 222 classes sit at
-depth 4, which is the quantitative form of the warning in the `describe` phase
-prompt: a description set without resource chaining reaches the 25 classes at
-depth 1 and 2 and no further.
+depth 4, so a description set without resource chaining reaches the 25 classes
+at depth 1 and 2 and no further, which the `describe` phase prompt warns of.
 
 ## Chain grouping
 
 Commands sharing an owning class share an allocation chain, so one program can
 build the chain once and issue every command that class owns against it.
-`chains` performs the join that makes that shape buildable: the control
-inventory carries `owning_class`, the NVOC internal class name, and this table
-carries `internal_class` on every record.
+`chains` joins the control inventory's `owning_class`, the NVOC internal class
+name, to `internal_class` on every record of this table.
 
 | Field on a chain record | Contents |
 |---|---|
@@ -147,6 +115,21 @@ carries `internal_class` on every record.
 The artefact carries 98 records, 82 of them chained. 514 of the 531 targetable
 control commands resolve to a chain.
 
+```mermaid
+flowchart LR
+    FD["/dev/nvidiactl<br/>open file descriptor"] --> R["NV01_ROOT<br/>client"]
+    R --> D["NV01_DEVICE_0<br/>device"]
+    D --> S["NV20_SUBDEVICE_0<br/>subdevice"]
+    S --> T["target class"]
+    R -.->|91 commands| C1[RmClientResource commands]
+    D -.->|commands owned here| C2[Device commands]
+    S -.->|315 commands at this depth| C3[Subdevice commands]
+    T -.-> C4[The target class's own commands]
+```
+
+Every class allocated along the way is credited, so a class whose whole chain
+is already built costs nothing further.
+
 `cumulative_reach` is the greedy curve. Each step buys the class with the
 highest command count per allocation the built set does not already hold, and
 every class allocated along the way is credited, so a class whose whole chain is
@@ -161,9 +144,7 @@ already built costs nothing.
 | 15 | 455 | 86% | SemaphoreSurface |
 | 38 | 514 | 97% | ZbcApi |
 
-Beyond 38 allocations nothing further unlocks. Three allocations reach 59% of
-the control surface, against a naive program shape that rebuilds a chain for a
-single call.
+Beyond 38 allocations nothing further unlocks.
 
 17 commands reach no chain, for two reasons that are not parser defects, and
 `unresolved_owning_classes` records the class, the reason and the handler names
@@ -183,8 +164,7 @@ test empties the whole chain set: 82 chains become 2 and the curve tops out at 2
 commands. Every chain carrying such a step lists it in `unclassified_steps`, so
 an admitted step is distinguishable from a verified unprivileged one.
 
-`rm-chains.json` is the data a chain-grouped program is built from. The
-conversion into `.syz` programs belongs to
+The conversion of `rm-chains.json` into `.syz` programs belongs to
 [`trace2seed.py chains`](/gspwn/architecture/components/trace2seed/).
 
 ## Stated limits

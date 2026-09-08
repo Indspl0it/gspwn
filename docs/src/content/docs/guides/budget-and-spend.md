@@ -3,9 +3,7 @@ title: Budget and spend
 description: The three caps that bound an unattended run, how hours are measured, and the refusals once the budget is spent.
 ---
 
-Three declared stopping rules bound an unattended run. They bound the search
-itself. The repository has no view of what an instance costs and produces no
-cost estimate.
+Three declared stopping rules bound an unattended run.
 
 | Cap | Key | Enforced by |
 |---|---|---|
@@ -26,14 +24,14 @@ and both are overridable. See
 
 A campaign's billed hours are the wall-clock span from its first coverage
 sample to its last, on either track. A run that died after three hours must not
-bill the configured twenty-four.
+bill the configured thousand.
 
 ```
 python3 tools/pipeline_ctl.py round-end --from-run r2-1
 ```
 
 ```
-round 2 closed: growing, crashes=4, run_h=23.47
+round 2 closed: growing, crashes=4, run_h=987.42
   measured from run r2-1: k: growing (...); u: growing (...)
 ```
 
@@ -41,7 +39,7 @@ The configured window stands in only when a run left no usable coverage
 samples, and that fallback says so:
 
 ```
-billed 24.00 run-hours for run r2-1 (configured window (no usable coverage samples); campaign window elapsed)
+billed 1000.00 run-hours for run r2-1 (configured window (no usable coverage samples); campaign window elapsed)
 ```
 
 A run with no samples at all is reported:
@@ -59,6 +57,19 @@ a run with its own state file still counts against the one cap.
 Recording is idempotent per run id. Re-billing a run overwrites its entry, so a
 retried `round-end` never double-counts a campaign.
 
+A campaign install does not trust the ledger alone. `spend_for_budget()`
+compares its total against the hours the state file records and uses the larger,
+because a ledger write that failed on permissions leaves hours on record and out
+of the ledger, and the cap would then read headroom that was already spent. The
+gap is reported:
+
+```
+WARNING: spend ledger state/spend.json holds 1979.0 run-hours while the state file records 2966.4. 987.4 h of spend never reached the ledger, most likely a write that failed on permissions. Using the larger figure so the cap counts what actually ran. Fix the ledger's ownership and re-run: python3 tools/pipeline_ctl.py spend-init
+```
+
+`round-decide` and `round-show` read the ledger alone, so the two figures can
+disagree until the ledger is re-seeded.
+
 Two paths bill, and they cannot double-count because both derive the figure the
 same way:
 
@@ -67,16 +78,19 @@ same way:
 | `campaign_ctl.py` | On deadline stop, on manual stop, and when `status` finds a campaign already finished |
 | `pipeline_ctl.py round-end` | When the round closes |
 
-Billing in both places keeps a round that never closes from leaving its
-hours off the cap entirely. A round can fail to close because a phase blocked,
-the breaker tripped, or someone stopped it by hand.
+Billing in both places keeps a round that never closes from leaving its hours
+off the cap entirely. A round can fail to close because a phase blocked, the
+breaker tripped, or a human stopped it.
 
 ```mermaid
 flowchart LR
   CS["coverage samples<br/>artifacts/runs/&lt;id&gt;/coverage.csv"] --> MH["measured_run_hours()<br/>first sample to last"]
   MH --> RC["record_run_hours(run_id, h)<br/>idempotent per run id"]
-  RC --> SJ[("state/spend.json")]
-  SJ --> CB["check_budget()<br/>at campaign install"]
+  RC --> SJ[("state/spend.json<br/>machine-global")]
+  RC --> PJ[("state/pipeline.json<br/>round.run_hours")]
+  SJ --> SB["spend_for_budget()<br/>larger of the two"]
+  PJ --> SB
+  SB --> CB["check_budget()<br/>at campaign install"]
   SJ --> LD["loop_decision()<br/>at round-decide"]
   DL["check-deadline / stop / status"] --> MH
   RE["round-end --from-run"] --> MH
@@ -89,12 +103,13 @@ python3 tools/pipeline_ctl.py round-show
 ```
 
 ```
-rounds: 2 of max 3   run-hours: 47.0 of 216
-  round 1   complete   growing    crashes=6    run_h=23.5   edges 12004->31220
-            decision: continue — coverage still growing after round 1
+rounds: 2 of max 10   run-hours: 1979.0 of 5000
+  round 1   complete   growing    crashes=6    run_h=991.6   edges 12004->31220
+            surface:  incomplete (214 exercised + 31 accounted of 852 on denominator v3-852)
+            decision: continue (coverage still growing after round 1)
             runs: r1-1
             produced:  artifacts/eval/r1-1/worklist.md
-  round 2   in_progress unknown    crashes=0    run_h=23.5
+  round 2   in_progress unknown    crashes=0    run_h=987.4
             runs: r2-1
             executing: artifacts/eval/r1-1/worklist.md
 ```
@@ -123,7 +138,7 @@ python3 tools/pipeline_ctl.py round-decide --decision continue --reason "one mor
 ```
 
 ```
-error: computed decision is stop (run-hour budget spent (216.0 of 216.0 h)). A budget or round-cap stop cannot be overridden
+error: computed decision is stop (run-hour budget spent (5000.0 of 5000.0 h)). A completion, budget or round-cap stop cannot be overridden
 ```
 
 The round cap behaves the same way. A plateau stop or an `unknown` stop can be
@@ -137,7 +152,7 @@ python3 tools/pipeline_ctl.py round-decide --decision continue \
 ## Missing ledger recovery
 
 ```
-error: spend ledger state/spend.json is missing, but the state file records 47.2 billed run-hours. Refusing to treat the budget as unspent. Re-seed it from the state file with: python3 tools/pipeline_ctl.py spend-init
+error: spend ledger state/spend.json is missing, but the state file records 1979.0 billed run-hours. Refusing to treat the budget as unspent. Re-seed it from the state file with: python3 tools/pipeline_ctl.py spend-init
 ```
 
 Falling back to zero would hand the loop a fresh budget. A genuinely fresh
@@ -148,14 +163,14 @@ python3 tools/pipeline_ctl.py spend-init
 ```
 
 ```
-seeded ledger state/spend.json: 47.2 run-hours billed
+seeded ledger state/spend.json: 1979.0 run-hours billed
 ```
 
 It rebuilds the ledger from the hours the state file records and never lowers
 recorded spend. With a ledger already present it changes nothing:
 
 ```
-ledger already present at state/spend.json: 47.2 run-hours billed
+ledger already present at state/spend.json: 1979.0 run-hours billed
 (no change. Delete the ledger first to rebuild it from the state file)
 ```
 
@@ -175,6 +190,9 @@ Derived per-run hours are preferred. The cap is measured against `run_hours`,
 and typing it in puts a transcription step in front of a budget.
 
 ## Outside the caps
+
+The three caps bound the search. The repository has no view of what an instance
+costs and produces no cost estimate.
 
 | Cost | Bounded by | Source |
 |---|---|---|

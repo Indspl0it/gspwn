@@ -74,15 +74,6 @@ path this instance resolved:
 python3 tools/verify_tenant_surface.py runtime-mode
 ```
 
-```
-injection path
-
-  mode      auto
-  evidence  /etc/nvidia-container-runtime/config.toml sets mode = 'auto'
-
-This host resolves auto to jit-cdi. The CDI path injects /dev/nvidia-modeset and every /dev/dri node found for the GPU's PCI bus id, with no capability check. That is the device set surface/entry-points.json records as the tenant surface.
-```
-
 No AWS GPU AMI pins the mode, and the toolkit packages write `mode = auto` at
 install time, so a stock instance resolves to jit-cdi. An instance reporting
 `legacy` hands a container a smaller device set than the denominator assumes,
@@ -113,8 +104,7 @@ Run the sysrq test. A capture path is confirmed only by a captured panic.
 
 ## 7. Measure the tenant surface
 
-Run this before the campaign starts. It is the one gate whose failure is cheap
-here and expensive later.
+Run this before the campaign starts.
 
 ```
 python3 tools/verify_tenant_surface.py measure
@@ -136,9 +126,8 @@ The two disagreements are not symmetric:
 | A node the container received, recorded outside the tenant surface | Reachable surface the campaign does not model. Every coverage figure is measured against the wrong denominator |
 | A node recorded inside, which the container never received | Budgeted effort no attacker can use |
 
-Paste the full output into the phase's gate evidence, including the injection
-path it detected and the node list it measured. A summary line stating agreement
-records no measurement.
+Record the full output, including the injection path it detected and the node
+list it measured. A summary line stating agreement records no measurement.
 
 ## 8. Build the instrumented kernel
 
@@ -167,8 +156,8 @@ Stop there and set `BASE_CONFIG` before rebuilding. Do not reboot.
 ## 9. Snapshot the provisioned machine
 
 Once `provision` and `build` have passed their gates, create an AMI. Those two
-phases run once per machine and cost hours; every later instance can start from
-the image.
+phases run once per machine and cost hours, and every later instance can start
+from the image.
 
 ```
 aws ec2 create-image --instance-id <id> --name gspwn-provisioned-<date> --no-reboot
@@ -227,9 +216,10 @@ the instance to different hardware. Nothing in the repository can do that.
 
 ## 12. Monetary cost
 
-The caps in `config/campaign.yaml` bound the search itself. The repository has
-no view of what the instance costs and produces no estimate. Monetary spend is
-visible in the AWS console. Set a budget alert there.
+The repository has no view of what the instance costs and produces no estimate.
+The caps in `config/campaign.yaml` bound the search itself, and
+[Budget and spend](/gspwn/guides/budget-and-spend/) covers them. Monetary spend
+is visible in the AWS console. Set a budget alert there.
 
 ## See also
 

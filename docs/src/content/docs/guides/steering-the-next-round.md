@@ -19,8 +19,9 @@ flowchart LR
   FS --> FL["finding-list<br/>per-subsystem rollup"]
   FL --> RF["refine merges<br/>with coverage gaps"]
   RF --> WL["artifacts/eval/&lt;run-id&gt;/worklist.md"]
-  WL --> RE["round-end --worklist"]
-  RE --> RA["round-advance"]
+  WL --> RE["round-end --worklist<br/>records round.worklist"]
+  RE --> DE["round-decide<br/>continue"]
+  DE --> RA["round-advance"]
   RA --> WI["round.worklist_in"]
   WI --> D["describe reads it<br/>models adjacent calls"]
   WI --> S["seeds reads it<br/>builds preconditions"]
@@ -124,8 +125,7 @@ accepted and none of them steer produces no work for the next round, and
 PROBLEM: crash-0004 has a finding that steers nothing: every adjacent call is already in ioctls, ...
 ```
 
-The per-subsystem rollup is the target register. It records that `nvidia_uvm`
-has produced three findings and `nvidia_rm` one, which is the loop's only
+The per-subsystem rollup is the target register, and the loop's only
 non-coverage evidence for where to look next.
 
 ## 3. refine merges both signals

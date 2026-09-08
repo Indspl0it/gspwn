@@ -104,6 +104,22 @@ the PoC README.
 
 A run is a hit only when the evidence ties to **this** crash.
 
+```mermaid
+flowchart TB
+  R["run the reproducer"] --> V{"usable verdict?"}
+  V -->|no| VOID["void:<br/>ring wrapped, empty dmesg,<br/>would not execute, wrong crash"]
+  VOID --> CAP{"attempts left?<br/>poc.void_retry_factor"}
+  CAP -->|yes| R
+  CAP -->|no| EX2["exit 2: short denominator"]
+  V -->|yes| SIG{"this crash's signature<br/>in the dmesg delta?"}
+  SIG -->|yes| HIT["counted: CRASH"]
+  SIG -->|no| CLEAN["counted: clean"]
+  HIT --> N{"--runs counted?"}
+  CLEAN --> N
+  N -->|no| R
+  N -->|yes| RATE["rate = hits / counted<br/>reliable, flaky or unreproducible"]
+```
+
 | Track | Hit condition |
 |---|---|
 | K | This crash's signature appears in the dmesg delta |
@@ -135,9 +151,9 @@ and the denominator, and re-run.
 | A Track U replay followed by an unexplained reboot | A userspace replay cannot take the kernel down |
 | Track U exit 126 or 127 | Harness infrastructure failure: the command was not runnable |
 
-Void runs do not advance the count, so verification keeps going until enough
-verdicts land. `poc.void_retry_factor` caps total attempts, so a persistently
-wrapping ring cannot loop forever:
+Verification keeps going until enough verdicts land.
+`poc.void_retry_factor` caps total attempts, so a persistently wrapping ring
+cannot loop forever:
 
 ```
 giving up after 25 attempts: too many void runs
@@ -228,7 +244,7 @@ Record one of three outcomes in the PoC README:
 | Outcome | Meaning |
 |---|---|
 | `tenant-reachable` | It reproduces there. The only outcome supporting the tenant-reachability claim |
-| `not-tenant-reachable` | It needs privilege the model's attacker does not have. Still a real driver bug; the impact statement says which privilege |
+| `not-tenant-reachable` | It needs privilege the model's attacker does not have. Still a real driver bug, and the impact statement says which privilege |
 | `profile-check-blocked` | The check could not be run. Never recorded as tenant-reachable by default |
 
 Confirm what the container actually received before trusting the result:
@@ -254,4 +270,4 @@ attacker needs.
 
 - [Impact and severity](/gspwn/architecture/impact-and-severity/) covers what
   the report can argue from a verified reproducer.
-- [repro_ctl.py reference](/gspwn/reference/cli/repro-ctl/)
+- [repro_ctl.py reference](/gspwn/architecture/components/repro-ctl/)

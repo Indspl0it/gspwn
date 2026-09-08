@@ -40,9 +40,9 @@ processing block's register file.
 | Tensor cores | 4, one per processing block | 4 |
 
 The caps interact, and occupancy is the minimum across all of them. The
-register file binds most often, and it does so without appearing anywhere in
-the source: 65,536 registers per SM divided by threads-per-block times
-registers-per-thread gives a block count the launch configuration never states.
+register file binds most often and appears nowhere in the source. 65,536
+registers per SM divided by threads-per-block times registers-per-thread gives
+a block count the launch configuration never states.
 `ptxas -v` reports the register count the compiler chose, and
 `cudaOccupancyMaxActiveBlocksPerMultiprocessor` computes the resulting figure.
 

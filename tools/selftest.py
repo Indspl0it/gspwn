@@ -1947,6 +1947,166 @@ class TestBudgetGuard(StateTempMixin, unittest.TestCase):
             self.assertEqual(ps.spend_for_budget(), 300.0)
 
 
+
+class TestProseFiguresMatchTheSurface(unittest.TestCase):
+    """regression_check figures: a number in a brief is an assertion with no
+    test behind it.
+
+    `agents` reads the command lines out of a brief and checks each against
+    the tool's own argparse parser. Nothing read the numbers in the prose, and
+    a brief is executed by a model that takes them as fact. Three stale
+    figures survived every check that way: a denominator enumeration summing
+    to 828, an exclusion count of 347 and a compile verdict of 862 syscalls.
+    """
+
+    def run_over(self, text):
+        """-> (exit code, output) with `text` standing in for every source."""
+        path = os.path.join(tempfile.mkdtemp(prefix="figures-"), "brief.md")
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        self.addCleanup(shutil.rmtree, os.path.dirname(path),
+                        ignore_errors=True)
+        real = regression_check.figure_sources
+        regression_check.figure_sources = lambda: [path]
+        self.addCleanup(setattr, regression_check, "figure_sources", real)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = regression_check.check_figures()
+        return code, buffer.getvalue()
+
+    def measured(self):
+        targets, excluded, _meta = surface_cov.load_targets()
+        families = collections.Counter(r["family"] for r in targets.values())
+        return len(targets), len(excluded), families
+
+    def test_the_committed_prose_states_no_stale_figure(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = regression_check.check_figures()
+        self.assertEqual(code, 0, buffer.getvalue())
+
+    def test_a_retired_denominator_stated_as_current_is_reported(self):
+        code, out = self.run_over("The surface holds 828 targetable "
+                                  "commands.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("superseded", out)
+        self.assertIn("828", out)
+
+    def test_a_retired_denominator_inside_a_code_span_is_left_alone(self):
+        """A figure in a code span reproduces what a tool printed."""
+        code, out = self.run_over("The `surface_cov.py report` output read "
+                                  "`828 targetable` at the time.\n")
+        self.assertEqual(code, 0, out)
+
+    def test_a_retired_denominator_inside_a_fence_is_left_alone(self):
+        code, out = self.run_over("Output:\n\n```\n828 targetable\n```\n")
+        self.assertEqual(code, 0, out)
+
+    def test_a_family_enumeration_missing_a_family_is_reported_by_its_sum(
+            self):
+        """The rule that catches a family added and left out of a brief.
+
+        Every figure in the list is right and the list is still wrong, so no
+        per-figure comparison finds it. The sum moves, and the report names
+        the family the list omits.
+        """
+        code, out = self.run_over(
+            "Counted as 32 escape, 39 uvm, 7 uvm_tools, 531 control, "
+            "155 alloc and 64 modeset targets.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("enumeration", out)
+        self.assertIn("omitting drm", out)
+
+    def test_a_family_enumeration_that_sums_to_the_denominator_passes(self):
+        total, _excluded, families = self.measured()
+        listed = ", ".join("%d %s" % (families[name], name)
+                           for name in sorted(families))
+        code, out = self.run_over("Counted as %s targets, %d in all.\n"
+                                  % (listed, total))
+        self.assertEqual(code, 0, out)
+
+    def test_an_enumeration_wrapped_across_a_line_is_summed_whole(self):
+        """Prose here wraps at 80 columns and an enumeration spans two lines.
+
+        Reading line by line sums a partial list and reports a mismatch that
+        is an artefact of the wrap.
+        """
+        _total, _excluded, families = self.measured()
+        names = sorted(families)
+        head = ", ".join("%d %s" % (families[n], n) for n in names[:4])
+        tail = ", ".join("%d %s" % (families[n], n) for n in names[4:])
+        code, out = self.run_over("Counted as %s,\n%s targets.\n"
+                                  % (head, tail))
+        self.assertEqual(code, 0, out)
+
+    def test_a_wrong_exclusion_total_is_reported(self):
+        code, out = self.run_over("347 commands sit outside the "
+                                  "denominator.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("bound", out)
+        self.assertIn("347", out)
+
+    def test_a_wrong_exclusion_group_count_is_reported(self):
+        code, out = self.run_over("Five groups sit outside it.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("bound", out)
+
+    def test_the_right_exclusion_total_passes(self):
+        _total, excluded, _families = self.measured()
+        code, out = self.run_over("%d commands sit outside the "
+                                  "denominator.\n" % excluded)
+        self.assertEqual(code, 0, out)
+
+    def test_an_offence_names_the_file_and_the_line(self):
+        code, out = self.run_over("A note.\n\nThe surface holds 828 "
+                                  "targetable commands.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("brief.md", out)
+        self.assertIn(":3", out)
+
+    def test_the_generated_reference_tree_is_not_read(self):
+        """`pages` already compares it against the artefacts it renders from.
+
+        Reading it here would report the same drift twice and name the
+        rendered file where the generator is the thing to edit.
+        """
+        for path in regression_check.figure_sources():
+            self.assertNotIn("docs/src/content/docs/reference",
+                             path.replace(os.sep, "/"), path)
+
+    def test_the_retired_denominators_come_from_the_recorded_history(self):
+        """Read with ast, because pipeline_state needs fcntl and importing it
+        would stop this check running on a Windows workstation."""
+        retired = regression_check.retired_denominators(852)
+        self.assertIn(764, retired)
+        self.assertIn(828, retired)
+        self.assertNotIn(852, retired)
+
+    def test_prose_naming_a_figure_as_retired_may_state_it(self):
+        """A page documenting the denominator's history has to name it.
+
+        The rule reports a retired denominator stated as a current one, so
+        prose that marks the figure as retired sits outside the rule. The
+        component page for this tool states 764 and 828 exactly that way.
+        """
+        code, out = self.run_over("The retired denominators are 764 and "
+                                  "828.\n")
+        self.assertEqual(code, 0, out)
+
+    def test_the_exemption_does_not_reach_a_later_sentence(self):
+        """The window ends at the sentence boundary.
+
+        Without that, one mention of the history anywhere above would exempt
+        every stale figure on the rest of the page. The assertion is on the
+        rule's own sentence and not on the figure appearing somewhere in the
+        output, because an offence quotes its neighbourhood and a nearby
+        figure lands in that excerpt without having been reported.
+        """
+        code, out = self.run_over("That history is recorded elsewhere. The "
+                                  "surface holds 828 targetable commands.\n")
+        self.assertEqual(code, 1, out)
+        self.assertIn("828 is a retired denominator", out)
+
 class TestPlateauAcrossRestarts(unittest.TestCase):
     """The fuzzer restarts by design: units are Restart=always and the box
     panics. Edge counts reset to zero when it does."""
@@ -13337,7 +13497,7 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
         self.assertEqual(regression_check.check_order(),
                          ["names", "pins", "coverage", "derived",
                           "families", "pages", "stale", "harnesses",
-                          "agents"])
+                          "agents", "figures"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -13515,13 +13675,7 @@ class TestTheRegisterCheckTellsACleftFromADeterminer(unittest.TestCase):
     right for a reproduction and wrong for the cleft pattern, because a cleft
     is routinely completed by an identifier."""
 
-    DETERMINERS = [
-        ("architecture/crash-identity.md", 183),
-        ("architecture/durability.md", 163),
-        ("architecture/loops.md", 460),
-        ("reference/cli/campaign-ctl.md", 188),
-        ("reference/cli/orchestrator-ctl.md", 118),
-    ]
+    DETERMINER = "is the one"
 
     def hits(self, text):
         directory = tempfile.mkdtemp()
@@ -13561,28 +13715,32 @@ class TestTheRegisterCheckTellsACleftFromADeterminer(unittest.TestCase):
                       "over."), [])
 
     def test_the_determiner_pages_report_no_cleft(self):
-        # Located by the phrase and not by the line number the review
-        # recorded, because these pages belong to another partition and a
-        # line number goes stale on the next edit. The count guard keeps the
-        # test from passing over a corpus that has moved away entirely.
+        # The carrying pages are found by the phrase rather than named. An
+        # earlier version listed five paths with the line the review recorded;
+        # two of those pages were later deleted and the line numbers had
+        # already moved, so the list described a corpus that no longer
+        # existed. The count guard keeps the test from passing vacuously over
+        # a corpus carrying the phrase nowhere.
         root = os.path.join(register_check.REPO_ROOT, "docs", "src",
                             "content", "docs")
         checked = 0
-        for rel, _line in self.DETERMINERS:
-            path = os.path.join(root, *rel.split("/"))
-            if not os.path.exists(path):
-                continue
-            with open(path, encoding="utf-8") as handle:
-                lines = handle.read().split("\n")
-            carrying = [i + 1 for i, text in enumerate(lines)
-                        if "is the one" in text]
-            if not carrying:
-                continue
-            hits = [h for h in register_check.check_file(path, rel)
-                    if h[0] == "cleft construction" and h[1] in carrying]
-            self.assertEqual(hits, [], rel)
-            checked += 1
-        self.assertGreaterEqual(checked, 3)
+        for directory, _sub, names in os.walk(root):
+            for name in sorted(names):
+                if not name.endswith((".md", ".mdx")):
+                    continue
+                path = os.path.join(directory, name)
+                rel = os.path.relpath(path, root).replace(os.sep, "/")
+                with open(path, encoding="utf-8") as handle:
+                    lines = handle.read().split("\n")
+                carrying = [i + 1 for i, text in enumerate(lines)
+                            if self.DETERMINER in text]
+                if not carrying:
+                    continue
+                hits = [h for h in register_check.check_file(path, rel)
+                        if h[0] == "cleft construction" and h[1] in carrying]
+                self.assertEqual(hits, [], rel)
+                checked += 1
+        self.assertGreaterEqual(checked, 1)
 
     def test_a_code_span_is_still_exempt_from_every_other_rule(self):
         directory = tempfile.mkdtemp()
@@ -13789,6 +13947,63 @@ class TestRecordedInputsStillMatch(Phase0Fixtures):
         self.assertIn("surface/rm-control-rank.json", out)
         self.assertIn("absent", out)
 
+    def test_a_crlf_working_copy_is_named_as_line_endings(self):
+        """The failure that reached the branch tip.
+
+        .gitattributes normalises to LF, so the committed blob is LF whatever
+        platform wrote it and git reports a CRLF working copy as unmodified.
+        A digest taken over that working copy then passes on the machine that
+        recorded it and fails on every checkout, which is the machine the
+        campaign runs on. Reported as a content mismatch it reads as a
+        half-applied regeneration and the remedy rewrites a set that was
+        never wrong.
+        """
+        root = self.tempdir()
+        record = self.scratch(root)
+        path = os.path.join(root, "surface", "rm-control-rank.json")
+        with open(path, "rb") as fh:
+            body = fh.read()
+        with open(path, "wb") as fh:
+            fh.write(body.replace(b"\n", b"\r\n"))
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("crlf", out)
+        self.assertIn("CRLF line endings", out)
+        self.assertIn("dos2unix", out)
+
+    def test_a_digest_recorded_over_crlf_is_named_as_the_record(self):
+        """The other direction, and the one that breaks the deployment.
+
+        The working copy is LF and correct; the digest was taken on a machine
+        whose copy was CRLF. No checkout of the commit reproduces it, so the
+        artefact is not the thing to change.
+        """
+        root = self.tempdir()
+        record = self.scratch(root)
+        path = os.path.join(root, "surface", "rm-control-rank.json")
+        with open(path, "rb") as fh:
+            body = fh.read()
+        record["ctrl_rank"]["sha256"] = hashlib.sha256(
+            body.replace(b"\n", b"\r\n")).hexdigest()
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("crlf-record", out)
+        self.assertIn("no checkout of this commit reproduces it", out)
+
+    def test_a_content_change_is_still_reported_as_content(self):
+        """The line-ending diagnosis must not swallow a real mismatch."""
+        root = self.tempdir()
+        record = self.scratch(root)
+        self.artefact(root, "surface/rm-control-rank.json",
+                      b'{"commands": [1]}\n')
+        self.generation(root, record)
+        code, out = self.check("stale")
+        self.assertEqual(code, 1, out)
+        self.assertIn("differs", out)
+        self.assertNotIn("crlf", out)
+
     def test_a_record_with_no_provenance_block_cannot_run(self):
         root = self.tempdir()
         directory = os.path.join(root, "descriptions")
@@ -13949,16 +14164,16 @@ class TestHarnessTargetListsAgree(Phase0Fixtures):
 class TestTheTwoGuardsAreRegistered(unittest.TestCase):
     """Both guards run under `regression_check.py all`."""
 
-    def test_the_registry_holds_nine_checks(self):
-        self.assertEqual(len(regression_check.check_order()), 9)
+    def test_the_registry_holds_ten_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 10)
 
     def test_both_guards_are_registered_and_ordered(self):
-        for name in ("stale", "harnesses", "agents"):
+        for name in ("stale", "harnesses", "agents", "figures"):
             self.assertIn(name, regression_check.CHECKS, name)
             self.assertIn(name, regression_check.CHECK_ORDER, name)
 
-    def test_the_module_docstring_names_nine_checks(self):
-        self.assertIn("Nine CI checks", regression_check.__doc__)
+    def test_the_module_docstring_names_ten_checks(self):
+        self.assertIn("Ten CI checks", regression_check.__doc__)
 
     def test_the_workflow_runs_both_guards(self):
         with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
@@ -13966,7 +14181,7 @@ class TestTheTwoGuardsAreRegistered(unittest.TestCase):
             workflow = fh.read()
         # Asserted as a membership test and not with assertIn, because the
         # workflow is one long string and a failure would print all of it.
-        for name in ("stale", "harnesses", "agents"):
+        for name in ("stale", "harnesses", "agents", "figures"):
             self.assertTrue("regression_check.py %s" % name in workflow,
                             "the workflow runs no %s step" % name)
 
@@ -14600,23 +14815,31 @@ class TestTheSyzlangWorkflow(unittest.TestCase):
 
 
 class TestTheCompileGateIsDocumented(unittest.TestCase):
-    """The gate replaces a hand-produced result, so the prompts and the exit
-    code table have to name it."""
+    """The gate replaces a hand-produced result, so the tool and the prompt
+    have to name it. The exit codes were asserted against a reference page
+    until the documentation restructure removed it; they are asserted against
+    the tool's own docstring now, which is where a reader of the codebase
+    finds them and which sits beside the implementation."""
 
     def read(self, *parts):
         with open(os.path.join(os.path.dirname(HERE), *parts),
                   encoding="utf-8") as handle:
             return handle.read()
 
-    def test_the_exit_code_table_carries_the_toolchain_code(self):
-        text = self.read("docs", "src", "content", "docs", "reference",
-                         "exit-codes.md")
-        self.assertIn("| `syzlang_gen.py` | `compile` | 3 |", text)
+    def test_the_tool_names_the_toolchain_exit_code(self):
+        # 3 is kept apart from 1 on purpose: a missing Go toolchain is an
+        # environment the gate cannot obtain, and a set that does not compile
+        # is a result.
+        self.assertIn("3 `compile` found no Go", self.read("tools",
+                                                           "syzlang_gen.py"))
 
-    def test_the_exit_code_table_carries_the_compile_failure_code(self):
-        text = self.read("docs", "src", "content", "docs", "reference",
-                         "exit-codes.md")
-        self.assertIn("| `syzlang_gen.py` | `compile` | 1 |", text)
+    def test_the_tool_names_the_compile_failure_exit_code(self):
+        self.assertIn("1 bad input or unreadable source or a set that",
+                      self.read("tools", "syzlang_gen.py"))
+
+    def test_the_describe_prompt_refuses_exit_three_as_a_pass(self):
+        self.assertIn("Exit 3 is not a pass", self.read("agents",
+                                                        "describe.md"))
 
     def test_the_describe_prompt_cites_the_command(self):
         self.assertIn("python3 tools/syzlang_gen.py compile",

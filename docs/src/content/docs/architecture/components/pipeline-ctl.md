@@ -4,9 +4,7 @@ description: The command surface of the state machine.
 ---
 
 The command surface over `pipeline_state.py`. Twenty subcommands, no root
-required. Every state change an agent makes passes through here.
-
-The module is a leaf: nothing in `tools/` imports it.
+required. Every state change an agent makes passes through it.
 
 ## Responsibility
 
@@ -23,58 +21,21 @@ views built from state at read time. It writes state only through
 | A command that reads spend fails closed | `main` catches `SpendLedgerMissing` and prints its remediation |
 | The handoff is never stale | `cmd_brief` derives every line at read time and stamps its own timestamp |
 
-## Interface
+## The command vocabulary
 
-| Subcommand | Purpose |
+Twenty subcommands cover five groups of state change.
+
+| Group | Covers |
 |---|---|
-| `init` | Create `state/pipeline.json` |
-| `show` | Phase table and crash summary |
-| `next` | The first phase not marked done, or the wait line |
-| `set-phase` | Set a phase status |
-| `crash-list` | List registered crashes |
-| `crash-set` | Update one or more crash registry entries |
-| `brief` | The derived handoff for a replacement agent |
-| `finding-set`, `finding-list` | Write and read the research records |
-| `impact-set`, `impact-list` | Write and read the impact records |
-| `campaign-add` | Record a campaign event |
-| `round-show` | Round history and loop budget |
-| `round-add-run` | Attach a run id to this round |
-| `round-end` | Record the round's measured outcome, both curves and the completion reading |
-| `surface-account` | Record one target as accounted for in the completion ledger |
-| `surface-unaccount` | Remove one accounted row, reopening its target |
-| `surface-ledger` | Print the accounted rows grouped by reason |
-| `worklist` | The worklist this round's `describe` and `seeds` sub-agents execute |
-| `round-decide` | Apply the caps and record the loop decision |
-| `round-advance` | Open the next round |
-| `spend-init` | Rebuild a lost spend ledger from recorded hours |
-| `validate` | Report registry and state integrity problems |
+| Phases | Reading the phase table, the next phase to run, and setting a phase status |
+| Crashes | Listing the registry, and bulk-editing entries with their status, duplicate links and reproduction rates |
+| Research | Writing and reading the finding and impact records that carry a crash's analysis |
+| Rounds | Attaching runs, recording a round's measured outcome, applying the caps, and opening the next round |
+| Completion | Accounting a target as closed, reopening one, and printing the ledger grouped by reason |
 
-`selftest.py` calls `cmd_round_end` through a lazy wrapper.
-
-## Callers
-
-| Direction | Modules |
-|---|---|
-| Imports this module | Nothing. `selftest.py` imports it inside a wrapper function |
-| This module imports | `pipeline_state.py`, `gspwn_config.py`, `knowledge_ctl.py` inside a `try` for `brief` |
-| Lazily, inside a function | `coverage_ctl` for measurement in `_derive_run`; `campaign_ctl` for the live check in `_live_runs` and `cmd_round_end` |
-
-The two lazy imports exist because `coverage_ctl` and `campaign_ctl` read
-configuration when their argument parsers are built, and a module-scope import
-would run that read at import time.
-
-## Failure modes
-
-| Condition | Behaviour |
-|---|---|
-| Loop or agent settings unreadable | Exits 1. The accessors do not fall back to a default |
-| Configuration unreadable during `validate` | Passes `None` for the drift check and still reports on the registry |
-| `round-end` without `--from-run` | Exits 1 asking for at least one run to measure |
-| `round-end` while a run in the round is inside its campaign window | Exits 1 naming the live run |
-| `crash-set` given an unknown id, a self-duplicate, a link to a duplicate, or a rate outside 0.0 to 1.0 | Exits 1 before the write, and nothing is changed |
-| `round-decide --decision continue` against a tripped hard cap | Exits 1 naming the cap |
-| Spend ledger missing on any command that reads spend | Exits 1 with the exception's own remediation |
-| Knowledge files unreadable during `brief` | The state summary above them still prints |
+Alongside those sit the derived views: a handoff brief for a replacement agent,
+the worklist a round's sub-agents execute, and an integrity report over the
+registry and the state file.
 
 ## Concurrency and durability
 
@@ -110,10 +71,8 @@ gain.
 recording `edges_end` below `edges_start` would show the round losing coverage
 in the history the report is built from.
 
-`cmd_brief` is derived and short. A hand-maintained handoff drifts as soon as a
-phase changes without it being rewritten. It stamps its own time, so its age is
-visible. It is read into a context window that has just been truncated, where
-every line displaces something else.
+A hand-maintained handoff drifts as soon as a phase changes without it being
+rewritten, which is why `cmd_brief` derives every line at read time.
 
 `finding-set` and `impact-set` take JSON. The records are nine and eighteen
 fields, several of them lists, and `rca` authors each as a whole. A dozen
@@ -164,5 +123,4 @@ where a relative path is a run of `..` segments.
 
 ## See also
 
-- [pipeline_ctl.py reference](/gspwn/reference/cli/pipeline-ctl/)
-- [State file schema](/gspwn/reference/state-file/)
+- [pipeline_ctl.py reference](/gspwn/architecture/components/pipeline-ctl/)

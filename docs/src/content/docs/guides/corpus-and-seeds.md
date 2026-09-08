@@ -10,9 +10,6 @@ Two stores hold programs, and they have different lifetimes.
 | Run corpus | `artifacts/runs/<run-id>/workdir/corpus.db` | Dies with the run |
 | Seed bank | `artifacts/seeds/` | Outlives rounds and campaigns |
 
-syzkaller's corpus lives inside one run's workdir. Later rounds start from the
-seed bank, which persists across the outer loop.
-
 ## Corpus policy per run
 
 ```
@@ -144,16 +141,12 @@ source.
 The two `trace2seed.py` sources cover different holes and the bank needs both.
 A trace reaches a surface classified `unreachable-by-construction` by the
 `refine` phase, meaning code that needs a real object or handle chain syzkaller
-will not build on its own. No trace names a control command, because
-`NV_ESC_RM_CONTROL` dispatches on a field inside a parameter struct that
-`strace` does not decode, so the chain-shaped programs are the only route to
-the 531.
+will not build on its own. No trace names a control command, so the
+chain-shaped programs are the only route to the 531.
 
-The 514 counts emitted programs. It says a chain exists in `rm-chains.json` for
-that command and a program was written for it. Whether the prologue allocates
-on real hardware is unverified: no GPU was
-involved, no chain was allocated and no emitted program has been executed or
-put through `prog.Deserialize`. See
+The 514 counts emitted programs. Whether a prologue allocates on real hardware
+is unverified: no GPU was involved, no chain was allocated and no emitted
+program has been executed or put through `prog.Deserialize`. See
 [Seeds from traces](/gspwn/guides/generating-seeds-from-traces/).
 
 `convert` writes `seed-NNNN.syz` and `chains` writes `chain-NNNN.syz`, so the
@@ -168,8 +161,8 @@ python3 tools/coverage_ctl.py compare --run-id r2-1 --against r1-1
 ```
 
 ```
-r2-1                 edges  18422 ->  41907  (+23485) over 23.5 h
-r1-1                 edges  12004 ->  31220  (+19216) over 23.8 h
+r2-1                 edges  18422 ->  41907  (+23485) over 987.4 h
+r1-1                 edges  12004 ->  31220  (+19216) over 991.6 h
 Comparing runs is only meaningful when each had its own workdir and corpus policy. See campaign_ctl.py --corpus.
 ```
 
@@ -180,4 +173,4 @@ test.
 ## See also
 
 - [Seeds from traces](/gspwn/guides/generating-seeds-from-traces/)
-- [corpus_ctl.py reference](/gspwn/reference/cli/corpus-ctl/)
+- [corpus_ctl.py reference](/gspwn/architecture/components/corpus-ctl/)

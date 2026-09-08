@@ -18,8 +18,8 @@ sequenceDiagram
 
   P->>K: ioctl, allocate an object
   K->>K: validate the client handle<br/>and the parameter struct
-  K->>Q: write an RPC message
-  K->>G: ring the doorbell
+  K->>Q: GspMsgQueueSendCommand<br/>writes the RPC message
+  K->>G: kgspSetCmdQueueHead_HAL<br/>advances the queue head
   G->>G: perform the allocation<br/>program the hardware
   G->>Q: write the reply
   G-->>K: interrupt
@@ -43,16 +43,16 @@ sequenceDiagram
 | Fault reporting and error containment | GSP |
 | The display engine, where present | Kernel, through `nvidia-modeset.ko` |
 
-The split follows no single line. An operation typically validates in the
-kernel, executes on the GSP, and updates state on both sides.
+An operation typically validates in the kernel, executes on the GSP, and
+updates state on both sides.
 
 ## The transport
 
 | Element | Location |
 | --- | --- |
-| Command queue | Device memory, written by the kernel and read by the GSP |
+| Command queue | Device memory, written by `GspMsgQueueSendCommand` and read by the GSP |
 | Reply queue | Device memory, written by the GSP and read by the kernel |
-| Doorbell | A register write that tells the GSP a message is waiting |
+| Queue head write | `kgspSetCmdQueueHead_HAL`, the register write that tells the GSP a message is waiting |
 | Completion | An interrupt from the GSP to the host |
 | Event channel | A separate path for unsolicited messages such as fault notifications |
 
@@ -72,10 +72,6 @@ absolute.
 | Latency changed shape | Operations that were function calls became message round trips, so a sequence of small calls now pays one round trip each |
 | The open modules became possible | Publishing the thin half discloses no hardware programming detail, because that detail moved into the firmware |
 
-`open-gpu-kernel-modules` is publishable because the unpublished code moved to
-the far side of the RPC queue. The kernel-side module discloses no hardware
-programming detail, because it no longer contains any.
-
 ## Xid
 
 An Xid is a numbered error the driver logs when the GPU reports a fault. The
@@ -88,7 +84,7 @@ number identifies a class.
 | A GSP RPC timeout | The firmware stopped responding |
 | A robust channel error | An engine faulted and its channel was killed |
 
-`nvidia-smi -q` reports the counts; the kernel log carries the entries with the
+`nvidia-smi -q` reports the counts. The kernel log carries the entries with the
 PID and channel where available.
 
 ## Worked example: an allocation crossing the boundary
@@ -99,9 +95,9 @@ A process calls the driver API to allocate device memory.
    number, a parent handle and a parameter structure.
 2. `nvidia.ko` validates that the parent handle belongs to this client and that
    the parameter structure's size and fields are consistent with the class.
-3. The kernel side builds an RPC message and writes it into the command queue
-   in device memory.
-4. It rings the doorbell.
+3. The kernel side builds an RPC message and `GspMsgQueueSendCommand` writes it
+   into the command queue in device memory.
+4. `kgspSetCmdQueueHead_HAL` advances the queue head register.
 5. The GSP reads the message, allocates the memory, programs the page tables,
    and constructs the object in its own bookkeeping.
 6. The GSP writes a reply into the reply queue and raises an interrupt.

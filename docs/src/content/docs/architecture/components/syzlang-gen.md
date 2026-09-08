@@ -7,9 +7,7 @@ Generates a syzlang description set for the NVIDIA driver ioctl surface from
 the three measured inventories. `ioctl_inventory.py` supplies the dispatched
 escapes and their request numbers, `ctrl_surface.py` the RM control command
 space with its privilege classification, and `object_graph.py` the allocation
-DAG. Without this module the `describe` phase transcribes all three by hand on
-a live SUT, and spends the time it has on the target writing down numbers that
-are already extracted.
+DAG.
 
 Struct field layout appears in none of the inventories, which carry struct
 names and sizes only. This module parses layout out of the driver headers and
@@ -17,7 +15,7 @@ checks every derived layout against a `sizeof` measured by compiling the same
 header for x86-64.
 
 The module runs entirely off the source tree and the committed inventories. It
-reaches no device, opens no socket, and needs no GPU.
+reaches no device and needs no GPU.
 
 ## Responsibility
 
@@ -28,111 +26,66 @@ description set. It writes only the files under its output directory.
 |---|---|
 | A derived struct layout never ships unchecked | Every struct a description names is compared against a measured `sizeof` |
 | A layout that disagrees with its measurement is still correctly sized | The struct falls back to an opaque array at the measured size |
-| A disagreement is visible | `generation.json` records the struct, the derived total and the measured total, and `--strict` exits 2 |
+| A disagreement is visible | `generation.json` records the struct, the derived total and the measured total, and a strict run refuses to write the set at all |
 | Nothing is guessed to complete a description | A parameter type with neither a derived layout nor a measured size is skipped and counted |
 | The emitted size does not depend on syzkaller's alignment rules | Padding is explicit and every struct carries `[packed]` |
 | The client allocation is always emitted | The three `RS_ROOT_OBJECT` classes name no `RS_FLAGS_ALLOC_*` flag and are emitted anyway, with a log line naming them |
 | The control multiplexer is a constant set | One variant per command, with `cmd` pinned to `const[<method id>, int32]` |
-| No emitted call leaves its leaf selector free | `require_pinned()` reads the rendered struct text and exits on a `cmd` or `hClass` that is not `const[...]`, over 768 variants |
-| The wrapper escape reaches no command the direct route cannot | `emit_xfer` declines both multiplexers and emits one typed variant per remaining inner escape |
-| A description set is reproducible from a clean checkout | `--ctrl-sizes` and `--ctrl-rank` both default to a committed artefact, and `generation.json` records the path, the digest and the entry count of each |
-| A parent pin is never a chip-gated guess | `parent_is_narrow()` expands a class to one variant per legal parent only when no member of its parent set is chip-exclusive |
+| No emitted call leaves its leaf selector free | The rendered struct text is read at emission, and a `cmd` or `hClass` that is not `const[...]` stops the run. Every control, allocation, XFER, modeset and DRM variant is checked |
+| The wrapper escape reaches no command the direct route cannot | Both multiplexers are declined, and one typed variant is emitted per remaining inner escape |
+| A description set is reproducible from a clean checkout | Every input defaults to a committed artefact, and `generation.json` records the path, the digest and the entry count of each |
+| A parent pin is never a chip-gated guess | A class expands to one variant per legal parent only when no member of its parent set is chip-exclusive |
 | A UVM request number carries no `_IOC` fields | UVM commands are read from the inventory's `bare_command_number` nodes and emitted as bare values |
-| No field is bound to a value family the audit did not accept | `load_value_families` reads the accepted set through `value_families.accepted_families`, which joins the derivation against `surface/value-families-audit.json` and returns the accepted records alone |
-| A bound field keeps the width it had | `value_overrides` reads the width off the derived layout and never off the family record, so a field emitted as `int8` binds to `flags[..., int8]` and the struct size does not move |
-| A value family never displaces an existing override | `Emitter.merge_value_overrides` keeps the existing override for a field both name, records the collision, and `emit` reports it |
-| A set is emitted only where a field references it | `emit_value_flags_sets` reads `Emitter.value_bound`, which is appended to as each struct renders, and runs after every `emit_*` call |
-| The emitted identifier is the audited identifier | Both the set definition and the field binding read `record["set_name"]` off the derivation, which `value_families.set_name` computed once |
-| Out-of-scope device nodes stay absent | Only `/dev/nvidiactl`, `/dev/nvidiaN`, `/dev/nvidia-uvm` and `/dev/nvidia-uvm-tools` get an `openat$` variant |
+| No field is bound to a value family the audit did not accept | The derivation is joined against `surface/value-families-audit.json` and only accepted records reach a field |
+| A bound field keeps the width it had | The width comes from the derived layout and never from the family record, so a field emitted as `int8` binds to `flags[..., int8]` and the struct size does not move |
+| A value family never displaces an existing override | The existing override wins any field both name, and the collision is recorded and reported |
+| A set is emitted only where a field references it | Sets are written after every struct has rendered, over the families that actually bound |
+| The emitted identifier is the audited identifier | The set definition and the field binding read one name off the derivation, computed once at derivation time |
+| Out-of-scope device nodes stay absent | Seven nodes get an `openat$` variant: `/dev/nvidiactl`, `/dev/nvidiaN`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools`, `/dev/nvidia-modeset`, `/dev/dri/cardN` and `/dev/dri/renderDN`. Nothing else does |
 
-## Interface
+## Generation
 
-| Subcommand | Output |
-|---|---|
-| `emit [--out-dir DIR]` | `nvidia.txt`, `nvidia_ctrl.txt`, `nvidia_uvm.txt`, `nvidia_modeset.txt`, `nvidia_structs.txt`, the `_IOWR` header, and `generation.json` |
-| `emit-probe --probe-dir DIR` | One C translation unit per SDK header group, plus a runner that compiles them for x86-64 and writes `sizes.json` |
-| `verify` | The size-match table and nothing else |
-| `summary` | Counts per category, and control coverage by SDK prefix |
-| `compile` | The verdict of syzkaller's own `pkg/compiler` over the staged set, with the driver's diagnostics unchanged |
+Five inventories and the driver headers go in, and a syzlang description set
+comes out with a size check standing between them.
 
-`--src` selects the checkout. `--inventory`, `--control`, `--graph` and
-`--nvkms` select the four inventory files. `--strict` turns any size disagreement into exit 2.
-`--max-control` caps the control family, `--control-order` picks between chain
-depth and table order, `--uvm-test` adds the 104 test commands, and
-`--all-classes` adds the privileged allocation classes.
+```mermaid
+flowchart TD
+    SRC[Driver source headers] --> PARSE[Header parse: struct layout]
+    SRC --> PROBE[Probe: compile each SDK header group for x86-64]
+    PROBE --> SIZES[Measured sizeof per struct]
+    INV[Five inventories: escapes, control, object graph, modeset, DRM] --> EMIT
+    RANK[Ranking and value families] --> EMIT
+    PARSE --> GATE{Derived layout equals measured sizeof?}
+    SIZES --> GATE
+    GATE -->|yes, 595 of 595| EMIT[Emit the description set]
+    GATE -->|no| OPAQUE[Emit an opaque array at the measured size, and record the disagreement]
+    OPAQUE --> EMIT
+    EMIT --> SET[933 ioctl variants across five files, plus the generation record]
+    SET --> COMPILE[Compile gate: syzkaller pkg/compiler]
+```
 
-Two inputs carry a committed default, so `emit --commit <sha>` alone reproduces
-the shipped set.
+The size check is the reason the set can be trusted at all. An ioctl request
+number encodes the size the driver expects, so a wrong layout compiles, runs,
+and lands on a different field or on none. Every struct a description names is
+compared against a `sizeof` measured by compiling the same header for x86-64,
+and a struct whose derived layout disagrees falls back to an opaque array at
+the measured size with the disagreement recorded.
 
-| Flag | Default | Opt-out |
-|---|---|---|
-| `--ctrl-sizes PATH` | `surface/ctrl-param-sizes.json`, 739 entries. May be given more than once | `--no-ctrl-sizes` generates without measured control sizes, with a warning |
-| `--ctrl-rank PATH` | `surface/rm-control-rank.json` when present, from `ctrl_rank.py rank` | `--no-ctrl-rank` orders control commands on object-graph depth alone |
-| `--value-families PATH` | `surface/value-families.json`, 72 derived families | None. An absent file stops the run |
-| `--value-audit PATH` | `surface/value-families-audit.json`, 73 entries of which 53 are accepted | None. An absent file stops the run |
-
-| Function | Returns |
-|---|---|
-| `scan_headers(src)` | A `TypeIndex` over every header under the include roots |
-| `TypeIndex.layout(name)` | Flat field layout with offsets, explicit padding, total size and alignment |
-| `TypeIndex.canonical_struct(name)` | The struct a typedef or macro alias resolves to |
-| `TypeIndex.const(expr)` | The integer value of a macro expression, or `None` |
-| `Emitter.ensure(name)` | The emitted struct name, or `None` when neither a layout nor a measured size exists |
-| `load_value_families(families_path, audit_path)` | Struct name to the accepted family records for that struct, keyed as the derivation names it |
-| `value_overrides(struct, layout, families)` | The `{field: flags[...]}` override map for one struct, and the accepted records the layout carries no integer field for |
-| `Emitter.merge_value_overrides(name, layout, overrides)` | The caller's override map with the accepted families merged in, the caller's entry winning any collision |
-| `emit_value_flags_sets(emitter)` | The `flags` set definitions for the families the run bound to a field |
-| `class_numbers(index, wanted)` | External class name to class number, for the names the object graph carries |
-| `base_param_type(index, name)` | Size and syzlang type when a parameter type is a base type |
-| `escape_param_type(emitter, command)` | The emitted parameter struct for one escape, resolved once and read by the direct route and the XFER route alike |
-| `emit_xfer(emitter, inventory)` | The `NV_ESC_IOCTL_XFER_CMD_*` family, one typed variant per in-scope inner escape |
-| `require_pinned(emitter, variant, field, what)` | Nothing. Raises `SystemExit` unless the named field renders `const[...]` |
-| `parent_resource(record, by_class, class_map)` | The syzlang resource for `hObjectParent` when a class has one legal parent |
-| `parent_is_narrow(concrete)` | Whether a parent set names at most one chip-exclusive class |
-| `parent_options(record, by_class)` | One `(parent class, resource)` option per legal parent for a narrow class, and one generic option otherwise |
-| `resolve_ctrl_sizes(args)`, `resolve_ctrl_rank(args)` | The measured-size files to merge, and the ranking to order by |
-
-## Callers
-
-| Direction | Modules |
-|---|---|
-| Imports this module | `tools/selftest.py`, for the size-verification invariant. The `describe` phase invokes it as a command |
-| This module imports | `tools/value_families.py`, for `accepted_families`, `load_json` and `SourceError`, imported inside `load_value_families` because that module imports this one for `scan_headers` and `strip_comments`. It reads the inventory JSON files and the driver headers |
-| Consumes this module's output | `tools/surface_cov.py` measures `descriptions/` against the same inventories |
-
-## Failure modes
-
-| Condition | Behaviour | Exit |
-|---|---|---|
-| An inventory file is absent | Message naming the file and stating that it has to be regenerated | 1 |
-| An inventory file has the wrong shape | Message naming the missing keys and the extractor that writes them | 1 |
-| An include root is absent under `--src` | Message naming the path and the flag to override it | 1 |
-| `NV_ESC_RM_ALLOC` or `NV_ESC_RM_CONTROL` is absent from the escape inventory | Message stating that the allocation chain or the multiplexer cannot be modelled | 1 |
-| `--ctrl-sizes` names a file that does not exist | Message naming `emit-probe` and its runner | 1 |
-| The committed measured-size file is absent and no flag was passed | Message naming `emit-probe`, `--ctrl-sizes` and `--no-ctrl-sizes` | 1 |
-| `--ctrl-sizes` and `--no-ctrl-sizes` are both passed | Message stating that the two contradict each other | 1 |
-| `--ctrl-rank` names a file that does not exist | Message naming `ctrl_rank.py rank` and `--no-ctrl-rank` | 1 |
-| The committed ranking is absent and no flag was passed | Warning, and control commands order on object-graph depth alone | 0 |
-| An emitted call renders `cmd` or `hClass` as anything but `const[...]` | `require_pinned()` names the variant, the field and the override that has to name it | 1 |
-| A per-parent variant name collides with a class-level name | Message naming both, so one description never overwrites another | 1 |
-| A size in the probe output is not a non-negative integer | Message naming the struct, the file and the value found | 1 |
-| A derived layout disagrees with its measured size | Recorded in `generation.json`, printed, and emitted opaque at the measured size | 0, or 2 under `--strict` |
-| A parameter type resolves to no layout and no measured size | Counted in `generation.json`, and the description is skipped | 0 |
-| A class number evaluates outside the 16-bit class space | Rejected, logged, and no variant is emitted for that class | 0 |
-| A struct definition carries a bitfield | The struct is rejected by the member parser and falls back to its measured size | 0 |
+The generation record `descriptions/generation.json` carries the driver version
+and commit the set was built from, a digest of each of the nine inputs, and the
+per-family counts, so a stale description set is detectable at rest.
 
 ## Concurrency and durability
 
-Each invocation reads three JSON files and the header tree, then writes six
-files. Every output goes to a temp file in its target directory and moves into
-place with `os.replace`, so a crash mid-write leaves the previous file intact
-and never a truncated one. The module takes no lock and holds no state between
-runs. Two concurrent invocations sharing an output directory race for it, and
-the phase invokes it once.
+Each invocation reads five inventories and the header tree, then writes five
+description files, the struct file, the `_IOWR` header and the generation
+record. Every output goes to a temp file in its target directory and moves into
+place atomically, so a crash mid-write leaves the previous file intact and
+never a truncated one. The module holds no state between runs.
 
-`emit-probe` deletes the probe units an earlier run left behind, because the
-runner globs `probe_*.c` and a unit from a different grouping would still
-compile and contribute sizes for structs the current set no longer names.
+The probe deletes the translation units an earlier run left behind, because a
+unit from a different grouping would still compile and contribute sizes for
+structs the current set no longer names.
 
 ## Prohibited behaviour
 
@@ -156,22 +109,21 @@ second clause removes the 236 non-privileged methods whose local handler is
 compiled out and whose parameter buffer crosses the RPC queue to GSP firmware.
 
 Each control command is named as its own variant,
-`ioctl$NV_ESC_RM_CONTROL_<handler>`. A single `NV_ESC_RM_CONTROL` description
-with a command field would put the command number inside a mutable parameter
-buffer and out of the corpus text. Naming it in the description makes corpus
-text self-describing, so [`surface_cov.py`](/gspwn/architecture/components/surface-cov/)
+`ioctl$NV_ESC_RM_CONTROL_<handler>`. That makes corpus text self-describing, so
+[`surface_cov.py`](/gspwn/architecture/components/surface-cov/)
 measures which commands a corpus reaches with no KCOV, no syz-manager and no
 GPU. Variants are named after the handler and not the command number, so the 5
 duplicate method ids in the export table still produce distinct descriptions.
 
-`surface_cov.py` measures the generated baseline at 852 of 852 targets
-modelled, 100.0%. The denominator decomposes as 32 escapes, 39 UVM commands, 7
-UVM tools commands, 531 control commands, 155 allocation classes and 64 modeset
-commands. The set declares 909 `ioctl$` variants, split 268 in `nvidia.txt`,
-531 in `nvidia_ctrl.txt`, 46 in `nvidia_uvm.txt` and 64 in
-`nvidia_modeset.txt`, plus five `openat$` descriptions.
+[`surface_cov.py`](/gspwn/architecture/components/surface-cov/) measures the
+generated baseline at 852 of 852 targets modelled, 100.0%. The denominator
+decomposes as 32 escapes, 39 UVM commands, 7 UVM tools commands, 531 control
+commands, 155 allocation classes, 64 modeset commands and 24 DRM commands. The
+set declares 933 `ioctl$` variants, split 268 in `nvidia.txt`, 531 in
+`nvidia_ctrl.txt`, 46 in `nvidia_uvm.txt`, 64 in `nvidia_modeset.txt` and 24 in
+`nvidia_drm.txt`, plus seven `openat$` descriptions.
 
-81 of the 909 sit outside the denominator, and every one of them is an
+81 of the 933 sit outside the denominator, and every one of them is an
 additional calling form or an additional route to a target the denominator
 already counts.
 
@@ -185,9 +137,9 @@ already counts.
 `sizeof(NVOS64_PARAMETERS)` at 48 and `sizeof(NVOS21_PARAMETERS)` at 32, so one
 class takes two parameter structs where the inventories count one target.
 
-595 of the 1923 emitted structs are named directly by a description and were
+595 of the 1947 emitted structs are named directly by a description and were
 measured by the probe. All 595 derived layouts match their measured `sizeof`,
-so `generation.json` records a size-mismatch count of zero. The remaining 1328
+so `generation.json` records a size-mismatch count of zero. The remaining 1352
 structs are nested inside those, or are synthetic names for an anonymous inner
 struct or union. A nested struct has no `sizeof` of its own to check, and a
 wrong nested layout moves its parent's total, which the check does see.
@@ -195,15 +147,13 @@ wrong nested layout moves its parent's total, which the check does see.
 The check is verified to fail when the layout is wrong. Widening `NvHandle`
 from 4 bytes to 8 in the base type table turns 105 of the 595 into reported
 mismatches, each falling back to an opaque array at the measured size.
-`tools/selftest.py` carries the same invariant as five scenario tests against
-`Emitter.ensure`.
 
-The `compile` subcommand runs syzkaller's own `pkg/compiler` over the staged
-set against a pinned checkout. It reports 927 syscalls, which is 921 from the
-description set plus the 6 `syz_builtinN` pseudo-syscalls `pkg/compiler`
-prepends to every compile, over 178 resources and 4803 types, with nothing
-unsupported. The 921 are the 909 `ioctl$` variants, the 5 `openat$`
-descriptions, the 6 entry-point calls and `syz_nvidia_uvm_init`.
+The compile gate runs syzkaller's own `pkg/compiler` over the staged set
+against a pinned checkout. It reports 957 syscalls, over 181 resources and 4939
+types, with nothing unsupported. 951 of the 957 come from the description set
+and the other 6 are the `syz_builtinN` pseudo-syscalls `pkg/compiler` prepends
+to every compile. The 951 are the 933 `ioctl$` variants, the 7 `openat$`
+descriptions, the 10 entry-point calls and `syz_nvidia_uvm_init`.
 
 Three spellings the set depends on are settled by that gate:
 `array[const[0, int8], N]` for explicit padding, `ptr64[in, T]` for the `NvP64`
@@ -222,9 +172,7 @@ and `NV_ESC_RM_ALLOC`, `NV_ESC_RM_CONTROL` and `UVM_REGISTER_GPU` expand to the
 numbers the inventory computed.
 
 Four header constructs in the RM tree defeat a straightforward member parser,
-and each accounted for parameter types the first generation could not lay out.
-The modeset section above carries three more that appear only under
-`src/nvidia-modeset/interface`. `nvos.h`
+and three more appear only under `src/nvidia-modeset/interface`. `nvos.h`
 places `#define` lines between struct members, which makes a naive splitter
 read a macro and the field after it as one declaration. 25 control parameter
 structs carry an `enum` typed field, and `ctrl2080gr.h` uses an enumerator as
@@ -236,35 +184,33 @@ uses `NV_DECLARE_ALIGNED`.
 ## Value families
 
 53 parameter fields render as `flags[<set>, intN]`. Each set holds the
-constants the driver's own headers define for that one field, derived by
-[value_families.py](/gspwn/reference/artifacts/#surface-artefacts) and accepted
-by `surface/value-families-audit.json`.
+constants the driver's own headers define for that one field, derived
+mechanically from the headers and accepted by hand in
+`surface/value-families-audit.json`.
 
-`load_value_families` calls `value_families.accepted_families`, which joins the
-derivation against the audit on `(struct, field)` and returns the accepted
-records alone. A derived family the audit rejected has no route from that
-function to a rendered field. The audit rejects 20 of the 72 derived families,
-and the reason it records for `NV0000_CTRL_GPU_ACTIVE_DEVICE.gpuId` names the
-`NV0000_CTRL_GPU_ID_INFO_*` defines as belonging to a different field. A field
-bound to the wrong family is worse than a bare integer, because the bare
-integer still reaches its real values by mutation and a wrong family never
-does.
+The derivation and the audit are joined on the struct and the field, and only
+accepted records reach a rendered field. The audit holds 73 records against the
+72 derived families, 53 accepted and 20 rejected. 19 of those rejections fall
+among the 72. The twentieth stands against
+`NV0000_CTRL_GPU_ACTIVE_DEVICE.gpuId`, a pair the derivation no longer
+produces, and the reason recorded there names the `NV0000_CTRL_GPU_ID_INFO_*`
+defines as belonging to a different field. A field bound to the wrong family is worse than a bare integer, because
+the bare integer still reaches its real values by mutation and a wrong family
+never does.
 
-| Step | Mechanism |
-|---|---|
-| Read the accepted set | `load_value_families`, keyed on `TypeIndex.canonical_struct` so a family naming a typedef and one naming the struct behind it reach one key |
-| Build the override map | `value_overrides`, reading the width off the derived layout and the identifier off `record["set_name"]` |
-| Merge with the existing overrides | `Emitter.merge_value_overrides`, inside `ensure`, so every call site that emits a parameter struct binds through it |
-| Emit the sets | `emit_value_flags_sets`, after every `emit_*` call, over the families that bound |
-| Report the run | `emit` prints the bound count, each collision and each accepted family the layouts carry no field for; `generation.json` records all three |
+The join is keyed on the canonical struct, so a family naming a typedef and one
+naming the struct behind it reach one key. The set definition and the field
+binding read one identifier off the derivation, so the emitted name and the
+audited name cannot diverge. Every call site that emits a parameter struct
+binds through one door, and the run reports the bound count, each collision and
+each accepted family the layouts carry no field for.
 
 The width comes from the layout. A field the driver declares as `NvU8` renders
 as `int8`, and `flags[..., int32]` in its place would move three bytes of the
 struct and change its measured size. 41 of the 53 bind at `int32`, 11 at `int8`
 and one at `int64`.
 
-Where an existing override and a value family both name one field, the existing
-override is kept and the collision is reported. The existing overrides carry
+The existing overrides carry
 the handle resources, the pinned selectors and the typed descriptors, all
 derived from the driver's dispatch, and the value-family rule has not examined
 any of them. The current artefacts produce no collision.
@@ -275,8 +221,7 @@ any of them. The current artefacts produce no collision.
 request number. `nvkms-ioctl.h:47` builds `NVKMS_IOCTL_IOWR` as
 `_IOWR(NVKMS_IOCTL_MAGIC, NVKMS_IOCTL_CMD, struct NvKmsIoctlParams)`, which
 evaluates to `0xc0106d00`, and `nvKmsIoctl` reads the leaf out of
-`NvKmsIoctlParams.cmd` after `copy_from_user`. The emission mirrors
-`emit_control`: one variant per leaf, each carrying a per-variant copy of the
+`NvKmsIoctlParams.cmd` after `copy_from_user`. The emission mirrors the control family. One variant per leaf, each carrying a per-variant copy of the
 16-byte envelope with `cmd` pinned to the dispatch ordinal, `size` pinned to
 the command's own parameter size, and `address` typed as a pointer to the
 parameter struct `surface/nvkms-command-inventory.json` names.
@@ -299,13 +244,37 @@ carries no parent/child polymorphism to model where RM's does. A member is
 typed by its C type and never by its field name. That works here because each
 typedef is distinct. RM spells every handle `NvHandle`, so the type carries no
 information there. Each parameter struct is pointed at `inout`, so `pkg/compiler`
-counts one member as both a constructor and an input for its resource. A reply
-field carrying a handle and a request field consuming one are exactly those
-two things.
+counts one member as both a constructor and an input for its resource.
 
 Two of the 66 declared enumerators carry no dispatch entry and no description
 is emitted for either: `NVKMS_IOCTL_GET_3DVISION_DONGLE_PARAM_BYTES` at
 ordinal 35 and `NVKMS_IOCTL_SET_3DVISION_AEGIS_PARAMS` at ordinal 36.
+
+## The DRM family
+
+`/dev/dri` is inside the tenant surface, because the CDI injection path hands a
+container both node types. The driver declares 28 commands in the
+`DRM_NVIDIA_*` range and dispatches 24 of them, and the four with no entry in
+the dispatch table reach no driver code and stay outside the denominator.
+
+Unlike the modeset family, every nvidia-drm command carries its own request
+number, so the identity is the driver-relative command number the DRM core
+recovers.
+
+The two node types are emitted as separate calls with separate file-descriptor
+resources, because a render client cannot issue every command a card client
+can.
+
+| Node | Commands reachable | Condition |
+|---|---|---|
+| `/dev/dri/cardN` | 24 of 24 | Two of them only while the opening file is the current DRM master |
+| `/dev/dri/renderDN` | 21 of 24 | A render client is refused any command whose flag word omits `DRM_RENDER_ALLOW` |
+
+One call name covering both nodes would model the union on each of them and
+emit programs that reach no handler. Separate `fd` resources make the
+21-of-24 split a compile-time type error instead. Both figures are carried on
+every record, so a consumer reads either without re-deriving the flags, and
+neither shrinks the family total of 24.
 
 ## The parent rule
 
@@ -321,8 +290,7 @@ is chip-gated.
 | `RS_ROOT_OBJECT` | 3 | One variant | `const[0, int32]`, parented by the file descriptor |
 | `RS_ANY_PARENT` | 5 | One variant | `nv_handle` |
 
-`parent_is_narrow()` tests for a chip-exclusive class by name, through
-`CHIP_EXCLUSIVE_PARENT_RES`. Two families are matched: `CHANNEL_GPFIFO`, and
+A chip-exclusive class is recognised by name. Two families are matched: `CHANNEL_GPFIFO`, and
 the chip-numbered display classes under `^NV[0-9A-F]{3}0_DISPLAY$`, which
 leaves the unnumbered `NV04_DISPLAY_COMMON`, `NVC372_DISPLAY_SW` and
 `NVA083_GRID_DISPLAYLESS` out of the family. A wide class expanded per parent
@@ -339,10 +307,10 @@ supports. GB202 lists all 8 of the `*_CHANNEL_GPFIFO` classes that appear
 anywhere, and all 31 lists carrying any channel class carry
 `GF100_CHANNEL_GPFIFO`, so the driver keeps older channel classes allocatable
 on newer parts. Treating the family as exclusive refuses an expansion the
-driver would permit, which is the conservative direction: it holds the alloc
-variant count at 204 over 155 classes and produces no variant naming a parent
-the part refuses. Widening it is a change to the emitted set and not a
-correction, so the classification is left alone deliberately.
+driver would permit. It holds the alloc variant count at 204 over 155 classes
+and produces no variant naming a parent the part refuses. Widening it is a
+change to the emitted set and not a correction, so the classification is left
+alone deliberately.
 
 `nvidia.txt` declares `resource nv_handle[int32]` and every `nvh_*` resource
 derives from it. A loose pin is expected to correct itself, because
@@ -373,9 +341,9 @@ from the object graph, and `scan_variants` joins on the whole name.
 the denominator rests on is machine-readable.
 
 `hObject` on a control variant is typed from the command's own SDK class id.
-`control_object_resource` joins that number against the external classes of
-`rm-object-graph.json` that carry a class number in the headers, and falls back
-to `nv_handle` when the number names none. 12 of the 531 take the fallback, and
+That number is joined against the external classes of `rm-object-graph.json`
+that carry a class number in the headers, and falls back to `nv_handle` when
+the number names none. 12 of the 531 take the fallback, and
 `generation.json` carries the count on the `object_resource` field of each
 control record.
 
@@ -408,7 +376,7 @@ mapping syzkaller made. The expected consequence, that `copy_from_user` returns
 `-EFAULT` on almost every attempt, is syzkaller run-time behaviour and is
 unverified here: no program has been executed and no driver was involved.
 
-`emit_xfer` replaces that with one typed variant per in-scope inner escape.
+The generator replaces that with one typed variant per in-scope inner escape.
 
 ```
 ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])
@@ -428,8 +396,8 @@ nv_xfer_rm_free {
 | `size` | `const[<measured sizeof>, int32]` | `nv.c:2439` requires exact equality for a non-array escape |
 | `ptr` | `ptr64[inout, T]` | The inner `copy_from_user` at `nv.c:2535` reads a mapped address |
 
-`T` is resolved once by `escape_param_type` and read by both routes, so a struct
-rename cannot make the direct description and the wrapper disagree.
+`T` is resolved once and read by both routes, so a struct rename cannot make
+the direct description and the wrapper disagree.
 
 The escape inventory records 34 dispatched escapes. 31 take a suffixed variant,
 `NV_ESC_IOCTL_XFER_CMD` keeps its own bare name because the driver admits

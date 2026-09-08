@@ -20,8 +20,7 @@ dedup, the coverage model, the spend ledger and the systemd unit generation. It
 prints `OK` and exits 0 when everything passes. On a failure it prints the
 failing case and exits non-zero.
 
-`AGENTS.md` requires this run after any change to the tools, and
-`.github/workflows/selftest.yml` runs it on every push and pull request.
+`.github/workflows/selftest.yml` runs the suite on every push and pull request.
 
 ## 2. Check the shipped configuration
 
@@ -33,20 +32,19 @@ It prints the effective configuration as JSON, then the behaviour that
 configuration produces:
 
 ```
-stopping rules: at most 3 round(s) x campaigns of 24 h, total <= 216 run-hours
+stopping rules: at most 10 round(s) x campaigns of 1000 h, total <= 5000 run-hours
 orchestrator: command unset (supervisor not installable); breaker blocks at 5 same-boot start(s) or 10 reboot(s) per 60 min
 session resume: off — every restart starts a fresh session
 brief carries: 3 knowledge entr(ies) per file at 100 chars, 5 integrity problem(s)
 dedup: 3 stack frame(s) hashed, 5 frame(s) matched on repro; with no stack at all, 5 report line(s) cut to 300 chars
-plateau: fit the last 50% of executions (>= 8 samples, R2 >= 0.90); plateaued when another 24 h is expected to find < 50 new edge(s)
+plateau: fit the last 50% of executions (>= 8 samples, R2 >= 0.90); plateaued when another 1000 h is expected to find < 50 new edge(s)
+surface curve: sampled every 60 min, shape read from >= 5 sample(s), corpus unpack capped at 300s
 repro: 10 run(s) by default, 120s per run, reliable at >= 80%
 guards: deadline checked every 2 min, agent launch capped at no limit, warn below 20 GB free
 ```
 
 Exit code 0 means the configuration is usable. Non-zero means a value was
-rejected, and the message names the key, the value and the rule it broke. An
-unknown key is an error, so a misspelled key fails here and never leaves its
-default silently in force.
+rejected, and the message names the key, the value and the rule it broke.
 
 Full key list: [Configuration keys](/gspwn/reference/configuration/).
 
@@ -61,7 +59,7 @@ python3 tools/pipeline_ctl.py show
 
 ```
 pipeline: /path/to/gspwn/state/pipeline.json
-round 1 of max 3 (0.0 run-hours of 216 used)
+round 1 of max 10 (0.0 run-hours of 5000 used)
   . provision  pending
   . build      pending
   . describe   pending
@@ -133,7 +131,7 @@ Derived from state/pipeline.json at read time. Re-run it for a current answer, b
 nothing here stays authoritative once the state file moves on.
 
 ## Where the pipeline is
-round 1 of max 10, 0.0 of 216 run-hours spent
+round 1 of max 10, 0.0 of 5000 run-hours spent
 next action: run phase provision (see agents/provision.md)
 
 ## Crashes
@@ -146,8 +144,7 @@ none recorded: the loop can only steer on coverage
 none assessed: the report would carry reproducers with no argued severity
 ```
 
-`brief` is computed at read time and cannot be stale. A stored copy goes out of
-date the moment the pipeline moves, so re-run the command at each handoff.
+Re-run `brief` at each handoff.
 
 ## Scratch state file
 
@@ -160,10 +157,10 @@ GSPWN_STATE=/tmp/scratch/pipeline.json python3 tools/pipeline_ctl.py init
 
 The spend ledger does not follow `GSPWN_STATE`. A run with its own state file
 still bills the one machine-global budget. See
-[Environment variables](/gspwn/reference/environment/).
+Environment variables.
 
 ## Next
 
 - [First campaign](/gspwn/getting-started/first-campaign/) runs round 1 on
   real hardware.
-- [Command line overview](/gspwn/reference/cli/) lists every tool.
+- Command line overview lists every tool.

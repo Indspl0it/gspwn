@@ -22,16 +22,6 @@ The module owns one command invocation and its log file.
 | Several attempts in one log stay readable | Each attempt appends a header with the timestamp, attempt number and command |
 | The reported code describes the final outcome | `run` returns the last attempt's code |
 
-## Interface
-
-Command form: `--log NAME [--retries N] [--timeout S] -- CMD [ARGS...]`.
-
-| Function | Returns |
-|---|---|
-| `run(cmd, log_name, retries=0, timeout=None)` | The last attempt's exit code |
-
-The gap between attempts is a fixed two seconds.
-
 ## Callers
 
 | Direction | Modules |
@@ -42,14 +32,14 @@ The gap between attempts is a fixed two seconds.
 
 ## Failure modes
 
-| Condition | Behaviour | Exit code |
-|---|---|---|
-| Command succeeds | Retries stop immediately | 0 |
-| Command fails with retries left | The failure is logged and the attempt repeats after two seconds | |
-| Command fails with no retries left | The last attempt's code is returned | The command's code |
-| Attempt exceeds `--timeout` | `TIMEOUT after Ns` is written to the log | 124 |
-| Binary does not exist | `command not found: <cmd>` is written to the log | 127 |
-| No command given after `--` | Argument parser error | 2 |
+| Condition | Behaviour |
+|---|---|
+| Command succeeds | Retries stop immediately |
+| Command fails with retries left | The failure is logged and the attempt repeats after two seconds |
+| Command fails with no retries left | The last attempt's code is returned |
+| Attempt exceeds `--timeout` | `TIMEOUT after Ns` is written to the log |
+| Binary does not exist | `command not found: <cmd>` is written to the log |
+| No command given after `--` | Argument parser error |
 
 ## Concurrency and durability
 
@@ -70,18 +60,6 @@ else on the machine is installed.
 | Never lose the output of an attempt that timed out | The timeout is recorded in the log before the exit code is set |
 | Never import from `gspwn_config` or the rest of `tools/` | This runs before the rest of the machine is provisioned |
 
-## Design notes
-
-Standard output and standard error are merged into the log file, so the
-interleaving matches what a terminal would have shown.
-
-Each attempt appends a header with the timestamp, the attempt number and the
-command, so a log holding several attempts is readable.
-
-The exit code returned is the last attempt's, so it reports whether the command
-eventually succeeded.
-
 ## See also
 
-- [exec.py reference](/gspwn/reference/cli/exec/)
 - [build_kernel.sh](/gspwn/architecture/components/build-kernel/)

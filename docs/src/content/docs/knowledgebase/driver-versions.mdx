@@ -26,8 +26,7 @@ release's notes. It is not reproduced here. The value changes per release.
 
 ## Version sources
 
-Each lane reports its version through a different interface. A mismatch is
-located by comparing all four.
+A mismatch is located by comparing all four lanes.
 
 | Lane | Command | Reports |
 | --- | --- | --- |
@@ -41,10 +40,17 @@ located by comparing all four.
 The last two differ when a module has been replaced on disk and the old one is
 still resident. A reload or a reboot reconciles them.
 
+Every driver figure quoted across this site is read from a source checkout and
+not from any of the interfaces above. The version enumerated is `610.57.04`,
+taken from `NVIDIA_VERSION` in `version.mk` at the root of
+`open-gpu-kernel-modules`, commit `e4a5faa`. No running driver is consulted.
+The figures describe a source tree, and a machine running that version can
+still differ from them through chip gating and module parameters.
+
 ## Compatibility mechanisms
 
-Three mechanisms widen the tolerance between the lanes. Each addresses a
-different pair.
+Three mechanisms widen the tolerance between the lanes, each on a different
+pair.
 
 | Mechanism | Permits | Requirement |
 | --- | --- | --- |
@@ -53,8 +59,7 @@ different pair.
 | PTX just-in-time compilation | Device code runs on a GPU newer than its build target | The binary embeds PTX alongside its compiled cubins |
 
 Minor version compatibility applies at the CUDA runtime layer. Just-in-time
-compilation applies at the device code layer. They address different problems
-and both can apply in one process.
+compilation applies at the device code layer. Both can apply in one process.
 
 ## Branch types
 
@@ -72,8 +77,7 @@ branch choice on the driver side fixes the tag on the module side.
 
 ## Worked example: reading nvidia-smi
 
-The header carries three version numbers and they mean three different things.
-A representative header:
+The header carries three version numbers. A representative header:
 
 ```text
 +-----------------------------------------------------------------------------+

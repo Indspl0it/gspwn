@@ -28,12 +28,11 @@ sudo python3 tools/campaign_ctl.py install-k --run-id r2-1
 ```
 
 ```
-campaign window: 24 h (stops at epoch 1786000000, enforced by gspwn-deadline@r2-1.timer)
+campaign window: 1000 h (stops at epoch 1786000000, enforced by gspwn-deadline@r2-1.timer)
 ```
 
-A deadline stored on disk makes an unattended round end on time across
-reboots. After a reboot the check reads the same deadline and still stops on
-schedule. Without it nothing ever ends a campaign, because the units restart.
+A deadline stored on disk makes an unattended round end on time across reboots.
+Without it nothing ever ends a campaign, because the units restart.
 
 The timer runs `check-deadline` every `loop.deadline_check_min` minutes:
 
@@ -42,7 +41,7 @@ python3 tools/campaign_ctl.py check-deadline --run-id r2-1
 ```
 
 ```
-run r2-1: 18.3 h left of its campaign window
+run r2-1: 812.4 h left of its campaign window
 ```
 
 When the window is up it stops **and disables** both units, records the stops
@@ -50,7 +49,7 @@ in the campaign log, bills the run's measured hours, and retires its own timer:
 
 ```
 run r2-1: campaign window elapsed; stopped k, u
-billed 23.47 run-hours for run r2-1 (coverage samples; campaign window elapsed)
+billed 987.42 run-hours for run r2-1 (coverage samples; campaign window elapsed)
 ```
 
 Disabling matters as much as stopping. An enabled `Restart=always` unit comes
@@ -81,11 +80,11 @@ python3 tools/campaign_ctl.py wait --run-id r2-1
 ```
 
 ```
-run r2-1: 18.3 h left of its campaign window (ends 2026-08-16 15:31:04)
-run r2-1: 18.2 h left of its campaign window (ends 2026-08-16 15:31:04)
+run r2-1: 812.4 h left of its campaign window (ends 2026-09-27 04:12:11)
+run r2-1: 812.3 h left of its campaign window (ends 2026-09-27 04:12:11)
 ```
 
-The heartbeat exists because a silent process blocking for a day is
+The heartbeat exists because a silent process blocking for weeks is
 indistinguishable from a hung one. The interval is `--poll-min`, defaulting to
 `loop.deadline_check_min`.
 
@@ -106,6 +105,7 @@ sequenceDiagram
   participant K as kernel
   participant SD as systemd
   participant O as orchestrator
+  participant A as agent
   participant T as tools
   participant S as state/pipeline.json
 
@@ -115,15 +115,17 @@ sequenceDiagram
   SD->>SD: start gspwn-k, gspwn-u (Restart=always)
   SD->>SD: fire gspwn-deadline@r2-1.timer (OnBootSec)
   SD->>O: start gspwn-orchestrator
+  O->>O: circuit breaker, then resolve the session
   O->>T: crashlog_ctl.py harvest
   T-->>O: artifacts/crashes/pstore-20260816-041205
-  O->>T: pipeline_ctl.py brief
+  O->>A: launch the agent (orchestrator.command)
+  A->>T: pipeline_ctl.py brief
   T->>S: read
   S-->>T: position, crashes, findings, knowledge
-  T-->>O: the anchor
-  O->>T: pipeline_ctl.py next
-  T-->>O: wait (run r2-1 has 12.4 h left)
-  O->>T: campaign_ctl.py wait --run-id r2-1
+  T-->>A: the anchor
+  A->>T: pipeline_ctl.py next
+  T-->>A: wait (run r2-1 has 812.4 h left)
+  A->>T: campaign_ctl.py wait --run-id r2-1
 ```
 
 Three commands are the whole procedure, and they need no memory of the previous
@@ -145,20 +147,16 @@ launches an agent, so the sequence runs without a human. See
 sudo python3 tools/crashlog_ctl.py harvest
 ```
 
-pstore is a small fixed-size backend that frees a record only when the file is
-deleted. `harvest` copies every record out and then clears it, so the next
-panic has somewhere to write. Leaving records in place means lost findings on a
-machine that panics by design.
-
-`harvest` copies every unharvested `/var/crash` dump, because several panics
-can land between two harvests.
-
-Its exit code distinguishes two answers that must not be confused:
+`harvest` copies every pstore record out and then clears it, so the next panic
+has somewhere to write, and it copies every unharvested `/var/crash` dump. Its
+exit code distinguishes two answers that must not be confused:
 
 | Exit | Meaning |
 |---|---|
 | 0 | No new crash logs were found. Nothing to harvest |
 | non-zero | A source could not be read. This is not evidence that no crash occurred |
+
+[Disk and crash logs](/gspwn/guides/disk-and-crash-logs/) covers both sources.
 
 ## Re-anchoring a session
 
@@ -169,10 +167,7 @@ python3 tools/pipeline_ctl.py brief
 `brief` is derived from the state file at read time, so it cannot be stale. It
 carries where the pipeline is, what is blocked, what the crash registry holds,
 what the findings say to target, what the impact records can argue, and the
-tail of `knowledge/`.
-
-A saved copy of its output goes out of date the moment the pipeline moves.
-Re-run `brief` at the start of every session.
+tail of `knowledge/`. Re-run it at the start of every session.
 
 How much it carries is tunable through the `agent` section of
 `config/campaign.yaml`, and `--last N` overrides the knowledge depth for one
@@ -181,22 +176,16 @@ call.
 ## Missing spend ledger
 
 ```
-error: spend ledger state/spend.json is missing, but the state file records 47.2 billed run-hours. Refusing to treat the budget as unspent. Re-seed it from the state file with: python3 tools/pipeline_ctl.py spend-init
+error: spend ledger state/spend.json is missing, but the state file records 1979.0 billed run-hours. Refusing to treat the budget as unspent. Re-seed it from the state file with: python3 tools/pipeline_ctl.py spend-init
 ```
 
 Every command that reads spend fails closed. Falling back to zero would hand
-the loop a fresh budget.
+the loop a fresh budget. Recovery is
+[Budget and spend](/gspwn/guides/budget-and-spend/#missing-ledger-recovery):
 
 ```
 python3 tools/pipeline_ctl.py spend-init
 ```
-
-```
-seeded ledger state/spend.json: 47.2 run-hours billed
-```
-
-It never lowers recorded spend. With a ledger already present it is a no-op and
-says so, so it cannot be used to wipe the budget.
 
 ## Resuming a round
 
@@ -204,7 +193,7 @@ says so, so it cannot be used to wipe the budget.
 fuzzing:
 
 ```
-wait  (run r2-1 has 12.4 h left of its campaign window, and the round cannot be measured until it ends: python3 tools/campaign_ctl.py wait --run-id r2-1)
+wait  (run r2-1 has 812.4 h left of its campaign window, and the round cannot be measured until it ends: python3 tools/campaign_ctl.py wait --run-id r2-1)
 ```
 
 The `fuzz` phase itself is exempt, because it starts the campaign.
@@ -212,7 +201,7 @@ The `fuzz` phase itself is exempt, because it starts the campaign.
 `round-end` refuses for the same reason:
 
 ```
-error: refusing to measure a live campaign: run r2-1 has 12.4 h left. The curve, the billed hours and the crash count would all describe the part of the run that happened to be over. Wait it out with `python3 tools/campaign_ctl.py wait --run-id <id>`, or pass --force if the campaign really is finished and only its deadline file is stale.
+error: refusing to measure a live campaign: run r2-1 has 812.4 h left. The curve, the billed hours and the crash count would all describe the part of the run that happened to be over. Wait it out with `python3 tools/campaign_ctl.py wait --run-id <id>`, or pass --force if the campaign really is finished and only its deadline file is stale.
 ```
 
 ## See also

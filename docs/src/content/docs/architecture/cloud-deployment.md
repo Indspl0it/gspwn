@@ -5,8 +5,7 @@ description: The instance, storage, IAM and purchasing constraints for running g
 
 gspwn requires a machine it can panic repeatedly, a GPU the open kernel modules
 support, and a capture path for the final kernel log output when the machine
-hangs without reaching disk. Those three requirements determine every choice
-below.
+hangs without reaching disk.
 
 The operational sequence is in [Cloud runbook](/gspwn/guides/cloud-runbook/).
 
@@ -59,8 +58,7 @@ crash identity, so the same driver bug on two cards registers as one bug.
 ## Container runtime and the injection path
 
 The threat model is a container tenant, so the device nodes a container receives
-on this instance decide what the campaign is entitled to call reachable. Two
-injection paths exist and they hand a container different sets.
+on this instance decide what the campaign is entitled to call reachable.
 
 | Path | Reached by | Injects `/dev/nvidia-modeset` and `/dev/dri` |
 |---|---|---|
@@ -85,28 +83,11 @@ would report coverage against surface no tenant on that instance can reach.
 
 ## Region and quota
 
-Availability moves between regions and over time. Query it directly:
-
-```
-aws ec2 describe-instance-type-offerings \
-  --location-type availability-zone \
-  --filters Name=instance-type,Values=g4dn.xlarge,g5.xlarge,g6.xlarge \
-  --region us-east-1 \
-  --query 'InstanceTypeOfferings[].[InstanceType,Location]' --output table
-```
-
-GPU instances need a service quota granted before launch, and the quota is per
-region and per family:
-
-```
-aws service-quotas list-service-quotas --service-code ec2 \
-  --query "Quotas[?contains(QuotaName, 'On-Demand G and VT')].[QuotaName,Value]" \
-  --output table
-```
-
-A new account commonly holds a quota of 0 for these families, and the increase
-request takes time to approve. Check the quota before planning a campaign
-window.
+Availability of these families moves between regions and over time, so it is
+queried against the account before a campaign is planned. GPU instances also
+need a service quota granted before launch, per region and per family. A new
+account commonly holds a quota of 0 for them, and the increase request takes
+time to approve, which puts a lead time in front of any campaign window.
 
 ## Storage
 
@@ -141,9 +122,9 @@ which produce an AMI and can be re-run.
 | Anything on instance store | No |
 | A reproducer verification in flight | Yes. Resolved as void or as a weak hit on the next invocation |
 
-The pipeline survives all of that, because it survives kernel panics. It does
-not distinguish a spot reclaim from a panic, so a spot-interrupted round
-measures a shorter run than it configured and its verdict rests on less data.
+The pipeline does not distinguish a spot reclaim from a panic, so a
+spot-interrupted round measures a shorter run than it configured and its
+verdict rests on less data.
 
 ## Termination protection
 
@@ -230,11 +211,9 @@ A plateau verdict will read 'unknown' while the GPU is in this state, so the loo
 ## Cost
 
 The three caps in `config/campaign.yaml` bound the search. They do not bound
-the bill. The repository has no view of what an instance costs and does not
-estimate one.
-
-Watch real money in the AWS console, and set a budget alert independently of
-anything here. See [Spend accounting](/gspwn/architecture/spend-accounting/).
+the bill. Watch real money in the AWS console, and set a budget alert
+independently of anything here. See
+[Spend accounting](/gspwn/architecture/spend-accounting/).
 
 ## See also
 

@@ -35,9 +35,9 @@ Coverage growth is a species-discovery process. The framing is Böhme's, from
 | Discovery exponent | `beta` in the fitted curve |
 
 The output is the number of new edges another campaign of
-`coverage.horizon_hours` is expected to find. That figure is in the units of
-the quantity being predicted. A growth percentage is scale-dependent: the same
-percentage means ten edges early in a run and a thousand late in one.
+`coverage.horizon_hours` is expected to find. A growth percentage is
+scale-dependent, so the same percentage means ten edges early in a run and a
+thousand late in one.
 
 ## Axis construction
 
@@ -49,9 +49,6 @@ that reset differently.
 |---|---|---|---|
 | x | Cumulative executions | Sum of per-sample deltas | The delta is the new reading itself, so no negative delta is recorded |
 | y | Distinct edges | Running maximum | The replayed count contributes zero until it passes the previous high-water mark |
-
-Executions accumulate as a sum because they are work done. Edges accumulate as
-a maximum because they are a set.
 
 | Axis choice | Failure it removes |
 |---|---|
@@ -104,6 +101,7 @@ execution rate.
 | `coverage.surface_sample_min` | 60 | Minutes between surface samples. 0 measures the surface on every coverage sample |
 | `coverage.surface_min_samples` | 5 | Surface samples needed before the second curve's shape is read. Minimum 2 |
 | `coverage.unpack_timeout_sec` | 300 | Ceiling on one `syz-db unpack` of a run's corpus |
+| `loop.stop_on_plateau` | `true` | Whether a `plateaued` verdict stops the loop. A plateau stop is overridable with a reason. The round cap, the run-hour budget and surface completion are not |
 | `loop.plateau_window_min` | 240 | Trailing wall-clock window for the legacy fallback |
 | `loop.plateau_min_growth` | 0.02 | Growth threshold for the legacy fallback |
 | `loop.coverage_sample_min` | 10 | Sampling cadence, which sets how many points a run produces |
@@ -167,12 +165,20 @@ flowchart TB
 A detail line accompanies every verdict:
 
 ```
-41907 distinct edges after 3.41e+09 executions; beta 0.412, R2 0.987 over 68 samples. At 1.45e+08 exec/h another 24 h is expected to find ~1180 new edge(s), 2.8% more (plateau below 50)
+41907 distinct edges after 3.41e+09 executions; beta 0.412, R2 0.987 over 68 samples. At 1.45e+08 exec/h another 1000 h is expected to find ~156444 new edge(s), 373.3% more (plateau below 50)
 ```
 
-The relative figure is reported alongside the absolute one. The threshold is a
-judgement about what would justify another campaign of machine time, and 2.5%
-of a run's coverage reads differently from 37%.
+The threshold is a judgement about what would justify another campaign of
+machine time, and 2.5% of a run's coverage reads differently from 37%.
+
+`coverage.horizon_hours` is 1000, matching `loop.campaign_hours`, and that
+horizon sets a high bar on its own. Against 3.41e+09 executions already done,
+another 1000 h at any productive execution rate multiplies the cumulative
+count many times over, and a power law with a fitted `beta` well above zero
+clears 50 expected new edges easily. A `plateaued` verdict from the fit
+therefore requires a `beta` close to zero, and most real plateaus are caught
+earlier, by the flat-tail case in step 5 that returns `plateaued` without
+fitting anything.
 
 ## Unknown verdicts
 
@@ -216,9 +222,8 @@ A source that reports no execution count still has to produce a verdict.
 of `loop.plateau_window_min` against `loop.plateau_min_growth`, on the
 accumulation curve.
 
-The result is reported as a degraded measurement. A wall-clock window cannot
-distinguish a slow hour from a saturated one, which is the reason the model
-path exists:
+The result is reported as a degraded measurement, because a wall-clock window
+cannot distinguish a slow hour from a saturated one:
 
 ```
 no execution counts recorded, so growth is measured over elapsed time with no measure of work done: distinct edges 41200 -> 41907 over 240 min = 1.716% growth (threshold 2.000%)
@@ -226,20 +231,15 @@ no execution counts recorded, so growth is measured over elapsed time with no me
 
 ## Combining the tracks
 
-```
-python3 tools/coverage_ctl.py plateau --run-id r2-1
-```
-
 | Per-track verdicts | Combined |
 |---|---|
 | Any `growing` | `growing` |
 | Some `plateaued`, none `growing` | `plateaued` |
 | All `unknown`, or no track sampled | `unknown` |
 
-A round is still learning while any track is still finding edges. Stopping
-because Track K flattened while the container-toolkit harnesses were still
-growing ends the campaign early. A track with no samples at all is ignored and
-does not force `unknown`.
+Stopping because Track K flattened while the container-toolkit harnesses were
+still growing ends the campaign early. A track with no samples at all is
+ignored and does not force `unknown`.
 
 ## Stated limits
 
@@ -290,38 +290,44 @@ on completion.
 
 ## The completion check
 
-```
-python3 tools/coverage_ctl.py completion [--run-id ID ...] [--corpus DIR] [--ledger PATH] [--top N]
-```
-
 Completion is the ledger identity `exercised + accounted-for = 852`, computed
 as a union of the two sets. A target can be exercised in a later round after an
 earlier one wrote a reason for it, and adding the counts would close the ledger
 while targets remained.
 
-The accounted-for set is the reasons that assert unreachability. Seven of the
-eight accounting reasons do, and `deliberately-deferred` does not: it records
-that a reachable target was put aside, so its rows are subtracted before the
-union and reported on their own as `deferred`. A deferral does not close a
-target and cannot fire the stop. See
-[Closed vocabularies](/gspwn/reference/vocabularies/).
+The accounted-for set is the reasons that assert unreachability. Eight reasons
+are admitted, and seven of them close a target.
+
+| Reason | Assertion | Closes |
+|---|---|---|
+| `control_gsp` | The handler is compiled out. The parameter buffer crosses the RPC queue and runs on GSP, where KCOV cannot follow | Yes |
+| `uvm_test` | Gated on `uvm_enable_builtin_tests=1`, which the target does not set | Yes |
+| `escape_dead` | Declared with no dispatch case, so no kernel code runs | Yes |
+| `escape_mux` | A multiplexer whose leaves are counted in another family | Yes |
+| `needs-privilege` | The handler body checks a capability the modelled caller does not hold | Yes |
+| `chain-unbuildable` | No allocation chain a default tenant can build reaches the object this call needs | Yes |
+| `no-param-model` | The parameter struct cannot be modelled well enough for the call to reach its handler | Yes |
+| `deliberately-deferred` | The target is in scope and reachable, and was left for a later campaign by an explicit decision | No |
+
+Five of the seven closing reasons assert something about driver source or the
+object graph, and those require a source reference: `control_gsp`,
+`escape_dead`, `needs-privilege`, `chain-unbuildable` and `no-param-model`. A
+claim that closes a target permanently is a claim about code.
+
+`deliberately-deferred` rows are subtracted before the union and reported on
+their own as `deferred`. Counting them as closed would make the identity read
+"exercised, or excluded, or postponed", and fire a stop printing that nothing
+is left to fuzz over targets the ledger itself records as reachable.
 
 `completion_status` also requires every family in `surface_cov.FAMILIES` to
 contribute at least one target. A truncated inventory would otherwise yield a
 smaller denominator that a corpus can close, firing the stop over commands
 nobody counted. It yields `unknown` instead.
 
-| Exit | Verdict |
-|---|---|
-| 0 | `complete` |
-| 3 | `incomplete` |
-| 1 | `unknown` |
-
-The output names the driver version, every corpus it read with its
-modification time and program count, the ledger path, the three counts, and the
-targets that are neither exercised nor accounted for. Each of those prints as a
-worklist line carrying the variant in brackets, which is the handle
-`pipeline_ctl.py surface-account` resolves:
+The three verdicts are `complete`, `incomplete` and `unknown`. Every target
+that is neither exercised nor accounted for is reported as a worklist line
+carrying the variant in brackets, which is the handle an accounting entry is
+recorded against:
 
 ```
 - [surface] control NV0000 0x00000102 cliresCtrlCmdSystemGetCpuInfo  [NV_ESC_RM_CONTROL_cliresCtrlCmdSystemGetCpuInfo]
@@ -359,16 +365,12 @@ See [surface_cov.py](/gspwn/architecture/components/surface-cov/).
 | The `refine` sub-agent | The detail line's expected-new-edges figure goes into `gaps.md`, and the unaddressed targets go into the worklist or the ledger |
 | The `eval` sub-agent | The series and the cross-round progression |
 
-A `plateaued` verdict is a statement about the descriptions as much as about
-the driver: this grammar has stopped reaching new code. It is the strongest
-available argument for what to model next, and it does not establish that the
-subsystem is covered.
+A `plateaued` verdict states that this grammar has stopped reaching new code.
+It does not establish that the subsystem is covered.
 
 ## See also
 
 - [Throughput against depth](/gspwn/guides/tuning-throughput-vs-depth/)
 - [surface_cov.py](/gspwn/architecture/components/surface-cov/)
-- [coverage_ctl.py](/gspwn/reference/cli/coverage-ctl/)
 - [Loops](/gspwn/architecture/loops/)
-- [Artifacts](/gspwn/reference/artifacts/)
 - [Scope and oracle](/gspwn/architecture/scope-and-oracle/)

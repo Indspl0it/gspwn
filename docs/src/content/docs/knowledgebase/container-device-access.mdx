@@ -13,6 +13,24 @@ Line references below are to `libnvidia-container` at commit `08cb279`,
 The admission sequence itself is on
 [Container admission path](/gspwn/knowledgebase/container-admission/).
 
+```mermaid
+flowchart TB
+  REQ["Create request<br/>NVIDIA_VISIBLE_DEVICES names a GPU"]
+  MODE{"mode setting<br/>default auto"}
+  LEG["Legacy hook<br/>nvidia-container-cli"]
+  CDI["CDI or jit-cdi<br/>generated specification"]
+  CAP["Capability filter<br/>NVIDIA_DRIVER_CAPABILITIES<br/>default compute,utility"]
+  NOCAP["No capability test<br/>the variable is never read"]
+  LDEV["/dev/nvidiaN, /dev/nvidiactl,<br/>/dev/nvidia-uvm, /dev/nvidia-uvm-tools<br/>cgroup rule rw"]
+  CDEV["The same four, plus<br/>/dev/nvidia-modeset and<br/>/dev/dri/card*, /dev/dri/renderD*<br/>permissions rwm"]
+
+  REQ --> MODE
+  MODE -->|"legacy"| LEG
+  MODE -->|"auto, resolved to jit-cdi<br/>wherever NVML loads"| CDI
+  LEG --> CAP --> LDEV
+  CDI --> NOCAP --> CDEV
+```
+
 ## Capability values
 
 `NVIDIA_DRIVER_CAPABILITIES` accepts a comma-separated list. The toolkit
@@ -45,10 +63,13 @@ One image shape overrides the default. An image carrying `CUDA_VERSION` and no
 
 Two sites in `libnvidia-container` decide the set.
 `lookup_devices` (`src/nvc_info.c`) builds a candidate list from the driver
-options, and `nvc_driver_mount` (`src/nvc_mount.c`) filters it with two tests:
-a device whose major is not 195 requires `OPT_COMPUTE_LIBS`, and a device whose
-minor is 254 requires `OPT_DISPLAY`. The per-GPU node is mounted separately by
-`nvc_device_mount`, with no capability test at all.
+options, placing `/dev/nvidia-modeset` on it unless the driver option
+`OPT_NO_MODESET` is set, and `nvc_driver_mount` (`src/nvc_mount.c:786`) then
+filters that list with two tests: a device whose major is not 195 requires
+`OPT_COMPUTE_LIBS`, and a device whose minor is 254 requires `OPT_DISPLAY`. The
+node is therefore discovered by default and withheld from the container by the
+second test. The per-GPU node is mounted separately by `nvc_device_mount`, with
+no capability test at all.
 
 | Capability | `/dev/nvidiaN` | `/dev/nvidiactl` | `/dev/nvidia-uvm` | `/dev/nvidia-uvm-tools` | `/dev/nvidia-modeset` | `/dev/dri/*` |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -63,17 +84,25 @@ minor is 254 requires `OPT_DISPLAY`. The per-GPU node is mounted separately by
 | `compute,utility` | yes | yes | yes | yes | no | no |
 | `all` | yes | yes | yes | yes | yes | yes |
 
-`/dev/nvidiaN` and `/dev/nvidiactl` are ungated. A container that names a GPU
-in `NVIDIA_VISIBLE_DEVICES` receives both even with an empty capability set,
-and both carry the Resource Manager ioctl surface described on
+The table above holds for the legacy hook alone. The CDI path reads no
+capability value, and its device set is below.
+
+`/dev/nvidiaN` and `/dev/nvidiactl` are ungated on both paths. A container that
+names a GPU in `NVIDIA_VISIBLE_DEVICES` receives both even with an empty
+capability set, and both carry the Resource Manager ioctl surface described on
 [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/).
 
 `/dev/dri/*` is not mounted by `libnvidia-container`. The string `dri/` does
-not occur in its sources. The DRM nodes come from the Go runtime,
-`internal/modifier/graphics.go`, which builds a DRM node discoverer when the
-capability set contains `graphics` or `display`, and matches the globs
-`/dev/dri/card*` and `/dev/dri/renderD*` filtered to the PCI bus IDs of the
-visible GPUs.
+not occur in its sources. The DRM nodes come from the Go runtime by two
+separate routes. Under the legacy hook, `internal/modifier/graphics.go` builds
+a DRM node discoverer only when the capability set contains `graphics` or
+`display`, and matches the globs `/dev/dri/card*` and `/dev/dri/renderD*`
+filtered to the PCI bus IDs of the visible GPUs. Under the CDI path,
+`GetDeviceNodesByBusID` (`internal/info/drm/drm_devices.go`) globs
+`/sys/bus/pci/devices/<busid>/drm/*` and maps each entry's basename into
+`/dev/dri`, and `internal/platform-support/dgpu/nvml.go` appends the result to
+the per-GPU device edit with no capability test. `internal/edits/device.go`
+stamps every such edit `rwm`.
 
 ## Capability to library and binary
 
@@ -108,8 +137,10 @@ at the top of `nvc_info.c`.
 
 The device cgroup allowlist is written one rule per mounted node, in the form
 `c <major>:<minor> rw` (`setup_device_cgroup`, `src/cgroup_legacy.c` for
-cgroup v1 and `src/cgroup.c` for v2). The `m` permission is never granted, so a
-container cannot create further nodes on those majors.
+cgroup v1 and `src/cgroup.c` for v2). On this path the `m` permission is never
+granted, so a container cannot create further nodes on those majors. The CDI
+path grants `rwm` on every device edit, so the two mechanisms differ on `m` as
+well as on which nodes they inject.
 
 ## MIG capability nodes
 
@@ -164,13 +195,15 @@ capability filter are absent from the modifier list
 | Per-GPU device edits | `/dev/nvidiaN`, plus every DRM node on the PCI bus id of that GPU |
 | Per-MIG device edits | The parent `/dev/nvidiaN`, the GPU instance cap device, the compute instance cap device, and the DRM nodes when the MIG profile carries the `gfx` attribute |
 
-The two paths differ on two nodes for the same request:
+The same request reaches a different device set on each path. `mode = "auto"`
+resolves to `jit-cdi` wherever NVML loads, so a default installation grants the
+right-hand column.
 
 | Node | Legacy hook, `compute,utility` | CDI or jit-cdi, any capability value |
 | --- | --- | --- |
-| `/dev/nvidiaN`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` | granted | granted |
-| `/dev/nvidia-modeset` | withheld | granted |
-| `/dev/dri/card*`, `/dev/dri/renderD*` | withheld | granted |
+| `/dev/nvidiaN`, `/dev/nvidiactl`, `/dev/nvidia-uvm`, `/dev/nvidia-uvm-tools` | granted `rw` | granted `rwm` |
+| `/dev/nvidia-modeset` | withheld | granted `rwm` |
+| `/dev/dri/card*`, `/dev/dri/renderD*` | withheld | granted `rwm` |
 
 The CDI path also drops the per-GPU procfs bind mount. In its place, the
 `disable-device-node-modification` CDI hook writes a `params` file carrying

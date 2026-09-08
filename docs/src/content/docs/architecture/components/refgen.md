@@ -1,13 +1,13 @@
 ---
 title: refgen.py
-description: Renders the committed surface artefacts as the five reference pages under reference/surface/, deterministically, so CI can regenerate and diff them.
+description: Renders the committed surface artefacts as the seven reference pages under reference/surface/, deterministically, so CI can regenerate and diff them.
 ---
 
-Turns the committed surface artefacts into the five content pages and the
+Turns the committed surface artefacts into the six content pages and the
 index over them, under
-`docs/src/content/docs/reference/surface/`. The site describes the tools that
-enumerate the attack surface; without these pages a reader asking which escapes
-exist, or where a given control command ranks, opens a 1.2 MB JSON file.
+`docs/src/content/docs/reference/surface/`. Without these pages a reader asking
+which escapes exist, or where a given control command ranks, opens a 1.2 MB
+JSON file.
 
 The module reads committed files only. It needs no GPU, no kernel, no network
 and no driver source checkout, so it runs in CI on the same runner as the
@@ -15,7 +15,7 @@ offline self-test.
 
 ## Responsibility
 
-The module owns the five generated pages and the determinism the CI `pages`
+The module owns the seven generated pages and the determinism the CI `pages`
 check depends on. It writes nothing outside `--out`.
 
 | Invariant | Enforced by |
@@ -28,22 +28,6 @@ check depends on. It writes nothing outside `--out`.
 | A multiplexer is never rendered without the field it dispatches on | `load_all` requires `comment_multiplexers.requests` in `tools/ioctl_map.json` |
 | A half-written page never reaches the content directory | `write` writes a temp file in `--out` and calls `os.replace`, and unlinks the temp file on any exception, because a stray temp file inside the content directory is a page Starlight would try to build |
 
-## Interface
-
-| Command | Output |
-|---|---|
-| `refgen.py` | The five pages into `docs/src/content/docs/reference/surface`, then a page, records and bytes table |
-| `refgen.py --out DIR` | The same five pages into `DIR` |
-| `refgen.py -v` | Adds one log line per page with its byte count |
-
-| Function | Returns |
-|---|---|
-| `load_all()` | Every artefact the five pages read, keyed by short name, with `targets`, `excluded` and `meta` from `surface_cov.load_targets()` |
-| `render(docs=None)` | `({filename: text}, {filename: record count})`, fully deterministic |
-| `write(pages, out_dir)` | The paths written, each written atomically with LF endings |
-| `build_parser()` | The argument parser, split out of `main` so the defaults are readable without a run |
-| `table(headers, rows)`, `code(value)`, `num(value)`, `cell(value)` | Markdown rendering helpers. Every driver identifier goes in a code span, which keeps `<any parent>` out of the markdown HTML parser and stops `register_check.py` reading an identifier as prose |
-
 ## Generated pages
 
 | Page | Records | Sources |
@@ -52,41 +36,30 @@ check depends on. It writes nothing outside `--out`.
 | `control-commands.md` | 531 | `surface/rm-control-rank.json`, `rm-control-inventory.json`, `rm-object-graph.json` |
 | `allocation-classes.md` | 253 | `surface/rm-object-graph.json`, `rm-chains.json` |
 | `driver-cves.md` | 61 | `surface/prior-cves.json`, `cve-hotspots.json` |
-| `index.md` | 4 | The four pages above, their record counts and their sources |
+| `modeset-commands.md` | 66 | `surface/nvkms-command-inventory.json` |
+| `drm-commands.md` | 28 | `surface/drm-command-inventory.json` |
+| `index.md` | 6 | The six pages above, their record counts and their sources |
 
-`PAGE_SOURCES` declares the per-page list and `provenance()` renders it, so the
-sources a page names are the sources the check reads.
+Every page carries its own provenance: the command that produced it, the
+artefacts it was rendered from, and the check that guards it. The per-page
+source list is declared once and rendered into the page, so the sources a page
+names are the sources the check reads.
 
-## Callers
+Nothing in CI runs the generator itself. The
+[`pages` check](/gspwn/architecture/components/regression-check/) regenerates
+into a temporary directory and diffs against the committed pages.
 
-| Direction | Modules |
-|---|---|
-| Imports this module | `tools/regression_check.py`, for `render` and `write` in `check_pages`. `tools/selftest.py` |
-| This module imports | `tools/surface_cov.py`, for `load_targets`, the artefact paths and `SURFACE_DIR` |
+## Refusal conditions
 
-`surface_cov.py` is the only import. `pipeline_state.py` is deliberately
-absent: it needs `fcntl`, which would stop both modules running on a Windows
-workstation.
+A page that reads as complete and states nothing is worse than no page, so the
+generator refuses to write one. An artefact that is absent, unparseable, or
+carrying an unrecognised schema stamp stops the run with the path and the
+producing command named. So does an array that is present and empty, and so
+does a disagreement between the two CVE artefacts, which describe one
+population and would otherwise silently drop or invent rows.
 
-Nothing in CI runs `refgen.py` itself. `regression_check.py pages` regenerates
-through `render` and `write` into a temporary directory and diffs against the
-committed pages. CI checks the committed copies, and an editor runs the tool.
-
-## Failure modes
-
-| Condition | Behaviour | Exit |
-|---|---|---|
-| Every page written | The per-page records and bytes table | 0 |
-| An artefact is absent or unparseable | `refgen: cannot run:` on stderr, naming the path and the label | 2 |
-| An artefact is not a JSON object | The same, naming the path | 2 |
-| A named array is absent or empty | The same, naming the artefact and the key, and stating that a page generated from it would state nothing | 2 |
-| `cve-hotspots.json` carries an unrecognised schema stamp | The same, naming both stamps and the producing command | 2 |
-| The classified and mined CVE sets differ | The same, naming the disclosures on each side | 2 |
-| `tools/ioctl_map.json` carries no `comment_multiplexers.requests` block | The same, naming the file and the block | 2 |
-| `surface_cov.load_targets()` raises `SurfaceError` | The same, carrying that module's message | 2 |
-
-Exit 1 is not used. Every failure is an input this tool cannot read, and CI
-fails on any non-zero code.
+Every failure is an input the tool cannot read, so there is one failure code
+and no partial output.
 
 ## Concurrency and durability
 
@@ -108,18 +81,12 @@ same either way.
 | Never store a digest beside a page in place of regenerating it | Whoever edits a page is positioned to update the digest, and the digest of a stale page still matches itself |
 | Never import `pipeline_state.py` | It needs `fcntl`, and this tool runs on a Windows workstation |
 | Never render a page from an empty artefact | An empty table reads as a complete answer and states nothing |
-| Never render a driver identifier outside a code span | Angle brackets reach the markdown HTML parser, and the register check reads the identifier as prose |
+| Never render a driver identifier outside a code span | Angle brackets in a name like `<any parent>` otherwise reach the markdown HTML parser |
 
 ## Design notes
 
-The five pages exist because the surface artefacts are the project's primary
-reference and were readable only as JSON. The generator is the alternative to
-hand-maintained tables, which drift against the artefacts with no check able to
-say so.
-
-Determinism makes the CI check possible. A digest committed beside a page
-cannot distinguish a stale page from an edited one, so the check regenerates,
-and regenerating is only a check if the output cannot move on its own.
+The generator is the alternative to hand-maintained tables, which drift against
+the artefacts with no check able to say so.
 
 Regenerating through `refgen.write` covers the writer as well as the renderer,
 which comparing rendered strings would miss. A page written with the platform's
@@ -127,10 +94,10 @@ native line endings differs from the committed LF copy, which is a real defect
 the repository's `.gitattributes` exists to prevent.
 
 `driver-cves.md` joins two artefacts. `prior-cves.json` classifies each
-disclosure and carries NVIDIA's bulletin sentence; `cve-hotspots.json` carries
+disclosure and carries NVIDIA's bulletin sentence. `cve-hotspots.json` carries
 what reading the fixing diff established, per disclosure. A CVE row without the
 join states a weakness class and no location in the driver. The per-disclosure
-function list is rendered for the 8 disclosures the mining narrowed; for the
+function list is rendered for the 8 disclosures the mining narrowed. For the
 other 53 the artefact's own verdict says the diff attributes no hunk to any one
 disclosure, so the page states the verdict, the shared patch set, and how many
 entry points that patch set touched.
@@ -140,34 +107,24 @@ entry points that patch set touched.
 means one artefact was regenerated and the other was not, and the joined table
 would drop or invent rows without saying so.
 
-## Regenerating after a driver bump
+## Position in the extraction chain
 
-The pages sit at the end of the extraction chain, so they are regenerated last.
+The pages sit at the end of the chain, so they are regenerated last. The
+inventories come first, then the two derived artefacts that read them, then the
+pages.
 
-1. Regenerate the artefacts, in dependency order.
+| Order | Artefact | Produced by |
+|---|---|---|
+| 1 | `surface/ioctl-inventory.json` | The escape extractor |
+| 1 | `surface/rm-control-inventory.json` | The control-surface extractor |
+| 1 | `surface/rm-object-graph.json` | The allocation-DAG extractor |
+| 1 | `surface/nvkms-command-inventory.json` | The modeset extractor |
+| 1 | `surface/drm-command-inventory.json` | The DRM extractor |
+| 2 | `surface/rm-chains.json`, `surface/rm-control-rank.json` | Derived from the inventories |
+| 3 | The seven pages | This generator |
 
-   ```
-   python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules
-   python3 tools/ctrl_surface.py --src artifacts/src/open-gpu-kernel-modules
-   python3 tools/object_graph.py extract --src artifacts/src/open-gpu-kernel-modules
-   python3 tools/object_graph.py chains
-   python3 tools/ctrl_rank.py rank
-   ```
-
-2. Regenerate the pages.
-
-   ```
-   python3 tools/refgen.py
-   ```
-
-3. Confirm the committed copies match.
-
-   ```
-   python3 tools/regression_check.py pages
-   ```
-
-Step 3 exits 1 whenever step 2 was skipped, so a bump that moves an artefact
-and leaves the pages behind fails CI in the step whose title names the pages.
+A bump that moves an artefact and leaves the pages behind fails CI in the step
+whose title names the pages.
 
 ## Stated limits
 
@@ -182,4 +139,3 @@ and leaves the pages behind fails CI in the step whose title names the pages.
 - [regression_check.py](/gspwn/architecture/components/regression-check/)
 - [surface_cov.py](/gspwn/architecture/components/surface-cov/)
 - [Enumerated surface](/gspwn/reference/surface/)
-- [Artifacts](/gspwn/reference/artifacts/)

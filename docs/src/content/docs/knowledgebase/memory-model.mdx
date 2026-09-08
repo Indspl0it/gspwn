@@ -46,12 +46,10 @@ scatter, it issues up to 32.
 | `a[perm[i]]` with a random permutation | Up to 32 |
 
 This is why array-of-structures layouts underperform structure-of-arrays on a
-GPU. Reading one field from 32 consecutive structures strides through memory;
-reading 32 consecutive values from one field array does not.
+GPU. Reading one field from 32 consecutive structures strides through memory.
+Reading 32 consecutive values from one field array does not.
 
 ## Unified virtual addressing and unified memory
-
-Two mechanisms are often conflated.
 
 | Mechanism | Provides | Since |
 | --- | --- | --- |
@@ -96,10 +94,8 @@ sequenceDiagram
   K->>K: continue
 ```
 
-Two fault classes exist. A replayable fault stalls the warp, is serviced, and
-the access is replayed; this is the normal migration path. A non-replayable
-fault comes from an engine that cannot be replayed, such as a copy engine, and
-is an error.
+The two fault classes and the structures the driver tracks residency in are on
+[UVM subsystem](/gspwn/knowledgebase/uvm/).
 
 ## Worked example: a first touch on managed memory
 
@@ -125,11 +121,12 @@ printf("%f\n", a[0]);                       // 5
 
 The same code with `cudaMemPrefetchAsync(a, bytes, deviceId)` between steps 2
 and 3 moves every page in one operation, and the kernel starts with its data
-already resident. Migration cost does not disappear; it stops being paid one
-page fault at a time inside the kernel.
+already resident. The migration cost remains, paid once for the range and no
+longer one page fault at a time inside the kernel.
 
 ## See also
 
+- [UVM subsystem](/gspwn/knowledgebase/uvm/)
 - [Execution model](/gspwn/knowledgebase/execution-model/)
 - [Memory hierarchy](/gspwn/knowledgebase/memory-hierarchy/)
 - [Installed stack](/gspwn/knowledgebase/installed-stack/)

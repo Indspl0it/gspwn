@@ -5,15 +5,17 @@ The documentation site describes the tools that enumerate the attack surface.
 It did not render the surface itself, so a reader asking which escapes exist,
 or where a given control command ranks, had to open a 1.2 MB JSON file. This
 tool turns the committed artefacts into six browsable pages under
-docs/src/content/docs/reference/surface/:
+docs/src/content/docs/reference/surface/, with an index over them:
 
-    index.md               the five pages, their record counts and sources
+    index.md               the six pages, their record counts and sources
     escapes.md             the 34 dispatched RM escapes and the 3 dead ones
     control-commands.md    the 531 targetable control commands, ranked
     allocation-classes.md  the 155 allocatable classes and the 98 chains
     driver-cves.md         the 61 disclosures classified as reaching Track K
     modeset-commands.md    the 64 dispatched modeset commands and the 2 with
                            no dispatch entry
+    drm-commands.md        the 24 dispatched DRM commands and the 4 the
+                           dispatch table omits
 
 Run it:
 
@@ -802,6 +804,26 @@ def _entry_points(record):
     return control, uvm
 
 
+def _layer_keys(records):
+    """-> (classification basis text -> key, ordered rows).
+
+    7 distinct sentences cover the 61 kernel-module disclosures and one of
+    them covers 46, so the column costs the page 61 copies of 7 texts. The
+    texts go in their own table and each disclosure names one by key, ordered
+    by the number of disclosures sharing it and then by the text, so the keys
+    are stable across runs.
+    """
+    shared = {}
+    for record in records:
+        basis = record.get("classification_basis")
+        if basis:
+            shared[basis] = shared.get(basis, 0) + 1
+    order = sorted(shared, key=lambda text: (-shared[text], text))
+    keys = {text: "L%d" % (index + 1) for index, text in enumerate(order)}
+    rows = [[keys[text], shared[text], text] for text in order]
+    return keys, rows
+
+
 def _basis_keys(records):
     """-> (basis text -> key, ordered rows).
 
@@ -817,11 +839,7 @@ def _basis_keys(records):
             shared[basis] = shared.get(basis, 0) + 1
     order = sorted(shared, key=lambda text: (-shared[text], text))
     keys = {text: "B%d" % (index + 1) for index, text in enumerate(order)}
-    rows = [[keys[text], shared[text],
-             ", ".join(code(r["cve"]) for r in records
-                       if r.get("verdict_basis") == text),
-             text]
-            for text in order]
+    rows = [[keys[text], shared[text], text] for text in order]
     return keys, rows
 
 
@@ -880,9 +898,10 @@ def fix_location_sections(docs):
         "## Verdict basis",
         "",
         "The reason the mining reached the verdict it did, one row per "
-        "distinct text.",
+        "distinct text. The `Basis` column of the table above names the row "
+        "each disclosure carries.",
         "",
-        table(["Key", "Disclosures", "CVEs", "Basis"], basis_rows),
+        table(["Key", "Disclosures", "Basis"], basis_rows),
         "",
         "## Located fix functions",
         "",
@@ -1017,6 +1036,8 @@ def page_cves(docs):
                      key=lambda r: (r.get("bulletin_date") or "",
                                     r.get("cve") or ""))
 
+    layer_keys, layer_rows = _layer_keys(records)
+
     parts = [
         frontmatter("Driver CVEs",
                     "The 61 publicly disclosed vulnerabilities NVIDIA places "
@@ -1051,37 +1072,37 @@ def page_cves(docs):
         "",
         "## Disclosures",
         "",
-        "Sorted by bulletin date, then CVE identifier. The CVSS values are "
-        "NVIDIA's own scoring as the CNA, reproduced from the bulletin.",
+        "Sorted by bulletin date, then CVE identifier. The CVSS base score is "
+        "NVIDIA's own scoring as the CNA, reproduced from the bulletin; the "
+        "full vector is the `cvss_vector` field of `surface/prior-cves.json` "
+        "and is on the NVD entry each row links to. The component-and-fault "
+        "wording is NVIDIA's: each cell is a contiguous substring of the "
+        "bulletin sentence with the leading product-and-version preamble and "
+        "the trailing impact clause removed, and the whole sentence and the "
+        "impact list are in the same artefact under "
+        "`component_as_nvidia_words_it`. The layer column names a row of "
+        "[Layer basis](#layer-basis).",
         "",
-        table(["CVE", "Bulletin date", "Bulletin", "CWE", "CVSS base score",
-               "CVSS vector", "Subsystem"],
+        table(["CVE", "Bulletin date", "Bulletin", "CWE", "CVSS",
+               "Subsystem", "Component and fault, in NVIDIA's words",
+               "Layer"],
               [["[%s](https://nvd.nist.gov/vuln/detail/%s)"
                 % (r["cve"], r["cve"]),
                 r.get("bulletin_date") or "(none)",
                 "[%s](%s)" % (r.get("bulletin_id"), r.get("bulletin_url"))
                 if r.get("bulletin_url") else num(r.get("bulletin_id")),
                 code(r.get("cwe")), num(r.get("cvss_base_score")),
-                code(r.get("cvss_vector")), code(r.get("subsystem"))]
-               for r in records]),
-        "",
-        "## Component and fault",
-        "",
-        "The wording of the middle column is NVIDIA's. Each cell is a "
-        "contiguous substring of the bulletin sentence, with the leading "
-        "product-and-version preamble and the trailing impact clause removed "
-        "and NVIDIA's own casing kept. The whole sentence and the impact list "
-        "are in `surface/prior-cves.json` under "
-        "`component_as_nvidia_words_it`. The basis column carries this "
-        "project's reason for placing the disclosure in the kernel-module "
-        "layer.",
-        "",
-        table(["CVE", "Component and fault, in NVIDIA's words",
-               "Classification basis"],
-              [[code(r["cve"]),
+                code(r.get("subsystem")),
                 condense(r.get("component_as_nvidia_words_it")),
-                r.get("classification_basis") or "(none)"]
+                code(layer_keys.get(r.get("classification_basis")))]
                for r in records]),
+        "",
+        "## Layer basis",
+        "",
+        "This project's reason for placing each disclosure in the "
+        "kernel-module layer, one row per distinct text.",
+        "",
+        table(["Key", "Disclosures", "Basis"], layer_rows),
         "",
     ] + fix_location_sections(docs) + [
         "## See also",
@@ -1517,14 +1538,13 @@ def page_index(docs, rows):
         "`%s` regenerates all %d pages into a temporary directory and "
         "compares them against the committed copies, naming the page and the "
         "first differing line when they disagree. It runs in the same offline "
-        "CI job as the other seven artefact checks, so an artefact "
+        "CI job as the other nine artefact checks, so an artefact "
         "regenerated against a new driver release without regenerating these "
         "pages fails the build." % (CHECK, len(BUILDERS) + 1),
         "",
         "## See also",
         "",
         "- [Attack surface](/gspwn/architecture/attack-surface/)",
-        "- [Artifacts](/gspwn/reference/artifacts/)",
         "- [`surface_cov.py`](/gspwn/architecture/components/surface-cov/)",
     ]
     return "\n".join(parts).rstrip() + "\n"

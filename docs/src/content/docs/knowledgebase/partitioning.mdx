@@ -21,14 +21,13 @@ another.
 | MIG | SMs, L2 cache slices and memory controllers assigned to an instance | A fixed share of the frame buffer, physically partitioned | A fault stays inside its instance | Each instance schedules independently | A100 or later data centre part |
 | vGPU | Host-side mediation of register access | A fixed share per guest | A guest reset affects that guest | The host manager schedules guests | Licensed vGPU software, a supported part |
 
-Time-slicing raises throughput on an underused GPU and provides no isolation
-guarantee. MPS raises throughput further by removing the context switch, and
+MPS raises throughput above time-slicing by removing the context switch, and
 its isolation depends entirely on the architecture. MIG is the only mode where
 the division is made in silicon.
 
 ## Time-slicing
 
-The default. Multiple CUDA contexts exist on one GPU and the scheduler switches
+Multiple CUDA contexts exist on one GPU and the scheduler switches
 between them. Each context has its own virtual address space, so one cannot
 address another's memory. The contexts share every SM, the full frame buffer
 bandwidth and the failure domain.
@@ -44,8 +43,7 @@ The Multi-Process Service replaces per-process contexts with one shared
 context, fronted by a control daemon. Work from several processes is submitted
 into that single context and runs concurrently without a switch between them.
 
-Volta changed the isolation properties substantially, and material written
-before it still circulates.
+Volta changed the isolation properties substantially.
 
 | Property | Pre-Volta MPS | Volta and later |
 | --- | --- | --- |
@@ -75,8 +73,6 @@ Instances divide the SMs further, sharing that instance's memory.
 | Compute Instance | SM slices within its GPU Instance | One GPU Instance |
 
 ### Profile names
-
-A profile name states the size of an instance.
 
 | Profile | Compute slices | Memory slices | Frame buffer | Instances that fit on an A100 40GB |
 | --- | --- | --- | --- | --- |
@@ -131,8 +127,7 @@ accepts, so the arithmetic working out is necessary and not sufficient.
 `nvidia-smi mig -lgip` lists the profiles with their placements, and
 `nvidia-smi mig -lgipp` lists the placements still free.
 
-Leaving the remainder unallocated wastes it. MIG has no mechanism to lend idle
-slices to a busy instance.
+MIG has no mechanism to lend idle slices to a busy instance.
 
 ## See also
 

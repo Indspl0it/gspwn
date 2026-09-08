@@ -72,8 +72,7 @@ against the surviving finding.
 A collision in one key alone may be a second bug or the same bug reported
 twice, and distinguishing them requires reading both reports. Such a crash is
 registered `flagged`, and is neither merged nor split. It stays in the
-registry, so `crash-list --status flagged` is a durable review queue that
-survives the tool's output scrolling away.
+registry, so `crash-list --status flagged` is a durable review queue.
 
 When neither side carries a stack, an exact title match is still flagged: no
 evidence confirms identity. The identical sighting re-read from the identical
@@ -139,9 +138,18 @@ the bus id is stripped, because `XID_NUM_RE` consumes the parenthesised bus id
 as a group. Skipping that group loosely reads the first field of the bus id as
 the Xid number and classifies every crash as an unknown Xid 0.
 
-`XID_CLASS` in `tools/crash_parse.py` maps each known Xid number to one of
-`signal`, `review`, `health` and `noise`. See
-[Xid classification](/gspwn/reference/xid-classification/).
+`XID_CLASS` in `tools/crash_parse.py` maps 22 known Xid numbers to one of four
+classes. An unlisted number defaults to `review`.
+
+| Class | Xid numbers | Meaning | Effect |
+|---|---|---|---|
+| `noise` | 8, 13, 31, 43, 45, 69 | Application-caused faults: illegal instruction, illegal GPU address, channel error, preemptive cleanup | The fuzzer causes these by design. Kept as an audit trail and excluded from every derived crash count |
+| `signal` | 32, 38, 48, 61, 62, 92, 94, 95, 119, 120, 140 | Corrupted push buffer, driver firmware error, ECC errors, micro-controller halt, GSP RPC timeout and GSP error | Queued for RCA |
+| `health` | 63, 64, 74, 79 | ECC page retirement and its failure, NVLink error, and the GPU falling off the bus | Not a finding. The measurement path is degraded |
+| `review` | 12, and every unlisted number | Driver error-handling exception | The default, read by a human |
+
+A wrongly classified `noise` entry drops real crashes from every derived count
+with no warning, which is why an unlisted number defaults to `review`.
 
 ## The status machine
 
@@ -207,8 +215,7 @@ settings.
 PROBLEM: triage.stack_hash_frames is 5 now but the registry's hashes were built with 3. Hashes are not recomputed, so across this change one bug can register twice and two bugs can merge into one that never reaches rca. Restore it for the rest of this campaign, or start a fresh registry
 ```
 
-Already-registered hashes are not recomputed. Change these settings between
-campaigns.
+Change these settings between campaigns.
 
 ## Integrity rules
 
@@ -227,5 +234,4 @@ with nothing to duplicate, excluded from the RCA queue permanently.
 ## See also
 
 - [Results and triage](/gspwn/guides/results-and-triage/)
-- [crash_parse.py](/gspwn/reference/cli/crash-parse/)
 - [Impact and severity](/gspwn/architecture/impact-and-severity/)
