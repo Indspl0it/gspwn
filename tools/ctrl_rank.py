@@ -87,6 +87,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -398,21 +401,19 @@ def sort_key(row):
 
 
 def write_json(path, payload):
-    """Temp file in the same directory, fsync, rename."""
+    """Serialise the ranking and hand the text to the shared durable writer.
+
+    indent=1 and sort_keys=True are this artefact's committed shape and
+    regression_check.py stale hashes it, so both stay here where the payload
+    is serialised. atomic_write_text owns the temporary file, the fsyncs and
+    the rename.
+    """
     out_dir = os.path.dirname(os.path.abspath(path))
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
         logger.info("created output directory %s", out_dir)
-    tmp = os.path.abspath(path) + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump(payload, fh, indent=1, sort_keys=True)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+    atomic_write.atomic_write_text(
+        path, json.dumps(payload, indent=1, sort_keys=True))
 
 
 def cmd_rank(args):

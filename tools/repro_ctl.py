@@ -42,11 +42,14 @@ panicked it.
 What counts as a reproduction — and what does not. A run is a hit only when
 the evidence ties to *this* crash:
 
-- Track K derives a signature at verify start (normalized title phrases with
-  volatile fields removed, plus top stack frames from the registered report)
-  and requires it in the dmesg delta. A generic BUG:/Oops in the window never
-  scores on its own — the fuzzer panics this box by design, so any-crash
-  matching would inflate the rate that gates disclosure.
+- Track K derives a signature at verify start (the top stack frames of the
+  registered report that name this crash, or normalized title phrases when
+  the report carries no frames) and requires *every* member of it in the
+  dmesg delta. triage.signature_frames is how many frames that is. A generic
+  BUG:/Oops in the window never scores, because the fuzzer panics this box
+  by design and any-crash matching would inflate the rate that gates
+  disclosure. One frame out of five is any-crash matching, because every
+  KASAN report contains dump_stack_lvl.
 - On the reboot recovery path, a boot-id change plus a harvested crash log
   (pstore/kdump/console) containing this crash's signature is a hit; a
   boot-id change whose harvested logs show a *different* crash is void (the
@@ -86,12 +89,14 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write
 import crash_parse
 import gspwn_config
 import pipeline_state as ps
@@ -100,6 +105,114 @@ REPO_ROOT = ps.REPO_ROOT
 SYZKALLER = os.path.join(REPO_ROOT, "artifacts", "src", "syzkaller")
 
 REPRO_LOCK = "repro.lock"    # in the state dir, next to .pipeline.lock
+
+
+def _env_int(name, default):
+    """A positive integer read from environment variable `name`, or `default`.
+
+    Validated at this boundary so a mistyped value is a message naming the
+    variable, the value and the default, and not a TypeError inside a
+    subprocess call part way through a verification session.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        sys.exit("%s=%r is not an integer. Unset it to use the default of %d "
+                 "seconds." % (name, raw, default))
+    if value <= 0:
+        sys.exit("%s=%d must be greater than zero. Unset it to use the "
+                 "default of %d seconds." % (name, value, default))
+    return value
+
+
+# Bounds on the tools this module shells out to. These are tool mechanics and
+# live here, unlike poc.repro_timeout_sec, which decides how long a
+# reproducer may run and is a research decision in config/campaign.yaml. Each
+# default states how long the operation takes on a working machine, and each
+# carries an environment override for a machine where it takes longer.
+#
+# Every one of these calls sits on a path that ends in a recorded verdict. A
+# call with no bound does not fail, it stops, and a verification that stopped
+# is indistinguishable from one still running.
+PROG2C_TIMEOUT_SEC = _env_int("GSPWN_PROG2C_TIMEOUT_SEC", 120)
+DMESG_TIMEOUT_SEC = _env_int("GSPWN_DMESG_TIMEOUT_SEC", 30)
+GCC_TIMEOUT_SEC = _env_int("GSPWN_GCC_TIMEOUT_SEC", 300)
+SYSTEMCTL_TIMEOUT_SEC = _env_int("GSPWN_SYSTEMCTL_TIMEOUT_SEC", 30)
+# Seconds a timed-out run's process group has to leave on SIGTERM before the
+# group is SIGKILLed. Long enough for a harness to close its files, short
+# enough that the next run does not start while the last one is still
+# printing.
+GROUP_TERM_GRACE_SEC = _env_int("GSPWN_GROUP_TERM_GRACE_SEC", 5)
+
+
+def _signal_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except OSError:
+        pass
+
+
+def _kill_group(proc):
+    """SIGTERM a timed-out run's whole process group, then SIGKILL it.
+
+    subprocess's own timeout handling kills the direct child. A --cmd
+    template that spawns anything (a shell pipeline, a wrapper script, a
+    harness that forks a worker) leaves those children running past the run
+    that started them. They go on printing, and what they print to the kernel
+    log lands inside a LATER run's dmesg delta, which scores that run as a
+    reproduction of output it did not produce. Under --runs 10 with
+    poc.void_retry_factor 2 up to 25 such groups accumulate in one session.
+
+    The SIGKILL is sent whether or not the direct child has already exited,
+    because the orphans are the point.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        proc.kill()
+        return
+    _signal_group(pgid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=GROUP_TERM_GRACE_SEC)
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_group(pgid, signal.SIGKILL)
+
+
+def _run_isolated(cmd, timeout, shell=False, capture=False):
+    """Run one measured run in its own process group.
+
+    -> (returncode or None on timeout, combined output text, timed_out)
+
+    start_new_session puts the child in a session and process group of its
+    own, so _kill_group reaches every process it started. Nothing this
+    function runs may outlive the run it belongs to: the delta window a
+    verdict is read from has to hold only what the run under measurement
+    produced.
+
+    Output is collected only when `capture` is set. Track K reads its verdict
+    from the kernel ring buffer and discards the reproducer's own stdout;
+    Track U reads its verdict from the harness output and keeps it.
+    """
+    stream = subprocess.PIPE if capture else subprocess.DEVNULL
+    proc = subprocess.Popen(cmd, shell=shell, start_new_session=True,
+                            stdout=stream, stderr=stream,
+                            text=True if capture else None,
+                            errors="replace" if capture else None)
+    timed_out = False
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_group(proc)
+        # The second communicate returns what the first one had already read
+        # off the pipes, so the pre-timeout output is not lost.
+        out, err = proc.communicate()
+    text = "%s\n%s" % (out or "", err or "") if capture else ""
+    return (None if timed_out else proc.returncode), text, timed_out
 
 
 def _poc_cfg():
@@ -143,6 +256,44 @@ TRACE_RE = re.compile(r"(?:^|\s)(?:in\s+)?([A-Za-z_][\w.~]*)"
 VOLATILE_RE = re.compile(r"0x[0-9a-fA-F]+|\bpid=\d+|\b\d{6,}\b"
                          r"|\[\s*\d+\.\d+\]")
 
+# Frames every report of its class carries whoever crashed: the report
+# printer, the sanitizer runtime thunks, the syscall entry stubs, the
+# unwinder and the panic/oops printers. They are dropped before the
+# signature_frames cap is applied, so the cap spends its slots on frames that
+# name *this* crash. A KASAN report of a use-after-free in nv_uvm_free opens
+# with nv_uvm_free, dump_stack_lvl, print_report, kasan_report and
+# __x64_sys_ioctl; four of those five are true of every KASAN report ever
+# printed, and taking the first five unfiltered leaves one frame of evidence
+# in a five-frame signature.
+#
+# Matched by subsystem prefix and not by an exact name list, because each of
+# these is a whole file's worth of functions and a kernel release renames
+# some of them: mm/kasan/report.c and the __kasan_/__asan_/__ubsan_ thunks,
+# lib/dump_stack.c, kernel/stacktrace.c and the arch unwinder,
+# arch/x86/entry's syscall stubs, and kernel/panic.c. A function added to one
+# of those files matches its prefix and is dropped with the rest.
+#
+# A machinery frame in none of these subsystems costs one cap slot and
+# nothing else: matched_signature requires every frame, and a frame present
+# in every report is satisfied by every delta, so an unfiltered one can
+# produce no false hit. It is also visible, because _prepare_k prints the
+# derived signature before the first run of every verification.
+UBIQUITOUS_FRAME_RE = re.compile(
+    r"^(?:"
+    # Sanitizer runtime, with or without the compiler's leading underscores:
+    # kasan_report, __kasan_slab_free and __asan_report_load8_noabort are one
+    # subsystem written three ways.
+    r"_{0,2}(?:kasan|asan|ubsan|msan|kmsan|kcsan|tsan)_"
+    r"|print_report|print_address_description|print_memory_metadata"
+    r"|report_bug|__report_bug"
+    r"|(?:__)?dump_stack|show_stack|show_trace_log_lvl"   # lib/dump_stack.c
+    r"|stack_trace_save|save_stack_trace|arch_stack_walk|unwind_"
+    r"|__x64_sys_|__ia32_sys_|__se_sys_|__do_sys_|do_syscall_|entry_SYSCALL"
+    r"|do_int80_syscall|syscall_exit_to_user_mode|ret_from_fork"
+    r"|panic$|nmi_panic|__die|die_addr|oops_end|__warn$|warn_slowpath"
+    r"|asm_exc_|error_entry$|rewind_stack"
+    r")")
+
 
 def crash_entry(cid):
     c = ps.load()["crashes"].get(cid)
@@ -160,9 +311,18 @@ def _check_track(c, cid, track):
 
 
 def _atomic_copy(src, dst):
-    """Crash-durable copy: temp file + fsync + atomic rename, matching the
-    state-file idiom — this pipeline panics the machine by design."""
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dst), suffix=".tmp")
+    """Crash-durable copy: temp file, fsync, atomic rename, directory fsync.
+
+    The binary counterpart of atomic_write.atomic_write_text, which takes
+    text and cannot carry a reproducer or a pstore record. The directory
+    fsync comes from that module, so both writers commit a directory entry
+    the same way: os.replace publishes the name and the file fsync commits
+    the bytes, and neither commits the entry itself. This pipeline panics the
+    machine by design, so the window after the rename is one a panic lands
+    in.
+    """
+    dst_dir = os.path.dirname(os.path.abspath(dst))
+    fd, tmp = tempfile.mkstemp(dir=dst_dir, suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f, open(src, "rb") as s:
             shutil.copyfileobj(s, f)
@@ -173,6 +333,7 @@ def _atomic_copy(src, dst):
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+    atomic_write._fsync_directory(dst_dir)
 
 
 def _same_file(a, b):
@@ -191,9 +352,17 @@ def _generate_repro_c(syz, c_out):
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(c_out), suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            r = subprocess.run([prog2c, "-prog", syz, "-repeat", "1",
-                                "-procs", "1", "-sandbox", "namespace",
-                                "-exe", exe], stdout=f)
+            try:
+                r = subprocess.run([prog2c, "-prog", syz, "-repeat", "1",
+                                    "-procs", "1", "-sandbox", "namespace",
+                                    "-exe", exe], stdout=f,
+                                   timeout=PROG2C_TIMEOUT_SEC)
+            except subprocess.TimeoutExpired:
+                sys.exit("syz-prog2c did not finish within %ds on %s, so "
+                         "repro.c was NOT written. Raise "
+                         "GSPWN_PROG2C_TIMEOUT_SEC where the program is "
+                         "legitimately this large."
+                         % (PROG2C_TIMEOUT_SEC, syz))
             f.flush()
             os.fsync(f.fileno())
         if r.returncode != 0:
@@ -207,6 +376,8 @@ def _generate_repro_c(syz, c_out):
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+    # The same directory commit _atomic_copy takes, for the same reason.
+    atomic_write._fsync_directory(os.path.dirname(os.path.abspath(c_out)))
 
 
 # The reproducer syzkaller writes into workdir/crashes/<hash>/.
@@ -322,10 +493,36 @@ def _extract_k(cid, c):
     print("extracted to %s: %s" % (dest, ", ".join(copied) or "NOTHING"))
 
 
+def _registered_on_its_report(c):
+    """Is this Track U entry registered on a report whose input is gone?
+
+    crash_parse.track_u_pairs registers a .sanlog on its own path when the
+    input beside it has been deleted, because losing the finding is worse
+    than registering it against a path verify cannot replay. What it cannot
+    do is make that path replayable: the file holds the sanitizer's report,
+    not the bytes that produced it.
+    """
+    d = c.get("dir") or ""
+    return c.get("track") == "U" and d.endswith(crash_parse.REPORT_SUFFIX)
+
+
+NO_INPUT_MSG = (
+    "%s is registered on its sanitizer report %s, and the crash input beside "
+    "it has been deleted. The report is the output of the crash, not the "
+    "bytes that caused it, so there is nothing to replay. Copying it in as "
+    "`input` would replay report text through the harness, score every run "
+    "clean, and record this crash unreproducible, which writes off a real "
+    "finding. Restore the input file next to the report, or re-run "
+    "harnesses/replay_crashes.sh over a corpus that still holds it, then "
+    "extract again.")
+
+
 def _extract_u(cid, c, force):
     src = c["dir"]
     if not os.path.isfile(src):
         sys.exit("track U crash input is not a file: %s" % src)
+    if _registered_on_its_report(c):
+        sys.exit(NO_INPUT_MSG % (cid, src))
     dest = os.path.join(REPO_ROOT, "artifacts", "pocs", cid)
     os.makedirs(dest, exist_ok=True)
     dst = os.path.join(dest, "input")
@@ -362,7 +559,18 @@ def cmd_extract(cid, force=False, track=None):
 
 
 def dmesg_text():
-    r = subprocess.run(["dmesg"], capture_output=True, text=True)
+    """The kernel ring buffer as text.
+
+    Bounded: every verdict in this module is read from the difference between
+    two of these, and a dmesg that never returns leaves a run marked
+    in_flight with no verdict and no error. A timeout raises OSError, which
+    every caller here already handles as an unreadable ring buffer.
+    """
+    try:
+        r = subprocess.run(["dmesg"], capture_output=True, text=True,
+                           timeout=DMESG_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        raise OSError("dmesg did not return within %ds" % DMESG_TIMEOUT_SEC)
     return r.stdout
 
 
@@ -450,27 +658,40 @@ def crash_signature(c, cid):
 
     -> {"phrases": [...], "funcs": [...]}
 
+    funcs:   the top stack frames of the registered report that name this
+             crash, capped at triage.signature_frames. Frames matching
+             UBIQUITOUS_FRAME_RE are dropped before the cap: they are true of
+             every report of their class, so counting them toward the cap
+             spends the signature on evidence that distinguishes nothing.
+             Where a report carries no crash-specific frame at all, which is
+             the case for a title-only registration such as an NVRM Xid line
+             or a trace-less panic, identifier-like title tokens stand in,
+             since driver functions nearly always carry '_' or '.'. Tokens are
+             fallback and not an addition, because matched_signature requires
+             every member of funcs and a token naming a module the delta
+             never prints would void a genuine reproduction.
     phrases: the registry title split on volatile fields (pids, addresses,
              timestamps), keeping stable runs long enough to be meaningful.
              scan_dmesg's "kernel "/"NVRM " prefixes never appear verbatim
-             in a fresh delta, so they are stripped first.
-    funcs:   top stack frames from the registered report (the strongest
-             evidence), plus identifier-like title tokens — driver
-             functions nearly always carry '_' or '.'.
+             in a fresh delta, so they are stripped first. Consulted only
+             when funcs is empty.
     """
     title = re.sub(r"^(?:kernel|NVRM)\s+", "", (c.get("title") or "").strip())
     funcs = []
     for text in _report_texts(c, cid):
         for f in FRAME_RE.findall(text) + TRACE_RE.findall(text):
             f = f.strip(".~")
-            if len(f) >= 3 and f not in funcs:
-                funcs.append(f)
+            if len(f) < 3 or f in funcs or UBIQUITOUS_FRAME_RE.match(f):
+                continue
+            funcs.append(f)
     # How many frames a run has to match to count as a reproduction of this
     # crash, rather than as some other crash the same workload also triggers.
     funcs = funcs[:gspwn_config.triage()["signature_frames"]]
-    for tok in re.findall(r"[A-Za-z_][\w.~]*", title):
-        if len(tok) >= 4 and ("_" in tok or "." in tok) and tok not in funcs:
-            funcs.append(tok)
+    if not funcs:
+        for tok in re.findall(r"[A-Za-z_][\w.~]*", title):
+            if len(tok) >= 4 and ("_" in tok or "." in tok) \
+                    and tok not in funcs:
+                funcs.append(tok)
     phrases = []
     for part in VOLATILE_RE.split(title):
         part = re.sub(r"\s+", " ", part).strip(" ,:;-")
@@ -480,17 +701,35 @@ def crash_signature(c, cid):
 
 
 def matched_signature(delta, sig):
-    """Return the element of this crash's signature found in `delta`, or
-    None. One predicate for both the hit count and the printed log line —
-    they must never disagree. Generic CRASH_PATTERNS are deliberately not
-    consulted: any BUG:/Oops in the window is not evidence that *this*
-    crash reproduced."""
-    for f in sig["funcs"]:
-        if f in delta:
-            return f
-    for p in sig["phrases"]:
-        if p in delta:
-            return p
+    """Describe this crash's signature in `delta`, or return None.
+
+    Every frame in sig["funcs"] has to be present. config/campaign.yaml calls
+    triage.signature_frames "frames a reproduction must match to count as a
+    hit", and any one of five frames is not that: frames 2 to 5 of a
+    sanitizer report are the sanitizer's own machinery, so a delta holding
+    only an unrelated KASAN report matches on dump_stack_lvl and scores as a
+    reproduction of this crash. crash_signature drops those frames, and this
+    predicate requires the rest of them together.
+
+    Phrases are consulted only for a crash whose report carries no frames at
+    all, where the title wording is the only evidence there is. A frameful
+    crash never falls back to them: a phrase from the title is weaker
+    evidence than the stack that produced it, and admitting it as an
+    alternative would restore the single-element match this function exists
+    to remove.
+
+    One predicate for both the hit count and the printed log line, which must
+    never disagree. Generic CRASH_PATTERNS are deliberately not consulted:
+    any BUG:/Oops in the window is not evidence that *this* crash reproduced.
+    """
+    for kind, members in (("frame", sig["funcs"]), ("title phrase",
+                                                    sig["phrases"])):
+        if not members:
+            continue
+        if all(m in delta for m in members):
+            return "all %d %s(s): %s" % (len(members), kind,
+                                         ", ".join(members))
+        return None
     return None
 
 
@@ -563,10 +802,16 @@ def _log_summary(text):
     return "no recognizable crash marker in the log"
 
 
+# timeout_hits counts the timeouts scored on the hang-class rule alone.
+# timeout_voids counts the timeouts that produced no verdict. A timed-out run
+# whose delta also carried this crash's signature is in neither, so the
+# breakdown reports it as the difference. A progress dict written before
+# timeout_voids existed carries 0 for it and over-reports that middle group
+# in the printed note; no rate is derived from any of the three.
 PROGRESS_DEFAULT = {"runs_done": 0, "hits": 0, "inconclusive": 0,
                     "in_flight": False, "boot_id": None,
-                    "timeouts": 0, "timeout_hits": 0, "weak_hits": 0,
-                    "evidence": None}
+                    "timeouts": 0, "timeout_hits": 0, "timeout_voids": 0,
+                    "weak_hits": 0, "evidence": None}
 
 
 def boot_id():
@@ -613,9 +858,12 @@ def _recover(prog, now_boot, logs, c, cid):
                     "crash log contains this crash's signature (%s) -> "
                     "counted as CRASH" % (n, m))
         prog["inconclusive"] += 1
+        # Void, not clean: the log carries a different crash, or it carries
+        # this one truncated past part of its signature. Both are "no usable
+        # verdict", and a void run is re-run and not scored.
         return ("run %d: machine rebooted mid-run but the harvested crash "
-                "log shows a different crash (%s) -> VOID (not counted "
-                "either way)" % (n, _log_summary(logs)))
+                "log does not carry this crash's full signature (%s) -> VOID "
+                "(not counted either way)" % (n, _log_summary(logs)))
     if c["track"] == "U":
         # A userspace replay cannot take the kernel down, and no logs tie
         # the reboot to this crash — the run says nothing about the bug.
@@ -652,7 +900,7 @@ def needs_rebuild(src, exe):
 
 
 def _prepare_k(cid, c):
-    """Track K preconditions; returns (run_one, first_baseline)."""
+    """Track K preconditions; returns run_one."""
     timeout = _poc_cfg()["repro_timeout_sec"]
     dest = os.path.join(REPO_ROOT, "artifacts", "pocs", cid)
     src = os.path.join(dest, "repro.c")
@@ -665,7 +913,13 @@ def _prepare_k(cid, c):
                      "extract will regenerate it)" % dest)
         if outdated:
             print("repro.c is newer than the compiled reproducer; rebuilding")
-        r = subprocess.run(["gcc", "-pthread", "-static", "-o", exe, src])
+        try:
+            r = subprocess.run(["gcc", "-pthread", "-static", "-o", exe, src],
+                               timeout=GCC_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            sys.exit("gcc did not finish within %ds building repro.c in %s. "
+                     "Raise GSPWN_GCC_TIMEOUT_SEC where the machine is "
+                     "legitimately this slow." % (GCC_TIMEOUT_SEC, dest))
         if r.returncode != 0:
             sys.exit("gcc failed (rc %d) building repro.c in %s — re-run "
                      "extract to regenerate it" % (r.returncode, dest))
@@ -678,28 +932,27 @@ def _prepare_k(cid, c):
                  % (cid, c.get("title"), c.get("dir")))
     print("%s: crash signature funcs=%s phrases=%s"
           % (cid, sig["funcs"], sig["phrases"]))
-    # Probe before anything is scored; the probed text doubles as the first
-    # run's baseline so no ring-buffer read is wasted.
-    baseline = probe_dmesg()
+    # Probe before anything is scored, and discard the probed text. Reusing
+    # it as the first run's baseline saved one ring-buffer read and put
+    # everything the kernel printed between the probe and the run into run
+    # 1's delta: _verify_session opens a state transaction and
+    # harvested_logs() walks up to 32 MB of harvested crash logs after this
+    # point. Each run reads its own baseline immediately before executing.
+    probe_dmesg()
 
-    def run_one(before=None):
-        if before is None:
-            try:
-                before = dmesg_text()
-            except OSError:
-                before = None
-        timed_out = False
+    def run_one():
+        try:
+            before = dmesg_text()
+        except OSError:
+            before = None
         exec_failed = None
         try:
-            subprocess.run([exe], timeout=timeout,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+            _rc, _out, timed_out = _run_isolated([exe], timeout)
         except OSError as e:
             # The repro never ran, so the run says nothing about the bug.
             # Left uncaught this exits mid-run with in_flight set, which the
             # next invocation would have to reason about.
-            exec_failed = str(e)
+            exec_failed, timed_out = str(e), False
         try:
             after = dmesg_text()
         except OSError:
@@ -735,7 +988,7 @@ def _prepare_k(cid, c):
                     "detail": "dmesg ring wrapped; delta not computable"}
         return {"verdict": "clean", "timed_out": False, "detail": ""}
 
-    return run_one, baseline
+    return run_one
 
 
 def _prepare_u(cid, c, cmd, crash_exit):
@@ -745,6 +998,15 @@ def _prepare_u(cid, c, cmd, crash_exit):
     input_path = os.path.join(dest, "input")
     if not os.path.exists(input_path):
         sys.exit("no input file in %s (run extract first)" % dest)
+    # An extract from before this refusal leaves the report itself sitting
+    # there as `input`. Replaying it scores every run clean and records
+    # unreproducible, so it is refused here too, and only where the file on
+    # disk is that report: an operator who wrote a real input in by hand is
+    # replaying something else.
+    if _registered_on_its_report(c) and os.path.isfile(c["dir"]) \
+            and _same_file(c["dir"], input_path):
+        sys.exit(NO_INPUT_MSG % (cid, c["dir"])
+                 + " Delete the copied report at %s first." % input_path)
     if not cmd:
         sys.exit("track U verify needs --cmd '<command template>' with "
                  "{input} where the crash input goes, e.g. --cmd "
@@ -754,27 +1016,23 @@ def _prepare_u(cid, c, cmd, crash_exit):
     run_cmd = cmd.replace("{input}", shlex.quote(input_path))
     print("%s: track U replay: %s" % (cid, run_cmd))
 
-    def run_one(before=None):
-        timed_out = False
+    def run_one():
         try:
-            r = subprocess.run(run_cmd, shell=True, timeout=timeout,
-                               stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE,
-                               text=True, errors="replace")
-            out = (r.stdout or "") + "\n" + (r.stderr or "")
-            rc = r.returncode
-        except subprocess.TimeoutExpired as e:
-            timed_out = True
-            out = "%s\n%s" % (_text(e.output), _text(e.stderr))
-            rc = None
+            # In its own process group: a compound template ('a | b', a
+            # wrapper script, a harness that forks) leaves children behind a
+            # plain timeout kill, and on Track K those orphans go on printing
+            # into later runs' delta windows.
+            rc, out, timed_out = _run_isolated(run_cmd, timeout, shell=True,
+                                               capture=True)
         except OSError as e:
             return {"verdict": "void", "timed_out": False,
                     "detail": "harness infra failure: %s" % e}
         # Keep the last run's output for the poc agent's README (expected
         # sanitizer signature, exit code).
         try:
-            with open(os.path.join(dest, "last-run.log"), "w") as f:
-                f.write("%s\n[exit %s]\n" % (out, rc))
+            atomic_write.atomic_write_text(
+                os.path.join(dest, "last-run.log"),
+                "%s\n[exit %s]\n" % (out, rc))
         except OSError:
             pass
         m = SANITIZER_RE.search(out)
@@ -806,12 +1064,6 @@ def _prepare_u(cid, c, cmd, crash_exit):
     return run_one
 
 
-def _text(b):
-    if b is None:
-        return ""
-    return b if isinstance(b, str) else b.decode(errors="replace")
-
-
 def _acquire_lock():
     """Exclusive, non-blocking session lock. Concurrent verifiers share one
     dmesg ring and one machine, so a second session corrupts both runs'
@@ -835,7 +1087,7 @@ def _acquire_lock():
     return fd
 
 
-def _verify_session(cid, runs, restart, run_one, first_before=None):
+def _verify_session(cid, runs, restart, run_one):
     """The durable progress loop shared by both tracks. `run_one` returns a
     dict: verdict (hit|clean|void), detail, evidence (for hits), timed_out.
     """
@@ -883,8 +1135,7 @@ def _verify_session(cid, runs, restart, run_one, first_before=None):
         prog["in_flight"] = True
         prog["boot_id"] = now_boot
         persist()
-        r = run_one(before=first_before)
-        first_before = None
+        r = run_one()
         prog["in_flight"] = False
         if r.get("timed_out"):
             prog["timeouts"] += 1
@@ -896,6 +1147,8 @@ def _verify_session(cid, runs, restart, run_one, first_before=None):
             verdict = "CRASH (%s)" % r["detail"]
         elif r["verdict"] == "void":
             prog["inconclusive"] += 1
+            if r.get("timed_out"):
+                prog["timeout_voids"] += 1
             verdict = "VOID (%s)" % r["detail"]
         else:
             verdict = "clean" + (" (%s)" % r["detail"]
@@ -929,9 +1182,17 @@ def _verify_session(cid, runs, restart, run_one, first_before=None):
     if prog["inconclusive"]:
         notes.append("%d void run(s) excluded" % prog["inconclusive"])
     if prog["timeouts"]:
-        notes.append("%d timeout(s): %d hang-class hit(s), %d void"
-                     % (prog["timeouts"], prog["timeout_hits"],
-                        prog["timeouts"] - prog["timeout_hits"]))
+        # Three groups, not two. A run can time out and still carry this
+        # crash's signature in its delta, which scores it a hit on the
+        # dmesg-signature evidence class. Deriving the void count as
+        # timeouts - timeout_hits printed that run as void while it counted
+        # toward the rate, so the breakdown contradicted the figure above it.
+        sig_hits = max(prog["timeouts"] - prog["timeout_hits"]
+                       - prog["timeout_voids"], 0)
+        notes.append("%d timeout(s): %d hang-class hit(s), %d also matched "
+                     "the signature, %d void"
+                     % (prog["timeouts"], prog["timeout_hits"], sig_hits,
+                        prog["timeout_voids"]))
     if prog["weak_hits"]:
         notes.append("%d hit(s) on weak boot-id-only evidence"
                      % prog["weak_hits"])
@@ -960,9 +1221,20 @@ def _refuse_live_campaign(allow):
         return
     try:
         r = subprocess.run(["systemctl", "is-active", "gspwn-k"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True,
+                           timeout=SYSTEMCTL_TIMEOUT_SEC)
     except OSError:
         return          # no systemd here; nothing to assert either way
+    except subprocess.TimeoutExpired:
+        # systemd is present and did not answer, so whether the fuzzer is
+        # running is unknown. Refusing is the safe reading: if it is running,
+        # its panics score as reproductions of this crash.
+        sys.exit("systemctl did not answer within %ds, so whether gspwn-k is "
+                 "still fuzzing could not be established. A campaign panics "
+                 "this box by design and every one of its panics would count "
+                 "as a hit for this crash. Stop the campaign first, or pass "
+                 "--allow-live-campaign if you accept the inflated rate."
+                 % SYSTEMCTL_TIMEOUT_SEC)
     if r.stdout.strip() in ("active", "activating"):
         sys.exit("refusing to verify while gspwn-k is still fuzzing: a run "
                  "is scored as a reproduction when the box goes down during "
@@ -985,10 +1257,10 @@ def cmd_verify(cid, runs, restart, cmd=None, crash_exit=None, track=None,
     lock_fd = _acquire_lock()
     try:
         if trk == "K":
-            run_one, first_before = _prepare_k(cid, c)
+            run_one = _prepare_k(cid, c)
         else:
-            run_one, first_before = _prepare_u(cid, c, cmd, crash_exit), None
-        return _verify_session(cid, runs, restart, run_one, first_before)
+            run_one = _prepare_u(cid, c, cmd, crash_exit)
+        return _verify_session(cid, runs, restart, run_one)
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)

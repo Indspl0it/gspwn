@@ -1,6 +1,6 @@
 ---
 title: object_graph.py
-description: The RM allocation DAG extracted from the driver's own class table, and the two source inconsistencies that break a naive parser.
+description: The RM allocation DAG extracted from the driver's own class table, and the two source inconsistencies a single-pattern parser mishandles.
 ---
 
 Extracts the Resource Manager allocation DAG from
@@ -40,9 +40,15 @@ Alongside those, the tool reports the privilege split, the depth distribution,
 the widest parent sets, the shortest chain to a named class, and the parents
 ranked by reachable subtree size.
 
-A table format change fails loudly. Zero `RS_ENTRY` matches stops the run with
-a message naming the file, because a parser that silently matched nothing would
-report an empty allocation graph as a driver with no allocatable classes.
+The privilege split over the 222 records comes from the `RS_FLAGS_ALLOC_*`
+marker in Flags.
+
+| Allocation privilege | Records | Marker in Flags |
+|---|---|---|
+| `unprivileged` | 152 | `RS_FLAGS_ALLOC_NON_PRIVILEGED` |
+| `privileged` | 62 | `RS_FLAGS_ALLOC_PRIVILEGED` |
+| `kernel` | 5 | `RS_FLAGS_ALLOC_KERNEL_PRIVILEGED` |
+| `unclassified` | 3 | none |
 
 ## Concurrency and durability
 
@@ -52,6 +58,8 @@ invocations writing the same output path race for it, and the phase invokes it
 sequentially.
 
 ## Prohibited behaviour
+
+Five rules keep the privilege split and the depth distribution honest.
 
 | Rule | Rationale |
 |---|---|
@@ -63,8 +71,8 @@ sequentially.
 
 ## Design notes
 
-The source carries two inconsistencies a straightforward parser mishandles. 15
-records label the final field `Required Access Right`
+The source carries two inconsistencies that defeat a parser written to a single
+pattern. 15 of the 222 records label the final field `Required Access Right`
 without the plural. 5 records declare `RS_ANY_PARENT` where the rest declare
 `RS_LIST(classId(...))`, and those five are the event and context-DMA classes,
 which attach under any allocated object and are therefore the cheapest way to
@@ -87,10 +95,10 @@ because the set compiled, the counts held, and `surface_cov.py` measured 155 of
 155 modelled. What a single wrong pin costs a campaign is unverified.
 
 No class changed depth when the map was widened. The recovered edges run from a
-class to siblings of the parent it already had, and those siblings sit at the
+class to siblings of the parent it already had, and those siblings are at the
 same depth.
 
-Depth is measured from the open file descriptor. 151 of 222 classes sit at
+Depth is measured from the open file descriptor. 151 of 222 classes are at
 depth 4, so a description set without resource chaining reaches the 25 classes
 at depth 1 and 2 and no further, which the `describe` phase prompt warns of.
 
@@ -122,18 +130,15 @@ flowchart LR
     D --> S["NV20_SUBDEVICE_0<br/>subdevice"]
     S --> T["target class"]
     R -.->|91 commands| C1[RmClientResource commands]
-    D -.->|commands owned here| C2[Device commands]
-    S -.->|315 commands at this depth| C3[Subdevice commands]
+    D -.->|42 commands| C2[Device commands]
+    S -.->|182 commands| C3[Subdevice commands]
     T -.-> C4[The target class's own commands]
 ```
-
-Every class allocated along the way is credited, so a class whose whole chain
-is already built costs nothing further.
 
 `cumulative_reach` is the greedy curve. Each step buys the class with the
 highest command count per allocation the built set does not already hold, and
 every class allocated along the way is credited, so a class whose whole chain is
-already built costs nothing.
+already built costs nothing further.
 
 | Objects built | Commands unlocked | Share of 531 | Last class added at that count |
 |---|---|---|---|
@@ -146,34 +151,48 @@ already built costs nothing.
 
 Beyond 38 allocations nothing further unlocks.
 
-17 commands reach no chain, for two reasons that are not parser defects, and
-`unresolved_owning_classes` records the class, the reason and the handler names
-for each.
+17 commands reach no chain. Two properties of the driver's own class model
+account for all of them, and `unresolved_owning_classes` records the class, the
+reason and the handler names for each.
 
 | Owning class | Commands | Cause |
 |---|---|---|
 | `Memory` | 6 | NVOC base class, no `RS_ENTRY` row |
 | `ProfilerBase` | 9 | NVOC base class, no `RS_ENTRY` row |
-| `MmuFaultBuffer` | 1 | Every external class carries `RS_FLAGS_ALLOC_PRIVILEGED` |
-| `NvDispApi` | 1 | Every external class carries `RS_FLAGS_ALLOC_PRIVILEGED` |
+| `MmuFaultBuffer` | 1 | Its one external class, `MMU_FAULT_BUFFER`, carries `RS_FLAGS_ALLOC_KERNEL_PRIVILEGED` |
+| `NvDispApi` | 1 | All 8 of its external classes carry `RS_FLAGS_ALLOC_PRIVILEGED` |
 
 The chain walk blocks on `privileged` and `kernel` and admits `unclassified`.
 `NV01_ROOT`, `NV01_ROOT_NON_PRIV` and `NV01_ROOT_CLIENT` name no
 `RS_FLAGS_ALLOC_*` flag, and every chain starts at one of the three, so a strict
-test empties the whole chain set: 82 chains become 2 and the curve tops out at 2
-commands. Every chain carrying such a step lists it in `unclassified_steps`, so
-an admitted step is distinguishable from a verified unprivileged one.
+test blocks every chain at its first step: 82 chains become 0, no command
+resolves to a chain, and the cumulative-reach curve is empty. Every chain
+carrying such a step lists it in `unclassified_steps`, so an admitted step is
+distinguishable from a verified unprivileged one.
 
 The conversion of `rm-chains.json` into `.syz` programs belongs to
 [`trace2seed.py chains`](/gspwn/architecture/components/trace2seed/).
 
 ## Stated limits
 
-| Limit | Consequence |
-|---|---|
-| Chip gating is invisible in the table | The chain records name one external class and do not model `gpuGetClassByClassId`, which searches the per-chip class descriptor lists `gpu.c:1183` copies into `pGpu->classDB`. Over the 34 lists in `src/nvidia/generated/g_gpu_class_list.c`, 31 name a `*_CHANNEL_GPFIFO` class and all 31 name `GF100_CHANNEL_GPFIFO`, so the channel family is not one class per part on this release. The display family is gated: at most 2 of its 8 members appear together on any one part |
-| Nothing in CI runs `chains` | The artefact goes stale against a driver bump. `regression_check.py derived` reports the drift against the control inventory and does not repair it |
-| No chain has been allocated | The cumulative-reach curve, the chain lengths and the 514 count are arithmetic over the `RS_ENTRY` table. No GPU was involved, no allocation was issued and no emitted program was executed, so the reach these numbers describe is unverified |
+Three limits bound the graph and everything derived from it.
+
+- Chip gating is invisible in the table. The chain records name one external
+  class and do not model `gpuGetClassByClassId`, which searches `pGpu->classDB`
+  at `gpu_resource_desc.c:132`. That database is built at
+  `gpu_resource_desc.c:38` from the per-chip class descriptor lists `gpu.c:1183`
+  fetches. Over the 34 per-chip lists in
+  `src/nvidia/generated/g_gpu_class_list.c`, 31 name a
+  `*_CHANNEL_GPFIFO` class and all 31 name `GF100_CHANNEL_GPFIFO`, so the
+  channel family is not one class per part on this release. The display family
+  is gated, with at most 2 of its 8 members appearing together on any one part.
+- Nothing in CI runs `chains`, so the artefact goes stale against a driver
+  bump. `regression_check.py derived` reports the drift against the control
+  inventory and does not repair it.
+- No chain has been allocated. The cumulative-reach curve, the chain lengths
+  and the 514 count are arithmetic over the `RS_ENTRY` table. No GPU was
+  involved, no allocation was issued and no emitted program was executed, so
+  the reach these numbers describe is unverified.
 
 ## See also
 

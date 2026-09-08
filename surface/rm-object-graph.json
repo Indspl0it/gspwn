@@ -9,6 +9,14 @@
    "depth": 1,
    "external_class": "NV01_ROOT",
    "flags": "RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_ALLOC | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_DUP | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RsClientResource",
+    "RmResourceCommon",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "RmClientResource",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -23,6 +31,14 @@
    "depth": 1,
    "external_class": "NV01_ROOT_NON_PRIV",
    "flags": "RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_ALLOC | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_DUP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RsClientResource",
+    "RmResourceCommon",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "RmClientResource",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -37,6 +53,14 @@
    "depth": 1,
    "external_class": "NV01_ROOT_CLIENT",
    "flags": "RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_ALLOC | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_DUP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RsClientResource",
+    "RmResourceCommon",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "RmClientResource",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -51,6 +75,12 @@
    "depth": 2,
    "external_class": "MPS_COMPUTE",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "MpsApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -67,6 +97,12 @@
    "depth": 2,
    "external_class": "FABRIC_MANAGER_SESSION",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "FmSessionApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -83,6 +119,12 @@
    "depth": 2,
    "external_class": "NV_IMEX_SESSION",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "ImexSessionApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -99,6 +141,12 @@
    "depth": 2,
    "external_class": "NV0020_GPU_MANAGEMENT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "GpuManagementApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -115,6 +163,12 @@
    "depth": 2,
    "external_class": "NV_EVENT_BUFFER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "EventBuffer",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -131,6 +185,13 @@
    "depth": 4,
    "external_class": "NV_SEMAPHORE_SURFACE",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "SemaphoreSurface",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -145,6 +206,12 @@
    "depth": 2,
    "external_class": "NV50_P2P",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "P2PApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -161,6 +228,12 @@
    "depth": 2,
    "external_class": "NV0060_SYNC_GPU_BOOST",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "SyncGpuBoost",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -177,6 +250,13 @@
    "depth": 2,
    "external_class": "NV01_DEVICE_0",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "Device",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -193,6 +273,15 @@
    "depth": 3,
    "external_class": "GT200_DEBUGGER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_DUAL_CLIENT_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelSMDebuggerSession",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -207,6 +296,14 @@
    "depth": 2,
    "external_class": "NV30_GSYNC",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "GSyncApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -223,6 +320,13 @@
    "depth": 4,
    "external_class": "GF100_PROFILER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_PHYS_RM",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "Profiler",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -249,6 +353,14 @@
    "depth": 4,
    "external_class": "MAXWELL_PROFILER_CONTEXT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "ProfilerBase"
+   ],
    "internal_class": "ProfilerCtx",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -274,6 +386,14 @@
    "depth": 4,
    "external_class": "MAXWELL_PROFILER_DEVICE",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "ProfilerBase"
+   ],
    "internal_class": "ProfilerDev",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -288,6 +408,12 @@
    "depth": 4,
    "external_class": "PROFILER_DEVICE_EVENT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "ProfilerDeviceEvent",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -302,6 +428,12 @@
    "depth": 4,
    "external_class": "PROFILER_CONTEXT_EVENT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "ProfilerContextEvent",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -316,6 +448,12 @@
    "depth": 4,
    "external_class": "TRACE_DEVICE_EVENT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "TraceDeviceEvent",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -330,6 +468,13 @@
    "depth": 3,
    "external_class": "G84_PERFBUFFER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "PerfBuffer",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -344,6 +489,13 @@
    "depth": 3,
    "external_class": "KEPLER_DEVICE_VGPU",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "VgpuApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -358,6 +510,13 @@
    "depth": 3,
    "external_class": "GF100_HDACODEC",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ALLOC_RPC_TO_ALL | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "Hdacodec",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -372,6 +531,13 @@
    "depth": 3,
    "external_class": "NVA083_GRID_DISPLAYLESS",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "Griddisplayless",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -386,6 +552,15 @@
    "depth": 3,
    "external_class": "GF100_CHANNEL_GPFIFO",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -401,6 +576,15 @@
    "depth": 3,
    "external_class": "KEPLER_CHANNEL_GPFIFO_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -416,6 +600,15 @@
    "depth": 3,
    "external_class": "KEPLER_CHANNEL_GPFIFO_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -431,6 +624,15 @@
    "depth": 3,
    "external_class": "MAXWELL_CHANNEL_GPFIFO_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -446,6 +648,15 @@
    "depth": 3,
    "external_class": "PASCAL_CHANNEL_GPFIFO_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -461,6 +672,15 @@
    "depth": 3,
    "external_class": "VOLTA_CHANNEL_GPFIFO_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -476,6 +696,15 @@
    "depth": 3,
    "external_class": "TURING_CHANNEL_GPFIFO_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -491,6 +720,15 @@
    "depth": 3,
    "external_class": "AMPERE_CHANNEL_GPFIFO_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -506,6 +744,15 @@
    "depth": 3,
    "external_class": "HOPPER_CHANNEL_GPFIFO_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -521,6 +768,15 @@
    "depth": 3,
    "external_class": "BLACKWELL_CHANNEL_GPFIFO_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -536,6 +792,15 @@
    "depth": 3,
    "external_class": "BLACKWELL_CHANNEL_GPFIFO_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelChannel",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -551,6 +816,13 @@
    "depth": 3,
    "external_class": "UVM_CHANNEL_RETAINER",
    "flags": "RS_FLAGS_ALLOC_KERNEL_PRIVILEGED | RS_FLAGS_ALLOC_ALL_VGPU_PLUGINS | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_DUAL_CLIENT_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "UvmChannelRetainer",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -566,6 +838,13 @@
    "depth": 4,
    "external_class": "FERMI_CONTEXT_SHARE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "KernelCtxShareApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -580,6 +859,13 @@
    "depth": 4,
    "external_class": "KERNEL_WATCHDOG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_INTERNAL_ONLY",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "KernelWatchdog",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -594,6 +880,13 @@
    "depth": 4,
    "external_class": "KERNEL_GRAPHICS_CONTEXT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_INTERNAL_ONLY | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "KernelGraphicsContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -619,6 +912,15 @@
    "depth": 3,
    "external_class": "NV20_SUBDEVICE_0",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "Subdevice",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -633,6 +935,13 @@
    "depth": 4,
    "external_class": "NV2081_BINAPI",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_RPC_TO_PHYS_RM | RS_FLAGS_ALLOC_RPC_TO_VGPU_HOST | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "BinaryApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -647,6 +956,14 @@
    "depth": 4,
    "external_class": "NV2082_BINAPI_PRIVILEGED",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_RPC_TO_PHYS_RM | RS_FLAGS_ALLOC_RPC_TO_VGPU_HOST | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "BinaryApi"
+   ],
    "internal_class": "BinaryApiPrivileged",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -661,6 +978,13 @@
    "depth": 3,
    "external_class": "KEPLER_CHANNEL_GROUP_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "KernelChannelGroupApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -675,6 +999,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_LOCAL_PRIVILEGED",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "RegisterMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -689,6 +1020,14 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_LOCAL_USER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory",
+    "StandardMemory"
+   ],
    "internal_class": "VideoMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -704,6 +1043,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_LOCAL_PHYSICAL",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ALLOC_CPU_PLUGIN_FOR_SRIOV | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "PhysicalMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -718,6 +1064,14 @@
    "depth": 3,
    "external_class": "NV50_MEMORY_VIRTUAL",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory",
+    "StandardMemory"
+   ],
    "internal_class": "VirtualMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -732,6 +1086,14 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_SYSTEM",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory",
+    "StandardMemory"
+   ],
    "internal_class": "SystemMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -746,6 +1108,15 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_VIRTUAL",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory",
+    "StandardMemory",
+    "VirtualMemory"
+   ],
    "internal_class": "VirtualMemoryRange",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -760,6 +1131,13 @@
    "depth": 4,
    "external_class": "NV_MEMORY_MAPPER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "MemoryMapper",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -774,6 +1152,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_SYSTEM_OS_DESCRIPTOR",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK_ON_ALLOC | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_DUP | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_FORCE_ACQUIRE_RO_API_LOCK_ON_ALLOC_FREE",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "OsDescMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -788,6 +1173,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_SYNCPOINT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "SyncpointMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -802,6 +1194,13 @@
    "depth": 2,
    "external_class": "NV01_MEMORY_DEVICELESS",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "NoDeviceMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -818,6 +1217,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_FRAMEBUFFER_CONSOLE",
    "flags": "RS_FLAGS_ALLOC_KERNEL_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "ConsoleMemory",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -832,6 +1238,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_HW_RESOURCES",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "MemoryHwResources",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -847,6 +1260,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_LIST_SYSTEM",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "MemoryList",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -862,6 +1282,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_LIST_FBMEM",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ALLOC_CPU_PLUGIN_FOR_SRIOV | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "MemoryList",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -877,6 +1304,13 @@
    "depth": 3,
    "external_class": "NV01_MEMORY_LIST_OBJECT",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ALLOC_CPU_PLUGIN_FOR_SRIOV | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "MemoryList",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -892,6 +1326,12 @@
    "depth": 2,
    "external_class": "NV_MEMORY_EXPORT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "MemoryExport",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -908,6 +1348,13 @@
    "depth": 2,
    "external_class": "NV_MEMORY_FABRIC_IMPORT_V2",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "MemoryFabricImportV2",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -924,6 +1371,13 @@
    "depth": 4,
    "external_class": "NV_MEMORY_FABRIC",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "MemoryFabric",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -938,6 +1392,12 @@
    "depth": 2,
    "external_class": "NV_MEMORY_FABRIC_IMPORTED_REF",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "MemoryFabricImportedRef",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -954,6 +1414,13 @@
    "depth": 3,
    "external_class": "FERMI_VASPACE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "VaSpaceApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -969,6 +1436,13 @@
    "depth": 2,
    "external_class": "NV_MEMORY_MULTICAST_FABRIC",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "MemoryMulticastFabric",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -985,6 +1459,13 @@
    "depth": 4,
    "external_class": "NVENC_SW_SESSION",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "NvencSession",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -999,6 +1480,13 @@
    "depth": 4,
    "external_class": "NVFBC_SW_SESSION",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "NvfbcSession",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1013,6 +1501,15 @@
    "depth": 4,
    "external_class": "NVA081_VGPU_CONFIG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "VgpuConfigApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1027,6 +1524,15 @@
    "depth": 4,
    "external_class": "NVA084_KERNEL_HOST_VGPU_DEVICE",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "KernelHostVgpuDeviceApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1041,6 +1547,13 @@
    "depth": 4,
    "external_class": "NV50_THIRD_PARTY_P2P",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "ThirdPartyP2P",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1055,6 +1568,13 @@
    "depth": 4,
    "external_class": "GF100_SUBDEVICE_MASTER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "GenericEngineApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1069,6 +1589,13 @@
    "depth": 4,
    "external_class": "GF100_SUBDEVICE_INFOROM",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_RPC_TO_PHYS_RM",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "GenericEngineApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1083,6 +1610,15 @@
    "depth": 4,
    "external_class": "NV01_TIMER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ALLOC_RPC_TO_PHYS_RM | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "TimerApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1097,6 +1633,13 @@
    "depth": 4,
    "external_class": "NV40_I2C",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_PHYS_RM",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "I2cApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1111,6 +1654,15 @@
    "depth": 4,
    "external_class": "NV20_SUBDEVICE_DIAG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "DiagApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1125,6 +1677,13 @@
    "depth": 4,
    "external_class": "GF100_ZBC_CLEAR",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "ZbcApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1139,6 +1698,13 @@
    "depth": 4,
    "external_class": "NV40_DEBUG_BUFFER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DebugBufferApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1153,6 +1719,13 @@
    "depth": 4,
    "external_class": "RM_USER_SHARED_DATA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "GpuUserSharedData",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1167,6 +1740,13 @@
    "depth": 4,
    "external_class": "VOLTA_USERMODE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "UserModeApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1181,6 +1761,13 @@
    "depth": 4,
    "external_class": "TURING_USERMODE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "UserModeApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1195,6 +1782,13 @@
    "depth": 4,
    "external_class": "AMPERE_USERMODE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "UserModeApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1209,6 +1803,13 @@
    "depth": 4,
    "external_class": "HOPPER_USERMODE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "UserModeApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1223,6 +1824,13 @@
    "depth": 4,
    "external_class": "BLACKWELL_USERMODE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "Memory"
+   ],
    "internal_class": "UserModeApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1237,6 +1845,13 @@
    "depth": 4,
    "external_class": "NVC371_DISP_SF_USER",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispSfUser",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1251,6 +1866,13 @@
    "depth": 4,
    "external_class": "NVC671_DISP_SF_USER",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispSfUser",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1265,6 +1887,13 @@
    "depth": 4,
    "external_class": "NVC771_DISP_SF_USER",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispSfUser",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1279,6 +1908,13 @@
    "depth": 4,
    "external_class": "NVC871_DISP_SF_USER",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispSfUser",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1293,6 +1929,13 @@
    "depth": 4,
    "external_class": "NVC971_DISP_SF_USER",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispSfUser",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1307,6 +1950,13 @@
    "depth": 4,
    "external_class": "NVCA71_DISP_SF_USER",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispSfUser",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1321,6 +1971,13 @@
    "depth": 4,
    "external_class": "NVCB71_DISP_SF_USER",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispSfUser",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1335,6 +1992,13 @@
    "depth": 4,
    "external_class": "NVCC71_DISP_SF_USER",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispSfUser",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1349,6 +2013,15 @@
    "depth": 4,
    "external_class": "MMU_FAULT_BUFFER",
    "flags": "RS_FLAGS_ALLOC_KERNEL_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "MmuFaultBuffer",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1363,6 +2036,15 @@
    "depth": 4,
    "external_class": "ACCESS_COUNTER_NOTIFY_BUFFER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "AccessCounterBuffer",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1377,6 +2059,15 @@
    "depth": 4,
    "external_class": "MMU_VIDMEM_ACCESS_BIT_BUFFER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_PHYS_RM | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "VidmemAccessBitBuffer",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1391,6 +2082,15 @@
    "depth": 4,
    "external_class": "HOPPER_MMU_VIDMEM_ACCESS_BIT_BUFFER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_PHYS_RM",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "VidmemAccessBitBuffer",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1405,6 +2105,13 @@
    "depth": 4,
    "external_class": "AMPERE_SMC_PARTITION_REF",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "GPUInstanceSubscription",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1419,6 +2126,13 @@
    "depth": 5,
    "external_class": "AMPERE_SMC_EXEC_PARTITION_REF",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "ComputeInstanceSubscription",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1433,6 +2147,12 @@
    "depth": 2,
    "external_class": "AMPERE_SMC_CONFIG_SESSION",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "MIGConfigSession",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1449,6 +2169,12 @@
    "depth": 2,
    "external_class": "AMPERE_SMC_MONITOR_SESSION",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "MIGMonitorSession",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1465,6 +2191,15 @@
    "depth": 3,
    "external_class": "NVC570_DISPLAY",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "NvDispApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1479,6 +2214,15 @@
    "depth": 3,
    "external_class": "NVC670_DISPLAY",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "NvDispApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1493,6 +2237,15 @@
    "depth": 3,
    "external_class": "NVC770_DISPLAY",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "NvDispApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1507,6 +2260,15 @@
    "depth": 3,
    "external_class": "NVC870_DISPLAY",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "NvDispApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1521,6 +2283,15 @@
    "depth": 3,
    "external_class": "NVC970_DISPLAY",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "NvDispApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1535,6 +2306,15 @@
    "depth": 3,
    "external_class": "NVCA70_DISPLAY",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "NvDispApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1549,6 +2329,15 @@
    "depth": 3,
    "external_class": "NVCB70_DISPLAY",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "NvDispApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1563,6 +2352,15 @@
    "depth": 3,
    "external_class": "NVCC70_DISPLAY",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "NvDispApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1577,6 +2375,15 @@
    "depth": 3,
    "external_class": "NVC372_DISPLAY_SW",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "DispSwObj",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1591,6 +2398,15 @@
    "depth": 3,
    "external_class": "NV04_DISPLAY_COMMON",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier",
+    "DisplayApi"
+   ],
    "internal_class": "DispCommon",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1605,6 +2421,13 @@
    "depth": 3,
    "external_class": "NV9010_VBLANK_CALLBACK",
    "flags": "RS_FLAGS_ALLOC_KERNEL_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "VblankCallback",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1620,6 +2443,13 @@
    "depth": 4,
    "external_class": "NV0092_RG_LINE_CALLBACK",
    "flags": "RS_FLAGS_ALLOC_KERNEL_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "RgLineCallback",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1634,6 +2464,16 @@
    "depth": 4,
    "external_class": "NVC57A_CURSOR_IMM_CHANNEL_PIO",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelPio",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1655,6 +2495,16 @@
    "depth": 4,
    "external_class": "NVC67A_CURSOR_IMM_CHANNEL_PIO",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelPio",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1676,6 +2526,16 @@
    "depth": 4,
    "external_class": "NVC87A_CURSOR_IMM_CHANNEL_PIO",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelPio",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1697,6 +2557,16 @@
    "depth": 4,
    "external_class": "NVC97A_CURSOR_IMM_CHANNEL_PIO",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelPio",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1718,6 +2588,16 @@
    "depth": 4,
    "external_class": "NVCA7A_CURSOR_IMM_CHANNEL_PIO",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelPio",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1739,6 +2619,16 @@
    "depth": 4,
    "external_class": "NVCB7A_CURSOR_IMM_CHANNEL_PIO",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelPio",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1760,6 +2650,16 @@
    "depth": 4,
    "external_class": "NVCC7A_CURSOR_IMM_CHANNEL_PIO",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelPio",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1781,6 +2681,16 @@
    "depth": 4,
    "external_class": "NVC57B_WINDOW_IMM_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1802,6 +2712,16 @@
    "depth": 4,
    "external_class": "NVC57D_CORE_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1823,6 +2743,16 @@
    "depth": 4,
    "external_class": "NVC57E_WINDOW_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1844,6 +2774,13 @@
    "depth": 4,
    "external_class": "NVC573_DISP_CAPABILITIES",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispCapabilities",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1865,6 +2802,16 @@
    "depth": 4,
    "external_class": "NVC67B_WINDOW_IMM_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1886,6 +2833,16 @@
    "depth": 4,
    "external_class": "NVC67D_CORE_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1907,6 +2864,16 @@
    "depth": 4,
    "external_class": "NVC77D_CORE_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1928,6 +2895,16 @@
    "depth": 4,
    "external_class": "NVC77F_ANY_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1949,6 +2926,16 @@
    "depth": 4,
    "external_class": "NVC67E_WINDOW_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -1970,6 +2957,13 @@
    "depth": 4,
    "external_class": "NVC673_DISP_CAPABILITIES",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispCapabilities",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -1991,6 +2985,13 @@
    "depth": 4,
    "external_class": "NVC773_DISP_CAPABILITIES",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispCapabilities",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -2012,6 +3013,16 @@
    "depth": 4,
    "external_class": "NVC87B_WINDOW_IMM_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2033,6 +3044,16 @@
    "depth": 4,
    "external_class": "NVC87D_CORE_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2054,6 +3075,16 @@
    "depth": 4,
    "external_class": "NVC87E_WINDOW_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2075,6 +3106,13 @@
    "depth": 4,
    "external_class": "NVC873_DISP_CAPABILITIES",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispCapabilities",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -2096,6 +3134,16 @@
    "depth": 4,
    "external_class": "NVC97B_WINDOW_IMM_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2117,6 +3165,16 @@
    "depth": 4,
    "external_class": "NVC97D_CORE_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2138,6 +3196,16 @@
    "depth": 4,
    "external_class": "NVC97E_WINDOW_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2159,6 +3227,13 @@
    "depth": 4,
    "external_class": "NVC973_DISP_CAPABILITIES",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispCapabilities",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -2180,6 +3255,13 @@
    "depth": 4,
    "external_class": "NVCA73_DISP_CAPABILITIES",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispCapabilities",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -2201,6 +3283,16 @@
    "depth": 4,
    "external_class": "NVCA7B_WINDOW_IMM_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2222,6 +3314,16 @@
    "depth": 4,
    "external_class": "NVCA7D_CORE_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2243,6 +3345,16 @@
    "depth": 4,
    "external_class": "NVCA7E_WINDOW_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2264,6 +3376,13 @@
    "depth": 4,
    "external_class": "NVCB73_DISP_CAPABILITIES",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispCapabilities",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -2285,6 +3404,16 @@
    "depth": 4,
    "external_class": "NVCB7B_WINDOW_IMM_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2306,6 +3435,16 @@
    "depth": 4,
    "external_class": "NVCB7D_CORE_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2327,6 +3466,16 @@
    "depth": 4,
    "external_class": "NVCB7E_WINDOW_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2348,6 +3497,13 @@
    "depth": 4,
    "external_class": "NVCC73_DISP_CAPABILITIES",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "DispCapabilities",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -2369,6 +3525,16 @@
    "depth": 4,
    "external_class": "NVCC7B_WINDOW_IMM_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2390,6 +3556,16 @@
    "depth": 4,
    "external_class": "NVCC7D_CORE_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2411,6 +3587,16 @@
    "depth": 4,
    "external_class": "NVCC7E_WINDOW_CHANNEL_DMA",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "DispChannel"
+   ],
    "internal_class": "DispChannelDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2432,6 +3618,16 @@
    "depth": 4,
    "external_class": "GF100_DISP_SW",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_RPC_TO_ALL",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "DispSwObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2456,6 +3652,16 @@
    "depth": 4,
    "external_class": "GF100_TIMED_SEMAPHORE_SW",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "TimedSemaSwObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2480,6 +3686,16 @@
    "depth": 4,
    "external_class": "NV50_DEFERRED_API_CLASS",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "DeferredApiObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2504,6 +3720,16 @@
    "depth": 4,
    "external_class": "GP100_UVM_SW",
    "flags": "RS_FLAGS_ALLOC_PRIVILEGED | RS_FLAGS_ALLOC_CPU_PLUGIN_FOR_SRIOV | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP | RS_FLAGS_CHANNEL_DESCENDANT_COMMON",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "UvmSwObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2528,6 +3754,16 @@
    "depth": 4,
    "external_class": "NV04_SOFTWARE_TEST",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "SoftwareMethodTest",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2552,6 +3788,16 @@
    "depth": 4,
    "external_class": "MAXWELL_DMA_COPY_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelCeContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2576,6 +3822,16 @@
    "depth": 4,
    "external_class": "PASCAL_DMA_COPY_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelCeContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2600,6 +3856,16 @@
    "depth": 4,
    "external_class": "TURING_DMA_COPY_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelCeContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2624,6 +3890,16 @@
    "depth": 4,
    "external_class": "AMPERE_DMA_COPY_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelCeContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2648,6 +3924,16 @@
    "depth": 4,
    "external_class": "AMPERE_DMA_COPY_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelCeContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2672,6 +3958,16 @@
    "depth": 4,
    "external_class": "HOPPER_DMA_COPY_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelCeContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2696,6 +3992,16 @@
    "depth": 4,
    "external_class": "BLACKWELL_DMA_COPY_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelCeContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2720,6 +4026,16 @@
    "depth": 4,
    "external_class": "BLACKWELL_DMA_COPY_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelCeContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2744,6 +4060,16 @@
    "depth": 4,
    "external_class": "NVB8B0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2768,6 +4094,16 @@
    "depth": 4,
    "external_class": "NVC4B0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2792,6 +4128,16 @@
    "depth": 4,
    "external_class": "NVC6B0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2816,6 +4162,16 @@
    "depth": 4,
    "external_class": "NVC7B0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2840,6 +4196,16 @@
    "depth": 4,
    "external_class": "NVC9B0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2864,6 +4230,16 @@
    "depth": 4,
    "external_class": "NVCDB0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2888,6 +4264,16 @@
    "depth": 4,
    "external_class": "NVCEB0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2912,6 +4298,16 @@
    "depth": 4,
    "external_class": "NVCFB0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2936,6 +4332,16 @@
    "depth": 4,
    "external_class": "NVD1B0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2960,6 +4366,16 @@
    "depth": 4,
    "external_class": "NVD2B0_VIDEO_DECODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvdecContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -2984,6 +4400,16 @@
    "depth": 4,
    "external_class": "NVB8D1_VIDEO_NVJPG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvjpgContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3008,6 +4434,16 @@
    "depth": 4,
    "external_class": "NVC4D1_VIDEO_NVJPG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvjpgContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3032,6 +4468,16 @@
    "depth": 4,
    "external_class": "NVC9D1_VIDEO_NVJPG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvjpgContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3056,6 +4502,16 @@
    "depth": 4,
    "external_class": "NVCDD1_VIDEO_NVJPG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvjpgContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3080,6 +4536,16 @@
    "depth": 4,
    "external_class": "NVCED0_VIDEO_NVJPG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvjpgContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3104,6 +4570,16 @@
    "depth": 4,
    "external_class": "NVCFD1_VIDEO_NVJPG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvjpgContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3128,6 +4604,16 @@
    "depth": 4,
    "external_class": "NVD2D1_VIDEO_NVJPG",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "NvjpgContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3152,6 +4638,16 @@
    "depth": 4,
    "external_class": "NVB8FA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -3176,6 +4672,16 @@
    "depth": 4,
    "external_class": "NVC6FA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -3200,6 +4706,16 @@
    "depth": 4,
    "external_class": "NVC7FA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -3224,6 +4740,16 @@
    "depth": 4,
    "external_class": "NVC9FA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -3248,6 +4774,16 @@
    "depth": 4,
    "external_class": "NVCDFA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3272,6 +4808,16 @@
    "depth": 4,
    "external_class": "NVCEFA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -3296,6 +4842,16 @@
    "depth": 4,
    "external_class": "NVCFFA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -3320,6 +4876,16 @@
    "depth": 4,
    "external_class": "NVD1FA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -3344,6 +4910,16 @@
    "depth": 4,
    "external_class": "NVD2FA_VIDEO_OFA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "OfaContext",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -3368,6 +4944,16 @@
    "depth": 4,
    "external_class": "NVD1B7_VIDEO_ENCODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "MsencContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3392,6 +4978,16 @@
    "depth": 4,
    "external_class": "NVC4B7_VIDEO_ENCODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "MsencContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3416,6 +5012,16 @@
    "depth": 4,
    "external_class": "NVB4B7_VIDEO_ENCODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "MsencContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3440,6 +5046,16 @@
    "depth": 4,
    "external_class": "NVC7B7_VIDEO_ENCODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "MsencContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3464,6 +5080,16 @@
    "depth": 4,
    "external_class": "NVC9B7_VIDEO_ENCODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "MsencContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3488,6 +5114,16 @@
    "depth": 4,
    "external_class": "NVCEB7_VIDEO_ENCODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "MsencContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3512,6 +5148,16 @@
    "depth": 4,
    "external_class": "NVCFB7_VIDEO_ENCODER",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "MsencContext",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3536,6 +5182,16 @@
    "depth": 4,
    "external_class": "HOPPER_SEC2_WORK_LAUNCH_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "Sec2Context",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3560,6 +5216,16 @@
    "depth": 4,
    "external_class": "AMPERE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3584,6 +5250,16 @@
    "depth": 4,
    "external_class": "AMPERE_COMPUTE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3608,6 +5284,16 @@
    "depth": 4,
    "external_class": "AMPERE_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3632,6 +5318,16 @@
    "depth": 4,
    "external_class": "AMPERE_COMPUTE_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3656,6 +5352,16 @@
    "depth": 4,
    "external_class": "ADA_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3680,6 +5386,16 @@
    "depth": 4,
    "external_class": "ADA_COMPUTE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3704,6 +5420,16 @@
    "depth": 4,
    "external_class": "HOPPER_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3728,6 +5454,16 @@
    "depth": 4,
    "external_class": "HOPPER_COMPUTE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3752,6 +5488,16 @@
    "depth": 4,
    "external_class": "BLACKWELL_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3776,6 +5522,16 @@
    "depth": 4,
    "external_class": "BLACKWELL_COMPUTE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3800,6 +5556,16 @@
    "depth": 4,
    "external_class": "BLACKWELL_INLINE_TO_MEMORY_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3824,6 +5590,16 @@
    "depth": 4,
    "external_class": "BLACKWELL_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3848,6 +5624,16 @@
    "depth": 4,
    "external_class": "BLACKWELL_COMPUTE_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3872,6 +5658,16 @@
    "depth": 4,
    "external_class": "FERMI_TWOD_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3896,6 +5692,16 @@
    "depth": 4,
    "external_class": "KEPLER_INLINE_TO_MEMORY_B",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3920,6 +5726,16 @@
    "depth": 4,
    "external_class": "TURING_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3944,6 +5760,16 @@
    "depth": 4,
    "external_class": "TURING_COMPUTE_A",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_CHANNEL_DESCENDANT_COMMON | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource",
+    "INotifier",
+    "Notifier",
+    "ChannelDescendant"
+   ],
    "internal_class": "KernelGraphicsObject",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3968,6 +5794,14 @@
    "depth": 2,
    "external_class": "NV01_CONTEXT_DMA",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "INotifier",
+    "Notifier"
+   ],
    "internal_class": "ContextDma",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3982,6 +5816,12 @@
    "depth": 2,
    "external_class": "NV01_EVENT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_DUAL_CLIENT_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "EventApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -3996,6 +5836,12 @@
    "depth": 2,
    "external_class": "NV01_EVENT_OS_EVENT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_DUAL_CLIENT_LOCK | RS_FLAGS_ALLOC_GSP_PLUGIN_FOR_VGPU_GSP",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "EventApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -4010,6 +5856,12 @@
    "depth": 2,
    "external_class": "NV01_EVENT_KERNEL_CALLBACK",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_DUAL_CLIENT_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "EventApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -4024,6 +5876,12 @@
    "depth": 2,
    "external_class": "NV01_EVENT_KERNEL_CALLBACK_EX",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_DUAL_CLIENT_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "EventApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -4038,6 +5896,12 @@
    "depth": 2,
    "external_class": "NV_CONFIDENTIAL_COMPUTE",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "ConfidentialComputeApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -4054,6 +5918,13 @@
    "depth": 4,
    "external_class": "NV_COUNTER_COLLECTION_UNIT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_GPUS_LOCK",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "KernelCcuApi",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -4068,6 +5939,13 @@
    "depth": 4,
    "external_class": "NV_CE_UTILS",
    "flags": "RS_FLAGS_ACQUIRE_GPUS_LOCK | RS_FLAGS_ALLOC_PRIVILEGED",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "CeUtilsApi",
    "multi_instance": "NV_TRUE",
    "parents": [
@@ -4082,6 +5960,13 @@
    "depth": 4,
    "external_class": "LOCK_STRESS_OBJECT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource",
+    "GpuResource"
+   ],
    "internal_class": "LockStressObject",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -4096,6 +5981,12 @@
    "depth": 3,
    "external_class": "LOCK_TEST_RELAXED_DUP_OBJECT",
    "flags": "RS_FLAGS_ALLOC_NON_PRIVILEGED | RS_FLAGS_ACQUIRE_RELAXED_GPUS_LOCK_ON_DUP | RS_FLAGS_ACQUIRE_RO_API_LOCK_ON_ALLOC | RS_FLAGS_ACQUIRE_GPU_GROUP_LOCK_ON_ALLOC | RS_FLAGS_ACQUIRE_GPUS_LOCK_ON_FREE",
+   "internal_ancestors": [
+    "Object",
+    "RsResource",
+    "RmResourceCommon",
+    "RmResource"
+   ],
    "internal_class": "LockTestRelaxedDupObject",
    "multi_instance": "NV_FALSE",
    "parents": [
@@ -4106,6 +5997,7 @@
  ],
  "source": {
   "driver_version": "610.57.04",
+  "hierarchy_path": "artifacts/src/open-gpu-kernel-modules/src/nvidia/generated",
   "path": "artifacts/src/open-gpu-kernel-modules/src/nvidia/src/kernel/rmapi/resource_list.h"
  }
 }

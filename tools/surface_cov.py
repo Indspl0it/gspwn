@@ -166,6 +166,29 @@ IN_HANDLER_CHECKS = 16
 # targetable and callable.
 DRM_MASTER_COMMANDS = 2
 
+# How many exercised-and-unmodelled targets `report` names on its own line.
+# The count is stated in full and the names are capped, because a corpus that
+# ran ahead of the description set names the same describe-phase work the
+# no-description line above it already reports.
+UNMODELLED_EXERCISED_LISTED = 20
+
+
+def positive_int(text):
+    """An argparse type for a row cap. Refuses zero and negative values.
+
+    --top slices a sorted list. A negative value silently drops rows from the
+    end while the "and N more" line still prints a count taken from the whole
+    list, so the output states one number and shows another.
+    """
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r is not an integer" % text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            "a row count starts at 1, and %d is below it" % value)
+    return value
+
 
 class SurfaceError(Exception):
     """An inventory is missing or lacks the fields this tool needs."""
@@ -596,11 +619,20 @@ def unpack_timeout_sec():
     raw = os.environ.get("GSPWN_UNPACK_TIMEOUT_SEC")
     if raw is not None:
         try:
-            return int(raw)
+            value = int(raw)
         except ValueError:
             raise SurfaceError(
                 "GSPWN_UNPACK_TIMEOUT_SEC=%r is not an integer. Unset it to "
                 "use the configured value." % raw)
+        if value <= 0:
+            # subprocess.run treats a non-positive timeout as already expired,
+            # so the unpack is killed on the spot and the message below reads
+            # "did not finish within -5s".
+            raise SurfaceError(
+                "GSPWN_UNPACK_TIMEOUT_SEC=%d is a number of seconds and has "
+                "to be positive; unset it to use the configured value."
+                % value)
+        return value
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
         sys.path.insert(0, here)
@@ -640,8 +672,14 @@ def unpack_run_corpus(run_id, dest):
             % SYZ_DB)
     timeout = unpack_timeout_sec()
     try:
+        # encoding and errors are explicit: text=True alone decodes with the
+        # platform locale codec, and a byte syz-db writes that the codec has
+        # no mapping for raises UnicodeDecodeError from inside subprocess,
+        # outside both except clauses below, turning a diagnostic path into a
+        # traceback.
         r = subprocess.run([SYZ_DB, "unpack", db, dest], capture_output=True,
-                           text=True, timeout=timeout)
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout)
     except subprocess.TimeoutExpired:
         raise SurfaceError(
             "syz-db unpack of %s did not finish within %ds. The database is "
@@ -1034,7 +1072,15 @@ def cmd_report(args):
         rows.append([family, len(total), len(m), len(e),
                      "%.1f%%" % _pct(len(e), len(total))])
     all_m = [v for v in targets if v in modelled]
-    all_e = [v for v in targets if v in exercised]
+    # Intersected with modelled, the same way each family row above is. The
+    # total was taken over exercised alone, so a target the corpus exercises
+    # and the description set does not model raised the total without raising
+    # any family row, the columns stopped summing, and lost_corpus below went
+    # negative. That target is a real condition and carries a reported count
+    # of its own on the line below the table.
+    all_e = [v for v in all_m if v in exercised]
+    unmodelled_exercised = [v for v in targets
+                            if v in exercised and v not in modelled]
     rows.append(["total", len(targets), len(all_m), len(all_e),
                  "%.1f%%" % _pct(len(all_e), len(targets))])
 
@@ -1049,7 +1095,8 @@ def cmd_report(args):
             "by_family": {r[0]: {"targetable": r[1], "modelled": r[2],
                                  "exercised": r[3]} for r in rows[:-1]},
             "total": {"targetable": len(targets), "modelled": len(all_m),
-                      "exercised": len(all_e)},
+                      "exercised": len(all_e),
+                      "exercised_unmodelled": len(unmodelled_exercised)},
             "excluded": {f: sum(1 for t in excluded.values()
                                 if t["family"] == f) for f in EXCLUDED},
         }, indent=1))
@@ -1082,6 +1129,19 @@ def cmd_report(args):
     lost_corpus = len(all_m) - len(all_e)
     print("%d targetable command(s) have no description: describe phase work."
           % lost_model)
+    if unmodelled_exercised:
+        # Counted apart from the exercised column, which is intersected with
+        # modelled so that the family rows sum to the total row. A corpus
+        # program naming a target the description set does not model means
+        # the corpus outran the descriptions or the inventory moved under
+        # both, and either way the target is not one this table measures.
+        listed = sorted(unmodelled_exercised)[:UNMODELLED_EXERCISED_LISTED]
+        print("%d targetable command(s) appear in the corpus and carry no "
+              "description, so they are outside the exercised column above: "
+              "%s%s" % (len(unmodelled_exercised), ", ".join(listed),
+                        "" if len(listed) == len(unmodelled_exercised)
+                        else ", and %d more"
+                             % (len(unmodelled_exercised) - len(listed))))
     if not meta["corpus_programs"]:
         # An empty corpus is the pre-fuzz state, and reading it as a modelling
         # failure would send the describe agent to fix a description set that
@@ -1177,7 +1237,7 @@ def build_parser():
 
     p = add_shared(sub.add_parser("modelled",
                                   help="what the descriptions declare"))
-    p.add_argument("--top", type=int, default=20,
+    p.add_argument("--top", type=positive_int, default=20,
                    help="how many unmatched variants to list")
     p.set_defaults(func=cmd_modelled)
 
@@ -1190,7 +1250,8 @@ def build_parser():
     p.add_argument("--stage", choices=["model", "corpus"], default="model",
                    help="which stage lost the target")
     p.add_argument("--family", choices=FAMILIES, help="restrict to one family")
-    p.add_argument("--top", type=int, default=40, help="how many to list")
+    p.add_argument("--top", type=positive_int, default=40,
+                   help="how many to list")
     p.set_defaults(func=cmd_gaps)
     return ap
 

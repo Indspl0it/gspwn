@@ -4,21 +4,31 @@ description: Scanning crash sources, working the flagged queue, Xid classes, and
 ---
 
 Triage turns raw crash artifacts into a deduplicated registry. The gate is an
-empty flagged queue and a clean `validate`.
+empty flagged queue and a clean `validate`. Steps 1 to 5 run in order after
+every campaign.
 
-## Scan every source
+## 1. Scan every source
 
 ```
 python3 tools/crash_parse.py --run-id r2-1
 ```
 
-Always pass `--run-id`. Without it the tool scans the last run registered in
-the current round, which is wrong in a round with several campaigns. It warns
-only when no run is registered at all.
-
 That call covers two sources: the syzkaller workdir at
 `artifacts/runs/<id>/workdir/crashes/`, and the Track U crash directory at
 `artifacts/u-crashes/`.
+
+Always pass `--run-id`. Without it the tool falls back to the last run
+registered in the current round, which is the wrong workdir in a round with
+several campaigns. It warns only when no run is registered at all:
+
+```
+WARN: no run id given and none registered in this round — skipping the syzkaller workdir. Pass --run-id, or register the run with pipeline_ctl.py round-add-run.
+```
+
+A `WARN` naming a missing crashes directory means nothing was scanned. It says
+nothing about whether the run crashed. Check the run id and re-run.
+
+## 2. Scan the kernel logs
 
 Kernel logs are scanned separately, one file at a time:
 
@@ -35,10 +45,11 @@ On EC2 harvests, also parse the console log:
 [ -e <harvest>/console-output.log ] && python3 tools/crash_parse.py --dmesg <harvest>/console-output.log
 ```
 
-A `WARN` about a missing crashes directory means nothing was scanned. It says
-nothing about whether the run crashed.
+A named `--dmesg` path that does not exist is reported and skipped, and the
+scan continues. A wrong harvest directory therefore registers nothing and
+still exits 0, so read the `WARN` lines.
 
-## Read the output
+## 3. Read the output
 
 ```
 NEW crash-0001 KASAN: use-after-free in uvm_va_range_destroy
@@ -54,13 +65,13 @@ registry now holds 8 crashes
 | `NEW` | A crash with no prior match on either key |
 | `DUP ... -> <id>` naming a new id | The same title and stack from a new source, registered as a duplicate linked to the surviving entry |
 | `DUP ... -> <id>` naming no new id | The identical sighting re-read from the identical source, so nothing was registered |
-| `FLAG` | A collision in one key but not the other, needing a human decision |
+| `FLAG` | A collision in one key with no confirmation from the other, needing a human decision |
 
-The same panic often lands twice, once in the syzkaller workdir and again in
-the harvested dmesg. Those duplicates are expected in the counts and are not a
-backlog. Only `flagged` entries need a decision.
+The same panic is often recorded twice, once in the syzkaller workdir and again
+in the harvested dmesg. Those duplicates belong in the counts, and only
+`flagged` entries need a decision.
 
-## Work the flagged queue
+## 4. Work the flagged queue
 
 ```
 python3 tools/pipeline_ctl.py crash-list --status flagged
@@ -99,10 +110,10 @@ python3 tools/pipeline_ctl.py crash-set crash-0012 crash-0013 crash-0014 \
   --duplicate-of crash-0003
 ```
 
-The call is all-or-nothing: a rejected id aborts the whole transaction. Group
-only what has actually been read.
+The call is all-or-nothing, and a rejected id aborts the whole transaction
+naming the id it refused. Group only what has actually been read.
 
-## Correcting a mistake
+### Correcting a mistake
 
 ```
 python3 tools/pipeline_ctl.py crash-set crash-0012 --duplicate-of none
@@ -114,6 +125,23 @@ duplicate and stay excluded from the RCA queue.
 
 `--status duplicate` without a `--duplicate-of` link is refused: a crash that
 leaves the queue must record what it duplicates.
+
+## 5. Check the registry before handing off
+
+```
+python3 tools/pipeline_ctl.py validate
+```
+
+```
+state is consistent
+```
+
+`validate` must print that before the triage gate holds. It exits 1 and prints
+one `PROBLEM:` line per failure, covering a phase marked done ahead of its
+dependency, a duplicate with no link to a surviving entry, a duplicate chain, a
+crash analysed by `rca` with no research record, an impact record whose
+consequence outruns its primitive, and dedup settings that moved underneath the
+registry's stored hashes.
 
 ## Xid classification
 
@@ -135,7 +163,7 @@ The default for an unlisted Xid is `review`, because a new driver branch can
 introduce an Xid the table has never seen, and a `noise` default would discard
 the one class of finding the campaign exists to produce.
 
-Full table: Xid classification.
+The per-number table is `XID_CLASS` in `tools/crash_parse.py`.
 
 Reclassifying is recorded as a judgement in the crash entry. An Xid classed
 `noise` that looks like a finding gets a note saying why before it is promoted.
@@ -151,38 +179,27 @@ derive.
 | Unresolved flagged collisions | The one-bug-or-two decision is still open |
 | Noise Xids | The fuzzer produces them by design |
 
-`show` and `brief` report how much of the registry is noise, so a total of 412
-crashes is not read as 412 findings:
+`show` and `brief` print the noise share on the line below the total, so a
+registry of 412 crashes reports how many of them are findings:
 
 ```
-crashes: 412 total (duplicate=3, flagged=1, unique=6, ...)  of these 402 are noise Xids (the fuzzer causes them by design, and they are not counted as findings)
+crashes: 412 total (duplicate=3, flagged=1, unique=408)
+  of these 402 are noise Xids (the fuzzer causes them by design, and they are not counted as findings)
 ```
+
+The status counts sum to the total. The noise count is a second reading of the
+same registry, because a noise Xid carries a status like any other entry.
 
 ## Prioritise for RCA
 
 The queue order the `triage` phase writes to `artifacts/crashes/QUEUE.md`:
 
-1. KASAN use-after-free and out-of-bounds writes, and Track U ASan heap
-   corruption
-2. Other KASAN reports
-3. NVRM entries classed `signal` or `review`
-4. Panics with no sanitizer report
-
-## Check the registry before handing off
-
-```
-python3 tools/pipeline_ctl.py validate
-```
-
-```
-state is consistent
-```
-
-`validate` must print that before the triage gate holds. It catches a phase
-marked done ahead of its dependency, a duplicate with no link to a surviving
-entry, a crash analysed by `rca` with no research record, an impact record
-whose consequence outruns its primitive, and dedup settings that moved
-underneath the registry's stored hashes.
+| Rank | Class |
+|---|---|
+| 1 | KASAN use-after-free and out-of-bounds writes, and Track U ASan heap corruption |
+| 2 | Every other KASAN report |
+| 3 | NVRM entries classed `signal` or `review` |
+| 4 | Panics carrying no sanitizer report |
 
 ## See also
 

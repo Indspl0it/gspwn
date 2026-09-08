@@ -1,0 +1,105 @@
+---
+// The launch configuration written down the page, one slot per row.
+//
+// `kernel<<<gridDim, blockDim, sharedBytes, stream>>>(args);` is 54 characters
+// on one line. In a code block on a phone it overflows, the copy control lands
+// on top of the text, and the reader scrolls a fixed string sideways to read
+// it. Stacking the four slots removes the overflow and puts each parameter
+// beside what it states, which a separate table underneath was carrying before.
+
+const SLOTS = [
+	{
+		name: 'gridDim',
+		says: 'Blocks in the grid, up to three dimensions',
+	},
+	{
+		name: 'blockDim',
+		says: 'Threads per block, up to three dimensions, at most 1024 in total',
+	},
+	{
+		name: 'sharedBytes',
+		says: 'Dynamic shared memory per block, added to what the kernel declares statically',
+	},
+	{
+		name: 'stream',
+		says: 'The stream the launch is ordered in. Work in one stream is ordered, and work in different streams may overlap',
+	},
+];
+---
+
+<div class="lc" role="group" aria-label="Kernel launch configuration parameters">
+	<code class="line open">kernel&lt;&lt;&lt;</code>
+
+	{
+		SLOTS.map((s, i) => (
+			<div class="slot">
+				<code class="nm">
+					{s.name}
+					{i < SLOTS.length - 1 ? ',' : ''}
+				</code>
+				<span class="says">{s.says}</span>
+			</div>
+		))
+	}
+
+	<code class="line close">&gt;&gt;&gt;(args);</code>
+</div>
+
+<style>
+	.lc {
+		--edge: var(--sl-color-gray-5);
+		border: 1px solid var(--edge);
+		border-inline-start: 3px solid var(--gs-hue-cyan);
+		border-radius: 0.5rem;
+		background: var(--sl-color-gray-6);
+		padding: 0.7rem 0.9rem;
+		margin-block: 1.5rem;
+	}
+
+	.line {
+		display: block;
+		font-family: var(--sl-font-mono);
+		font-size: 0.8rem;
+		color: var(--sl-color-white);
+		background: none;
+		border: 0;
+		padding: 0;
+	}
+	.close { margin-top: 0.35rem; }
+
+	.slot {
+		display: grid;
+		grid-template-columns: minmax(6rem, 8rem) minmax(0, 1fr);
+		gap: 0.15rem 0.9rem;
+		align-items: baseline;
+		padding: 0.28rem 0 0.28rem 1.2rem;
+	}
+
+	.nm {
+		font-family: var(--sl-font-mono);
+		font-size: 0.78rem;
+		color: var(--gs-hue-cyan);
+		background: none;
+		border: 0;
+		padding: 0;
+	}
+
+	.says {
+		font-size: 0.76rem;
+		color: var(--sl-color-gray-2);
+		line-height: 1.45;
+	}
+
+	/* On a narrow screen the annotation drops beneath its parameter, so no
+	   column has to hold a full sentence at phone width. */
+	@media (max-width: 40rem) {
+		.slot {
+			grid-template-columns: minmax(0, 1fr);
+			padding-inline-start: 0.9rem;
+		}
+		.says {
+			font-size: 0.72rem;
+			padding-inline-start: 0.1rem;
+		}
+	}
+</style>

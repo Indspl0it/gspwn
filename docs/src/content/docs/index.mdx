@@ -22,86 +22,167 @@ hero:
 
 import NavCard from '../../components/NavCard.astro';
 
-gspwn runs unattended on a machine it panics on purpose. Each round models an
-interface, generates seeds, runs a bounded fuzzing campaign, deduplicates the
-crashes, analyses them, verifies reproducers, measures the round, and writes the
-work list the next round executes. Rounds continue until every enumerated
-ioctl target is either exercised or carries a written reason, until the species
-discovery curve plateaus, or until a declared cap trips.
+gspwn is an autonomous vulnerability-research agent for the NVIDIA GPU kernel
+driver (Track K) and the NVIDIA Container Toolkit (Track U). It runs
+coverage-guided fuzzing from the position a container tenant already holds:
+syzkaller against the driver's ioctl surface, on a kernel built with KCOV for
+edge coverage and KASAN as the oracle, and libFuzzer and AFL++ against the
+toolkit's parsing and path handling under AddressSanitizer and
+UndefinedBehaviorSanitizer.
 
-Campaign output is a set of verified vulnerabilities: deduplicated crashes, each
-carrying a root-cause analysis, a reproducer with a measured reproduction rate,
-an argued severity, and a disclosure package.
+A campaign runs in rounds. A round writes syzlang descriptions and seeds, fuzzes
+both tracks for a bounded window, deduplicates crashes into a registry, produces
+a root-cause analysis and a verified reproducer for each unique crash, and
+measures how much of the enumerated command surface it reached. The measurement
+writes the work list the next round executes.
 
-## Rationale
+Coverage is measured against a denominator taken from driver source. The
+inventories enumerate 1203 commands for driver 610.57.04. Of those, 852 across
+seven families are reachable by the modelled attacker and visible to KCOV, and
+they form the denominator. The
+[enumerated surface](/gspwn/reference/surface/) pages list all 1203.
 
-GPU capacity at cloud providers is growing, and much of it reaches tenants as a
-sandbox: a training job, an inference endpoint, a hosted notebook, a playground
-instance. Those sandboxes put untrusted code directly against the driver's ioctl
-surface through `/dev/nvidiactl`, `/dev/nvidiaN`, `/dev/nvidia-uvm`,
-`/dev/nvidia-modeset` and `/dev/dri`. The container runtime that admits them
-parses attacker-controlled image metadata as root, during container init, before
-isolation is enforced.
+## Threat position
 
-A memory-safety defect reachable from a default container capability set
-therefore carries a wide blast radius. One driver build runs across a provider's
-fleet, and the vulnerable surface is reachable from the lowest-privilege
-position that provider sells.
+GPU capacity at cloud providers reaches tenants as a sandbox: a training job,
+an inference endpoint, a hosted notebook, a playground instance. Untrusted code
+in that sandbox holds the driver's ioctl surface directly. The container
+runtime that admitted it parsed attacker-controlled image metadata as root,
+during container init, before isolation was enforced.
 
-The loop itself is a second objective. gspwn is a testbed for autonomous
-research on a task that runs for days, bills real money per hour, and reports
-results that can be checked against artifacts on disk. The same work builds
-working knowledge of the GPU driver stack.
+Both positions are the lowest-privilege thing a provider sells, and one driver
+build runs across a provider's whole fleet. A memory-safety defect reachable
+from a default `compute,utility` capability set therefore reaches the host
+kernel from every tenant on every machine carrying that build.
+
+gspwn is also a testbed for autonomous research. A campaign runs for days
+unattended, and every result it reports can be checked against an artefact on
+disk.
 
 ## The two targets
 
-gspwn attacks two codebases, called tracks.
+```mermaid
+flowchart LR
+  subgraph U["Track U: NVIDIA Container Toolkit"]
+    direction LR
+    T2["Attacker-controlled<br/>image"] --> N2["OCI config<br/>CDI spec<br/>env vars"]
+    N2 --> M2["nvidia-container-toolkit<br/>libnvidia-container"]
+    M2 --> H2["Host compromise<br/>before isolation"]
+  end
+  subgraph K["Track K: GPU kernel driver"]
+    direction LR
+    T1["Container tenant<br/>default caps"] --> N1["/dev/nvidiactl<br/>/dev/nvidiaN<br/>/dev/nvidia-uvm[-tools]<br/>/dev/nvidia-modeset<br/>/dev/dri/card*, renderD*"]
+    N1 --> M1["nvidia.ko<br/>nvidia-uvm.ko<br/>nvidia-modeset.ko<br/>nvidia-drm.ko<br/>ioctl handlers"]
+    M1 --> H1["Host kernel<br/>memory corruption"]
+  end
+```
 
 **Track K** is the NVIDIA GPU kernel driver, `open-gpu-kernel-modules`. The
 attacker is a container tenant holding the device nodes a default
 `compute,utility` capability set reaches: `/dev/nvidiactl`, `/dev/nvidiaN`,
 `/dev/nvidia-uvm[-tools]`, `/dev/nvidia-modeset` and `/dev/dri/cardN` with
-`/dev/dri/renderDN`. syzkaller drives those ioctl surfaces with grammar-based
-generative fuzzing, against a kernel built with KCOV for edge coverage and
-KASAN as the oracle.
-
-Track K's denominator is enumerated from driver source: 852 reachable commands
-across seven families for driver 610.57.04, with a further 351 counted
-separately across six groups and held outside it. The
-[enumerated surface](/gspwn/reference/surface/) pages list every command in
-both sets.
+`/dev/dri/renderDN`. syzkaller drives them with grammar-based generative
+fuzzing.
 
 **Track U** is the NVIDIA Container Toolkit, `libnvidia-container` and
 `nvidia-container-toolkit`. The attacker controls the container image, and the
-code under test runs as root during container init before isolation is
+code under test runs as root during container init, before isolation is
 enforced. libFuzzer and AFL++ harnesses drive the parsing and path-handling
-surface with mutational coverage-guided fuzzing. AddressSanitizer and
-UndefinedBehaviorSanitizer are the oracle.
+surface with mutational coverage-guided fuzzing.
+
+## Architecture
+
+gspwn is built in five layers. Track K fuzzing panics the machine as a normal
+part of its work, so each layer commits its result to disk as it produces it
+and resumes from that record when the machine returns.
 
 ```mermaid
-flowchart LR
-  subgraph K["Track K: GPU kernel driver"]
-    direction LR
-    T1["Container tenant<br/>default caps"] --> N1["/dev/nvidiactl, /dev/nvidiaN<br/>/dev/nvidia-uvm[-tools]<br/>/dev/nvidia-modeset, /dev/dri"]
-    N1 --> M1["nvidia.ko, nvidia-uvm.ko<br/>nvidia-modeset.ko, nvidia-drm.ko<br/>ioctl handlers"]
-    M1 --> H1["Host kernel<br/>memory corruption"]
+flowchart TB
+  subgraph SD["systemd"]
+    direction TB
+    ORCH["gspwn-orchestrator.service<br/>Restart=always<br/>circuit breaker"]
+    DL["gspwn-deadline@.timer<br/>one instance per run id"]
+    ORCH ~~~ K
+    DL ~~~ U
+    K["gspwn-k.service<br/>syz-manager"]
+    U["gspwn-u.service<br/>harness container"]
+    COV["gspwn-coverage.timer"]
   end
-  subgraph U["Track U: NVIDIA Container Toolkit"]
-    direction LR
-    T2["Attacker-controlled<br/>image"] --> N2["OCI config<br/>CDI spec, env vars"]
-    N2 --> M2["libnvidia-container<br/>runs as root at init"]
-    M2 --> H2["Host compromise<br/>before isolation"]
-  end
+
+  ORCH -->|"harvests, then launches"| AG["the orchestrating agent<br/>executing AGENTS.md"]
+  AG -->|"dispatches, one per phase"| SA["sub-agents<br/>agents/*.md"]
+  SA -->|"invokes"| T["tools/*.py, tools/*.sh<br/>the only writers"]
+  AG -->|"next, brief, set-phase"| T
+
+  T -->|"atomic write under flock"| PJ[("state/pipeline.json<br/>execution position")]
+  T -->|"idempotent per run id"| SJ[("state/spend.json<br/>run-hour ledger")]
+  T -->|"reads and writes"| AR[("artifacts/<br/>evidence")]
+  T -->|"atomic append"| KN[("knowledge/<br/>committed facts")]
+
+  K -->|"crashes, corpus"| AR
+  U -->|"crashes, fuzzer_stats"| AR
+  COV -->|"one row per interval"| AR
+  DL -->|"stops and disables"| K
+  DL -->|"stops and disables"| U
+  DL -->|"bills the run"| SJ
 ```
 
-## Campaign outputs
+[Architecture overview](/gspwn/architecture/overview/) has the layer table, the
+four state stores and the refusal conditions.
 
-| Output | Location |
+## The round
+
+Twelve phases run in order. `provision` and `build` prepare the machine once,
+nine phases form the round, and `report` closes the campaign.
+
+| Phase | Produces |
+|---|---|
+| `describe` | syzlang descriptions for the ioctl surface under test |
+| `seeds` | Corpus programs, from traces of real workloads and from allocation chains |
+| `harness` | libFuzzer and AFL++ harnesses for the Track U targets |
+| `fuzz` | A bounded campaign on both tracks, with a coverage series |
+| `triage` | Crashes deduplicated into a registry, one entry per distinct stack |
+| `rca` | A root-cause analysis per unique crash |
+| `poc` | A reproducer, with its reproduction rate measured over repeated runs |
+| `eval` | The round measured: coverage reached, surface accounted for, gaps named |
+| `refine` | The work list the next round executes |
+
+Three keys in `config/campaign.yaml` bound the search before a campaign starts.
+
+| Key | Bounds |
+|---|---|
+| `loop.campaign_hours` | The fuzzing window one round gets |
+| `loop.max_rounds` | How many rounds may run |
+| `loop.max_total_run_hours` | Machine time billed across every run |
+
+## Stop conditions
+
+`round-decide` applies five tests to the finished round, in the order below,
+and stops the campaign on the first that holds.
+
+| Condition | Test | Read from |
+|---|---|---|
+| Surface complete | Every enumerated ioctl target is exercised by a corpus program or accounted for with a written reason | The completion ledger |
+| Round cap | The round number reaches `loop.max_rounds` | `state/pipeline.json` |
+| Run-hour cap | Billed run-hours reach `loop.max_total_run_hours` | `state/spend.json` |
+| Plateau | The species discovery curve has flattened, with `loop.stop_on_plateau` set | The per-run coverage series |
+| No verdict | The round recorded no coverage verdict, so no decision can be argued | `state/pipeline.json` |
+
+Surface completion, the round cap and the run-hour cap hold whatever the
+coverage series is doing at the time.
+
+## Output
+
+A campaign produces verified vulnerabilities. Each one is a deduplicated crash
+carrying a root-cause analysis, a reproducer with a measured reproduction rate,
+an argued severity, and a disclosure package.
+
+| Artefact | Location |
 |---|---|
 | Deduplicated crash registry | `state/pipeline.json` |
 | Root-cause analysis per unique crash | `artifacts/rca/<crash-id>.md` |
-| Research record and impact record per analysed crash | the registry entry |
-| Verified reproducer with a measured reproduction rate | `artifacts/pocs/<crash-id>/` |
+| Research record and impact record | The registry entry |
+| Verified reproducer with a measured rate | `artifacts/pocs/<crash-id>/` |
 | Per-run coverage series | `artifacts/runs/<run-id>/coverage.csv` |
 | Work list steering the next round | `artifacts/eval/<run-id>/worklist.md` |
 | Penetration-test-style report | `artifacts/report/<date>-report.md` |

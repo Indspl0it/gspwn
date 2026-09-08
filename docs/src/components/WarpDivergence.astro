@@ -1,0 +1,148 @@
+---
+// The same warp under two branch predicates, drawn lane by lane.
+//
+// Divergence cost is stated in prose as "the warp executes both paths and
+// masks off the inactive lanes", which is accurate and hard to picture. The
+// picture is the point: half the lanes sit dark through every pass, and the
+// wasted issue slots are countable. Setting the two predicates side by side
+// also locates the fix in the predicate's granularity.
+
+const LANES = 32;
+const lanes = Array.from({ length: LANES }, (_, i) => i);
+
+const CASES = [
+	{
+		pred: 'threadIdx.x % 2 == 0',
+		note: 'the predicate splits inside the warp',
+		passes: [
+			{ path: 'A()', active: (i: number) => i % 2 === 0 },
+			{ path: 'B()', active: (i: number) => i % 2 !== 0 },
+		],
+		cost: 'two passes, 32 lane-slots idle',
+		bad: true,
+	},
+	{
+		pred: 'threadIdx.x / 32 == 0',
+		note: 'the predicate is constant across the warp',
+		passes: [{ path: 'A()', active: () => true }],
+		cost: 'one pass, no lane idle',
+		bad: false,
+	},
+];
+---
+
+<div class="wd" role="group" aria-label="One warp under two branch predicates">
+	{
+		CASES.map((c) => (
+			<section class={`case ${c.bad ? 'is-split' : 'is-uniform'}`}>
+				<code class="pred">{c.pred}</code>
+				<p class="note">{c.note}</p>
+
+				{c.passes.map((p) => (
+					<div class="pass">
+						<span class="path">{p.path}</span>
+						<div
+							class="lanes"
+							role="img"
+							aria-label={`${p.path}: ${
+								lanes.filter((i) => p.active(i)).length
+							} of ${LANES} lanes active`}
+						>
+							{lanes.map((i) => (
+								<span class={p.active(i) ? 'lane on' : 'lane off'} />
+							))}
+						</div>
+					</div>
+				))}
+
+				<p class="cost">{c.cost}</p>
+			</section>
+		))
+	}
+</div>
+
+<style>
+	.wd {
+		--edge: var(--sl-color-gray-5);
+		--panel: var(--sl-color-gray-6);
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.9rem;
+		margin-block: 1.5rem;
+	}
+
+	.case {
+		border: 1px solid var(--edge);
+		border-radius: 0.5rem;
+		background: var(--panel);
+		padding: 0.75rem 0.85rem 0.6rem;
+	}
+	.case.is-split { border-top: 3px solid var(--gs-hue-amber); }
+	.case.is-uniform { border-top: 3px solid var(--gs-hue-green); }
+
+	.pred {
+		font-family: var(--sl-font-mono);
+		font-size: 0.74rem;
+		color: var(--sl-color-white);
+		background: none;
+		border: 0;
+		padding: 0;
+	}
+
+	.note {
+		font-size: 0.68rem;
+		color: var(--sl-color-gray-3);
+		margin: 0.15rem 0 0.6rem;
+		line-height: 1.35;
+	}
+
+	.pass {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.35rem;
+	}
+
+	.path {
+		font-family: var(--sl-font-mono);
+		font-size: 0.66rem;
+		color: var(--sl-color-gray-2);
+		flex: none;
+		width: 2.2rem;
+	}
+
+	/* 32 lanes in one row states the warp width without a caption. The row
+	   shrinks rather than wraps, so the count stays readable as one unit. */
+	.lanes {
+		display: grid;
+		grid-template-columns: repeat(32, minmax(0, 1fr));
+		gap: 1px;
+		flex: 1;
+		min-width: 0;
+	}
+
+	.lane {
+		height: 0.85rem;
+		border-radius: 1px;
+	}
+	.is-split .lane.on { background: var(--gs-hue-amber); }
+	.is-uniform .lane.on { background: var(--gs-hue-green); }
+	.lane.off {
+		background: var(--sl-color-gray-4);
+		opacity: 0.28;
+	}
+
+	.cost {
+		font-family: var(--sl-font-mono);
+		font-size: 0.64rem;
+		color: var(--sl-color-gray-3);
+		margin: 0.5rem 0 0;
+		padding-top: 0.45rem;
+		border-top: 1px solid var(--edge);
+	}
+
+	@media (max-width: 48rem) {
+		.wd { grid-template-columns: minmax(0, 1fr); }
+		.lane { height: 0.7rem; }
+	}
+</style>

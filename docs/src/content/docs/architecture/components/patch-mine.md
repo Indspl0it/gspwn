@@ -5,8 +5,8 @@ description: "The security fix history of the two NVIDIA container repositories,
 
 Mines the fix history of `libnvidia-container` and `nvidia-container-toolkit`
 and ranks the files and functions those fixes touched. The `harness` phase names
-`libnvidia-container` as the Track U primary target and states that the
-CVE-2024-0132 class of defects lives adjacent to it, without naming a function.
+`libnvidia-container` as the Track U primary target and states that defects of
+the CVE-2024-0132 class are adjacent to it, without naming a function.
 
 The module runs entirely off a git checkout. It reaches no device and needs no
 GPU.
@@ -23,7 +23,7 @@ only the JSON file it is given.
 
 | Invariant | Enforced by |
 |---|---|
-| A shallow checkout cannot report an empty history as a clean one | `validate_repo` refuses a checkout where `git rev-parse --is-shallow-repository` prints true, and names the fetch command that fixes it |
+| A shallow checkout cannot report an empty history as a clean one | `validate_repo` refuses a checkout where `git rev-parse --is-shallow-repository` prints true, and names `git fetch --unshallow --tags` |
 | A checkout with no tags cannot report every fix as unreleased | `validate_repo` refuses a zero tag count and names `git fetch --tags` |
 | A loose date cannot silently move the window | `validate_since` accepts `YYYY-MM-DD` and refuses everything else, because git resolves date words differently across versions |
 | A forge-placed marker stays separable from a keyword guess | Each record carries a `signal` field holding `fork merge` or `keyword`, and a `matched` field holding the text that matched |
@@ -41,11 +41,21 @@ signal and subject; the top 20 files by fix-commit count; and the top 25
 functions by fix-commit count. The full record, every commit and both
 rankings, is also written as JSON.
 
-Two conditions stop a run before it reports anything. A shallow checkout holds
-one commit and no tags, and the empty result it produces would read as a clean
-fix history, so it is refused with the fetch command that repairs it. A loose
-date word is refused too, because git resolves those differently across
-versions and a silently shifted window changes every count.
+Five conditions stop a run before it reports anything, four of them in
+`validate_repo` and one in `validate_since`. Each refusal names the command that
+repairs it.
+
+| Condition | Message carries |
+|---|---|
+| `--repo` is not a directory | The instruction to pass a checkout of `libnvidia-container` or `nvidia-container-toolkit` |
+| `--repo` is not a git checkout | The `git rev-parse --show-toplevel` error |
+| The checkout is shallow | `git -C <repo> fetch --unshallow --tags` |
+| The checkout has no tags | `git -C <repo> fetch --tags` |
+| `--since` is not `YYYY-MM-DD` | The rejected value, and that git resolves loose date words differently across versions |
+
+A shallow checkout holds one commit and no tags, and the empty result it
+produces would read as a clean fix history. A loose date word silently shifts
+the window, which changes every count.
 
 ## Concurrency and durability
 
@@ -59,18 +69,29 @@ logs the removal. No lock is taken, and two concurrent invocations writing the
 same `--out` path race for it.
 
 The module holds no state between runs and is safe to re-run after new fixes
-land.
+are published.
 
 ## Prohibited behaviour
 
-| Rule | Rationale |
-|---|---|
-| Never assert a CVE mapping from a diff alone | A matching release version and a plausible diff are different weights of evidence. The tool supplies the version, and a human states the mapping with the evidence beside it |
-| Never treat a keyword hit as a confirmed security fix | The keyword list catches ordinary maintenance. Every `nvidia-container-toolkit` commit touching `ldconfig` matches, and that is a large maintenance stream in that repository |
-| Never match `capabilit` as a security keyword | In this codebase the word almost always means `NVIDIA_DRIVER_CAPABILITIES`, the image-supplied capability string. Matching it returned the entire MIG capability-mount history. POSIX capability handling is caught by `privilege` and `seccomp` |
-| Never rank a file by lines changed | A vendored dependency bump changes thousands of lines and says nothing about where this project's defects are. The ranking counts distinct fix commits |
-| Never report the function counts as complete | Git's funcname heuristic misses a definition whose opening brace sits on its own line, so every count is a lower bound |
-| Never mine a shallow checkout | A shallow clone holds one commit and no tags. The empty result it produces reads as a clean fix history |
+- Never assert a CVE mapping from a diff alone. A matching release version and
+  a plausible diff are different weights of evidence. The tool supplies the
+  version, and a human states the mapping with the evidence beside it.
+- Never treat a keyword hit as a confirmed security fix. The keyword list
+  catches ordinary maintenance. Every `nvidia-container-toolkit` commit
+  touching `ldconfig` matches, and that is a large maintenance stream in that
+  repository.
+- Never match `capabilit` as a security keyword. In this codebase the word
+  almost always means `NVIDIA_DRIVER_CAPABILITIES`, the image-supplied
+  capability string, and matching it returned the entire MIG capability-mount
+  history. POSIX capability handling is caught by `privilege` and `seccomp`.
+- Never rank a file by lines changed. A vendored dependency bump changes
+  thousands of lines and says nothing about where this project's defects are.
+  The ranking counts distinct fix commits.
+- Never report the function counts as complete. Git's funcname heuristic misses
+  a definition whose opening brace is on its own line, so every count is a
+  lower bound.
+- Never mine a shallow checkout. A shallow clone holds one commit and no tags,
+  and the empty result it produces reads as a clean fix history.
 
 ## The ranking method
 
@@ -82,10 +103,14 @@ The tool counts distinct fix commits per file and per function across the
 window. A commit becomes a candidate through one of two signals, and they carry
 different weights.
 
-| Signal | Marker | Weight |
-|---|---|---|
-| Fork merge | A merge whose subject is exactly `Merge commit from fork` | GitHub writes this subject when a private security-advisory fork is merged back. The forge places it, so it identifies a coordinated security fix without depending on any author's commit message discipline |
-| Keyword | A subject or body matching one of the patterns in `KEYWORDS`, with word boundaries | A heuristic. It catches fixes that never went through an advisory, and it catches unrelated commits. Each record carries the text that matched, and a human reviews it |
+- A fork merge is a merge whose subject is exactly `Merge commit from fork`.
+  GitHub writes that subject when a private security-advisory fork is merged
+  back. The forge places it, so it identifies a coordinated security fix
+  without depending on any author's commit message discipline.
+- A keyword hit is a subject or body matching one of the patterns in
+  `KEYWORDS`, with word boundaries. This signal is a heuristic. It catches
+  fixes that never went through an advisory, and it catches unrelated commits.
+  Each record carries the text that matched, and a human reviews it.
 
 ### Reachability and harnessability
 
@@ -96,24 +121,34 @@ a GPU and without a live container. A function failing the first falls outside
 the Track U attacker definition. A function failing the second needs a fixture,
 and the size of that fixture is stated per entry.
 
-The two axes disagree. Fix density puts `nvc_ldcache_update` first with 10 fix
-commits and `limit_syscalls` second with 9, both in `src/nvc_ldcache.c`. Neither can be
-harnessed: the first clones with `CLONE_NEWPID` and `CLONE_NEWNS`, remounts
-`/proc`, changes root into the container, drops capabilities, installs a seccomp
-filter and calls `fexecve`, and the second parses nothing. Six of the top ten
-functions by fix density need root, a namespace or a live container.
+The two axes disagree. Over the whole history of the `libnvidia-container`
+checkout under `artifacts/src/`, fix density puts `limit_syscalls` first with 12
+fix commits and `nvc_ldcache_update` second with 11, both in
+`src/nvc_ldcache.c`. Neither can be harnessed: `limit_syscalls` builds the
+seccomp allowlist and parses nothing, and `nvc_ldcache_update` clones with
+`CLONE_NEWPID` and `CLONE_NEWNS`, remounts `/proc`, changes root into the
+container, drops capabilities, installs a seccomp filter and calls `fexecve`.
+Nine of the ten highest-ranked functions belong to `src/nvc_ldcache.c`,
+`src/nvc_mount.c` or `src/nvc_container.c`. `harnesses/TARGETS.md` carries an
+exclusion row for four of them, `nvc_ldcache_update`, `limit_syscalls`,
+`mount_files` and `mount_directory`, each naming the fixture a unit harness
+cannot supply. The tenth is `file_create`, at `src/utils.c:537`, in the file the
+`fuzz_path_resolve` and `fuzz_path_join` harnesses already drive.
 
 The harnesses reach the layer beneath those functions. Commit `ad1f8c8`
 fixed `mount_files` by replacing `file_mode` with `file_mode_nofollow` and
-routing every mount destination through `path_resolve_full`. The defect lived in
-the caller. The mechanism lives in `src/utils.c`, and `src/utils.c` is
-harnessable. Any Track U coverage claim states the gap, because a green harness
+routing every mount destination through `path_resolve_full`. The defect was in
+the caller. `file_mode_nofollow` is defined at `src/utils.c:688` and
+`path_resolve_full` at `src/utils.c:934`, and a unit harness calls both
+directly. Any Track U coverage claim states the gap, because a green harness
 gate says nothing about the most-fixed function in the target.
 
 ## Harnesses
 
-The harness set the ranking produced is committed under `harnesses/`,
-105 files across seven targets.
+The harness set the ranking produced is committed under `harnesses/`, 106 files:
+one directory per target, `common/build_common.sh`, `TARGETS.md`, and the three
+scripts `build_all.sh`, `run_all.sh` and `replay_crashes.sh` alongside
+`seedgen.py`.
 
 | Harness | Entry point | Source file |
 |---|---|---|
@@ -131,10 +166,21 @@ The first six are the C targets listed in `track_u.targets` in
 output for the sampler to read. Go is memory-safe, and a finding against the
 toolkit supports a denial-of-service claim and no memory-corruption claim.
 
-These 105 files are hand-written C and Go that no phase regenerates, authored
-offline from the container sources at a pinned commit. Their seed corpora and
-dictionaries are committed beside them. Campaign output goes to
-`artifacts/runs/` and stays ignored.
+Each target directory holds a `build.sh`, the entry-point source, and a `seeds/`
+directory; the six C targets each add a `.dict`. The seven entry points are
+hand-written C and Go that no phase regenerates, authored offline from the
+container sources at the commits checked out under `artifacts/src/`. Campaign
+output goes to `artifacts/runs/` and stays ignored.
+
+| Target | Files | Entry-point source |
+|---|---|---|
+| `fuzz_ldcache` | 10 | `fuzz_ldcache.c` |
+| `fuzz_path_resolve` | 22 | `fuzz_path_resolve.c` |
+| `fuzz_dsl_evaluate` | 13 | `fuzz_dsl_evaluate.c` |
+| `fuzz_options_parse` | 14 | `fuzz_options_parse.c` |
+| `fuzz_imex_channels` | 13 | `fuzz_imex_channels.c` |
+| `fuzz_path_join` | 26 | `fuzz_path_join.c` |
+| `go_cudacompat_elf` | 2 | `fuzz_cuda_elf_header_test.go` |
 
 ## Build status
 
@@ -175,7 +221,7 @@ supplies most of the difference. With `--since 2019-01-01` it returns 35.
 Function names come from the trailing context of a zero-context diff hunk
 header. Git derives that context with a language heuristic that finds C and Go
 definitions well. A Debian changelog stanza header also parses as a call, which
-is why `pkg/` sits in the ignored prefixes.
+is why `pkg/` is in the ignored prefixes.
 
 ## See also
 

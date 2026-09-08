@@ -6,7 +6,8 @@ description: The five layers, the four state stores, the round loop, and the mec
 gspwn drives a fuzzing campaign against the NVIDIA GPU kernel driver (Track K)
 and the NVIDIA Container Toolkit (Track U) with no human at the console. It is
 built in five layers. Track K fuzzing panics the machine as a normal part of
-its work, so no layer holds durable state in a process.
+its work, so each layer commits its result to disk as it produces it and
+resumes from that record when the machine returns.
 
 ## Layers
 
@@ -54,6 +55,9 @@ flowchart TB
 
 ## State stores
 
+Four stores hold everything that survives a process, and one of them is
+committed to a public repository.
+
 | Store | Holds | Lifetime | Committed |
 |---|---|---|---|
 | `state/pipeline.json` | Execution position: phases, the crash registry, rounds | This campaign | No |
@@ -72,7 +76,7 @@ which is checked at every campaign install and at every round decision. See
 [Spend accounting](/gspwn/architecture/spend-accounting/).
 
 Three locks cover these stores. `state/.pipeline.lock` follows `GSPWN_STATE` and
-sits beside the file it protects. `state/spend.json.lock` and `state/repro.lock`
+is created beside the file it protects. `state/spend.json.lock` and `state/repro.lock`
 do not follow it. See [Durability](/gspwn/architecture/durability/).
 
 ## The round loop
@@ -123,6 +127,9 @@ Entry conditions, carried state and termination for all ten loops are in
 
 ## Crash resilience
 
+Eleven mechanisms carry a campaign across a panic, and each one exists against
+a specific failure.
+
 | Mechanism | Implementation | Failure it prevents |
 |---|---|---|
 | Durable position | `state/pipeline.json`, rendered by `pipeline_ctl.py brief`, which derives its output at read time | A resumed agent cannot locate the pipeline and restarts phases that already ran |
@@ -131,7 +138,7 @@ Entry conditions, carried state and termination for all ten loops are in
 | Exclusive transactions | An `flock` held across the whole read-modify-write cycle | Parallel `describe`, `seeds` and `harness` sub-agents overwrite each other's updates |
 | Process supervision | `gspwn-orchestrator.service`, `Restart=always`, `RestartSec=60` | The pipeline stops at the first panic and waits for a human to log in |
 | Circuit breaker | Same-boot starts and reboots counted separately inside `orchestrator.window_min`, against `orchestrator.max_same_boot_starts` and `orchestrator.max_reboots`. A trip records the block and exits 78, which systemd does not restart | A crash-looping agent restarts forever with no token ceiling. Separate counters keep expected panic reboots from tripping the same limit |
-| Launch cap | `orchestrator.max_agent_hours` kills the process group of a launch that exceeds it. It is 0 in the shipped configuration, which disables it, and a non-zero value has to exceed `loop.campaign_hours` because `fuzz` waits out the whole window inside one launch | A stalled agent holds the pipeline open while the instance bills |
+| Launch cap | `orchestrator.max_agent_hours` kills the process group of a launch that exceeds it. It is 24 in the shipped configuration and may not exceed `loop.campaign_hours`. `fuzz` waits out the whole window inside one launch, so that window is added for the fuzz launch alone. The string `"unbounded"` turns the cap off | A stalled agent holds the pipeline open while the instance bills |
 | Deadline on disk | `artifacts/runs/<run-id>/deadline` holds one absolute epoch second, `fsync`ed at install. `gspwn-deadline@<run-id>.timer` rechecks it every `loop.deadline_check_min` and after each boot. A lost file is reconstructed from the install event in the state file | A one-shot timer dies with the machine and the campaign runs past its window unbounded |
 | Stop plus disable | Deadline enforcement runs `systemctl stop` and `systemctl disable` on both fuzz units | An enabled `Restart=always` unit resumes fuzzing at the next boot, after the campaign was stopped |
 | Idempotent billing | `record_run_hours` overwrites the entry for a run id | A `round-end` retried after an interruption bills the campaign twice against `loop.max_total_run_hours` |
@@ -156,7 +163,7 @@ sequenceDiagram
   SD->>SD: gspwn-deadline@<run-id>.timer returns, OnBootSec
   SD->>OC: start the unit, Restart=always RestartSec=60
   OC->>OC: breaker check against orchestrator.window_min
-  OC->>OC: resolve the session id and store it BEFORE launching
+  OC->>OC: resolve the session id and store it before launching
   OC->>ST: is the pipeline drivable?
   ST-->>OC: blocked, complete or unreadable state exits 78
   OC->>T: crashlog_ctl.py harvest, as root
@@ -175,9 +182,10 @@ the launch would already be stale.
 
 A harvest failure warns and does not stop the launch. A blocked phase, a
 complete pipeline or an unreadable state file exits 78, and systemd leaves the
-unit stopped until the breaker is reset. `orchestrator.max_agent_hours` is 0 in
-the shipped configuration, which disables the per-launch wall-clock ceiling and
-leaves the circuit breaker as the only bound on a stalled agent.
+unit stopped until the breaker is reset. `orchestrator.max_agent_hours` is 24 in
+the shipped configuration, so a launch that stalls past 24 h has its process
+group killed, and the fuzz launch gets `loop.campaign_hours` on top of that
+because it waits out the campaign window inside one launch.
 
 The same sequence restores the position by hand after a panic, a reboot, a
 session restart or a compacted context: harvest the crash evidence, read the
@@ -194,7 +202,7 @@ wrong number.
 |---|---|---|---|
 | The `gpu` column of a Track K sample holds any value other than `ok` | `coverage_ctl.py plateau` | Reports the verdict as `unknown`, which `round-decide` treats as a stop | A card off the bus leaves syz-manager executing against nothing. The edge count stops moving and the curve matches a saturated run. Track U records `n/a` and is not gated on GPU health |
 | `dmesg` is unreadable, which under `kernel.dmesg_restrict=1` appears as empty output | `repro_ctl.py verify`, Track K | Exits before any run is scored | An empty ring buffer scores every run `clean`, giving a real bug a repro rate of 0.0 and the classification unreproducible |
-| `systemctl is-active gspwn-k` returns `active` or `activating` | `repro_ctl.py verify`, Track K | Exits before any run is scored | A Track K run counts as a reproduction partly because the box went down during it. A live fuzzer panics the box by design, and each such panic lands as a hit on the rate that gates disclosure |
+| `systemctl is-active gspwn-k` returns `active` or `activating` | `repro_ctl.py verify`, Track K | Exits before any run is scored | A Track K run counts as a reproduction partly because the box went down during it. A live fuzzer panics the box by design, and each such panic counts as a hit on the rate that gates disclosure |
 | Effective uid is not 0 | `crashlog_ctl.py harvest`, `setup` and `prune` | Exits with the sudo remediation and names `orchestrator_ctl.py preflight` | `/sys/fs/pstore` and `/var/crash` are root-only. A non-root harvest reads nothing while reporting that it found nothing, and the unattended post-panic path records success while the evidence stays on the machine |
 | `state/spend.json` is absent while rounds still record run-hours | `campaign_ctl.py install-k` and `install-u`, and every `pipeline_ctl.py` command that reads the ledger | Raises `SpendLedgerMissing`, refuses the operation, and names `pipeline_ctl.py spend-init` | A missing ledger read as zero spent removes `loop.max_total_run_hours` from an unattended run. `spend-init` rebuilds the ledger from the state file and never lowers recorded hours |
 | A run attached to this round is still inside its campaign window | `pipeline_ctl.py round-end` | Refuses to measure the round | The coverage verdict, edge counts, new-crash count and billed hours would describe whichever part of the run had happened by then |

@@ -85,9 +85,49 @@ tool call issued at the moment the kernel died.
 The breaker counts starts, not stalls, so an agent blocked on an interactive
 prompt or a wedged tool would hold the pipeline open indefinitely while the
 instance billed. `orchestrator.max_agent_hours` bounds one launch and kills
-the whole process group when it is exceeded. It has to exceed
-`loop.campaign_hours`, because the fuzz phase legitimately waits out the whole
-campaign window inside one launch; the config refuses a value that does not.
+the whole process group when it is exceeded.
+
+The fuzz phase blocks on `campaign_ctl.py wait` for the whole of
+`loop.campaign_hours` inside a single launch, so one figure cannot bound both
+kinds of launch. `launch_hours` adds the campaign window for the fuzz launch
+and for no other, which leaves the setting meaning the headroom a launch gets
+beyond the work it is waiting on. At the shipped values that is 24 h for every
+phase and 1024 h for fuzz.
+
+## Exit codes
+
+The exit code is this tool's contract with systemd, and nothing outside this
+table records it. The unit names BLOCKED_EXIT in RestartPreventExitStatus, so
+the code decides between a stopped unit and another launch every RestartSec.
+One question sets it: does running the same command again reach a different
+outcome? Where only a human can change that answer the exit is BLOCKED_EXIT,
+because a restart spends tokens to hit the same wall every 60 seconds. Where
+the condition may clear on its own the exit is 1, or the agent's own status.
+
+Only `run` is invoked by the unit. The other subcommands carry the same codes
+so one code means one thing across the module.
+
+| Condition | Subcommand | Exit | Cleared by |
+|---|---|---|---|
+| campaign.yaml is absent or fails validation | run, status, install | 78 | editing the config |
+| orchestrator.command is unset | run, install | 78 | setting it in the config file |
+| the breaker file is unreadable | run, status | 78 | `reset`, or restoring the file |
+| the breaker already records a block | run | 78 | `reset` |
+| a breaker threshold trips on this start | run | 78 | `reset`, after fixing the cause |
+| the pipeline state file is unreadable | run | 78 | restoring it from its .bak |
+| a phase is blocked | run | 78 | resolving the gate, then `reset` |
+| the pipeline is complete | run | 78 | nothing; the campaign is over |
+| the command needs root and does not have it | install, remove | 78 | re-running under sudo |
+| no non-root user to run the agent as | install | 78 | `--user`, or sudo from that user |
+| the named user is not in the password database | install | 78 | naming an existing user |
+| a file the command needs cannot be read or written | all | 78 | the permission bit or the disk |
+| the agent exits non-zero | run | the agent's status | the next restart |
+| the agent exceeds max_agent_hours | run | the agent's status, else 124 | the next restart |
+| preflight finds problems, an invalid config among them | preflight | 1 | reading the list |
+| status finds the breaker blocked | status | 1 | reading the report |
+
+`preflight` and `status` report a finding and decline no work, so they keep 1
+for it; the unit runs neither.
 
 Subcommands:
   install [--command 'CMD']   write and enable gspwn-orchestrator.service
@@ -180,16 +220,35 @@ WantedBy=multi-user.target
 """
 
 
+def blocked_exit(msg):
+    """Report a human-cleared condition and exit BLOCKED_EXIT.
+
+    A bare exit carrying a message string prints it and exits 1, which the
+    unit restarts into 60 seconds later. Every caller here names a row of the
+    exit-code table above whose "cleared by" column holds a human action.
+    """
+    print(msg, file=sys.stderr)
+    sys.exit(BLOCKED_EXIT)
+
+
 def cfg():
     try:
         return gspwn_config.load()
     except gspwn_config.ConfigError as e:
-        sys.exit("error: %s" % e)
+        # A campaign.yaml typo is fixed by editing campaign.yaml. Exiting 1
+        # here restarted the unit against the same typo every RestartSec.
+        blocked_exit("error: %s" % e)
+    except OSError as e:
+        # load() opens a file, so a config the process cannot read raises
+        # here and not as ConfigError. Escaping as a traceback exits 1, which
+        # RestartPreventExitStatus does not name, and a permission bit is no
+        # more self-clearing than a typo.
+        blocked_exit("error: cannot read the campaign config: %s" % e)
 
 
 def require_root(what):
     if os.geteuid() != 0:
-        sys.exit("%s must run as root" % what)
+        blocked_exit("%s must run as root" % what)
 
 
 def boot_id():
@@ -386,6 +445,35 @@ class _Exited:
         self.returncode = returncode
 
 
+def launch_hours(conf):
+    """Wall-clock ceiling for the launch about to be made, in hours.
+
+    One figure cannot bound both kinds of launch. The fuzz phase blocks on
+    `campaign_ctl.py wait` for the whole of loop.campaign_hours inside a single
+    launch, while every other phase is minutes to hours. A single setting large
+    enough for the first has to exceed the campaign window, which at the
+    shipped 1000 h lets a stalled describe agent hold a billing GPU instance
+    for 41 days before anything counts it.
+
+    So the campaign window is added for the launch that waits on it, and for no
+    other. orchestrator.max_agent_hours then means what its name says: the
+    headroom one launch gets beyond the work it is legitimately waiting on.
+    The sentinel gspwn_config.UNBOUNDED_AGENT_HOURS runs with no bound, and
+    an unreadable state file falls back to the setting alone, which is the
+    shorter of the two answers.
+    """
+    hours = conf["orchestrator"].get("max_agent_hours")
+    if hours == gspwn_config.UNBOUNDED_AGENT_HOURS or not hours:
+        return 0
+    try:
+        kind, value = ps.next_action(ps.load())
+    except (ValueError, OSError):
+        return hours
+    if (kind, value) == ("phase", "fuzz"):
+        return hours + (conf["loop"].get("campaign_hours") or 0)
+    return hours
+
+
 def launch_agent(command, max_hours=0):
     """Run the agent, killing it if it outlives max_hours (0 = no limit).
 
@@ -414,10 +502,10 @@ def launch_agent(command, max_hours=0):
         return proc
     except subprocess.TimeoutExpired:
         pass
-    print("agent exceeded orchestrator.max_agent_hours (%s h) and is being "
-          "terminated. A launch that runs this long is stalled rather than "
-          "busy: the fuzz phase's own wait is bounded by loop.campaign_hours."
-          % max_hours)
+    print("agent exceeded its %s h ceiling and is being terminated. A launch "
+          "that runs this long is stalled: the fuzz phase's own wait is the "
+          "only long one, and its bound already carries loop.campaign_hours "
+          "on top of orchestrator.max_agent_hours." % max_hours)
     for sig, grace in ((signal.SIGTERM, 30), (signal.SIGKILL, 10)):
         try:
             os.killpg(os.getpgid(proc.pid), sig)
@@ -470,9 +558,12 @@ def pipeline_stop_reason():
     """Why the agent should NOT be launched, or None to go ahead."""
     try:
         st = ps.load()
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         # A corrupt state file is not something to relaunch an agent into: it
         # would read the same broken file and stop again, once per restart.
+        # OSError as well as ValueError: load() opens a file, so a state file
+        # the process cannot read escaped as a traceback and exit 1, which is
+        # the restart loop this reason exists to stop.
         return "pipeline state cannot be read: %s" % e
     blocked = sorted(p for p in ps.PHASES
                      if st["phases"][p]["status"] == "blocked")
@@ -507,8 +598,11 @@ def cmd_run(a):
     with _breaker_lock():
         try:
             state = _read()
-        except ValueError as e:
-            sys.exit("refusing to start: %s" % e)
+        except (ValueError, OSError) as e:
+            # A breaker file that will not parse, or will not open, is cleared
+            # by `reset` or by restoring it. Both are human acts, so this is
+            # BLOCKED_EXIT: a restart reads the same file and stops again.
+            blocked_exit("refusing to start: %s" % e)
         if state["blocked"]:
             print("orchestrator is blocked (since %s): %s"
                   % (_ts(state["blocked"]["at"]), state["blocked"]["reason"]))
@@ -555,7 +649,7 @@ def cmd_run(a):
     launched = render_command(template, session["id"], o["resume_anchor"])
     print("launching: %s" % launched)
     sys.stdout.flush()
-    r = launch_agent(launched, o.get("max_agent_hours") or 0)
+    r = launch_agent(launched, launch_hours(conf))
     print("agent exited %d" % r.returncode)
     if resuming and r.returncode != 0:
         # Self-heal. A resume that fails is most likely a transcript that
@@ -740,8 +834,8 @@ def cmd_status(a):
     o = conf["orchestrator"]
     try:
         state = _read()
-    except ValueError as e:
-        sys.exit(str(e))
+    except (ValueError, OSError) as e:
+        blocked_exit(str(e))
     now = time.time()
     recent = _recent(state["starts"], o["window_min"], now)
     boots = {s.get("boot_id") for s in recent}
@@ -812,12 +906,12 @@ def cmd_install(a):
     o = conf["orchestrator"]
     command = a.command or o["command"]
     if not command:
-        sys.exit("refusing to install: no agent command. This repo is not "
-                 "tied to one coding-agent CLI, so it will not guess which "
-                 "is installed. Pass --command, or set it in "
-                 "config/campaign.yaml:\n"
-                 "  orchestrator:\n"
-                 "    command: \"claude -p 'run the pipeline'\"")
+        blocked_exit("refusing to install: no agent command. This repo is not "
+                     "tied to one coding-agent CLI, so it will not guess "
+                     "which is installed. Pass --command, or set it in "
+                     "config/campaign.yaml:\n"
+                     "  orchestrator:\n"
+                     "    command: \"claude -p 'run the pipeline'\"")
     if a.command and a.command != o["command"]:
         # The unit is generated from config on every install; a --command that
         # is not also in the file silently disappears on the next reinstall.
@@ -827,7 +921,7 @@ def cmd_install(a):
               % (o["command"] or ""))
     user = a.user or os.environ.get("SUDO_USER") or ""
     if not user or user == "root":
-        sys.exit(
+        blocked_exit(
             "refusing to install: no non-root user to run the agent as. "
             "A system unit runs as root, and a coding agent keeps its login "
             "under the invoking user's HOME — as root it would look in "
@@ -837,7 +931,7 @@ def cmd_install(a):
     try:
         home = pwd.getpwnam(user).pw_dir
     except KeyError:
-        sys.exit("refusing to install: no such user %r" % user)
+        blocked_exit("refusing to install: no such user %r" % user)
     if not os.path.isdir(os.path.join(home, ".claude")) and not a.force:
         print("NOTE: %s/.claude does not exist. If the agent keeps its "
               "credentials elsewhere this is fine; if not, log it in as %s "
@@ -939,7 +1033,17 @@ def main(argv=None):
     q.set_defaults(fn=cmd_remove)
 
     a = p.parse_args(argv)
-    return a.fn(a)
+    try:
+        return a.fn(a)
+    except OSError as e:
+        # Every file this module touches is one of four: the breaker state,
+        # its lock, the pipeline state and the unit. An OSError on any of them
+        # is a permission bit, a missing mount or a full disk, and none of the
+        # three clears because systemd started the process again. Escaping as
+        # a traceback exits 1, which RestartPreventExitStatus does not name,
+        # so the guard sits here where it covers taking the breaker lock and
+        # writing the file back as well as reading them.
+        blocked_exit("%s: %s" % (type(e).__name__, e))
 
 
 if __name__ == "__main__":

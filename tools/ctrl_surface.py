@@ -43,6 +43,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -518,15 +521,12 @@ def write_json(inventory, out_path):
         os.makedirs(parent, exist_ok=True)
     except OSError as e:
         raise SourceError("cannot create output directory %s: %s" % (parent, e))
-    tmp = out_path + ".tmp"
+    # indent=2, sort_keys=False and the trailing newline are this artefact's
+    # committed shape, which regression_check.py stale hashes.
+    text = json.dumps(inventory, indent=2, sort_keys=False) + "\n"
     try:
-        with open(tmp, "w") as f:
-            json.dump(inventory, f, indent=2, sort_keys=False)
-            f.write("\n")
-        os.replace(tmp, out_path)
+        atomic_write.atomic_write_text(out_path, text)
     except OSError as e:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         raise SourceError("cannot write %s: %s" % (out_path, e))
     logger.info("wrote %s", out_path)
 

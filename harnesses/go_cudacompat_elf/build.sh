@@ -13,15 +13,46 @@
 # records its execution count instead, and TARGETS.md states the limitation.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-: "${TOOLKIT_SRC:=$(cd "${here}/../../src/nvidia-container-toolkit" 2>/dev/null && pwd || true)}"
+HARNESS_ROOT="$(cd "${here}/.." && pwd)"
 
 PKG_REL="cmd/nvidia-cdi-hook/cudacompat"
 HARNESS="fuzz_cuda_elf_header_test.go"
+TOOLKIT_NAME="nvidia-container-toolkit"
 
 die() { echo "build error: $*" >&2; exit 1; }
 
-[ -n "${TOOLKIT_SRC}" ] || die \
-    "nvidia-container-toolkit checkout not found. Set TOOLKIT_SRC to one."
+# The checkout sits at <repo>/artifacts/src/ on a host build and at
+# /artifacts/src/ inside the container, where the harness tree arrives on its
+# own bind mount. build_common.sh searches the same three candidates for the C
+# targets, and this target carries its own copy because it sources nothing.
+TOOLKIT_CANDIDATES=(
+    "${HARNESS_ROOT}/../artifacts/src"
+    "/artifacts/src"
+    "${HARNESS_ROOT}/../src"
+)
+
+find_toolkit_src() {
+    local base
+    for base in "${TOOLKIT_CANDIDATES[@]}"; do
+        if [ -d "${base}/${TOOLKIT_NAME}/src" ] \
+           || [ -d "${base}/${TOOLKIT_NAME}/${PKG_REL}" ]; then
+            (cd "${base}/${TOOLKIT_NAME}" && pwd)
+            return 0
+        fi
+    done
+    return 1
+}
+
+# An explicit TOOLKIT_SRC is the operator's answer and is never searched over.
+: "${TOOLKIT_SRC:=$(find_toolkit_src || true)}"
+
+if [ -z "${TOOLKIT_SRC}" ]; then
+    die "nvidia-container-toolkit checkout not found. Tried, in order:
+$(for base in "${TOOLKIT_CANDIDATES[@]}"; do echo "  ${base}/${TOOLKIT_NAME}"; done)
+Each is accepted only when it carries a src/ directory or the ${PKG_REL} \
+package. Clone the toolkit under artifacts/src/, or set TOOLKIT_SRC to a \
+checkout."
+fi
 [ -d "${TOOLKIT_SRC}/${PKG_REL}" ] || die \
     "package ${PKG_REL} not present under ${TOOLKIT_SRC}. The cudacompat hook \
 moved between releases; find its directory and set PKG_REL."

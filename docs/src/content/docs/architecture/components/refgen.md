@@ -30,6 +30,9 @@ check depends on. It writes nothing outside `--out`.
 
 ## Generated pages
 
+Six content pages and the index over them are rendered from a declared set of
+artefacts.
+
 | Page | Records | Sources |
 |---|---|---|
 | `escapes.md` | 37 | `surface/ioctl-inventory.json`, `tools/ioctl_map.json` |
@@ -38,16 +41,15 @@ check depends on. It writes nothing outside `--out`.
 | `driver-cves.md` | 61 | `surface/prior-cves.json`, `cve-hotspots.json` |
 | `modeset-commands.md` | 66 | `surface/nvkms-command-inventory.json` |
 | `drm-commands.md` | 28 | `surface/drm-command-inventory.json` |
-| `index.md` | 6 | The six pages above, their record counts and their sources |
+| `index.md` | 6 | Every source above, plus `surface/entry-points.json` for the entry-point census |
 
 Every page carries its own provenance: the command that produced it, the
 artefacts it was rendered from, and the check that guards it. The per-page
 source list is declared once and rendered into the page, so the sources a page
 names are the sources the check reads.
 
-Nothing in CI runs the generator itself. The
-[`pages` check](/gspwn/architecture/components/regression-check/) regenerates
-into a temporary directory and diffs against the committed pages.
+Nothing in CI runs the generator itself. A CI check regenerates the pages
+into a temporary directory and diffs them against the committed set.
 
 ## Refusal conditions
 
@@ -73,6 +75,9 @@ rename is atomic, and both runs produce the same bytes, so the result is the
 same either way.
 
 ## Prohibited behaviour
+
+Six rules hold. The first three follow from the `pages` check regenerating the
+output and comparing bytes.
 
 | Rule | Rationale |
 |---|---|
@@ -109,33 +114,39 @@ would drop or invent rows without saying so.
 
 ## Position in the extraction chain
 
-The pages sit at the end of the chain, so they are regenerated last. The
-inventories come first, then the two derived artefacts that read them, then the
-pages.
+The pages are last in the chain, so they are regenerated last. The five
+inventories come first, then `rm-chains.json`, then the ranking that reads it,
+then the pages.
 
 | Order | Artefact | Produced by |
 |---|---|---|
-| 1 | `surface/ioctl-inventory.json` | The escape extractor |
-| 1 | `surface/rm-control-inventory.json` | The control-surface extractor |
-| 1 | `surface/rm-object-graph.json` | The allocation-DAG extractor |
-| 1 | `surface/nvkms-command-inventory.json` | The modeset extractor |
-| 1 | `surface/drm-command-inventory.json` | The DRM extractor |
-| 2 | `surface/rm-chains.json`, `surface/rm-control-rank.json` | Derived from the inventories |
-| 3 | The seven pages | This generator |
+| 1 | `surface/ioctl-inventory.json` | `tools/ioctl_inventory.py` |
+| 1 | `surface/rm-control-inventory.json` | `tools/ctrl_surface.py` |
+| 1 | `surface/rm-object-graph.json` | `tools/object_graph.py extract` |
+| 1 | `surface/nvkms-command-inventory.json` | `tools/nvkms_inventory.py` |
+| 1 | `surface/drm-command-inventory.json` | `tools/drm_inventory.py` |
+| 2 | `surface/rm-chains.json` | `tools/object_graph.py chains`, over the control inventory |
+| 3 | `surface/rm-control-rank.json` | `tools/ctrl_rank.py`, over the control inventory, `rm-chains.json`, `cve-hotspots.json` and `ctrl-param-sizes.json` |
+| 4 | The six pages and their index | `tools/refgen.py` |
 
 A bump that moves an artefact and leaves the pages behind fails CI in the step
 whose title names the pages.
 
 ## Stated limits
 
-| Limit | Consequence |
-|---|---|
-| Nothing in CI runs this tool | `pages` regenerates through the module and diffs, which catches a stale page. Producing the page is still an editor's step |
-| The tool reads artefacts and never the driver source | A page follows from the artefacts it names. `coverage` and `derived` cover whether the artefacts follow from the driver |
-| The record counts on `index.md` come from `render` | A builder that returned the wrong count would report the wrong count consistently, and the `pages` check compares bytes and not counts |
+Three limits apply to what a generated page settles.
+
+- Nothing in CI runs this tool. `pages` regenerates through the module and
+  diffs, which catches a stale page. Producing the page is still an editor's
+  step.
+- The tool reads artefacts and never the driver source. A page follows from
+  the artefacts it names, and `coverage` and `derived` cover whether the
+  artefacts follow from the driver.
+- The record counts on `index.md` come from `render`. A builder that returned
+  the wrong count would report the wrong count consistently, and the `pages`
+  check compares bytes and not counts.
 
 ## See also
 
-- [regression_check.py](/gspwn/architecture/components/regression-check/)
 - [surface_cov.py](/gspwn/architecture/components/surface-cov/)
 - [Enumerated surface](/gspwn/reference/surface/)

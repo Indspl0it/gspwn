@@ -5,9 +5,9 @@ description: "The handle hierarchy the NVIDIA driver exposes through ioctl, the 
 
 Every operation on an NVIDIA GPU is an operation on an object. Objects form a
 tree, each one is named by a handle, and a handle is only meaningful to the
-client that allocated it. The ioctl interface is small: four escapes cover
-almost everything, and the variety comes from the class numbers and parameter
-structures passed through them.
+client that allocated it. Four escapes cover almost every operation, and the
+variety comes from the class numbers and parameter structures passed through
+them.
 
 ```mermaid
 flowchart TB
@@ -36,27 +36,43 @@ a parent relationship and is not drawn here.
 
 ## The hierarchy
 
-| Object | Parent | Represents |
+| Object | Parent | Object modelled |
 | --- | --- | --- |
 | Client | None. It is the root. | One process's session with the driver |
 | Device | Client | A physical GPU as the client sees it |
 | Subdevice | Device | One GPU, where a device may span several |
 | Address space | Device, or subdevice | A virtual address space for a context |
-| Memory | Device | An allocation, host or device |
+| Memory | Device, subdevice or client root | An allocation, host or device |
 | Channel group | Device | A group of channels scheduled together |
 | Channel | Device, or channel group | A queue that work is pushed into |
 | Engine object | Channel | A class binding the channel to compute, copy or a codec |
 
-Most memory classes are parented by the device, several accept the subdevice as
-well, and four are parented by the client root: `NV01_MEMORY_DEVICELESS`,
-`NV_MEMORY_EXPORT`, `NV_MEMORY_FABRIC_IMPORT_V2` and
-`NV_MEMORY_FABRIC_IMPORTED_REF`. Mapping an allocation into an address space is
-a separate escape acting on two existing handles, and no class in the driver's
-table names an address space as its parent. A channel accepts either the device
-or a channel group as its parent, so a channel group is optional. The
-authoritative list of legal parents per class is
+The authoritative list of legal parents per class is
 `src/nvidia/src/kernel/rmapi/resource_list.h`, one `RS_ENTRY` record per class,
-222 records at `610.57.04`.
+222 records at `610.57.04`. Three of those records carry depth 1 and name the
+file descriptor itself as their parent: `NV01_ROOT`, `NV01_ROOT_NON_PRIV` and
+`NV01_ROOT_CLIENT`. A class parented by the client root accepts any of the
+three.
+
+A channel accepts either the device or a channel group as its parent, so a
+channel group is optional. No class in the table names an address space as its
+parent, so mapping an allocation into an address space is a separate escape
+acting on two existing handles.
+
+### Memory class parents
+
+The table carries 20 memory classes, counting every record whose internal
+class is a memory resource and excluding the two `INLINE_TO_MEMORY` records,
+which are graphics objects on a channel. The parent set splits them four ways.
+
+| Parent set | Classes | Members |
+| --- | --- | --- |
+| The device alone | 8 | `NV01_MEMORY_FRAMEBUFFER_CONSOLE`, `NV01_MEMORY_LOCAL_PHYSICAL`, `NV01_MEMORY_LOCAL_PRIVILEGED`, `NV01_MEMORY_SYNCPOINT`, `NV01_MEMORY_SYSTEM`, `NV01_MEMORY_SYSTEM_OS_DESCRIPTOR`, `NV01_MEMORY_VIRTUAL`, `NV50_MEMORY_VIRTUAL` |
+| The device or a subdevice | 5 | `NV01_MEMORY_HW_RESOURCES`, `NV01_MEMORY_LIST_FBMEM`, `NV01_MEMORY_LIST_OBJECT`, `NV01_MEMORY_LIST_SYSTEM`, `NV01_MEMORY_LOCAL_USER` |
+| A subdevice alone | 2 | `NV_MEMORY_FABRIC`, `NV_MEMORY_MAPPER` |
+| A client root | 5 | `NV01_MEMORY_DEVICELESS`, `NV_MEMORY_EXPORT`, `NV_MEMORY_FABRIC_IMPORT_V2`, `NV_MEMORY_FABRIC_IMPORTED_REF`, `NV_MEMORY_MULTICAST_FABRIC` |
+
+## Handles
 
 A handle is a 32-bit value chosen by the caller and validated by the driver
 against the client that owns it. Handles are not global: the same numeric value
@@ -68,15 +84,18 @@ process exit cleans up the GPU without cooperation from the process.
 
 ## The escapes
 
-The character devices under `/dev` accept a small set of ioctl commands. Their
-numbers are defined in `kernel-open/common/inc/nv-ioctl-numbers.h`.
+The RM escape numbers are defined in
+`src/nvidia/arch/nvalloc/unix/include/nv_escape.h:31-53`, which declares 23 of
+them. `kernel-open/common/inc/nv-ioctl-numbers.h:34` carries `NV_IOCTL_BASE`
+and the operating-system escapes that sit above it, a separate numbering. Four
+of the 23 carry the object model.
 
-| Escape | Operation |
-| --- | --- |
-| Allocate | Creates an object of a given class under a given parent, returning a handle |
-| Free | Destroys an object and everything under it |
-| Control | Invokes a numbered command on an object. This is the large surface. |
-| Map memory | Maps an allocation into a process or a device address space |
+| Escape | Number | Operation |
+| --- | --- | --- |
+| `NV_ESC_RM_ALLOC` | `0x2B` | Creates an object of a given class under a given parent, returning a handle |
+| `NV_ESC_RM_FREE` | `0x29` | Destroys an object and everything under it |
+| `NV_ESC_RM_CONTROL` | `0x2A` | Invokes a numbered command on an object. This is the large surface. |
+| `NV_ESC_RM_MAP_MEMORY` | `0x4E` | Maps an allocation into a process or a device address space |
 
 Each control command is a number selecting an operation on a class, with its
 own parameter structure. The numbering is organised per class under
@@ -84,9 +103,9 @@ own parameter structure. The numbering is organised per class under
 `src/common/sdk/nvidia/inc/class/`.
 
 The parameter structures for allocate, free and control are in
-`src/common/sdk/nvidia/inc/nvos.h`. The values are not reproduced here: they
-move between driver branches, and reading them from a tree checked out at the
-matching tag is the only reliable way to obtain them.
+`src/common/sdk/nvidia/inc/nvos.h`. The values move between driver branches,
+and reading them from a tree checked out at the matching tag is the only
+reliable way to obtain them.
 
 ## Class numbers
 
@@ -108,10 +127,11 @@ carries several channel classes and picks the one matching the part.
 
 ## The UVM interface
 
-`nvidia-uvm.ko` does not use the escapes above. It exposes its own ioctl
+`nvidia-uvm.ko` uses none of the escapes above. It exposes its own ioctl
 numbering through `/dev/nvidia-uvm`, defined in
-`kernel-open/nvidia-uvm/uvm_ioctl.h`, with its own conventions. Anything
-reading the RM interface and assuming UVM follows it will be wrong.
+`kernel-open/nvidia-uvm/uvm_ioctl.h`, with its own conventions. The RM
+convention predicts nothing about the UVM interface.
+[UVM subsystem](/gspwn/knowledgebase/uvm/) states that numbering.
 
 ## Worked example: from root to a submitted kernel
 
@@ -136,8 +156,8 @@ reading the RM interface and assuming UVM follows it will be wrong.
 
 Every step from 1 to 6 is an allocate escape. Step 4 also uses map memory.
 Steps 7 and 8 involve no ioctl at all: the pushbuffer and the doorbell are
-memory the process already has mapped. Submission therefore costs no system
-call, while setup costs one per object created.
+memory the process already has mapped. Submission costs no system call, and
+setup costs one per object created.
 
 ## See also
 

@@ -55,8 +55,8 @@ import logging
 import os
 import re
 import sys
-import tempfile
 
+import atomic_write
 import gitmine
 
 logger = logging.getLogger(__name__)
@@ -318,23 +318,21 @@ def hotspots(records):
 
 
 def write_json(out, payload):
-    """Write payload to out atomically, so an interrupted run leaves no half file."""
-    parent = os.path.dirname(os.path.abspath(out))
-    tmp = None
+    """Serialise the record and hand the text to the shared durable writer.
+
+    indent=2, sort_keys=False and the trailing newline are this record's shape
+    and stay here where the payload is serialised. tools/atomic_write.py owns
+    the temporary file, the two fsyncs and the rename, and removes the
+    temporary on every failure path, so an interrupted run leaves the previous
+    file intact and never a half one. The parent directory is checked by
+    validate_out before any mining runs, so this function creates none.
+    """
     try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=parent,
-                                         suffix=".tmp", delete=False) as fh:
-            tmp = fh.name
-            json.dump(payload, fh, indent=2, sort_keys=False)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, out)
-        tmp = None
-    finally:
-        if tmp is not None and os.path.exists(tmp):
-            os.unlink(tmp)
-            logger.error("removed partial output %s", tmp)
+        atomic_write.atomic_write_text(
+            out, json.dumps(payload, indent=2, sort_keys=False) + "\n")
+    except OSError:
+        logger.error("no output written to %s", out)
+        raise
 
 
 def print_summary(payload, stream):

@@ -58,6 +58,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+
 logger = logging.getLogger(__name__)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +95,38 @@ INSUFFICIENT = 4
 
 VERSION_RE = re.compile(r"\b(\d+\.\d+(?:\.\d+)?)\b")
 
+# Seconds git or nvidia-smi may take to answer. Both are single queries
+# against local state and answer in well under a second on a working
+# machine; the bound exists because `check` is a phase gate that runs
+# unattended, and a driver mid-reset makes nvidia-smi block.
+# GSPWN_SURFACE_VERIFY_CMD_TIMEOUT_SEC overrides it.
+QUERY_TIMEOUT_ENV = "GSPWN_SURFACE_VERIFY_CMD_TIMEOUT_SEC"
+
+
+def _query_timeout_sec(default=30):
+    """QUERY_TIMEOUT_ENV as a positive integer, or `default`.
+
+    Validated here so a mistyped override is a message naming the variable
+    and the value, and not a ValueError at import time.
+    """
+    raw = os.environ.get(QUERY_TIMEOUT_ENV)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SystemExit("%s=%r is not an integer. Unset it to use the "
+                         "default of %d seconds."
+                         % (QUERY_TIMEOUT_ENV, raw, default))
+    if value <= 0:
+        raise SystemExit("%s=%d must be greater than zero. Unset it to use "
+                         "the default of %d seconds."
+                         % (QUERY_TIMEOUT_ENV, value, default))
+    return value
+
+
+QUERY_TIMEOUT_SEC = _query_timeout_sec()
+
 
 def checkout_version(src):
     """NVIDIA_VERSION from version.mk, or None when the tree is absent."""
@@ -113,7 +148,8 @@ def checkout_commit(src):
         return None
     try:
         out = subprocess.run(["git", "-C", src, "rev-parse", "--short", "HEAD"],
-                             capture_output=True, text=True, timeout=30)
+                             capture_output=True, text=True,
+                             timeout=QUERY_TIMEOUT_SEC)
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("git rev-parse failed for %s: %s", src, exc)
         return None
@@ -183,10 +219,25 @@ def artefact_versions():
     """
     found, unversioned = {}, []
     if os.path.isfile(MAP_PATH):
-        with open(MAP_PATH, encoding="utf-8") as fh:
-            data = json.load(fh)
-        if VERSION_KEY in data:
-            found["tools/ioctl_map.json"] = str(data[VERSION_KEY]).split()[0]
+        # Guarded the way _scan_json_dir guards every other artefact: a map
+        # truncated by a panic mid-write is an artefact that cannot be
+        # checked, and this is a provision-phase gate. An unguarded
+        # json.load tracebacks out of it instead.
+        version = None
+        try:
+            with open(MAP_PATH, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as exc:
+            logger.warning("could not read tools/ioctl_map.json: %s", exc)
+            data = {}
+        # An empty or whitespace-only stamp yields no first word. `stamp`
+        # writes "<version> (commit <sha>)" and reads the version back off
+        # the front, so the value can be present and still name nothing.
+        parts = str(data.get(VERSION_KEY, "")).split()
+        if parts:
+            version = parts[0]
+        if version:
+            found["tools/ioctl_map.json"] = version
         else:
             unversioned.append("tools/ioctl_map.json")
     _scan_json_dir(SURFACE_DIR, "surface/", found, unversioned)
@@ -212,7 +263,7 @@ def running_version():
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=QUERY_TIMEOUT_SEC)
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("nvidia-smi unavailable: %s", exc)
         return None
@@ -220,7 +271,15 @@ def running_version():
         logger.debug("nvidia-smi exited %d: %s", out.returncode,
                      out.stderr.strip()[:200])
         return None
-    return out.stdout.strip().splitlines()[0].strip() or None
+    # nvidia-smi exits 0 with no rows where it sees no GPU, so there is not
+    # always a first line to take. Indexing it raises IndexError out of a
+    # provision-phase gate; no version source is the answer the caller
+    # already handles.
+    rows = out.stdout.strip().splitlines()
+    if not rows:
+        logger.debug("nvidia-smi exited 0 and listed no GPU")
+        return None
+    return rows[0].strip() or None
 
 
 def declared_version():
@@ -277,6 +336,35 @@ def collect(src):
     return sources
 
 
+def disagreement_remedy(a_name, a_values, b_name, b_values):
+    """What to do about one pair of version sources that disagree.
+
+    The remedy depends on which two groups hold the pair apart, because the
+    actions are different: a stale artefact is regenerated, a checkout is
+    moved to the release under test, and a declaration that contradicts the
+    loaded driver is a provisioning record that was never updated. One
+    verdict over all four sources names none of these.
+    """
+    pair = {a_name, b_name}
+    if ARTEFACT_GROUP in pair:
+        other = (pair - {ARTEFACT_GROUP}).pop()
+        target = b_values if a_name == ARTEFACT_GROUP else a_values
+        if other == CHECKOUT_GROUP:
+            return "Regenerate the artefacts from this checkout."
+        return ("Check out the driver source matching %s and regenerate."
+                % ", ".join(target))
+    if pair == {CHECKOUT_GROUP, RUNNING_GROUP}:
+        return ("Check out the release the target runs, or load the driver "
+                "the checkout describes. The artefacts derive from the "
+                "checkout and the campaign measures the loaded driver.")
+    if pair == {CHECKOUT_GROUP, DECLARED_GROUP}:
+        return ("Set driver_branch in config/machine.yaml to the release "
+                "under test, or check out the release it declares.")
+    return ("Reconcile config/machine.yaml with the driver the target "
+            "actually loaded. provision wrote the declaration, and every "
+            "measurement is taken against the loaded driver.")
+
+
 def cmd_show(args):
     sources = collect(args.src)
     commit = checkout_commit(args.src)
@@ -324,20 +412,30 @@ def cmd_check(args):
         problems.append(
             ("artefacts disagree with each other: %s" % ", ".join(art_values),
              "Regenerate all of them from one checkout."))
-    if checkout and art_values and art_values != [checkout]:
-        problems.append(
-            ("artefacts were built from %s, the checkout is %s"
-             % (", ".join(art_values), checkout),
-             "Regenerate the artefacts from this checkout."))
 
-    target = running or declared
-    target_label = "the running driver" if running else "config/machine.yaml"
-    if target and art_values and target not in art_values:
-        problems.append(
-            ("artefacts describe %s, %s reports %s"
-             % (", ".join(art_values), target_label, target),
-             "Check out the driver source matching %s and regenerate."
-             % target))
+    # Every available group against every other. `target = running or
+    # declared` read config/machine.yaml only when no driver was loaded, so
+    # on the machine the campaign runs on, where a driver is loaded by
+    # definition, the declared branch was printed in the table above, never
+    # compared, and counted in the agreement line. A tree with no stamped
+    # artefact was worse still: art_values was empty, so the checkout and the
+    # running driver were compared against nothing and against each other
+    # never. Both paths printed agreement over sources no comparison had
+    # touched. This is a provision-phase and describe-phase gate, so every
+    # later figure is measured against whichever driver the unread source
+    # named.
+    comparisons = 0
+    for i, (a_name, a_values) in enumerate(groups):
+        for b_name, b_values in groups[i + 1:]:
+            comparisons += 1
+            a_set = sorted({v for _label, v in a_values})
+            b_set = sorted({v for _label, v in b_values})
+            if a_set == b_set:
+                continue
+            problems.append(
+                ("%s carries %s, %s carries %s"
+                 % (a_name, ", ".join(a_set), b_name, ", ".join(b_set)),
+                 disagreement_remedy(a_name, a_set, b_name, b_set)))
 
     if not problems:
         compared = len(groups)
@@ -368,8 +466,12 @@ def cmd_check(args):
             logger.error("1 independent version source (%s), fewer than the 2 "
                          "needed to compare", only)
             return INSUFFICIENT
-        print("agreement across %d independent sources: %s"
-              % (compared,
+        # The comparison count is printed next to the source count because
+        # the source count alone once covered sources nothing had compared.
+        # For n groups it is n * (n - 1) / 2, and a reader can check it.
+        print("agreement across %d independent sources over %d pairwise "
+              "comparison(s): %s"
+              % (compared, comparisons,
                  ", ".join("%s (%d files)" % (name, len(members))
                            if name == ARTEFACT_GROUP else name
                            for name, members in groups)))
@@ -413,20 +515,24 @@ def cmd_stamp(args):
         data = json.load(fh)
     commit = checkout_commit(args.src)
     data[VERSION_KEY] = version + ((" (commit %s)" % commit) if commit else "")
-    # Written whole and replaced, so an interrupted write cannot leave the map
-    # half-rewritten and unparseable by the seeds phase. newline="\n" is
-    # explicit for the same reason object_graph.write_json pins it: a stamp run
-    # on Windows and one under WSL must produce the same bytes, and the default
-    # translation would rewrite every line of the map with CRLF. fsync before
-    # the replace, so a crash cannot leave the new name pointing at unwritten
-    # data.
-    tmp = MAP_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, MAP_PATH)
+    # indent=2 and the trailing newline are this artefact's committed shape
+    # and regression_check.py stale hashes it, so the serialisation stays
+    # here where the payload is built. atomic_write_text owns the temporary
+    # file, the LF newline translation, the two fsyncs and the rename. The
+    # one fixed temporary name this used to write beside the map collided
+    # between two runs against one directory, and nothing fsynced tools/, so
+    # a crash after the rename could leave the directory entry pointing at
+    # the previous map.
+    #
+    # sort_keys=False: ioctl_inventory.py --emit-map owns this file's shape
+    # and emits the documentation keys first, which is the order a reader
+    # opens it in. This command amends one value inside a document it did not
+    # create, and sorting rewrote 87 lines of it for no semantic change every
+    # time it ran, against an artefact whose bytes are hashed. json.load
+    # preserves insertion order, so a load and a dump round-trip the order
+    # exactly and only the stamp moves.
+    atomic_write.atomic_write_text(
+        MAP_PATH, json.dumps(data, indent=2, sort_keys=False) + "\n")
     logger.info("stamped %s into %s", data[VERSION_KEY], MAP_PATH)
     print("%s -> %s" % (data[VERSION_KEY], os.path.relpath(MAP_PATH, REPO)))
     return 0

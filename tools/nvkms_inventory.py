@@ -35,11 +35,12 @@ denominator. A drift in it changes a published coverage figure, so the count
 is asserted against EXPECTED_DECLARED and EXPECTED_DISPATCHED and a mismatch
 is a hard failure naming what was found.
 
-The plain and custom-user macro counts are asserted separately, and their sum
-against the dispatched total. Both macro names appear as `#define` lines
-inside the initialiser, so a scrape that counts a definition as a use reads
-58 plain and 6 custom-user. That sums to 64 and passes a total-only check.
-The split is the check that catches it. Macro definitions are excluded
+The table is built from 59 ENTRY uses and 5 ENTRY_CUSTOM_USER uses. Each half
+carries its own expected value and each is asserted, because the sum of the
+two is the entry total by construction and comparing it against that total
+cannot fail. Both macro names are also `#define`d at the head of the source,
+so a scrape that counts a definition as a use reads 60 and 6, and the two
+pinned halves are what catches it. Macro definitions are excluded
 structurally, by their column-zero `#`, by the preprocessor continuation run
 they start, and by the command argument pattern, and never by line number.
 """
@@ -49,6 +50,9 @@ import logging
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +91,13 @@ API_HEADER = os.path.join("src", "nvidia-modeset", "interface", "nvkms-api.h")
 DISPATCH_SOURCE = os.path.join("src", "nvidia-modeset", "src", "nvkms.c")
 VERSION_MK = "version.mk"
 
-# The reconciled count for driver 610.57.04. Both values are asserted on
+# The reconciled count for driver 610.57.04. All four values are asserted on
 # every run. See the module docstring for why the macro split is asserted
-# beside the total.
+# beside the total, and why each half of it carries its own expected value.
 EXPECTED_DECLARED = 66
 EXPECTED_DISPATCHED = 64
+EXPECTED_PLAIN = 59
+EXPECTED_CUSTOM_USER = 5
 
 # The two commands the header declares and the table leaves out.
 UNDISPATCHED_REASON = "no handler in the dispatch table"
@@ -316,10 +322,19 @@ def check_array_bound(text):
 def cross_check(declared, entries, expect_declared, expect_dispatched):
     """Reconcile the enum against the table, or fail naming the difference.
 
-    Six conditions, in the order a defect is easiest to read from:
+    Seven conditions, in the order a defect is easiest to read from:
     a command dispatched twice, a command dispatched without being declared,
-    the declared total, the dispatched total, the array bound, and the macro
-    split against the dispatched total.
+    the declared total, the dispatched total, the array bound, each half of
+    the macro split against its own expected value, and the split against the
+    dispatched total.
+
+    The two macro-split totals are absolute counts of the 610.57.04 table, so
+    they apply to that table alone. They are asserted where the caller is
+    asserting the pinned declared and dispatched totals, which is the run that
+    scans the pinned checkout, and a tree carrying any other pair is read on
+    its own terms. No argument switches the condition off: reaching it takes
+    the pinned totals, and abandoning those abandons the two conditions above
+    it as well.
     """
     declared_names = [d["command"] for d in declared]
     declared_set = set(declared_names)
@@ -366,13 +381,34 @@ def cross_check(declared, entries, expect_declared, expect_dispatched):
             "bound before it reads a handler"
             % (len(past_bound), array_len, ", ".join(past_bound), ARRAY_BOUND))
 
+    # Each half is pinned against its own expected value. Comparing the sum
+    # against the entry total cannot fail, because both counts are read from
+    # the same alternation and the sum is the total by construction.
     plain = sum(1 for e in entries if e["macro"] == PLAIN_MACRO)
     custom = sum(1 for e in entries if e["macro"] == CUSTOM_USER_MACRO)
+    pinned_checkout = (expect_declared == EXPECTED_DECLARED
+                       and expect_dispatched == EXPECTED_DISPATCHED)
+    if pinned_checkout and (plain != EXPECTED_PLAIN
+                            or custom != EXPECTED_CUSTOM_USER):
+        raise SourceError(
+            "the macro split reads %d %s and %d %s, expected %d and %d for a "
+            "table declaring %d commands and dispatching %d. A scrape that "
+            "counts the two `#define` lines at the head of the initialiser as "
+            "uses reads one more of each while the dispatched total stays "
+            "reconcilable against the enum, so the split is the condition "
+            "that catches it"
+            % (plain, PLAIN_MACRO, custom, CUSTOM_USER_MACRO,
+               EXPECTED_PLAIN, EXPECTED_CUSTOM_USER,
+               EXPECTED_DECLARED, EXPECTED_DISPATCHED))
+    # Reachable only where ENTRY_RE grows a third alternative and this
+    # function is not updated with it. Both counts come from the same
+    # alternation today, so on the current regex the sum is the total.
     if plain + custom != len(entries):
         raise SourceError(
-            "the macro split does not reconcile: %d plain and %d custom-user "
-            "against %d entries. A macro this tool does not recognise builds "
-            "part of the table" % (plain, custom, len(entries)))
+            "the macro split does not reconcile: %d %s and %d %s against %d "
+            "entries. A third entry macro reaches the table and no expected "
+            "total covers it"
+            % (plain, PLAIN_MACRO, custom, CUSTOM_USER_MACRO, len(entries)))
 
     logger.info("cross-check passed: %d dispatched of %d declared, "
                 "%d plain and %d custom-user, array length %d",
@@ -497,15 +533,12 @@ def write_json(inventory, out_path):
     except OSError as e:
         raise SourceError("cannot create output directory %s: %s"
                           % (parent, e))
-    tmp = out_path + ".tmp"
+    # indent=2, sort_keys=False and the trailing newline are this artefact's
+    # committed shape, which regression_check.py stale hashes.
+    text = json.dumps(inventory, indent=2, sort_keys=False) + "\n"
     try:
-        with open(tmp, "w") as f:
-            json.dump(inventory, f, indent=2, sort_keys=False)
-            f.write("\n")
-        os.replace(tmp, out_path)
+        atomic_write.atomic_write_text(out_path, text)
     except OSError as e:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         raise SourceError("cannot write %s: %s" % (out_path, e))
     logger.info("wrote %s", out_path)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ten CI checks over the committed surface artefacts.
+"""Twelve CI checks over the committed surface artefacts.
 
 Each one catches a class of defect that reached the repository unnoticed
 because nothing compared two artefacts that have to agree:
@@ -63,7 +63,12 @@ because nothing compared two artefacts that have to agree:
                 that hold a build.sh. A target added to one and not the others
                 is built and never run, or run and never built, and the fuzz
                 phase reports the skip as a per-target note hours into a
-                campaign.
+                campaign. It also reads the index mode of every tracked .sh
+                another tracked file invokes with no interpreter in front of
+                it. The Track U unit ran /harnesses/run_all.sh as a bare
+                container command while the file was mode 100644, so docker
+                run exited 126 and systemd retried it to the campaign
+                deadline.
     agents      every command line in agents/*.md resolves against the tool it
                 names: the file exists, the subcommand is one the tool's
                 argparse parser declares, every flag is declared on that
@@ -90,8 +95,26 @@ because nothing compared two artefacts that have to agree:
                 which is the rule that catches a family added to the surface
                 and left out of a brief, because the sum moves even when
                 every listed figure is right.
+    citations   every file and line number the documentation cites resolves
+                in a vendored source tree, and the cited line is not blank.
+                A citation reads as evidence, so one naming the wrong line
+                sends a reader to unrelated code. Line numbers drift whenever
+                a tree is re-vendored, and two had: `nv.c:2412` and
+                `nv.c:2439` both pointed at blank lines, and
+                `nvc_info.c:515` pointed at the blank line above the function
+                it named. artifacts/ is gitignored, so this check settles
+                nothing in a clean checkout and reports so. It runs on a
+                provisioned machine, which is where the trees exist and where
+                re-vendoring moves the numbers.
+    commands    every tool invocation a page shows parses against the tool's
+                own argparse parser, subcommand and flags alike. `agents`
+                does this for the phase briefs, and the documentation is the
+                other copy-paste surface: a reader following a stale command
+                gets an argparse error, which reads as the tool being broken.
+                One page told a reader to run `crash_ctl.py`, a tool that has
+                never existed.
 
-Run one, or all ten:
+Run one, or all twelve:
 
     python3 tools/regression_check.py names
     python3 tools/regression_check.py pins
@@ -103,6 +126,8 @@ Run one, or all ten:
     python3 tools/regression_check.py harnesses
     python3 tools/regression_check.py agents
     python3 tools/regression_check.py figures
+    python3 tools/regression_check.py citations
+    python3 tools/regression_check.py commands
     python3 tools/regression_check.py all
 
 `-v` logs what each artefact read contributed, and is accepted on either side
@@ -145,6 +170,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -294,6 +320,57 @@ GROUPS = [
 # fires again. All four are escape-family targets: surface_cov counts each as
 # one target and never decomposes it per leaf, so the field is a fuzzable
 # input to a single handler and not a name for another call.
+# The (group, field) pairs whose const selector reaches no authority, and why
+# no artefact carries one. A selector reaching no authority is compared
+# against nothing, and the count of them was reported and left out of the pass
+# condition, so the check printed its own blind spot and exited OK.
+#
+# The allowance is these pairs and not a total. A total fails on a driver bump
+# that adds an allocation class, which is a surface change and not a check
+# going silent, and it makes the check unusable against any set but the
+# committed one. The pair catches what a total exists to catch: a family whose
+# authority is removed, or whose selector stops rendering as a const, appears
+# under a pair that is not declared, whatever the count does.
+#
+# Measured over the committed set as it stands, 237 of the 860 selector fields
+# examined reach no authority, decomposing as 205 alloc hClass, 31 xfer cmd,
+# and the `cmd` of the bare NV_ESC_IOCTL_XFER_CMD multiplexer.
+#
+# The ledger records 241, being 207 alloc, 31 xfer and 3 outside every group.
+# The two figures describe the same tree on two counting bases, and the whole
+# of the difference is the four UNPINNED_BY_DESIGN fields below, which render
+# `int32` and so never reach the authority lookup at all:
+#
+#     alloc hClass    207 examined, 205 const, 2 free
+#     xfer cmd         31 examined,  31 const, 0 free
+#     outside a group   3 examined,   1 const, 2 free
+#
+# So 237 plus those 4 is 241. Every one of the 207 alloc selector fields is an
+# hClass, and the two that fall out are NV_ESC_RM_ALLOC_OBJECT and
+# NV_ESC_RM_ALLOC_CONTEXT_DMA2. All three fields outside every group are still
+# outside one, and the one reaching the const branch is NV_ESC_IOCTL_XFER_CMD,
+# whose own cmd is pinned to the escape number; the other two are
+# NV_ESC_CHECK_VERSION_STR and NV_ESC_RM_LOCKLESS_DIAGNOSTIC, both declared
+# below. Nothing moved in the grouping.
+#
+# This is a different quantity from the per-group `unmatched` counter, which
+# counts a variant an authority exists for and does not carry, reads 0 for all
+# three checked families, and is an offence with no allowance.
+PIN_NO_AUTHORITY = {
+    ("alloc", "hClass"):
+        "the allocation inventory carries a class number per class and no "
+        "per-variant record, and the emitter pins hClass from the class map "
+        "the same file records, so the two sides have one source and there "
+        "is no second artefact to compare against",
+    ("xfer", "cmd"):
+        "an XFER variant carries the inner escape's own cmd, and the escape "
+        "family counts each escape as one target, so no committed artefact "
+        "holds a per-leaf authority for the inner value",
+    (None, "cmd"):
+        "the bare NV_ESC_IOCTL_XFER_CMD multiplexer, whose own cmd is pinned "
+        "to the escape number and whose leaves the xfer group decomposes",
+}
+
 UNPINNED_BY_DESIGN = {
     ("NV_ESC_CHECK_VERSION_STR", "nv_ioctl_rm_api_version_t", "cmd"):
         "selects the version comparison mode inside one handler",
@@ -328,8 +405,7 @@ HARNESS_SOURCES = (
 )
 
 # Directories under harnesses/ that carry no Track U target, and the reason.
-# A name here is dropped from all four sources before they are compared. The
-# Go reason is the one config/campaign.yaml already records against
+# The Go reason is the one config/campaign.yaml already records against
 # track_u.targets, so the two texts state one fact. A directory holding no
 # build.sh and named nowhere here is reported: the exclusions are the whole of
 # what the check accepts as a known absence.
@@ -341,6 +417,46 @@ HARNESS_EXCLUSIONS = {
         "go test -fuzz writes no fuzzer_stats, so it produces no coverage "
         "output for the sampler to read",
 }
+
+HARNESS_SOURCE_KEYS = ("config", "run", "doc", "build")
+
+# The sources each exclusion is dropped from, and what makes that its whole
+# scope. An exclusion covers the sources its reason accounts for and no
+# others, so a name absent from one source by design is still compared against
+# the sources that do carry it.
+#
+# go_cudacompat_elf was dropped from all four while its reason accounts for
+# two. It has a build.sh and a TARGETS.md row and is named by neither
+# config/campaign.yaml nor run_all.sh, so the blanket drop compared the
+# built-and-never-run shape this check exists to report against nothing.
+#
+# A name in HARNESS_EXCLUSIONS with no entry here raises, because defaulting
+# it to all four sources is the defect this mapping was added to close.
+HARNESS_EXCLUSION_SOURCES = {
+    "common": (
+        HARNESS_SOURCE_KEYS,
+        "it names no target in any of the four, and holds no build.sh"),
+    "go_cudacompat_elf": (
+        ("config", "run"),
+        "the fuzz phase reads config/campaign.yaml for the targets it samples "
+        "coverage from, and run_all.sh iterates C_TARGETS, which is the C "
+        "array. A Go fuzz target runs under `go test -fuzz` and is in "
+        "neither. Its build.sh and its TARGETS.md row are still compared"),
+}
+
+# A shell script named as a command with no interpreter in front of it runs
+# only when its index mode carries the execute bit. tools/campaign_ctl.py's
+# Track U unit ran /harnesses/run_all.sh that way while every tracked .sh was
+# mode 100644, so `docker run` exited 126, Restart=always with RestartSec=30
+# retried to the campaign deadline, and the track produced nothing. The unit
+# now names /bin/bash and the eleven executed scripts are 100755; this holds
+# the pairing, because a mode is lost silently by any tool that rewrites a
+# file without preserving it.
+SCRIPT_MODE = "100755"
+
+# Files that can execute a command. A Markdown page naming a script at the
+# start of a line is citing it, not running it, so prose is not read here.
+SCRIPT_CALLER_SUFFIXES = (".sh", ".py")
 
 # The bash array run_all.sh iterates. Anchored on the opening and closing
 # lines so a later array in the same file cannot be read in its place.
@@ -411,14 +527,34 @@ def parse_calls(text):
 
 
 def read_descriptions():
-    """-> (calls, structs) merged over every committed description file."""
+    """-> (calls, structs) merged over every committed description file.
+
+    A name declared in two files raises. The merge was a dict.update per file,
+    so the last file read won and nothing reported the loss: every check above
+    then compared the surviving declaration while the emitted set carried two,
+    and syzkaller reads the package as one namespace where a redeclaration is
+    its own error. Raising here names both files and the name.
+    """
     calls, structs = {}, {}
+    origin = {}
     files = _description_files()
     for path in files:
+        name = os.path.basename(path)
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
-        structs.update(parse_structs(text))
-        calls.update(parse_calls(text))
+        for kind, parsed, into in (("struct", parse_structs(text), structs),
+                                   ("call", parse_calls(text), calls)):
+            for key, value in parsed.items():
+                first = origin.get((kind, key))
+                if first is not None:
+                    raise CheckInput(
+                        "the description set declares the %s %s in both %s "
+                        "and %s. syzlang resolves the package as one "
+                        "namespace, so one declaration wins and every check "
+                        "here reads that one while the set carries two."
+                        % (kind, key, first, name))
+                origin[(kind, key)] = name
+                into[key] = value
     logger.info("descriptions: %d file(s), %d call(s), %d struct(s)",
                 len(files), len(calls), len(structs))
     return calls, structs
@@ -474,18 +610,68 @@ def read_ioctl_map():
 
 
 def check_names():
-    """Every name in tools/ioctl_map.json is declared by the descriptions."""
+    """Every name in tools/ioctl_map.json is declared by the descriptions, and
+    every request number it is keyed on is the one that call renders."""
     entries = read_ioctl_map()
     calls, _structs = read_descriptions()
+    requests = read_call_requests()
     declared = set(calls)
 
     offenders = [(key, name) for key, name in entries if name not in declared]
+
+    # The key half of the same entry. read_call_requests() holds the request
+    # number each call renders, so the map is checkable in both directions and
+    # was checked in one: a single edited digit in a key left all twelve
+    # checks green and made trace2seed.py convert that request to another
+    # variant. Compared as whole request numbers, _IOC_SIZE included, because
+    # trace2seed.py keys on the number the trace carries and nothing masks it.
+    keyed, mismatched = 0, []
+    for key, name in entries:
+        if name not in declared:
+            continue
+        rendered = requests.get(name)
+        if rendered is None:
+            mismatched.append((key, name, "the description set declares this "
+                                          "call and renders no request "
+                                          "number for it"))
+            continue
+        value = const_value(rendered)
+        try:
+            stated = int(key, 0)
+        except ValueError:
+            mismatched.append((key, name, "the map key does not read as a "
+                                          "request number"))
+            continue
+        if value is None:
+            mismatched.append((key, name, "the call renders its request as "
+                                          "%s, which is not a const"
+                               % rendered))
+        elif value != stated:
+            mismatched.append((key, name, "the call renders request "
+                                          "0x%08x" % value))
+        else:
+            keyed += 1
+
     print("names: %d map entry/entries over %d distinct name(s), %d declared "
           "call(s) in the description set"
           % (len(entries), len({n for _k, n in entries}), len(declared)))
-    if not offenders:
+    print("names: %d entry/entries keyed on the request number their call "
+          "renders" % keyed)
+    if not offenders and not mismatched:
         print("names: OK")
         return 0
+
+    for key, name, why in mismatched:
+        print("names: %s is mapped to %s and %s" % (key, name, why))
+    if mismatched:
+        print()
+        print("tools/trace2seed.py picks the call name by the request number "
+              "a trace carries. A key that is not the number its own call "
+              "renders converts that request to another variant, and every "
+              "later measurement joins on the name.")
+        print()
+    if not offenders:
+        return 1
 
     print("names: %d entry/entries name a call no description declares"
           % len(offenders))
@@ -620,6 +806,14 @@ def check_pins():
     unresolved, wrong = [], []
     unmatched = {group: 0 for group, _f, _loc, _l in VALUE_CHECKED}
     values = {group: {} for group, _f, _loc, _l in VALUE_CHECKED}
+    # A const-rendered selector whose (group, field) no VALUE_CHECKED row
+    # covers, so nothing compares it against anything.
+    unauthored = []
+    # (pinned cmd value, the resource hObject renders as) over the control
+    # group. The driver exports one command number from three owning classes,
+    # so the cmd value alone is not unique and requiring it to be would refuse
+    # the real surface. The pair is what names one leaf.
+    control_pairs = {}
     for variant in sorted(calls):
         struct = calls[variant]
         fields = structs.get(struct)
@@ -647,7 +841,9 @@ def check_pins():
             rendered = fields[field]
             if rendered.startswith("const["):
                 authority = expected_by.get((group, field))
-                if authority is not None:
+                if authority is None:
+                    unauthored.append((variant, struct, field, group))
+                else:
                     value = const_value(rendered)
                     values[group].setdefault(value, []).append(variant)
                     expected = authority.get(variant)
@@ -657,6 +853,14 @@ def check_pins():
                             expected if isinstance(expected, int)
                             else int(expected, 0)):
                         wrong.append((variant, struct, rendered, expected))
+                if group == "control" and field == "cmd":
+                    # A struct declaring no hObject contributes None, which
+                    # collides with any other such variant. That is the same
+                    # defect the pair exists to report: two control variants
+                    # the emitted set gives no way to tell apart.
+                    control_pairs.setdefault(
+                        (const_value(rendered), fields.get("hObject")), []
+                    ).append(variant)
                 continue
             key = (variant, struct, field)
             if key in UNPINNED_BY_DESIGN:
@@ -677,6 +881,7 @@ def check_pins():
         group_counts[group] += 1
         authority = expected_by.get((group, field))
         if authority is None:
+            unauthored.append((variant, "(request)", field, group))
             continue
         value = const_value(rendered)
         if value is not None:
@@ -700,6 +905,8 @@ def check_pins():
                    .startswith("const["))
     empty = sorted(name for name, count in group_counts.items() if not count)
     blind = sorted(row for row in unresolved if row[2])
+    colliding = sorted((pair, names) for pair, names in control_pairs.items()
+                       if len(names) > 1)
 
     grouped = sum(group_counts.values())
     print("pins: %d selector field(s) examined across %d call(s) (%s, "
@@ -715,11 +922,75 @@ def check_pins():
                  unmatched[group]))
     print("pins: %d call(s) whose arg resolves to no declared struct, %d of "
           "them inside a reported group" % (len(unresolved), len(blind)))
-    if not free and not stale and not empty and not wrong and not blind:
+    undeclared = sorted({(row[3], row[2]) for row in unauthored}
+                        - set(PIN_NO_AUTHORITY))
+    by_pair = collections.Counter((row[3], row[2]) for row in unauthored)
+    print("pins: %d const selector(s) reach no authority over %d declared "
+          "pair(s) (%s)"
+          % (len(unauthored), len(PIN_NO_AUTHORITY),
+             ", ".join("%s %s %d" % (group or "outside every group", field,
+                                     count)
+                       for (group, field), count in sorted(
+                           by_pair.items(), key=lambda kv: str(kv[0])))
+             or "none"))
+    print("pins: %d control command(s) over %d distinct (cmd, hObject) "
+          "pair(s)" % (sum(len(n) for n in control_pairs.values()),
+                       len(control_pairs)))
+
+    # unmatched is an offence, not a report. It counts a variant the group's
+    # own authority does not carry, so that variant's selector is compared
+    # against nothing.
+    #
+    # `coverage` does not already cover it. Measured: `coverage` compares
+    # targets against declared variants in one direction only, at :1023, and
+    # the reverse at :1065 is printed as a count of declared variants outside
+    # the denominator and is never an offence. A control variant added to the
+    # description set under a handler the control inventory does not carry
+    # leaves `coverage` at exit 0, reporting 82 such variants where it had
+    # reported 81, while this counter reads 1.
+    carried_unmatched = sum(unmatched.values())
+    if (not free and not stale and not empty and not wrong and not blind
+            and not colliding and not undeclared and not carried_unmatched):
         print("pins: OK, %d field(s) unpinned by design"
               % len(UNPINNED_BY_DESIGN))
         return 0
 
+    for (value, handle), names in colliding:
+        print("pins: %d control variants pin cmd 0x%08x and render hObject as "
+              "%s, so the pair names no single leaf: %s"
+              % (len(names), value, handle, ", ".join(sorted(names))))
+        print("    The driver exports one command number from several owning "
+              "classes, so the cmd value alone is not unique. The resource "
+              "hObject renders as is what separates them, and it is typed "
+              "from the owning class in tools/syzlang_gen.py. Variants "
+              "colliding on both halves render byte-identical and all but "
+              "one reach a handler they are not named for.")
+        print()
+    for group, count in sorted(unmatched.items()):
+        if not count:
+            continue
+        print("pins: the %s authority does not carry %d of the variant(s) it "
+              "was read for, so those selectors are compared against nothing"
+              % (group, count))
+        print("    A variant the inventory has no row for is a name the "
+              "emitted set carries and the surface artefacts do not. "
+              "`coverage` reports it as a declared variant outside the "
+              "denominator and passes, so this is the check that fails on "
+              "it. Regenerate the description set against the same "
+              "inventories, or restore the inventory row.")
+        print()
+    for group, field in undeclared:
+        print("pins: %d %s %s selector(s) render const and reach no "
+              "authority, and PIN_NO_AUTHORITY declares no such pair"
+              % (by_pair[(group, field)], group or "outside every group",
+                 field))
+        print("    A selector reaching no authority is compared against "
+              "nothing, so the family it belongs to is counted and never "
+              "checked. Either VALUE_CHECKED lost the row that carries its "
+              "authority, or a new family renders a selector no artefact "
+              "settles. Restore the authority, or declare the pair in "
+              "PIN_NO_AUTHORITY with the reason no artefact carries one.")
+        print()
     if wrong:
         print("pins: %d selector(s) pinned to a value their own inventory "
               "does not carry for that variant" % len(wrong))
@@ -1022,6 +1293,90 @@ def _carried(records, field):
                                  for r in records)
 
 
+# The restatements each derived artefact carries beside its command set, and
+# the array they sit on. Read by the auditor that compares them and by the
+# summary line that reports how many of them were compared at all, so the two
+# cannot disagree about what the check is meant to be reading.
+RANK_RESTATEMENTS = ("rank", "rank_score", "rank_components",
+                     "no_chain_reason")
+CHAIN_RESTATEMENTS = ("chain", "chain_length", "target_external_class",
+                      "command_count")
+RESTATEMENTS = {
+    "rm-chains.json": ("chains", CHAIN_RESTATEMENTS),
+    "rm-control-rank.json": ("commands", RANK_RESTATEMENTS),
+}
+
+
+def _uncompared_fields(records, fields):
+    """-> the fields no record of the array carries, in the caller's order.
+
+    Every assertion in rank_consistency and chains_consistency is gated on the
+    field being present, so a field absent from every record is read by
+    nothing. That degrades the check from strong to weak: the command set is
+    still compared, so it does not go vacuous, and the degradation is silent,
+    which is the defect. The callers report this on every run.
+    """
+    if not records:
+        return []
+    return [field for field in fields
+            if not any(isinstance(r, dict) and field in r for r in records)]
+
+
+def _pinned_artefact(path, reference):
+    """Is `path` the committed artefact rather than a caller's own file?
+
+    The strong assertion runs against the real tree and the tolerance holds
+    everywhere else, the way nvkms_inventory.py:352 gates its macro-split
+    assertion on pinned_checkout. A fixture and a producer whose schema
+    predates a field both still pass on the command set alone, which is what
+    _partial_fields documents; the committed artefact has to carry every
+    field it carries today.
+    """
+    try:
+        return os.path.samefile(path, reference)
+    except OSError:
+        return False
+
+
+def _absent_fields(path, array, records, fields, reference):
+    """-> [problem] for a field the committed artefact carries and this one
+    does not.
+
+    The field set is read from `reference`, the committed artefact, rather
+    than restated here, so a field added to the producer later is picked up
+    without editing this check. Measured over the committed artefacts today:
+    all four ranked fields over 531 commands, all four chain fields over 98
+    records.
+    """
+    if not _pinned_artefact(path, reference):
+        return []
+    missing = _uncompared_fields(records, fields)
+    return ["%s carries `%s` on none of its %d record(s), and this is the "
+            "committed artefact. Every assertion this check makes about that "
+            "field is gated on the field being present, so its absence reads "
+            "as a pass. Either the producer stopped writing it, or it was "
+            "retired and belongs out of this check's field list."
+            % (array, field, len(records)) for field in missing]
+
+
+def _committed_fields(reference, array, fields):
+    """-> the field set a pinned artefact is held to, which is `fields` whole.
+
+    Deriving the set by reading `reference` and keeping the fields it carries
+    was the first shape of this function, and it made the assertion vacuous.
+    On a real run `reference` is the file under test, so the derived set was
+    read from the same records the set was then compared against, and the two
+    could not disagree. A producer that stopped writing a field dropped it
+    from both sides at once and the check reported 4 of 4.
+
+    The declared tuple is the floor. A field retired for real is retired from
+    RANK_RESTATEMENTS or CHAIN_RESTATEMENTS in the same change, which is one
+    line a reviewer sees. `reference` and `array` stay in the signature
+    because the counter below reports the artefact each figure belongs to.
+    """
+    return tuple(fields)
+
+
 def rank_consistency(doc, path):
     """-> [problem] for rm-control-rank.json's own ordering and arithmetic.
 
@@ -1041,8 +1396,12 @@ def rank_consistency(doc, path):
         ones carrying none
     """
     commands = doc["commands"]
-    fields = ("rank", "rank_score", "rank_components", "no_chain_reason")
-    problems = _partial_fields(path, "commands", commands, fields)
+    fields = RANK_RESTATEMENTS
+    problems = (_partial_fields(path, "commands", commands, fields)
+                + _absent_fields(path, "commands", commands,
+                                 _committed_fields(CTRL_RANK, "commands",
+                                                   fields),
+                                 CTRL_RANK))
     ranked = _carried(commands, "rank")
     scored = _carried(commands, "rank_score")
     priced = _carried(commands, "rank_components")
@@ -1108,9 +1467,11 @@ def chains_consistency(doc, path):
     step list to the class the chain exists to reach.
     """
     records = doc["chains"]
-    problems = _partial_fields(path, "chains", records,
-                               ("chain", "chain_length",
-                                "target_external_class", "command_count"))
+    fields = CHAIN_RESTATEMENTS
+    problems = (_partial_fields(path, "chains", records, fields)
+                + _absent_fields(path, "chains", records,
+                                 _committed_fields(CHAINS, "chains", fields),
+                                 CHAINS))
     lengths = _carried(records, "chain_length")
     targets = _carried(records, "target_external_class")
     counts = _carried(records, "command_count")
@@ -1185,17 +1546,28 @@ def check_derived():
     # that restatement against the records it describes.
     auditors = {"rm-chains.json": chains_consistency,
                 "rm-control-rank.json": rank_consistency}
-    rows, offenders, internal = [], [], []
+    rows, offenders, internal, silent = [], [], [], []
     for label, path, schema, array, remedy in DERIVED:
         doc = _load_derived(label, path, schema, array, remedy)
         implied, accounted = readers[label](doc, path)
         problems = auditors[label](doc, path)
+        # Which restatements this artefact carries, and so which of the
+        # assertions above ran at all. Every one of them is gated on its
+        # field being present, and a field absent from every record leaves
+        # that assertion silent while the command set is still compared. The
+        # count is reported on every run, passing or failing.
+        restated, fields = RESTATEMENTS[label]
+        uncompared = _uncompared_fields(doc[restated], fields)
+        if uncompared:
+            silent.append((label, uncompared, fields))
         undeclared = implied - declared
         stale = accounted - control
         unaccounted = control - accounted
         rows.append((label, len(doc[array]), len(implied), len(accounted),
                      len(undeclared), len(stale) + len(unaccounted),
-                     len(problems)))
+                     len(problems),
+                     "%d of %d" % (len(fields) - len(uncompared),
+                                   len(fields))))
         if undeclared or stale or unaccounted:
             offenders.append((label, remedy, undeclared, stale, unaccounted))
         if problems:
@@ -1204,15 +1576,22 @@ def check_derived():
     print("derived: driver %s, %d targetable control command(s)"
           % (meta.get("driver_version") or "unknown", len(control)))
     print()
-    print("  %-22s %8s %8s %10s %11s %9s %9s"
+    print("  %-22s %8s %8s %10s %11s %9s %9s %10s"
           % ("artefact", "records", "implies", "accounts", "undeclared",
-             "mismatch", "internal"))
-    print("  %-22s %8s %8s %10s %11s %9s %9s"
+             "mismatch", "internal", "restated"))
+    print("  %-22s %8s %8s %10s %11s %9s %9s %10s"
           % ("-" * 22, "-" * 8, "-" * 8, "-" * 10, "-" * 11, "-" * 9,
-             "-" * 9))
+             "-" * 9, "-" * 10))
     for row in rows:
-        print("  %-22s %8d %8d %10d %11d %9d %9d" % row)
+        print("  %-22s %8d %8d %10d %11d %9d %9d %10s" % row)
     print()
+    for label, uncompared, fields in silent:
+        print("derived: %s carries %d of its %d restatement(s), so the "
+              "assertions over %s ran against nothing"
+              % (label, len(fields) - len(uncompared), len(fields),
+                 ", ".join(uncompared)))
+    if silent:
+        print()
 
     for label, remedy, problems in internal:
         print("derived: %s contradicts its own record structure in %d place(s)"
@@ -1272,6 +1651,46 @@ def _first_difference(committed, generated):
                     "(generated output ends here)" if two is None
                     else two.decode("utf-8", "replace"))
     return None
+
+
+# A whole flags-set definition, with its value list. FLAGS_DEFINE_RE reads the
+# name alone, which is all the name comparison needs; this reads what the set
+# binds the field to.
+FLAGS_VALUES_RE = re.compile(r"^([a-z_][a-z0-9_]*)\s*=\s*([^\n]+)$", re.M)
+
+
+def read_flags_values():
+    """-> {set name: (file, line, [value])} over the committed set.
+
+    The values a set actually binds a field to. read_flags_sets reads the name
+    and the reference; nothing read the members, so editing
+    descriptions/nvidia.txt:239 from `= 0x1, 0x2` to `= 0x999999` left all
+    twelve checks green and pointed the fuzzer at one value where the driver
+    accepts two.
+
+    A member that does not read as an integer comes back as the raw token, so
+    the comparison reports it against the derivation rather than raising here.
+    """
+    values = {}
+    for path in _description_files():
+        name = os.path.basename(path)
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        for match in FLAGS_VALUES_RE.finditer(text):
+            if match.group(1) in values:
+                continue
+            members = []
+            for token in match.group(2).split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                try:
+                    members.append(int(token, 0))
+                except ValueError:
+                    members.append(token)
+            values[match.group(1)] = (
+                name, text[:match.start()].count("\n") + 1, members)
+    return values
 
 
 def read_flags_sets():
@@ -1339,9 +1758,11 @@ def check_families():
     accepted_keys = {(r["struct"], r["field"]) for r in accepted}
     _calls, structs = read_descriptions()
     defined, referenced = read_flags_sets()
+    members = read_flags_values()
 
     emitted, missing, wrong, leaked, dangling, unused, orphan = (
         [], [], [], [], [], [], [])
+    divergent = []
 
     # Direction one: the audit accepted it, so the description set carries it.
     for record in accepted:
@@ -1366,6 +1787,27 @@ def check_families():
                             "defines it"))
             continue
         emitted.append((struct, field, set_name))
+
+        # Direction three: the set's members are the values the derivation
+        # carries. Directions one and two compare the set's name, so a set
+        # whose value list was edited keeps its name, keeps its binding, and
+        # passes both. The fuzzer then drives whatever the edited list holds.
+        source, line, carried = members.get(set_name, (None, None, None))
+        if carried is None:
+            missing.append((struct, field, set_name,
+                            "no file defines it with a value list"))
+            continue
+        derived_values = record.get("values")
+        if not isinstance(derived_values, list):
+            raise CheckInput(
+                "%s carries no `values` array for %s.%s. The derivation is "
+                "the authority on what the emitted set binds the field to, "
+                "and without it the set is compared against nothing."
+                % (os.path.relpath(VALUE_FAMILIES, REPO_ROOT)
+                   .replace(os.sep, "/"), struct, field))
+        if list(carried) != list(derived_values):
+            divergent.append((set_name, source, line, carried,
+                              derived_values))
 
     # Direction two: the description set carries it, so the audit accepted it.
     # A derived family the audit rejected is the case this whole phase exists
@@ -1423,8 +1865,12 @@ def check_families():
                                0, len(defined) - len(emitted)))
     print()
 
+    print("families: %d bound set(s) compared against the derivation's own "
+          "value list" % (len(emitted) - len(divergent)))
+    print()
+
     offenders = (len(missing) + len(wrong) + len(leaked) + len(dangling)
-                 + len(unused) + len(orphan))
+                 + len(unused) + len(orphan) + len(divergent))
     if not offenders:
         print("families: every accepted family is bound to its field and "
               "every emitted set was accepted")
@@ -1449,6 +1895,18 @@ def check_families():
     for name, source in unused:
         print("families: %s is defined in %s and no field references it"
               % (name, source))
+    for set_name, source, line, carried, derived_values in divergent:
+        print("families: %s at %s:%d binds %s and the derivation carries %s"
+              % (set_name, source, line,
+                 ", ".join(str(v) for v in carried),
+                 ", ".join(str(v) for v in derived_values)))
+    if divergent:
+        print()
+        print("A set whose members were edited keeps its name, so the two "
+              "name comparisons above still pass while the field is bound to "
+              "values the derivation never produced. Regenerate the "
+              "description set with `%s`, or restore the edited line."
+              % GENERATION_REMEDY)
     print()
     print("A field bound to a family the audit did not accept never reaches "
           "that field's real values, where a bare integer still reaches them "
@@ -1565,7 +2023,43 @@ def read_generation():
             "without it nothing records which artefacts the description set "
             "was generated from." % (GENERATION, GENERATION_REMEDY))
     root = os.path.dirname(os.path.dirname(os.path.abspath(GENERATION)))
-    return record, root
+    return raw, record, root
+
+
+def recorded_outputs(raw):
+    """-> [(path, sha256, bytes)] over every file the run wrote.
+
+    The digests of the outputs, beside the digests of the inputs. Nothing
+    hashed what the run produced, so a hand edit to any descriptions/*.txt
+    left all nine recorded inputs matching and all twelve checks green.
+
+    A file digest was rejected for the inputs because it fails on a correct
+    regeneration and names no moved value. That objection does not reach a
+    digest recorded inside generation.json: the same run writes the file and
+    the record, so a correct regeneration moves both together and only a hand
+    edit moves one.
+
+    The block is mandatory. A run whose writer does not record it leaves the
+    outputs unhashed, which is the state this reader exists to end.
+    """
+    block = raw.get("generated")
+    if not isinstance(block, dict) or not block:
+        raise CheckInput(
+            "%s carries no `generated` mapping. `%s` writes one record per "
+            "file the run produced, each with a sha256 and a byte count, and "
+            "without it nothing hashes the description set itself: a hand "
+            "edit to any of those files leaves every recorded input matching."
+            % (GENERATION, GENERATION_REMEDY))
+    outputs = []
+    for path in sorted(block):
+        member = block[path]
+        if not isinstance(member, dict) or "sha256" not in member:
+            raise CheckInput(
+                "%s: generated[%r] is not an output record. Every entry "
+                "carries a sha256 and a byte count, and this one renders as "
+                "%.120r" % (GENERATION, path, member))
+        outputs.append((path, member["sha256"], member.get("bytes")))
+    return outputs
 
 
 def recorded_inputs(record):
@@ -1623,10 +2117,31 @@ def _digest_mismatch(content, digest):
     return "differs", "the file on disk hashes to another digest"
 
 
+def _digest_state(root, path, digest, expect_bytes=None):
+    """-> (state, offender or None) for one recorded file against disk."""
+    on_disk = os.path.join(root, *path.split("/"))
+    if not os.path.isfile(on_disk):
+        return "absent", (path, "no file at this path", digest, None)
+    with open(on_disk, "rb") as handle:
+        content = handle.read()
+    measured = hashlib.sha256(content).hexdigest()
+    if measured == digest:
+        if expect_bytes is not None and len(content) != expect_bytes:
+            return "size", (path, "the file holds %d bytes and the record "
+                                  "carries %d, over a matching digest, so "
+                                  "the record is internally inconsistent"
+                            % (len(content), expect_bytes), digest, measured)
+        return "OK", None
+    state, why = _digest_mismatch(content, digest)
+    return state, (path, why, digest, measured)
+
+
 def check_stale():
-    """Every input generation.json records still matches its digest."""
-    record, root = read_generation()
+    """Every file generation.json records, on both sides, still matches its
+    digest: the artefacts the set was generated from, and the set itself."""
+    raw, record, root = read_generation()
     inputs = recorded_inputs(record)
+    outputs = recorded_outputs(raw)
     if not inputs:
         raise CheckInput(
             "%s records no input file. The description set is generated from "
@@ -1636,24 +2151,36 @@ def check_stale():
 
     table, offenders = [], []
     for key, path, digest, count in inputs:
-        on_disk = os.path.join(root, *path.split("/"))
-        if not os.path.isfile(on_disk):
-            state = "absent"
-            offenders.append((path, "no file at this path", digest, None))
-        else:
-            with open(on_disk, "rb") as handle:
-                content = handle.read()
-            measured = hashlib.sha256(content).hexdigest()
-            if measured == digest:
-                state = "OK"
-            else:
-                state, why = _digest_mismatch(content, digest)
-                offenders.append((path, why, digest, measured))
+        state, offender = _digest_state(root, path, digest)
+        if offender:
+            offenders.append(offender)
         table.append((key, path, count, state))
 
+    # The output side. generation.json itself is not in the block, because it
+    # carries the record and cannot hash itself.
+    written = []
+    for path, digest, size in outputs:
+        state, offender = _digest_state(root, path, digest, size)
+        if offender:
+            offenders.append(offender)
+        written.append((path, size, state))
+
+    # The set on disk is enumerated beside generation.json and not through
+    # DESC_DIR. The recorded output paths resolve against `root`, which is
+    # derived from the record's own location, so reading the module constant
+    # here compares two different trees: pointed at a scratch root it named
+    # every committed file as unrecorded and missed the one file the scratch
+    # tree had gained. Only .txt is enumerated, and the emitted header is
+    # recorded without being scanned for.
+    beside = os.path.dirname(os.path.abspath(GENERATION))
+    on_disk = {os.path.relpath(p, root).replace(os.sep, "/")
+               for p in surface_cov._files(beside, (".txt",))}
+    unrecorded = sorted(on_disk - {path for path, _d, _s in outputs})
+
     checkout = {name: record.get(name) for name in CHECKOUT_KEYS}
-    print("stale: %d recorded input(s) in %s, driver %s at commit %s"
-          % (len(inputs),
+    print("stale: %d recorded input(s) and %d recorded output(s) in %s, "
+          "driver %s at commit %s"
+          % (len(inputs), len(outputs),
              os.path.relpath(GENERATION, root).replace(os.sep, "/"),
              checkout["driver_version"] or "(not recorded)",
              checkout["driver_commit"] or "(not recorded)"))
@@ -1666,10 +2193,23 @@ def check_stale():
         print("  %-20s %-40s %8s %9s"
               % (key, path, "" if count is None else count, state))
     print()
+    print("  %-20s %-40s %8s %9s"
+          % ("output", "path", "bytes", "state"))
+    print("  %-20s %-40s %8s %9s"
+          % ("-" * 20, "-" * 40, "-" * 8, "-" * 9))
+    for path, size, state in written:
+        print("  %-20s %-40s %8s %9s"
+              % ("generated", path, "" if size is None else size, state))
+    print()
 
-    if not offenders:
-        print("stale: %d of %d recorded input(s) match the digest "
-              "generation.json carries" % (len(inputs), len(inputs)))
+    for path in unrecorded:
+        print("stale: %s is a committed description file and `generated` "
+              "records no digest for it, so an edit to it is hashed by "
+              "nothing" % path)
+    if not offenders and not unrecorded:
+        print("stale: %d of %d recorded input(s) and %d of %d recorded "
+              "output(s) match the digest generation.json carries"
+              % (len(inputs), len(inputs), len(outputs), len(outputs)))
         print("stale: OK")
         return 0
 
@@ -1777,8 +2317,153 @@ def harness_directories():
     return built, bare
 
 
+def tracked_script_modes():
+    """-> {repository-relative path: index mode} for every tracked .sh.
+
+    The index mode is the one that decides whether a bare invocation runs on
+    the campaign machine. A working copy's own permission bits say nothing
+    about it: core.fileMode is false on the Windows checkout this repository
+    is developed on, so every file there reads as rwxr-xr-x.
+    """
+    try:
+        proc = subprocess.run(["git", "ls-files", "-s", "--", "*.sh"],
+                              cwd=REPO_ROOT, capture_output=True, text=True)
+    except OSError as exc:
+        raise CheckInput("cannot run git in %s: %s" % (REPO_ROOT, exc))
+    if proc.returncode != 0:
+        raise CheckInput(
+            "git ls-files exited %d in %s: %s. The mode this case reads lives "
+            "in the index, so it settles nothing outside a checkout."
+            % (proc.returncode, REPO_ROOT, proc.stderr.strip()))
+    modes = {}
+    for line in proc.stdout.splitlines():
+        head, _, path = line.partition("\t")
+        fields = head.split()
+        if not path or len(fields) < 3:
+            raise CheckInput(
+                "git ls-files -s wrote a line this case cannot read: %r"
+                % line)
+        modes[path.strip()] = fields[0]
+    if not modes:
+        raise CheckInput(
+            "git ls-files tracks no .sh under %s. Twelve are committed, so an "
+            "empty listing is the reader failing and not the tree changing."
+            % REPO_ROOT)
+    return modes
+
+
+def _script_token(line):
+    """-> the first word of `line` when it names a script path, else None.
+
+    A command sits at the start of its line in every caller this reads: a
+    shell statement, and the container command of the systemd unit
+    tools/campaign_ctl.py writes, whose ExecStart continues across lines.
+
+    Two exclusions keep prose out. A token carrying no `/` is excluded,
+    because no file here reaches a script through PATH and a bare basename in
+    a docstring reads as one otherwise. A token followed by a word that is
+    neither an option nor a variable is excluded, because a sentence opening
+    with a path is a citation: five lines across crash_parse.py, selftest.py
+    and this file open that way and none of them runs anything.
+    """
+    body = line.strip()
+    if not body or body.startswith("#"):
+        return None
+    if body.startswith("ExecStart="):
+        body = body[len("ExecStart="):].strip()
+    words = body.split()
+    token = words[0].strip("\"'`(){}[],;")
+    if not token.endswith(".sh") or "/" not in token:
+        return None
+    for word in words[1:]:
+        if word in ("\\", "&&", "||", "|", ";", "&"):
+            break
+        if not word.startswith(("-", "$", "\"$", "'$")):
+            return None
+    return token
+
+
+def bare_script_invocations(scripts):
+    """-> [(caller, line number, token, script)] for each bare invocation.
+
+    `scripts` is the tracked .sh set the token is resolved against. A token is
+    matched by path suffix, so /harnesses/run_all.sh inside a container and
+    harnesses/run_all.sh on the host resolve to the same tracked file.
+    """
+    found = []
+    for rel in sorted(_tracked_callers()):
+        path = os.path.join(REPO_ROOT, rel.replace("/", os.sep))
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                lines = handle.read().splitlines()
+        except OSError:
+            continue
+        for number, line in enumerate(lines, 1):
+            token = _script_token(line)
+            if token is None:
+                continue
+            norm = token.lstrip("/")
+            for script in sorted(scripts):
+                if script == norm or script.endswith("/" + norm):
+                    found.append((rel, number, token, script))
+    return found
+
+
+def _tracked_callers():
+    """-> every tracked file that can execute a command."""
+    try:
+        proc = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT,
+                              capture_output=True, text=True)
+    except OSError as exc:
+        raise CheckInput("cannot run git in %s: %s" % (REPO_ROOT, exc))
+    if proc.returncode != 0:
+        raise CheckInput("git ls-files exited %d in %s: %s"
+                         % (proc.returncode, REPO_ROOT, proc.stderr.strip()))
+    return [p.strip() for p in proc.stdout.splitlines()
+            if p.strip().endswith(SCRIPT_CALLER_SUFFIXES)]
+
+
+def script_mode_offenders():
+    """-> ([(caller, line, token, script, mode)], scripts, invocations).
+
+    An offender is a tracked .sh invoked as a bare command by another tracked
+    file while its index mode is not 100755. Zero invocations is a pass and is
+    reported as one: every caller in the tree names an interpreter, which is
+    the state this case exists to keep.
+    """
+    modes = tracked_script_modes()
+    invocations = bare_script_invocations(set(modes))
+    offenders = [(rel, number, token, script, modes[script])
+                 for rel, number, token, script in invocations
+                 if modes[script] != SCRIPT_MODE]
+    return offenders, modes, invocations
+
+
+def excluded_from(source):
+    """-> the names the exclusions drop from one of the four sources."""
+    unscoped = sorted(set(HARNESS_EXCLUSIONS) - set(HARNESS_EXCLUSION_SOURCES))
+    if unscoped:
+        raise CheckInput(
+            "HARNESS_EXCLUSIONS declares %s and HARNESS_EXCLUSION_SOURCES "
+            "gives no scope for it. An exclusion with no scope reads as "
+            "covering all four sources, which compares the name against "
+            "nothing." % ", ".join(unscoped))
+    unknown = {key for sources, _r in HARNESS_EXCLUSION_SOURCES.values()
+               for key in sources} - set(HARNESS_SOURCE_KEYS)
+    if unknown:
+        raise CheckInput(
+            "HARNESS_EXCLUSION_SOURCES names %s, which is no source in "
+            "HARNESS_SOURCES. An exclusion aimed at a source that does not "
+            "exist drops nothing and reads as though it does."
+            % ", ".join(sorted(unknown)))
+    return {name for name, (sources, _reason)
+            in HARNESS_EXCLUSION_SOURCES.items()
+            if name in HARNESS_EXCLUSIONS and source in sources}
+
+
 def check_harnesses():
-    """The four Track U target lists still name the same harnesses."""
+    """The four Track U target lists still name the same harnesses, and a
+    script invoked with no interpreter is executable in the index."""
     built, bare = harness_directories()
     carried = {
         "config": harness_config_targets(),
@@ -1787,29 +2472,42 @@ def check_harnesses():
         "build": built,
     }
     labels = dict(HARNESS_SOURCES)
-    excluded = set(HARNESS_EXCLUSIONS)
-    sets = {key: set(names) - excluded for key, names in carried.items()}
+    # Read whole. An exclusion no longer removes a name from the comparison;
+    # it says the name is not required in the sources its scope covers, so a
+    # name absent from two sources by design is still compared against the two
+    # that carry it.
+    sets = {key: set(names) for key, names in carried.items()}
+    skips = {key: excluded_from(key) for key, _label in HARNESS_SOURCES}
     for key, label in HARNESS_SOURCES:
-        if not sets[key]:
+        if not sets[key] - skips[key]:
             raise CheckInput(
                 "%s carries no target name. A source that reads as empty "
                 "makes every other source disagree with it, and the reader "
                 "for it is the thing to fix." % label)
 
-    targets = sorted(set().union(*sets.values()))
+    # A name every source excludes names no target at all. `common` is one:
+    # it holds no build.sh, so it reaches the stray listing below instead.
+    everywhere = {name for name in HARNESS_EXCLUSIONS
+                  if all(name in skips[key] for key, _l in HARNESS_SOURCES)}
+    targets = sorted(set().union(*sets.values()) - everywhere)
     offenders = []
     for name in targets:
         absent = [labels[key] for key, _ in HARNESS_SOURCES
-                  if name not in sets[key]]
+                  if name not in sets[key] and name not in skips[key]]
         if absent:
             present = [labels[key] for key, _ in HARNESS_SOURCES
                        if name in sets[key]]
             offenders.append((name, absent, present))
-    stray = sorted(set(bare) - excluded)
+    stray = sorted(set(bare) - everywhere - skips["build"])
+    mode_offenders, modes, invocations = script_mode_offenders()
 
     print("harnesses: %d target(s) across %d source(s), %d declared "
           "exclusion(s)" % (len(targets), len(HARNESS_SOURCES),
                             len(HARNESS_EXCLUSIONS)))
+    print("harnesses: %d tracked script(s), %d executable in the index, %d "
+          "invoked as a bare command"
+          % (len(modes), sum(1 for m in modes.values() if m == SCRIPT_MODE),
+             len(invocations)))
     print()
     print("  %-22s %-14s %-11s %-11s %s"
           % ("target", "campaign.yaml", "run_all.sh", "TARGETS.md",
@@ -1817,19 +2515,36 @@ def check_harnesses():
     print("  %-22s %-14s %-11s %-11s %s"
           % ("-" * 22, "-" * 14, "-" * 11, "-" * 11, "-" * 8))
     for name in targets:
-        print("  %-22s %-14s %-11s %-11s %s"
-              % ((name,) + tuple("yes" if name in sets[key] else "NO"
-                                 for key, _ in HARNESS_SOURCES)))
+        # n/a is a source this name is excluded from. It reads apart from NO
+        # so the table states which absences are declared and which are the
+        # disagreement the check reports.
+        cells = tuple("n/a" if name in skips[key]
+                      else ("yes" if name in sets[key] else "NO")
+                      for key, _ in HARNESS_SOURCES)
+        print("  %-22s %-14s %-11s %-11s %s" % ((name,) + cells))
     print()
     print("  %-22s %s" % ("excluded", "reason"))
     print("  %-22s %s" % ("-" * 22, "-" * 6))
     for name in sorted(HARNESS_EXCLUSIONS):
+        sources, scope = HARNESS_EXCLUSION_SOURCES[name]
         print("  %-22s %s" % (name, HARNESS_EXCLUSIONS[name]))
+        print("  %-22s dropped from %s"
+              % ("", ", ".join(labels[key] for key, _l in HARNESS_SOURCES
+                               if key in sources)))
+        print("  %-22s %s" % ("", scope))
     print()
 
-    if not offenders and not stray:
+    if not offenders and not stray and not mode_offenders:
         print("harnesses: OK")
         return 0
+
+    for rel, number, token, script, mode in mode_offenders:
+        print("harnesses: %s:%d: %s runs %s with no interpreter, and %s is "
+              "mode %s in the index" % (rel, number, token, script, script,
+                                        mode))
+        print("    a bare command exits 126 there. Either name the "
+              "interpreter, or run: git update-index --chmod=+x %s" % script)
+        print()
 
     for name, absent, present in offenders:
         for label in absent:
@@ -2220,8 +2935,15 @@ def agent_exit_claims(text):
     return claims
 
 
-def _resolve_command(tool, arguments, parsers):
-    """-> [fault] for one command, each fault a line naming what disagreed."""
+def _resolve_command(tool, arguments, parsers, shapes=None):
+    """-> [fault] for one command, each fault a line naming what disagreed.
+
+    `shapes` is an optional list the caller owns. A command whose subcommand
+    is a metavariable is appended to it and yields no fault: no subparser is
+    named, so no flag after it can be resolved against one. Counting them
+    keeps that visible, because a command silently checked against nothing is
+    the class of hole this whole tool reports.
+    """
     if not os.path.isfile(os.path.join(REPO_ROOT, tool)):
         return ["no such tool %s" % tool]
     if tool in AGENT_TOOL_EXCLUSIONS:
@@ -2234,12 +2956,21 @@ def _resolve_command(tool, arguments, parsers):
     words = list(arguments)
     if subcommands and words and not words[0].startswith("-"):
         name = words.pop(0)
+        if PLACEHOLDER_RE.match(name):
+            if shapes is not None:
+                shapes.append((tool, name))
+            return []
         if name not in subcommands:
             return ["no such subcommand %s. %s declares %s"
                     % (name, tool, ", ".join(sorted(subcommands)))]
-        sub_flags, _ = parser_surface(subcommands[name])
-        flags = dict(flags)
-        flags.update(sub_flags)
+        # The subcommand's own flags, and not those merged with the main
+        # parser's. argparse binds a main-parser flag before the subcommand
+        # name and refuses it after, so merging accepts a command line that
+        # cannot run: `syzlang_gen.py emit -v` parsed here and exits 2 when
+        # run. A flag declared on both, which regression_check.py does for -v
+        # through a parent parser, is carried by the subparser and still
+        # resolves.
+        flags, _ = parser_surface(subcommands[name])
         where = "%s %s" % (tool, name)
     elif subcommands and words and words[0].startswith("-"):
         where = tool
@@ -2292,20 +3023,146 @@ def _resolve_value(option, where, action, value):
             continue
         try:
             action.type(alternative)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, argparse.ArgumentTypeError):
+            # ArgumentTypeError is what a tool's own validating type raises,
+            # and argparse derives it from Exception and not from ValueError.
+            # Leaving it out let it escape main() as an exit 2 traceback, so
+            # a documented argument the tool refuses read as this check being
+            # broken. knowledge_ctl._positive_int is one such type.
             faults.append("%s on %s: %s is not a valid %s"
                           % (option, where, alternative,
                              getattr(action.type, "__name__", action.type)))
     return faults
 
 
+# A count of this tool's own checks, stated in prose. The number word or digit
+# sits immediately before the noun, which is how all four statements in the
+# tree today are written: "the twelve checks CI runs", "over all twelve
+# checks". `artefact` and `regression` are admitted between the two because
+# AGENTS.md writes the first form with the adjective.
+CHECK_COUNT_RE = re.compile(r"\b(\w+)\s+(?:artefact\s+|regression\s+)?"
+                            r"checks?\b")
+
+# Number words a count is written as here. A count above this range would be
+# written in digits, which the reader also takes.
+CHECK_COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                     "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+                     "eleven": 11, "twelve": 12, "thirteen": 13,
+                     "fourteen": 14, "fifteen": 15, "sixteen": 16}
+
+# How far back a count is bound to an invocation of this tool. A count is read
+# as a count of these checks only where `regression_check.py` is named within
+# this many characters before it, with line breaks folded to single spaces.
+# Measured over AGENTS.md and the twelve briefs: at 200 the rule reads exactly
+# the four statements that are about this tool and nothing else. At 300 it
+# also reads "all three of its numbers" at AGENTS.md's seeds gate, and
+# "All four checks are required" in agents/describe.md's validation section,
+# neither of which counts a check in CHECKS.
+CHECK_COUNT_WINDOW = 200
+
+# How far apart two registered names sit and still read as one enumeration.
+# The reader takes the first registered name after a count and extends while
+# the next one starts within this many characters of the previous one ending,
+# so a comma list and a Markdown table are both read whole and the constant
+# does not encode either shape. Measured over the two enumerations in the
+# tree: 248 characters at the widest in AGENTS.md, 199 in the table at
+# agents/describe.md:219. A gap set too wide can only pull in a name from the
+# prose after the list, which adds to the set the assertion needs to see and
+# never removes one, so this errs wide.
+CHECK_LIST_GAP = 300
+
+# How many registered names have to appear before the run is read as an
+# enumeration of the whole set. One name is a sentence naming one check; two
+# or more is a list, and a list that is short is the defect this case exists
+# to catch, because AGENTS.md said ten and listed nine.
+CHECK_LIST_FLOOR = 2
+
+# The backticked spans an enumeration is read out of.
+CHECK_NAME_SPAN_RE = re.compile(r"`([a-z_]+)`")
+
+
+def check_count_sources():
+    """-> every file this case reads a stated check count out of.
+
+    AGENTS.md and the phase briefs, which are what a coding agent follows to
+    decide how many checks a run has to pass. The generated documentation is
+    outside this: `pages` compares it against the artefacts it was rendered
+    from, and a count restated there is the generator's to fix.
+    """
+    out = [os.path.join(REPO_ROOT, "AGENTS.md")]
+    out.extend(path for _name, path in agent_briefs())
+    return [path for path in out if os.path.isfile(path)]
+
+
+def stated_check_counts():
+    """-> [(path, line, stated, listed)] for every count of these checks.
+
+    `stated` is the number the prose states. `listed` is the set of registered
+    check names enumerated in the CHECK_LIST_WINDOW characters after it, empty
+    where fewer than CHECK_LIST_FLOOR of them appear there.
+
+    A prose figure this repository has now got wrong twice: AGENTS.md said ten
+    and listed nine while CHECKS carried twelve, and an agent following it ran
+    nine.
+    """
+    registered = set(CHECKS)
+    found = []
+    for path in check_count_sources():
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                raw = handle.read()
+        except OSError as exc:
+            raise CheckInput("cannot read %s (%s)" % (path, exc))
+        rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+        # Joined the way check_figures joins its own sources, so a count and
+        # the invocation binding it are read across the 80-column wrap that
+        # separates them at AGENTS.md:122. Code spans are kept, because the
+        # enumeration beside a count is written as backticked names.
+        flat, offsets = _join_wrapped(raw.splitlines())
+        for hit in CHECK_COUNT_RE.finditer(flat):
+            word = hit.group(1)
+            stated = (int(word) if word.isdigit()
+                      else CHECK_COUNT_WORDS.get(word.lower()))
+            if stated is None:
+                continue
+            before = flat[max(0, hit.start() - CHECK_COUNT_WINDOW):hit.start()]
+            if "regression_check.py" not in before:
+                continue
+            listed = _enumerated_checks(flat, hit.end(), registered)
+            found.append((rel, _line_of(offsets, hit.start()), stated,
+                          listed if len(listed) >= CHECK_LIST_FLOOR
+                          else set()))
+    return found
+
+
+def _enumerated_checks(flat, start, registered):
+    """-> the registered check names the run of names at `start` holds.
+
+    The run begins at the first registered name at or after `start` and ends
+    at the first gap wider than CHECK_LIST_GAP. An empty set means no
+    registered name follows the count at all, which is a count stated without
+    a list beside it.
+    """
+    listed, end = set(), None
+    for match in CHECK_NAME_SPAN_RE.finditer(flat, start):
+        if match.group(1) not in registered:
+            continue
+        if end is not None and match.start() - end > CHECK_LIST_GAP:
+            break
+        listed.add(match.group(1))
+        end = match.end()
+    return listed
+
+
 def check_agents():
-    """Every command line in agents/*.md resolves against the tool it names."""
+    """Every command line in agents/*.md resolves against the tool it names,
+    and every count of these checks stated there matches the registry."""
     briefs = agent_briefs()
     parsers = {}
     offenders = []
     counted = {}
     tools = set()
+    shapes = []
     commands = 0
     claims = 0
 
@@ -2327,7 +3184,7 @@ def check_agents():
             tool, arguments = parsed
             found += 1
             tools.add(tool)
-            for fault in _resolve_command(tool, arguments, parsers):
+            for fault in _resolve_command(tool, arguments, parsers, shapes):
                 offenders.append((name, number, command, fault))
         for number, tool, code in agent_exit_claims(text):
             if tool in AGENT_TOOL_EXCLUSIONS:
@@ -2346,6 +3203,19 @@ def check_agents():
         commands += found
         claims += stated
 
+    counts = stated_check_counts()
+    registered = set(CHECKS)
+    miscounted = [(rel, number, stated, sorted(registered - listed))
+                  for rel, number, stated, listed in counts
+                  if stated != len(CHECKS) or (listed and listed != registered)]
+    if not counts:
+        raise CheckInput(
+            "no count of these checks is stated in AGENTS.md or in any brief "
+            "under %s. AGENTS.md carries the sentence a coding agent reads to "
+            "decide how many checks a run has to pass, so a reader finding "
+            "none is the extractor failing and not the prose changing."
+            % AGENTS_DIR)
+
     if not commands:
         raise CheckInput(
             "no command line in any brief under %s. A brief set carrying no "
@@ -2356,6 +3226,12 @@ def check_agents():
           "over %d tool(s), %d declared exclusion(s)"
           % (len(briefs), commands, claims, len(tools),
              len(AGENT_TOOL_EXCLUSIONS)))
+    print("agents: %d stated count(s) of these checks against %d registered, "
+          "%d of them enumerating the set by name"
+          % (len(counts), len(CHECKS),
+             sum(1 for _r, _n, _s, listed in counts if listed)))
+    print("agents: %d command line(s) naming a subcommand as a metavariable"
+          % len(shapes))
     print()
     print("  %-16s %8s %11s" % ("brief", "commands", "exit codes"))
     print("  %-16s %8s %11s" % ("-" * 16, "-" * 8, "-" * 11))
@@ -2368,14 +3244,27 @@ def check_agents():
         print("  %-24s %s" % (tool, AGENT_TOOL_EXCLUSIONS[tool]))
     print()
 
-    if not offenders:
+    if not offenders and not miscounted:
         print("agents: OK")
         return 0
+
+    for rel, number, stated, absent in miscounted:
+        print("agents: %s:%d: states %d check(s) and the registry carries %d"
+              % (rel, number, stated, len(CHECKS)))
+        if absent:
+            print("    the enumeration beside it omits %s"
+                  % ", ".join(absent))
+        print("    an agent following this prose runs the number it states. "
+              "The registry is tools/regression_check.py CHECKS, and "
+              "CHECK_ORDER carries the order to list them in.")
+        print()
 
     for name, number, command, fault in offenders:
         print("agents: agents/%s:%d: %s" % (name, number, command))
         print("    %s" % fault)
         print()
+    if not offenders:
+        return 1
     print("Each line above is a command a phase brief tells a coding agent to "
           "run on a metered instance. A subcommand, a flag or a value the "
           "tool does not declare stalls the phase there and needs a human to "
@@ -2414,6 +3303,48 @@ EXCLUDED_TOTAL_PATTERNS = (
 GROUP_COUNT_PATTERNS = (
     re.compile(r"naming\s+the\s+(\w+)\s+excluded\s+groups"),
     re.compile(r"\b(\w+)\s+groups?\s+(?:sit\s+outside|are\s+counted)"),
+)
+
+# The per-group figure stated beside the excluded total, keyed by the family
+# surface_cov counts that group under. The rule that read the 351 total and
+# the word "six" never read these six numbers, so a group whose count moved
+# left the prose stating the old one while the total still summed.
+#
+# Each pattern is anchored on the phrase its group is named by, because the
+# family word alone is ambiguous: `(\d+) modeset commands?` also matches the
+# 64 modelled modeset commands on two documentation pages, which is the
+# family denominator and not the exclusion. Measured over the prose sources:
+# these six read 11 figures and all 11 agree with the artefacts.
+EXCLUDED_GROUP_PATTERNS = (
+    ("control_gsp",
+     re.compile(r"(\d+)\s+control\s+commands?\s+routed\s+to\s+GSP", re.I)),
+    ("uvm_test",
+     re.compile(r"(\d+)\s+uvm_test\s+commands?", re.I)),
+    ("drm_undispatched",
+     re.compile(r"(\d+)\s+DRM\s+commands?\s+declared", re.I)),
+    ("escape_dead",
+     re.compile(r"(\d+)\s+escapes?\s+declared\s+with\s+no\s+dispatch", re.I)),
+    ("escape_mux",
+     re.compile(r"(\d+)\s+multiplexer\s+escapes?", re.I)),
+    ("modeset_undispatched",
+     re.compile(r"(\d+)\s+modeset\s+commands?\s+"
+                r"(?:declared\s+in|the\s+dispatch)", re.I)),
+)
+
+# A family figure standing on its own, outside any enumeration, whose own
+# words bind it to that family's whole denominator. FIGURE_PAIR runs only
+# inside a FIGURE_ENUM match, so a figure stated alone was read by no rule.
+#
+# The totalising word is required. A bare `N <family>` is not a claim about
+# the denominator: measured over the prose sources, 28 pairs stand outside an
+# enumeration and 13 of them state a subset, among them the 16 control
+# commands carrying an in-handler capability check and the 2 drm commands
+# carrying DRM_MASTER. Bound this way the rule reads 4 figures and all 4
+# agree.
+FIGURE_TOTAL_PATTERNS = (
+    re.compile(r"all\s+(\d+)\s+(%s)\s+(?:targets?|commands?)\b"
+               % FAMILY_WORD, re.I),
+    re.compile(r"(\d+)\s+(%s)\s+targets?\b" % FAMILY_WORD, re.I),
 )
 NUMBER_WORDS = {"four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
                 "nine": 9, "ten": 10}
@@ -2536,17 +3467,34 @@ def check_figures():
     """Every surface figure stated in prose matches the measured artefacts."""
     try:
         targets, excluded, _meta = surface_cov.load_targets()
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError,
+            surface_cov.SurfaceError) as exc:
+        # SurfaceError is the domain error load_targets raises for a missing
+        # or unreadable inventory, which is the condition this clause exists
+        # for. Left out, it escapes as a traceback and the check exits 2 with
+        # no line naming the artefact.
         raise CheckInput("cannot load the surface inventories (%s)" % exc)
 
     denominator = len(targets)
     excluded_total = len(excluded)
     families = collections.Counter(r["family"] for r in targets.values())
-    groups = len({r["family"] for r in excluded.values()})
+    group_counts = collections.Counter(r["family"]
+                                       for r in excluded.values())
+    groups = len(group_counts)
     retired = retired_denominators(denominator)
+
+    declared = {group for group, _p in EXCLUDED_GROUP_PATTERNS}
+    unnamed = sorted(set(group_counts) - declared)
+    if unnamed:
+        raise CheckInput(
+            "the inventories carry the excluded group(s) %s and "
+            "EXCLUDED_GROUP_PATTERNS names no pattern for them, so a figure "
+            "stated for that group is read by no rule. Add the phrase the "
+            "prose names it by." % ", ".join(unnamed))
 
     sources = figure_sources()
     offences = []
+    read_groups = read_totals = 0
 
     def note(path, starts, offset, rule, why, text):
         offences.append((os.path.relpath(path, REPO_ROOT).replace(os.sep, "/"),
@@ -2601,11 +3549,46 @@ def check_figures():
                          "names %s exclusion groups against %d counted"
                          % (hit.group(1), groups), text)
 
+        # group: one excluded group's own figure, beside the total the rule
+        # above reads. A group whose count moves leaves the total right and
+        # the six numbers under it wrong.
+        for group, pattern in EXCLUDED_GROUP_PATTERNS:
+            for hit in pattern.finditer(text):
+                counted_group = group_counts.get(group, 0)
+                read_groups += 1
+                if int(hit.group(1)) != counted_group:
+                    note(path, starts, hit.start(), "group",
+                         "states %s in the %s group against %d counted"
+                         % (hit.group(1), group, counted_group), text)
+
+        # total: a family figure stated alone and bound by its own words to
+        # that family's whole denominator.
+        enumerated = [(m.start(), m.end())
+                      for m in FIGURE_ENUM.finditer(text)]
+        for pattern in FIGURE_TOTAL_PATTERNS:
+            for hit in pattern.finditer(text):
+                if any(a <= hit.start() < b for a, b in enumerated):
+                    continue
+                family = hit.group(2).lower()
+                read_totals += 1
+                if int(hit.group(1)) != families.get(family, 0):
+                    note(path, starts, hit.start(), "total",
+                         "states %s %s targets against %d counted"
+                         % (hit.group(1), family, families.get(family, 0)),
+                         text)
+
     print("figures: denominator %d over %d family/families, %d excluded over "
           "%d group(s)" % (denominator, len(families), excluded_total, groups))
     print("figures: retired denominator(s) %s"
           % (", ".join(str(n) for n in retired) or "none"))
     print("figures: %d prose file(s) read" % len(sources))
+    print("figures: %d per-group figure(s) and %d standalone family total(s) "
+          "compared" % (read_groups, read_totals))
+    print()
+    print("  %-24s %8s" % ("excluded group", "counted"))
+    print("  %-24s %8s" % ("-" * 24, "-" * 8))
+    for group in sorted(group_counts):
+        print("  %-24s %8d" % (group, group_counts[group]))
     print()
 
     if not offences:
@@ -2628,6 +3611,379 @@ def check_figures():
     return 1
 
 
+# --------------------------------------------------------------------------
+# Documentation checks: citations and command lines
+# --------------------------------------------------------------------------
+
+DOC_ROOT = os.path.join(REPO_ROOT, "docs", "src", "content", "docs")
+
+# The committed pages, held apart from DOC_ROOT so a caller pointing the check
+# at its own directory is told apart from a run over the real tree. Only the
+# real tree carries every page an exclusion is declared for.
+COMMITTED_DOC_ROOT = DOC_ROOT
+VENDOR_DIR = os.path.join(REPO_ROOT, "artifacts", "src")
+VENDOR_EXT = (".c", ".h", ".go", ".py", ".sh", ".mk")
+
+# A fenced block, so a citation or a command inside one is read as the
+# reproduction it is and not as a claim this check can settle.
+DOC_FENCE_RE = re.compile(r"^```.*?^```", re.S | re.M)
+
+# `path/file.c:120` or `file.go:25-35`, inside an inline code span. The docs
+# write every citation that way, and prose naming a file without a span is a
+# mention rather than a citation.
+DOC_CITE_RE = re.compile(
+    r"`([A-Za-z0-9_./+-]+\.(?:c|h|go|py|sh|mk))(?::(\d+)(?:-(\d+))?)?`")
+
+# A documented invocation. Only a line that opens with the command counts: a
+# command quoted inside a verbatim error message is a reproduction, and the
+# flags later in that sentence belong to a different subcommand.
+DOC_INVOKE_RE = re.compile(
+    r"^[ \t]*(?:\$[ \t]*)?(?:sudo[ \t]+(?:-\S+[ \t]+)*)?"
+    r"python3?[ \t]+(?:-\S+[ \t]+)*"
+    r"(tools/[a-z_0-9]+\.py)([^\n|;&]*)$", re.M)
+
+# An inline code span, outside any fenced block. The prose runs commands in
+# these as often as it shows them in a block: measured over the committed
+# pages, the fenced blocks carry 129 invocations and another 39 appear only in
+# a span, among them the tools/crash_ctl.py line this check's own CI comment
+# cites. A span is matched against DOC_INVOKE_RE the same way a block line is,
+# so the two sources share one definition of what an invocation is.
+DOC_SPAN_RE = re.compile(r"`([^`\n]+)`")
+
+# A cited path that resolves in no tree, with the reason it never will. Each
+# one is a real reference and none of them is a defect, so leaving them
+# unlisted would make this check report twenty offenders on a clean run and
+# train a reader to ignore it.
+#
+# An entry excluding nothing is dead and is an offence, checked below over the
+# committed pages. Three were removed when the count was first taken. Two of
+# them, run_all.sh and build_all.sh, were declared as generated into
+# harnesses/ by the harness phase, and the tree commits harnesses/run_all.sh
+# and harnesses/build_all.sh, so all thirteen citations of them resolve and
+# the exclusion was never consulted. The third, injected.c, is cited by no
+# page. Removing an entry narrows the check: a citation of that basename that
+# resolves nowhere is now reported.
+CITATION_EXCLUSIONS = {
+    "repro.c":
+        "a reproducer the poc phase generates per crash under "
+        "artifacts/pocs/, so no checkout carries it",
+    "measure_sizes.sh":
+        "a probe script ioctl_inventory.py generates beside its own output",
+    "_nvoc.c":
+        "the suffix NVOC gives every generated class file, written as a "
+        "pattern and not as one file",
+    "kernel/kcov.c":
+        "Linux, which this repository does not vendor",
+    "drivers/gpu/drm/drm_ioctl.c":
+        "Linux, which this repository does not vendor",
+    "drivers/gpu/drm/drm_auth.c":
+        "Linux, which this repository does not vendor",
+}
+
+
+# A tool the docs invoke that declares no argparse parser, with the reason.
+# Kept apart from AGENT_TOOL_EXCLUSIONS so the two checks state their own
+# surface: a brief and a page do not invoke the same set of tools.
+DOC_TOOL_EXCLUSIONS = {
+    "tools/selftest.py":
+        "a unittest module. It is run by `python3 tools/selftest.py` with no "
+        "argument of its own, and unittest.main() takes the parsing",
+    "tools/gspwn_config.py":
+        "takes no argument. Run bare it prints the effective configuration, "
+        "and it declares no parser for a surface to be checked against",
+    "tools/register_check.py":
+        "reads sys.argv by hand at main(). Its positional paths and its two "
+        "help flags are literals there, so no parser carries them and no "
+        "import reaches them",
+}
+
+
+def doc_files():
+    """-> every documentation page, generated pages included.
+
+    A generated page carries citations its generator wrote, and a stale one
+    there is the same defect as a stale one in a hand-written page.
+    """
+    out = []
+    for base, _dirs, names in os.walk(DOC_ROOT):
+        out.extend(os.path.join(base, name) for name in sorted(names)
+                   if name.endswith((".md", ".mdx")))
+    return sorted(out)
+
+
+def _blank_fences(text):
+    """-> the text with fenced blocks blanked to the same line count."""
+    return DOC_FENCE_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+
+
+DOC_FROM_FENCE = "fence"
+DOC_FROM_SPAN = "span"
+
+# Info strings a fenced block carries that make its body a shell transcript.
+# Measured over the committed pages: no block this check skips carries any
+# other info string, so a wider filter here recovers nothing. The invocations
+# it was missing were in inline spans, which is what doc_invocations reads.
+DOC_SHELL_INFO = ("", "sh", "bash", "console", "shell")
+
+
+def doc_invocations(text):
+    """-> [(line, source, shown text, tool, argument text)] for one page.
+
+    Both places a page runs a tool, read through one definition of what an
+    invocation is. A fenced block contributes each line opening with the
+    command, joined across a trailing backslash. An inline code span
+    contributes its whole body where the body opens with the command, which
+    is how the prose writes a one-line invocation mid-sentence.
+
+    A span inside a fenced block is read once, as part of the block: the
+    spans are taken from the text with every block blanked.
+    """
+    found = []
+    for fence in DOC_FENCE_RE.finditer(text):
+        body = fence.group(0)
+        if body.splitlines()[0].strip("`").strip() not in DOC_SHELL_INFO:
+            continue
+        at = text[:fence.start()].count("\n") + 1
+        joined = re.sub(r"\\\n[ \t]*", " ", body)
+        for match in DOC_INVOKE_RE.finditer(joined):
+            found.append((at + joined[:match.start()].count("\n"),
+                          DOC_FROM_FENCE, match.group(0).strip(),
+                          match.group(1), match.group(2)))
+
+    outside = _blank_fences(text)
+    for span in DOC_SPAN_RE.finditer(outside):
+        match = DOC_INVOKE_RE.match(span.group(1))
+        if match is None:
+            continue
+        found.append((outside[:span.start()].count("\n") + 1,
+                      DOC_FROM_SPAN, span.group(0).strip(),
+                      match.group(1), match.group(2)))
+    return sorted(found)
+
+
+def _vendored_trees():
+    """-> every vendored source tree present, by path."""
+    if not os.path.isdir(VENDOR_DIR):
+        return []
+    return [os.path.join(VENDOR_DIR, name)
+            for name in sorted(os.listdir(VENDOR_DIR))
+            if os.path.isdir(os.path.join(VENDOR_DIR, name))]
+
+
+def _index_sources(trees):
+    """-> ({tree-relative path: full path}, {basename: [full path]})."""
+    by_path, by_base = {}, {}
+    roots = list(trees) + [REPO_ROOT]
+    skip = {".git", "node_modules", "__pycache__", ".claude", "artifacts",
+            "dist", ".astro", "tmp", "thoughts", ".github"}
+    for top in roots:
+        for base, dirs, names in os.walk(top):
+            dirs[:] = [d for d in dirs if d not in skip]
+            for name in names:
+                if not name.endswith(VENDOR_EXT):
+                    continue
+                full = os.path.join(base, name)
+                rel = os.path.relpath(full, top).replace(os.sep, "/")
+                by_path.setdefault(rel, full)
+                by_base.setdefault(name, []).append(full)
+    return by_path, by_base
+
+
+def _resolve_citation(cited, by_path, by_base):
+    """-> [full path] a cited path can mean, most specific first."""
+    if cited in by_path:
+        return [by_path[cited]]
+    suffix = [v for k, v in by_path.items() if k.endswith("/" + cited)]
+    if suffix:
+        return suffix
+    return list(by_base.get(os.path.basename(cited), []))
+
+
+def _cited_line(path, number):
+    """-> the cited line, or None when the file is shorter than that."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for index, line in enumerate(handle, 1):
+                if index == number:
+                    return line.rstrip()
+    except OSError:
+        return None
+    return None
+
+
+def check_citations():
+    """Every file and line the docs cite resolves in a vendored source tree."""
+    trees = _vendored_trees()
+    if not trees:
+        print("citations: no vendored source tree under %s. artifacts/ is "
+              "gitignored, so a clean checkout carries none and this check "
+              "settles nothing. It runs on a provisioned machine, which is "
+              "where a re-vendored tree moves the line numbers."
+              % os.path.relpath(VENDOR_DIR, REPO_ROOT))
+        return 0
+
+    by_path, by_base = _index_sources(trees)
+    pages = doc_files()
+    offenders = []
+    files_cited = lines_cited = excluded = 0
+    per_exclusion = {name: 0 for name in CITATION_EXCLUSIONS}
+
+    for path in pages:
+        rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+        with open(path, encoding="utf-8") as handle:
+            text = _blank_fences(handle.read())
+        for match in DOC_CITE_RE.finditer(text):
+            cited, start, end = match.group(1), match.group(2), match.group(3)
+            number = text[:match.start()].count("\n") + 1
+            hits = _resolve_citation(cited, by_path, by_base)
+            if not hits:
+                # The exclusions are consulted only here, where the path
+                # resolved in no tree. Every reason states why a path never
+                # will: it is generated by a phase, fabricated by a fixture,
+                # or belongs to Linux. Consulting them before resolution
+                # matched on basename, so a vendored file named run_all.sh,
+                # build_all.sh, measure_sizes.sh or repro.c was excluded in
+                # any tree, which is wider than any of those reasons.
+                key = (cited if cited in CITATION_EXCLUSIONS
+                       else os.path.basename(cited))
+                if key in CITATION_EXCLUSIONS:
+                    excluded += 1
+                    per_exclusion[key] += 1
+                    continue
+                offenders.append((rel, number, match.group(0),
+                                  "resolves in no tree, and no exclusion "
+                                  "declares why"))
+                continue
+            if start is None:
+                files_cited += 1
+                continue
+            if len(hits) > 1:
+                offenders.append((rel, number, match.group(0),
+                                  "names %d files, so the line number is "
+                                  "ambiguous. Qualify the path"
+                                  % len(hits)))
+                continue
+            lines_cited += 1
+            first, last = int(start), int(end) if end else int(start)
+            if last < first:
+                # A reversed range. The guard below reads the end of the
+                # range, so a citation whose end precedes its start resolves
+                # there and leaves the start line unread, and calling .strip()
+                # on that None exits 2 with a traceback.
+                offenders.append((rel, number, match.group(0),
+                                  "the range ends at %d and starts at %d"
+                                  % (last, first)))
+                continue
+            if _cited_line(hits[0], last) is None:
+                offenders.append((rel, number, match.group(0),
+                                  "the file has fewer than %d lines" % last))
+                continue
+            opening = _cited_line(hits[0], first)
+            if opening is None or not opening.strip():
+                offenders.append((rel, number, match.group(0),
+                                  "line %s is blank, so the citation has "
+                                  "drifted" % start))
+
+    print("citations: %d page(s), %d file citation(s) and %d line "
+          "citation(s) over %d vendored tree(s), %d declared exclusion(s)"
+          % (len(pages), files_cited, lines_cited, len(trees),
+             len(CITATION_EXCLUSIONS)))
+    print("citations: %d citation instance(s) matched a declared exclusion"
+          % excluded)
+    print()
+    print("  %-30s %9s  %s" % ("excluded", "instances", "reason"))
+    print("  %-30s %9s  %s" % ("-" * 30, "-" * 9, "-" * 6))
+    for name in sorted(CITATION_EXCLUSIONS):
+        print("  %-30s %9d  %s"
+              % (name, per_exclusion[name], CITATION_EXCLUSIONS[name]))
+    print()
+
+    # An exclusion matching nothing is dead, and it hides the reason it was
+    # written: either the path now resolves, which makes the stated reason
+    # false, or no page cites it any more. Both are reported here so the set
+    # cannot drift into a list of paths nobody has read. The assertion runs
+    # over the committed pages only, since a caller pointing DOC_ROOT at one
+    # page necessarily leaves every exclusion unmatched.
+    if _pinned_artefact(DOC_ROOT, COMMITTED_DOC_ROOT):
+        for name in sorted(CITATION_EXCLUSIONS):
+            if per_exclusion[name]:
+                continue
+            offenders.append(("tools/regression_check.py", 0,
+                              "CITATION_EXCLUSIONS[%r]" % name,
+                              "excludes nothing over the committed pages. "
+                              "Either the path now resolves, or no page "
+                              "cites it. Delete the entry"))
+
+    if not offenders:
+        print("citations: OK")
+        return 0
+    for rel, number, cite, fault in offenders:
+        print("%s:%d: %s %s" % (rel, number, cite, fault), file=sys.stderr)
+    print("citations: %d offending citation(s)" % len(offenders),
+          file=sys.stderr)
+    return 1
+
+
+def check_commands():
+    """Every tool invocation the docs show parses against the tool."""
+    pages = doc_files()
+    parsers = {}
+    offenders = []
+    counted = fenced = spanned = 0
+    tools = set()
+    shapes = []
+
+    for path in pages:
+        rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        for number, source, shown, tool, rest in doc_invocations(text):
+            counted += 1
+            if source == DOC_FROM_FENCE:
+                fenced += 1
+            else:
+                spanned += 1
+            tools.add(tool)
+            try:
+                words = shlex.split(rest, comments=False, posix=False)
+            except ValueError:
+                words = rest.split()
+            if tool in DOC_TOOL_EXCLUSIONS:
+                continue
+            for fault in _resolve_command(tool, words, parsers, shapes):
+                offenders.append((rel, number, shown, fault))
+
+    if not counted:
+        raise CheckInput(
+            "no tool invocation in any page under %s. A documentation set "
+            "showing no command makes every tool agree with it vacuously, "
+            "and the extractor is then the thing to fix."
+            % os.path.relpath(DOC_ROOT, REPO_ROOT))
+
+    print("commands: %d page(s), %d invocation(s) over %d tool(s), "
+          "%d declared exclusion(s)"
+          % (len(pages), counted, len(tools), len(DOC_TOOL_EXCLUSIONS)))
+    print("commands: %d in a fenced block, %d in an inline code span, %d "
+          "naming its subcommand as a metavariable"
+          % (fenced, spanned, len(shapes)))
+    print()
+    print("  %-24s %s" % ("excluded", "reason"))
+    print("  %-24s %s" % ("-" * 24, "-" * 6))
+    for name in sorted(DOC_TOOL_EXCLUSIONS):
+        print("  %-24s %s" % (name, DOC_TOOL_EXCLUSIONS[name]))
+    print()
+
+    if not offenders:
+        print("commands: OK")
+        return 0
+    for rel, number, command, fault in offenders:
+        print("%s:%d: %s: %s" % (rel, number, command, fault),
+              file=sys.stderr)
+    print("commands: %d offending invocation(s)" % len(offenders),
+          file=sys.stderr)
+    return 1
+
+
 CHECKS = {
     "names": check_names,
     "pins": check_pins,
@@ -2639,18 +3995,32 @@ CHECKS = {
     "harnesses": check_harnesses,
     "agents": check_agents,
     "figures": check_figures,
+    "citations": check_citations,
+    "commands": check_commands,
 }
 
 # The order `all` runs them in, and the order the module docstring and the CI
-# steps present them in. It follows the dependency between them: names and
-# pins read the description set alone, coverage, derived and families join it
-# against the artefacts it was generated from, and pages renders the artefacts
-# the other five compare. stale and harnesses close the order because neither
-# reads the description set: stale reads the provenance record against the
-# artefacts the first six compare, and harnesses reads the Track U seam, which
-# the first seven never touch.
+# steps present them in. It follows the dependency between them, in three
+# bands.
+#
+# The first six read the description set. names and pins read it alone,
+# coverage, derived and families join it against the artefacts it was
+# generated from, and pages renders those artefacts.
+#
+# stale and harnesses follow because neither reads the description set: stale
+# reads the provenance record against the artefacts the first six compare, and
+# harnesses reads the Track U seam, which the first seven never touch.
+#
+# agents, figures, citations and commands close the order because each reads
+# prose against something the bands above have already settled. agents and
+# commands resolve a command line against the tool's own argparse parser,
+# figures compares a stated surface figure against the inventories coverage
+# reads, and citations resolves a cited path and line in a vendored source
+# tree. A prose failure reported before the artefact failure that caused it
+# names the page where the generator is the thing to edit.
 CHECK_ORDER = ("names", "pins", "coverage", "derived", "families", "pages",
-               "stale", "harnesses", "agents", "figures")
+               "stale", "harnesses", "agents", "figures",
+               "citations", "commands")
 
 
 def check_order():
