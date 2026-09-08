@@ -4,7 +4,7 @@ description: Which device nodes and syscalls Track K covers, which Track U entry
 ---
 
 Scope is a configuration decision on Track K and a source-analysis decision on
-Track U. Both are recorded before any modelling starts.
+Track U. Both are recorded before the `describe` phase models anything.
 
 ## Track K: the enabled syscall set
 
@@ -18,7 +18,15 @@ track_k:
     - "mmap$nvidia*"
     - "ioctl$NV_*"
     - "ioctl$UVM_*"
+    - "ioctl$NVKMS_*"
+    - "ioctl$DRM_NVIDIA_*"
+    - "mmap$dri*"
+    - "poll$dri*"
 ```
+
+`ioctl$NVKMS_*` and `ioctl$DRM_NVIDIA_*` have their own patterns because every
+variant is named for an `NvKmsIoctlCommand` enumerator or a `DRM_NVIDIA_`
+command number macro, neither of which matches `NV_*`.
 
 Each entry is a syzkaller syscall pattern, and the `$` suffix names a
 description variant that the `describe` phase authored. An empty list enables
@@ -42,29 +50,28 @@ refuses it: the value must be a list of non-empty strings.
 | `/dev/dri/card*` and `/dev/dri/renderD*` | Yes | Injected by the CDI generator with no capability check. Withheld on the legacy path alone |
 
 The injection path decides the modeset node and the DRM nodes. The CDI
-generator lists the modeset node beside the other control nodes and applies
-no capability test, and it adds every `/dev/dri` node found for the GPU's PCI
-bus id. `jit-cdi` is the default runtime mode, so a default tenant holds both.
-The legacy path withholds the modeset node unless the `display` value is set,
-and withholds the DRM nodes under the default `compute,utility` set. The
+generator lists the modeset node beside the other control nodes and applies no
+capability test, and it adds every `/dev/dri` node found for the GPU's PCI bus
+id. `internal/info/auto.go:89` resolves the default mode `auto` to `jit-cdi`,
+so a stock instance takes that path and its tenant holds both.
+
+`NVIDIA_DRIVER_CAPABILITIES` gates the legacy path, which withholds the modeset
+node unless the `display` value is set and yields no `/dev/dri` and no
+`nvidia-drm` nodes under the `compute,utility` default that CUDA images
+request. That exclusion is a property of a deployment pinned to `legacy` mode.
+The
 [threat model](/gspwn/architecture/threat-model/#device-node-injection-paths)
 carries both mechanisms with their source citations.
 
-`NVIDIA_DRIVER_CAPABILITIES` gates the legacy path. The default that CUDA
-images request, `compute,utility`, yields no `/dev/dri` and no `nvidia-drm`
-nodes there. That exclusion is a property of a deployment pinned to `legacy`
-mode. `internal/info/auto.go:89` resolves the default mode `auto` to
-`jit-cdi`, so a stock instance takes the CDI path and its tenant holds the DRM
-nodes.
+The DRM nodes sit inside the modelled set. `surface/entry-points.json` records
+`nv_drm_fops` with `tenant_surface` true and `modelled` true, and
+`tools/trace2seed.py` converts a traced `/dev/dri/cardN` open to
+`openat$dri_card` and a `/dev/dri/renderDN` open to `openat$dri_render`.
+`nvkms_fops`, for `/dev/nvidia-modeset`, is recorded `tenant_surface` true and
+`modelled` false.
 
-The DRM nodes sit inside the tenant surface and outside the modelled set.
-`surface/entry-points.json` records `nv_drm_fops` with `tenant_surface` true
-and `modelled` false. The `describe` sub-agent is told to skip those nodes and
-`tools/trace2seed.py` refuses to emit a seed referencing them, so they are
-measured as reachable surface outside the campaign's denominator.
-
-A seed referencing an unmodelled node fails the syzkaller-parse gate anyway,
-because no description declares a call against it.
+A seed referencing an unmodelled node fails the syzkaller-parse gate, because
+no description declares a call against it.
 
 Widening scope requires a decision recorded in the
 [threat model](/gspwn/architecture/threat-model/) before the `describe`
@@ -127,7 +134,7 @@ track_u:
 
 `track_u.targets` holds the harness directory names, written by the `harness`
 phase and read by the `fuzz` phase when it checks per-harness coverage output.
-No tool reads the list; it reaches behaviour through what the orchestrator
+No tool reads the list, which reaches behaviour through what the orchestrator
 pastes into a sub-agent's context. The configuration validator checks its shape
 and nothing else, so a name that does not correspond to a real harness is
 accepted here and discovered during the fuzz phase.

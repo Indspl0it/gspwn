@@ -3,9 +3,9 @@ title: Loops
 description: All ten loops in the system, each with its entry condition, iteration body, exit condition, bound and owner.
 ---
 
-Ten loops run in gspwn. They nest three deep in places. Each entry below states
-the loop's bound, because an unterminated loop on a machine billed by the hour
-spends without limit.
+Ten loops run in gspwn, nesting three deep in places. Each carries a bound,
+because an unterminated loop on a machine billed by the hour spends without
+limit.
 
 ## Nesting
 
@@ -80,11 +80,10 @@ flowchart TB
 | Coverage verdict unknown | `round.coverage_verdict` | Yes, with `--reason` |
 
 `hard_cap_reason()` checks completion first, so a campaign finishing on its
-last permitted round records why it finished and not which limit it also
-touched. `loop.max_rounds` is 10 and is a backstop against a runaway loop: a
-campaign that reaches it has failed to converge, and its stop reason says so
-and points at the completion ledger. `loop.max_total_run_hours` at 5000 is the
-spend ceiling. See
+last permitted round records why it finished. `loop.max_rounds` is 10 and is a
+backstop against a runaway loop. A campaign that reaches it has failed to
+converge, and its stop reason says so and points at the completion ledger.
+`loop.max_total_run_hours` at 5000 is the spend ceiling. See
 [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/) for the
 two-curve decision table.
 
@@ -100,8 +99,7 @@ a release tag pair and ranks 270 changed functions, 27 of which reach a named
 ioctl target. The current run writes `surface/worklist-round1.md`
 with 14 `describe` items, 4 `seeds` items and 5 targets recorded as outside the
 tenant surface. A `[history CVE-YYYY-NNNNN]` item ranks a place where the
-vendor found a bug and is no evidence that a bug remains there. It orders the
-work and predicts no finding. See
+vendor found a bug and is no evidence that a bug remains there. See
 [Historical targeting](/gspwn/architecture/historical-targeting/).
 
 `describe`, `seeds` and `harness` are declared parallel after the build phase
@@ -155,7 +153,7 @@ The confirmation step reads the filesystem. See
 ```mermaid
 flowchart TB
   P["pick a corpus program"] --> MU["mutate"]
-  MU --> EX["execute against<br/>/dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm"]
+  MU --> EX["execute against a modelled node:<br/>nvidiactl, nvidiaN, nvidia-uvm, nvidia-uvm-tools,<br/>nvidia-modeset, dri/card, dri/renderD"]
   EX --> KC["read the KCOV trace"]
   KC --> NEW{"new edges?"}
   NEW -->|yes| ADD["add to the corpus, minimise"]
@@ -170,11 +168,12 @@ flowchart TB
 
 The pipeline does not modify this loop. The outer loop supplies what syzkaller
 cannot produce for itself: models for ioctls it has no description for, and
-valid object-chain seeds.
+valid object-chain seeds. One iteration is drawn in
+[Execution model](/gspwn/architecture/execution-model/).
 
-The restart edge is the reason the coverage model accumulates the y axis with a
-running maximum. A replay climbs the reported count back towards its previous
-high-water mark and records no new coverage.
+A replay climbs the reported count back towards its previous high-water mark
+and records no new coverage, which the coverage model absorbs with a running
+maximum on the y axis.
 
 ## L4: the deadline loop
 
@@ -206,8 +205,8 @@ flowchart TB
   RETRY --> T
 ```
 
-The disable step matters as much as the stop. An enabled `Restart=always` unit
-resumes at the next boot, and this pipeline reboots by design.
+An enabled `Restart=always` unit resumes at the next boot, and this pipeline
+reboots by design, so the disable step is required alongside the stop.
 
 `loop.deadline_check_min` is separate from `loop.coverage_sample_min`, so
 raising the sampling interval does not delay every campaign stop past the
@@ -218,22 +217,28 @@ window it enforces.
 | Property | Value |
 |---|---|
 | Entry | `coverage_ctl.py install-timer` enables `gspwn-coverage.timer` |
-| Iteration body | Collect Track K, collect Track U, probe the GPU, read free disk, measure the surface when it is due, append one row |
+| Iteration body | One invocation per track: collect that track's counters, probe the GPU, read free disk, measure the surface when it is due, append one row |
 | State carried | `artifacts/runs/<id>/coverage.csv` and `coverage-u.csv` |
 | Exit | `coverage_ctl.py remove-timer` |
 | Bound | Fires every `loop.coverage_sample_min`. The append is skipped once the campaign window has elapsed, absent `--force` |
 
+The timer carries one `ExecStart` line per track and each is a separate
+invocation against its own CSV. A sample handles one track and never both.
+
 ```mermaid
 flowchart TB
-  T["timer fires every<br/>loop.coverage_sample_min"] --> REG{"run registered<br/>in the state file?"}
+  T["timer fires every<br/>loop.coverage_sample_min<br/>once per track"] --> REG{"run registered<br/>in the state file?"}
   REG -->|no| REF["refuse: a typo would create a<br/>root-owned run directory"]
   REG -->|yes| FIN{"campaign window<br/>elapsed?"}
   FIN -->|"yes, and no --force"| SKIP["skip: do not pad the sample count<br/>long after fuzzing stopped"]
-  FIN -->|no| CK["Track K: try the JSON endpoints,<br/>then the dashboard HTML,<br/>then corpus.db size"]
-  CK --> CU["Track U: sum fuzzer_stats<br/>across artifacts/runs/&lt;id&gt;/u/*"]
-  CU --> GPU["probe the GPU<br/>(Track K only; Track U records n/a)"]
-  GPU --> DISK["read free space"]
-  DISK --> SD{"Track K, and the last<br/>surface sample older than<br/>coverage.surface_sample_min?"}
+  FIN -->|no| TRK{"which track?"}
+  TRK -->|K| CK["try the JSON endpoints,<br/>then the dashboard HTML,<br/>then corpus.db size"]
+  TRK -->|U| CU["sum fuzzer_stats<br/>across artifacts/runs/&lt;id&gt;/u/*"]
+  CK --> GK["probe the GPU"]
+  CU --> GU["record the GPU column<br/>as not applicable"]
+  GK --> DISK["read free space"]
+  GU --> DISK
+  DISK --> SD{"Track K, surface not skipped,<br/>and the last surface sample older<br/>than coverage.surface_sample_min?"}
   SD -->|yes| SURF["unpack the run's corpus.db<br/>and count enumerated targets"]
   SD -->|no| APP
   SURF --> APP["append one row under the header<br/>the file already carries"]
@@ -245,16 +250,16 @@ flowchart TB
   REF --> T
 ```
 
-The two `ExecStart` lines carry a `-` prefix, so a failure sampling one track
+Both `ExecStart` lines carry a `-` prefix, so a failure sampling one track
 leaves the other track's sample intact. The GPU probe is bounded by
-`coverage.gpu_probe_timeout_sec`, which covers a hung driver as well as a dead
-one.
+`coverage.gpu_probe_timeout_sec`, default 20 seconds, which covers a hung
+driver as well as a dead one.
 
 The surface measurement runs on its own coarser cadence, because it unpacks the
 run's `corpus.db` and rescans every program in it where the other columns come
-from one HTTP fetch. The Track U `ExecStart` passes `--skip-surface`: those
-harnesses produce no syzlang programs. A sample that skips the measurement
-records an empty `surface` value, which the curve drops.
+from one HTTP fetch. The Track U line skips it: those harnesses produce no
+syzlang programs. A sample that skips the measurement records an empty
+`surface` value, which the curve drops.
 
 ## L6: the supervision loop
 
@@ -264,7 +269,7 @@ records an empty `surface` value, which the curve drops.
 | Iteration body | Breaker check, session resolve, harvest, launch the agent, wait for exit or kill on stall |
 | State carried | `state/orchestrator.json`: the start history, the blocked record, the session id |
 | Exit | Exit 78, which systemd does not restart |
-| Bound | `orchestrator.max_same_boot_starts` and `orchestrator.max_reboots` inside `orchestrator.window_min`; `orchestrator.max_agent_hours` per launch |
+| Bound | `orchestrator.max_same_boot_starts` (5) and `orchestrator.max_reboots` (10) inside `orchestrator.window_min` (60). `orchestrator.max_agent_hours` per launch, 0 in the shipped configuration and therefore off |
 
 ```mermaid
 flowchart TB
@@ -279,7 +284,7 @@ flowchart TB
   PIPE -->|"complete"| X3["exit 78"]
   PIPE -->|"state file unreadable"| X4["exit 78"]
   PIPE -->|yes| HAR["crashlog_ctl.py harvest<br/>failure warns, does not stop"]
-  HAR --> LAUNCH["launch the agent,<br/>bounded by max_agent_hours"]
+  HAR --> LAUNCH["launch the agent,<br/>bounded by max_agent_hours<br/>when it is non-zero"]
   LAUNCH --> WAIT{"exited, or stalled?"}
   WAIT -->|exited| RES{"was this a resume<br/>that exited non-zero?"}
   WAIT -->|stalled| KILL["kill the process group:<br/>SIGTERM, then SIGKILL"]
@@ -298,9 +303,8 @@ flowchart TB
 Same-boot starts and reboots are counted separately. Track K panics the box by
 design, so one shared limit would trip on a healthy campaign.
 
-The session id is stored before the launch. A panic terminates the agent with
-no exit code, so anything written after the launch is never written on the
-restarts this mechanism exists for.
+The session id is stored before the launch. See
+[Durability](/gspwn/architecture/durability/).
 
 ## L7: the verify loop
 
@@ -341,7 +345,7 @@ flowchart TB
 | clean | Yes | No |
 | void | No | No |
 
-Void runs leave the count unchanged, which is why the attempt cap exists: a
+Void runs leave the count unchanged, so the attempt cap bounds the loop. A
 persistently wrapping dmesg ring would otherwise iterate without end.
 
 A rate at or above `poc.reliable_threshold` classifies the crash `reliable`.
@@ -380,6 +384,11 @@ it takes effect without restarting the wait. The heartbeat distinguishes a
 process blocking for a day from a hung one. A wait interrupted by a panic
 resumes against the same deadline when the command is re-run after the reboot.
 
+The wait enforces the deadline itself when the units are still active past it,
+because the timer may never have been installed. Waiting out a window and then
+measuring a campaign that is still running produces the same wrong number the
+timer exists to prevent.
+
 ## L9: the rung ladder
 
 | Property | Value |
@@ -396,11 +405,11 @@ flowchart TB
   G1 -->|pass| DONE1["record rung 1, stop"]
   G1 -->|fail| H1["harvest crash logs,<br/>write rung-1-failed.md"]
   H1 --> R2["RUNG=2 SKIP_KERNEL=1<br/>KCOV-only modules"]
-  R2 --> G2{"gate"}
+  R2 --> G2{"same gate, KASAN state<br/>matching this rung"}
   G2 -->|pass| DONE2["record rung 2, stop"]
   G2 -->|fail| H2["harvest, write rung-2-failed.md"]
   H2 --> R3["RUNG=3 SKIP_KERNEL=1<br/>uninstrumented modules"]
-  R3 --> G3{"gate"}
+  R3 --> G3{"same gate, KASAN state<br/>matching this rung"}
   G3 -->|pass| DONE3["record rung 3, stop"]
   G3 -->|fail| BLOCK["write FAILED.md,<br/>mark the phase blocked"]
 ```
@@ -422,7 +431,7 @@ The rung reached bounds what the oracles report. See
 | Exit | `crash-list --status flagged` returns nothing |
 | Bound | The count of `flagged` entries, which no iteration increases |
 
-The queue is durable, so it survives the session that produced it. The
+The queue is durable and survives the session that produced it. The
 commands are in
 [Results and triage](/gspwn/guides/results-and-triage/), and the flagging rules
 are in [Crash identity](/gspwn/architecture/crash-identity/).
@@ -457,12 +466,13 @@ stateDiagram-v2
 | `measured` | `pipeline_ctl.py round-end --from-run` | The round record |
 | `retired` | A `--replace` install of another run | The previous run's units disabled and its timer retired |
 
-The `rebooted` to `running` edge is the one this pipeline traverses most often.
-Every mechanism on the diagram survives it, because each is either a file on
-disk or a systemd unit carrying `OnBootSec`.
+This pipeline traverses the `rebooted` to `running` edge most often. Every
+mechanism on the diagram survives it, because each is either a file on disk or
+a systemd unit carrying `OnBootSec`.
 
 ## See also
 
 - [Execution model](/gspwn/architecture/execution-model/)
 - [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/)
 - [Spend accounting](/gspwn/architecture/spend-accounting/)
+- [Durability](/gspwn/architecture/durability/)

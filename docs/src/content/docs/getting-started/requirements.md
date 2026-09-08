@@ -18,8 +18,7 @@ machine must carry no other workload.
 | Python | Python 3 with PyYAML. Every tool is stdlib-only except the configuration reader, which parses `config/campaign.yaml`. | `python3 tools/gspwn_config.py` |
 | Line endings | LF. `.gitattributes` normalises every file on checkout, and a CRLF checkout makes the shell scripts unrunnable. | no automatic check |
 
-Development on Windows goes through WSL. See
-[Development](/gspwn/project/development/).
+Development on Windows goes through WSL.
 
 ## GPU
 
@@ -32,12 +31,6 @@ Turing and later carry the GSP microcontroller that `open-gpu-kernel-modules`
 depends on. Volta and earlier run the proprietary driver, whose Resource
 Manager ships as a prebuilt binary that KCOV cannot instrument, so
 coverage-guided kernel fuzzing does not work on those cards.
-
-Check the card before provisioning:
-
-```
-nvidia-smi --query-gpu=name --format=csv,noheader
-```
 
 Track U harnesses run in a container and never touch the card. Their coverage
 samples record the GPU column as `n/a`.
@@ -92,17 +85,21 @@ python3-yaml docker.io kdump-tools pstore-tools mokutil
 ## Go toolchain
 
 syzkaller builds on the host, and its pinned revision declares `go 1.26.0` in
-`go.mod`. Go 1.21 and later download that toolchain on demand under the default
-`GOTOOLCHAIN=auto`, so an `apt` package at 1.21 or later works where the module
-proxy is reachable. The upstream tarball installs the declared version directly
-and carries neither condition.
+`go.mod`. That is not the version the machine must carry. Go 1.21 and later
+read the directive and fetch the named toolchain on demand, because
+`GOTOOLCHAIN` defaults to `auto`, so a distribution package at 1.21 or later
+satisfies the build wherever `proxy.golang.org` is reachable.
 
 | Consumer | Requirement |
 |---|---|
-| `make` in the syzkaller tree | Go at or above the `go.mod` floor. The build stops on the directive otherwise, and `bin/syz-manager` is never produced |
+| `make` in the syzkaller tree | Go 1.21 or later. The build stops on the `go.mod` directive below that, under `GOTOOLCHAIN=local`, or with no route to `proxy.golang.org`, and `bin/syz-manager` is never produced |
 | `syzlang_gen.py compile` | `go` on `PATH` in the phase's own shell. Exit 3 means no verdict was reached, which is distinct from a description set that fails to compile |
 
-[Installation](/gspwn/getting-started/installation/) carries the commands.
+The upstream tarball is the recommended route even where an `apt` package would
+serve. It installs the declared version directly, keeps a multi-minute download
+off the build's critical path, and assumes no proxy access.
+[Installation](/gspwn/getting-started/installation/) step 7 carries the
+commands.
 
 ## Container runtime
 
@@ -140,7 +137,7 @@ The `provision` phase clones five repositories into `artifacts/src/`:
 | Directory | Contents |
 |---|---|
 | `linux` | Upstream stable branch matching the newest that `open-gpu-kernel-modules` supports |
-| `open-gpu-kernel-modules` | Latest production branch |
+| `open-gpu-kernel-modules` | Latest production branch. The surface inventories in this branch were taken from 610.57.04 |
 | `syzkaller` | master, built so `bin/syz-manager`, `bin/syz-db` and `bin/syz-prog2c` exist |
 | `nvidia-container-toolkit` | Track U target |
 | `libnvidia-container` | Track U target, the primary memory-safety surface |
@@ -163,7 +160,7 @@ password prompt.
 :::danger[This rule is equivalent to unrestricted root unless the repository is protected]
 If the agent user can write those scripts, it can write anything root would
 run. Keep the repository root-owned on the machine under test and grant the
-agent user read and execute only. No tool writes this sudoers rule; it is a
+agent user read and execute only. No tool writes this sudoers rule. It is a
 deliberate human step, validated with `visudo -f /etc/sudoers.d/gspwn`.
 :::
 
@@ -173,8 +170,8 @@ Confirm the whole prerequisite set before starting a campaign:
 python3 tools/orchestrator_ctl.py preflight
 ```
 
-`preflight` checks the configuration, the agent command, passwordless sudo and
-disk headroom. It exits non-zero and lists what is missing.
+`preflight` checks the configuration, the agent command, passwordless sudo, the
+host binaries and disk headroom. It exits non-zero and lists what is missing.
 
 ## Disk
 

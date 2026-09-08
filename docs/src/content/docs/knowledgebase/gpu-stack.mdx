@@ -7,7 +7,7 @@ import GpuStack from '../../../components/GpuStack.astro';
 
 A GPU workload passes through eight layers between application code and silicon.
 Track K enters at L4 and lands in L3 and L2. Everything above L4 is replaced by
-the fuzzer; everything below L2 carries no instrumentation and therefore
+the fuzzer. Everything below L2 carries no instrumentation and therefore
 supports no finding.
 
 <GpuStack />
@@ -31,10 +31,10 @@ privilege. That is the reachability the threat model assumes.
 
 ## Instrumentation boundary
 
-The instrumentation boundary sits at L2. KCOV counts kernel-side reachable
-edges alone. A defect inside the GSP is invisible to it and surfaces only as a
-symptom such as an Xid. A campaign reports edge growth and a plateau estimate,
-and states no fraction of the driver as covered.
+The instrumentation boundary sits at L2. A defect inside the GSP is invisible
+to KCOV and surfaces only as a symptom such as an Xid. The consequences for a
+coverage figure are on
+[Threat model](/gspwn/architecture/threat-model/#gsp-coverage-blind-spot).
 
 ## Emulation requirements
 
@@ -54,12 +54,13 @@ machine.
 
 ## Rented instance properties
 
-| Property | Mechanism |
-| --- | --- |
-| Disposable machine | The campaign panics the kernel deliberately. The instance reboots, pstore and kdump preserve the evidence, and the pipeline resumes from `state/pipeline.json`. |
-| Correct attacker position | The same instance family, driver build and default `compute,utility` capability set a real tenant receives, so a reachability result transfers. |
-| Bounded blast radius | The GPU is passed through to one guest and the IOMMU fences its DMA to that guest. A panic reboots the guest. |
-| No provider boundary crossed | Everything under test runs inside the rented guest. Nothing in the design targets the hypervisor, and no finding claims to reach it. |
+A rented instance carries the instance family, driver build and default
+`compute,utility` capability set a real tenant receives, so a reachability
+result transfers. The campaign panics the kernel deliberately and the pipeline
+resumes after the reboot.
+[Blast radius](/gspwn/architecture/threat-model/#blast-radius) states what a
+panic reaches and [Cloud deployment](/gspwn/architecture/cloud-deployment/) the
+crash-capture path.
 
 ## See also
 

@@ -26,8 +26,8 @@ dispatch cycle itself.
 5. Record the result. `set-phase <phase> done` on confirmed evidence, or
    `set-phase <phase> blocked --notes "<why>"` when confirmation fails.
 
-Step 4 is a read of the filesystem. Sub-agents are isolated and hand off
-artifact paths, so the evidence a sub-agent returns is a claim about files. A
+Sub-agents are isolated and hand off artifact paths, so the evidence a
+sub-agent returns is a claim about files. A
 phase marked `done` on an unconfirmed claim leaves every later gate satisfied
 by having nothing to inspect, and the condition stays invisible until
 `round-end` measures the round, at which point the campaign hours are spent.
@@ -62,21 +62,31 @@ flowchart TB
   START["pipeline_ctl.py next"] --> SP{"a setup phase<br/>not done?"}
   SP -->|yes| P1["phase provision or build"]
   SP -->|no| RP{"a round phase<br/>not done?"}
-  RP -->|yes| FZ{"is it fuzz?"}
-  FZ -->|yes| P2["phase fuzz"]
-  FZ -->|no| LV{"fuzz done AND a run<br/>still inside its window?"}
-  LV -->|yes| W["wait<br/>block on campaign_ctl.py wait"]
-  LV -->|no| P3["that round phase"]
+  RP -->|yes| P3["that round phase"]
   RP -->|no| DE{"round decision<br/>recorded?"}
-  DE -->|no| D["decide<br/>run round-decide"]
+  DE -->|no| D["decide"]
   DE -->|"continue"| A["advance-round"]
   DE -->|"stop"| RE{"report done?"}
   RE -->|no| P4["phase report"]
   RE -->|yes| C["complete"]
+
+  P1 --> G
+  P3 --> G
+  D --> G
+  A --> G
+  P4 --> G
+  C --> G
+  G{"is the answer<br/>phase fuzz?"} -->|yes| OUT(["return it unchanged"])
+  G -->|no| FD{"is fuzz done?"}
+  FD -->|no| OUT
+  FD -->|yes| LV{"a run attached to this round<br/>still inside its window?"}
+  LV -->|no| OUT
+  LV -->|yes| W(["wait<br/>block on campaign_ctl.py wait"])
 ```
 
-The `wait` branch prevents a phase from measuring a live campaign. `fuzz` is
-exempt from it, because `fuzz` starts the campaign the branch guards.
+The live-run check is applied to whatever the walk returned, so a live campaign
+suspends `decide`, `advance-round` and `complete` as well as a round phase.
+`fuzz` is exempt, because `fuzz` starts the campaign the check guards.
 
 A `blocked` or `failed` phase halts the walk at that phase. `round-advance`
 refuses to open a new round while one is present.
@@ -86,13 +96,13 @@ refuses to open a new round while one is present.
 | Rule | Scope | Enforced by |
 |---|---|---|
 | `describe`, `seeds` and `harness` may run concurrently after `build` | `PARALLEL_AFTER_BUILD` in `tools/pipeline_state.py` | The phase-ordering integrity check exempts the trio from each other |
-| A background sub-agent is allowed for `fuzz` and for the parallel trio | `AGENTS.md` | The orchestrator contract |
-| A timed-out sub-agent is resumed | Any phase | The orchestrator contract |
+| A background sub-agent is allowed for `fuzz`, a long-running monitor, and for the parallel trio | `AGENTS.md` | The orchestrator contract |
+| A timed-out sub-agent is resumed, and its work is not restarted from the beginning | Any phase | The orchestrator contract |
 | Every read-modify-write of the state file runs inside one transaction | All tools | An exclusive `flock` held across load, mutate and save |
 
-In round 1 `seeds` consumes the `NV_*` header that `describe` produces, so the
-trio is independent from round 2 onward, once the header and
-`tools/ioctl_map.json` exist.
+The trio is independent in round 1 as in every later round. `seeds` reads
+`tools/ioctl_map.json`, which is committed and pre-populated, so it takes no
+input from `describe`.
 
 A bare load-and-save pair loses updates when two parallel sub-agents write
 between the load and the save. See
@@ -116,7 +126,7 @@ sequenceDiagram
   M->>M: pick a corpus program, mutate it
   M->>E: send the program
   E->>KC: enable coverage for this task
-  E->>D: ioctl on /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm
+  E->>D: ioctl on a modelled node, one of seven command families
   D-->>E: return value
   E->>KC: read the trace
   KC-->>E: covered PCs
@@ -150,9 +160,7 @@ sampling has to survive the panics this loop produces.
 | 4 | Sampler | Reports an edge count climbing steeply back towards its previous value |
 | 5 | `coverage_ctl.py` | Accumulates the y axis with a running maximum, so the replay contributes zero |
 
-Without step 5, a saturated run reports tens of percent of growth after each
-panic, and a campaign that has stopped finding edges continues on the strength
-of its own crashes. See
+The running maximum in step 5 is specified in
 [Coverage and plateau](/gspwn/architecture/coverage-and-plateau/).
 
 ## Halt conditions

@@ -6,11 +6,6 @@ description: The committed knowledge files, and the disclosure refusal.
 Appends to `knowledge/`: what the campaigns have taught, across all of them. Two
 files, `learnings.md` and `mistakes.md`, each with a fixed header.
 
-This is deliberately not part of `state/pipeline.json`. The state file records
-where this campaign is, resets its round phases every round, and is gitignored.
-These files record what is known, never reset, and are committed.
-`GSPWN_KNOWLEDGE` redirects the directory for the test suite.
-
 ## Responsibility
 
 The module owns the two knowledge files and their entry format. It is the sole
@@ -25,18 +20,12 @@ writer of `knowledge/`.
 | The two kinds stay separate | `KINDS` and `FILENAME` map each kind to its own file |
 | An entry is machine-timestamped | `cmd_note` stamps the heading, and the files are not hand-edited |
 
-## Interface
+## Operations
 
 | Subcommand | Purpose |
 |---|---|
-| `note --kind learning\|mistake --phase P "text" [--tags a,b]` | Append one entry |
+| `note` | Append one entry, tagged and stamped with its phase |
 | `show` | Read the knowledge files back |
-
-| Symbol | Returns |
-|---|---|
-| `KINDS` | `("learning", "mistake")` |
-| `FILENAME` | Kind to filename mapping |
-| `_entries(kind)` | Parsed entries for that kind, split on the heading |
 
 An entry is a Markdown heading carrying an ISO-8601 timestamp and the phase, an
 optional `Tags:` line, and the body.
@@ -86,22 +75,17 @@ the machine panics by design and `AGENTS.md` allows parallel sub-agents.
 
 ## Design notes
 
-`_entries` parses the format back by splitting on the heading, which is why the
-files are not hand-edited: the tool timestamps and locks, and a hand edit breaks
-the format.
+`_entries` parses the format back by splitting on the heading, so a hand edit
+breaks the format the parser depends on.
 
 Both file headers state the public-repository constraint, so a reader who opens
 the file directly sees it without reading the tool.
 
-`GSPWN_KNOWLEDGE` redirects the directory and exists so the test suite can point
-it at a temporary directory. Unlike the state file this has no per-run use:
+`GSPWN_KNOWLEDGE` redirects the directory so the test suite can point it at a
+temporary directory. Unlike the state file it has no per-run use, because
 knowledge is machine-independent and campaign-independent by design.
 
 `cmd_note` prints a repository-relative path when the file is inside the
 repository, and the absolute path otherwise, because a redirected directory
 would print a run of `..` segments.
 
-## See also
-
-- [knowledge_ctl.py reference](/gspwn/reference/cli/knowledge-ctl/)
-- [Security and disclosure](/gspwn/project/security/)

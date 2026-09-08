@@ -3,10 +3,10 @@ title: Historical targeting
 description: "The third steering signal. NVIDIA's bulletins name the release that fixed each CVE, the driver's 216 release tags let that release be diffed, and the changed functions join to the ioctl surface."
 ---
 
-Two of the campaign's three steering signals come from the campaign itself.
-Coverage says where the fuzzer has not been, derived by `refine` from the run's
-own curve. Findings say where bugs have been found, derived by `rca` from
-crashes this campaign produced. Both are empty before anything has run, which
+Two of the campaign's three steering signals come from the campaign itself:
+coverage, derived by `refine` from the run's own curve, and findings, derived
+by `rca` from crashes this campaign produced. Both are empty before anything
+has run, which
 left round 1 following the structural priority order alone across the 531
 non-privileged control commands that have a kernel-side handler.
 
@@ -74,7 +74,7 @@ reaches.
 
 | Excluded | Reason |
 |---|---|
-| `kernel-open/nvidia-drm/`, `kernel-open/nvidia-modeset/`, `src/nvidia-modeset/` | Out of scope by threat model. The nodes exist only under the `graphics` or `display` container capability |
+| `kernel-open/nvidia-drm/`, `kernel-open/nvidia-modeset/`, `src/nvidia-modeset/` | Excluded when the filter was written, on the reading that those nodes reach a container only under the `graphics` or `display` capability. The CDI injection path has since been traced and both node families are in scope, so this exclusion is a known gap in the historical signal and not a threat-model boundary. See [Threat model](/gspwn/architecture/threat-model/) |
 | `kernel-open/nvidia-peermem/` | An RDMA peer-memory shim with no ioctl of its own |
 | `src/nvidia/generated/` | NVOC output, regenerated wholesale on every release. Opt back in with `--include-generated` |
 
@@ -161,6 +161,7 @@ it as `[surface]`. The tag orders the queue and gates nothing.
 | The bulletin names a public release, and the commit may be earlier | For CVE-2024-53869 the R550 bulletin row names `550.144.03`, and `550.142` already carries the hunk. A branch can receive a fix before the release the bulletin names |
 | A fix outside the open modules is invisible | The user-mode driver, the GSP firmware image and `nvidia-modeset` all ship in the same driver package and none of them is in this repository |
 | The signal table is a heuristic | It fires on ordinary refactoring and misses a fix expressed as a data-structure change. Its only job is ordering the reading queue |
+| Two of the seven command families carry no historical signal | The join reaches the RM control, UVM and escape inventories and the object graph. The `modeset` family, 64 targets, and the `drm` family, 24 targets, entered the denominator after the path filter was written and neither is diffed |
 | Frequency measures release churn until it is filtered | An unfiltered count ranks `nvidia.Kbuild`, the version headers and the GSP RPC poll loop above every handler. The ranking counts only same-branch releases under a footprint ceiling, and only named functions carrying a signal |
 
 ## Requires SUT

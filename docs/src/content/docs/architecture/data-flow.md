@@ -101,9 +101,9 @@ flowchart LR
 | The same, on `/var/crash` | `artifacts/crashes/kdump-<name>/` | The same | The campaign |
 | The same, on EC2 | `artifacts/crashes/console-output.log` | The same | The campaign |
 
-Harvest runs before anything else on the recovery path. pstore has a fixed size
-and frees a record only on unlink, so the next panic needs the space. Every
-pstore record is unlinked after it is copied.
+Harvest runs before anything else on the recovery path, and every pstore record
+is unlinked after it is copied. See
+[Durability](/gspwn/architecture/durability/).
 
 ### Registration
 
@@ -183,7 +183,7 @@ Three artifacts cross a round boundary.
 | The work list | `round.worklist` becoming `round.worklist_in` | `describe` and `seeds` |
 | The completion ledger | A file outside the state, keyed on the driver release | `surface-account`, and `round-decide` in every later round |
 
-The ledger is a third crossing and it outlives the campaign as well as the
+The ledger outlives the campaign as well as the
 round. A target closed as `chain-unbuildable` in round 2 stays closed in round
 6, so the surface curve is read by subtraction against a denominator that only
 shrinks.
@@ -211,6 +211,5 @@ after an unrecoverable GPU fault can have it detached and reattached. See
 
 ## See also
 
-- [Artifacts](/gspwn/reference/artifacts/)
-- [State file schema](/gspwn/reference/state-file/)
 - [Cloud deployment](/gspwn/architecture/cloud-deployment/)
+- [Durability](/gspwn/architecture/durability/)

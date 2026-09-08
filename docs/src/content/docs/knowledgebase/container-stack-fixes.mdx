@@ -18,6 +18,19 @@ container. The Go repository carries the C library as the git submodule
 names exactly one library commit. That pin is the link between the two
 histories and the evidence behind every mapping below.
 
+```mermaid
+flowchart LR
+  BUL["NVIDIA bulletin<br/>affected and updated version"]
+  REL["Toolkit release tag<br/>for example v1.17.4"]
+  GO["nvidia-container-toolkit commit<br/>Go: the hook, the CDI generator"]
+  PIN["Submodule pin<br/>third_party/libnvidia-container"]
+  C["libnvidia-container commit<br/>C: the mounts, ldconfig, device nodes"]
+
+  BUL -->|"names an updated version"| REL
+  REL --> GO
+  REL -->|"pins exactly one commit"| PIN --> C
+```
+
 ## Sources
 
 | Source | Coverage | Form |
@@ -58,8 +71,7 @@ change reached v1.17.4 through the maintenance branch as the plain commit
 
 ## Submodule pin per toolkit release
 
-Every mapping between a bulletin and a C-library commit runs through this
-table. A toolkit release ships exactly the library commit it pins.
+A toolkit release ships exactly the library commit it pins.
 
 | Toolkit release | Date | Pinned libnvidia-container commit |
 | --- | --- | --- |
@@ -79,15 +91,14 @@ table. A toolkit release ships exactly the library commit it pins.
 | v1.19.0 | 2026-03-10 | `7585946` |
 | v1.19.1 | 2026-05-21 | `7585946` |
 
-Two rows carry most of the weight. v1.16.2 advanced the pin across the four
-library commits that include `ad1f8c8`, and v1.17.4 advanced it to the
-`f23e5e5` security-fork merge.
+v1.16.2 advanced the pin across the four library commits that include
+`ad1f8c8`, and v1.17.4 advanced it to the `f23e5e5` security-fork merge.
 
 ## Disclosure to commit
 
-Evidence is stated per row and never assumed. A release-version match plus a
-diff whose mechanism matches the bulletin's own description of the fault counts
-as evidence. A plausible diff on its own does not, and those rows say so.
+A release-version match plus a diff whose mechanism matches the bulletin's own
+description of the fault counts as evidence. A plausible diff on its own does
+not, and those rows say so.
 
 | CVE | Updated version | Fix commits | Component | Evidence |
 | --- | --- | --- | --- | --- |
@@ -184,19 +195,11 @@ committed as `testdata/compat/libcuda.orin.13.2.1.so.1.1`.
 ## Reproducing this record
 
 `tools/patch_mine.py` performs the commit identification and the frequency
-counts mechanically against a checkout:
-
-```
-python3 tools/patch_mine.py \
-  --repo artifacts/src/libnvidia-container \
-  --since 2019-01-01 \
-  --out patches.json
-```
-
-The tool marks a commit as a fork merge or as a keyword hit and reports the
+counts mechanically against a checkout of either repository.
+It marks a commit as a fork merge or as a keyword hit and reports the
 earliest release tag containing it. It never asserts a CVE mapping. The mappings
 on this page were made by reading each diff against the bulletin's own
-description of the fault, and the evidence column states what carried each one.
+description of the fault.
 
 ## See also
 

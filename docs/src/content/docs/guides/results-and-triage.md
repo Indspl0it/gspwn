@@ -99,8 +99,8 @@ python3 tools/pipeline_ctl.py crash-set crash-0012 crash-0013 crash-0014 \
   --duplicate-of crash-0003
 ```
 
-The call is all-or-nothing. A rejected id aborts the whole transaction, so the
-queue is never left half-decided. Group only what has actually been read.
+The call is all-or-nothing: a rejected id aborts the whole transaction. Group
+only what has actually been read.
 
 ## Correcting a mistake
 
@@ -113,8 +113,7 @@ queue. Without that, the crash would keep `status=duplicate` with nothing to
 duplicate and stay excluded from the RCA queue.
 
 `--status duplicate` without a `--duplicate-of` link is refused: a crash that
-leaves the queue must record what it duplicates. An unlinked entry has been
-dropped from the queue with no triage decision behind it.
+leaves the queue must record what it duplicates.
 
 ## Xid classification
 
@@ -136,7 +135,7 @@ The default for an unlisted Xid is `review`, because a new driver branch can
 introduce an Xid the table has never seen, and a `noise` default would discard
 the one class of finding the campaign exists to produce.
 
-Full table: [Xid classification](/gspwn/reference/xid-classification/).
+Full table: Xid classification.
 
 Reclassifying is recorded as a judgement in the crash entry. An Xid classed
 `noise` that looks like a finding gets a note saying why before it is promoted.
@@ -179,8 +178,11 @@ python3 tools/pipeline_ctl.py validate
 state is consistent
 ```
 
-`validate` must print that before the triage gate holds. What it catches is
-listed in [State file schema](/gspwn/reference/state-file/).
+`validate` must print that before the triage gate holds. It catches a phase
+marked done ahead of its dependency, a duplicate with no link to a surviving
+entry, a crash analysed by `rca` with no research record, an impact record
+whose consequence outruns its primitive, and dedup settings that moved
+underneath the registry's stored hashes.
 
 ## See also
 

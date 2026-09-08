@@ -26,31 +26,11 @@ one derived value.
 Sections: `track_k`, `track_u`, `loop`, `orchestrator`, `agent`, `coverage`,
 `poc`, `triage`.
 
-## Interface
-
-| Function | Returns | Raises |
-|---|---|---|
-| `load(path=None)` | The whole effective configuration, validated | `ConfigError` |
-| `cached(path=None)` | The same, memoised until the file changes on disk | `ConfigError` |
-| `validate(cfg)` | `cfg` | `ConfigError` listing every problem |
-| `loop(path=None)` | The `loop` section | `ConfigError` |
-| `agent(path=None)` | The `agent` section, read by `brief` and `crash-list` | `ConfigError` |
-| `triage(path=None)` | The `triage` section, the dedup depths | `ConfigError` |
-| `coverage(path=None)` | The `coverage` section, the plateau tunables | `ConfigError` |
-| `poc(path=None)` | The `poc` section, the reproduction tunables | `ConfigError` |
-| `manager_url(path=None)` | The syz-manager base URL derived from `track_k.http` | `ConfigError` |
-
-Exported constants: `DEFAULTS`, `CONFIG_PATH`, `SESSION_PLACEHOLDER`,
-`ConfigError`.
-
-The command form prints the effective configuration as JSON, then the
-behaviour that configuration produces.
-
 ## Callers
 
 | Direction | Modules |
 |---|---|
-| Imports this module | `pipeline_ctl.py`, `campaign_ctl.py`, `coverage_ctl.py`, `crash_parse.py`, `repro_ctl.py`, `orchestrator_ctl.py`, `corpus_ctl.py` |
+| Imports this module | `pipeline_ctl.py`, `campaign_ctl.py`, `coverage_ctl.py`, `crash_parse.py`, `repro_ctl.py`, `orchestrator_ctl.py`, `corpus_ctl.py`, `regression_check.py`, and `surface_cov.py` lazily for the unpack timeout |
 | This module imports | Nothing in `tools/` |
 
 ## Failure modes
@@ -87,8 +67,8 @@ snapshot across a long operation read once and pass the dict down.
 `bool` is an `int` subclass in Python, so every numeric predicate excludes it
 explicitly. `loop.max_rounds: true` would otherwise validate as the integer 1.
 
-Caps that count things are integers. `loop.max_rounds: 2.5` fails validation; a
-float truncates in one place and compares as 2.5 in another.
+`loop.max_rounds: 2.5` fails validation, because a float truncates in one place
+and compares as 2.5 in another.
 
 The systemd byte-spec rule exists because an unvalidated `12GB` is accepted by
 YAML and fails only when systemd refuses to load the unit on the target
@@ -103,13 +83,10 @@ double quote. It is substituted into a shell command line the operator has
 already quoted, and a quote in it would end that quoting and hand the rest to
 the shell.
 
-`main` prints the effective configuration and then the behaviour it produces.
-The JSON dump reports the settings; the summary reports their effect. The
-horizon note fires when `coverage.horizon_hours` and `loop.campaign_hours`
+The horizon note fires when `coverage.horizon_hours` and `loop.campaign_hours`
 differ, because the verdict then covers a different window from the one the
 next campaign runs for.
 
 ## See also
 
-- [gspwn_config.py reference](/gspwn/reference/cli/gspwn-config/)
 - [Configuration keys](/gspwn/reference/configuration/)

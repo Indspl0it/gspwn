@@ -3,15 +3,12 @@ title: Throughput against depth
 description: Which knobs change how fast a campaign runs, and which change what it concludes.
 ---
 
-Two kinds of value live in `config/campaign.yaml`. One kind changes how much
-work a campaign gets through. The other changes what the campaign concludes
-from that work.
+Two kinds of value live in `config/campaign.yaml`.
 
 ## Knobs that change throughput
 
-Changing these makes a campaign faster or slower. The verdict rules are
-untouched, so a curve measured under a new value is still comparable in kind to
-an old one, though not in magnitude.
+The verdict rules are untouched, so a curve measured under a new value is still
+comparable in kind to an old one, though not in magnitude.
 
 | Key | Effect | Cost |
 |---|---|---|
@@ -92,8 +89,8 @@ decision the verdict authorises is another campaign of that length.
 ## Dedup depth
 
 `triage.stack_hash_frames` fails in both directions. Fewer frames merge
-distinct bugs that share a common caller; more frames split one bug whose stack
-varies by an inlined frame.
+distinct bugs that share a common caller, and more frames split one bug whose
+stack varies by an inlined frame.
 
 `triage.frameless_signature_lines` and `triage.frameless_signature_chars`
 govern the identity of a report with no usable stack at all. A narrow value
@@ -138,8 +135,7 @@ python3 tools/coverage_ctl.py compare --run-id r2-1 --against r1-1
 Comparing runs is only meaningful when each had its own workdir and corpus policy. See campaign_ctl.py --corpus.
 ```
 
-Runs sharing a workdir shared an evolved corpus, so the comparison describes
-that shared corpus and carries no information about the change under test.
+See [Corpus and seeds](/gspwn/guides/corpus-and-seeds/#comparing-runs).
 
 ## See also
 

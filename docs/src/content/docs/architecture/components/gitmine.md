@@ -6,9 +6,9 @@ description: The git-mining mechanism the two patch miners share, the deletion r
 Holds the git mechanics both patch miners need, in one implementation.
 `patch_mine.py` mines the container stack for Track U and `cve_patch_map.py`
 mines the driver for Track K. The two miners stay separate because their
-repositories, their fix signals and their output schemas all differ. Both
-duplicated a git wrapper, hunk-header parsing, function attribution from a
-`-U0` diff, and release-tag mapping.
+repositories, their fix signals and their output schemas all differ. Both need
+a git wrapper, hunk-header parsing, function attribution from a `-U0` diff, and
+release-tag mapping.
 
 This is a library. It has no subcommands and no entry point.
 
@@ -26,60 +26,6 @@ no output schema, so nothing in it is specific to a repository.
 | A hunk body ends where its header says it ends | The body consumes exactly `old_count` removed and `new_count` added lines, so a body line beginning `++` is never read as a file header |
 | One git invocation cannot hang the miner | `timeout` defaults to `GIT_TIMEOUT_SECONDS`, 300 seconds |
 | A release-candidate tag is not a release | `RELEASE_TAG_RE` matches three dot-separated numbers, optionally `v`-prefixed, and nothing else |
-
-## Interface
-
-Errors and configuration:
-
-| Name | Signature | Returns |
-|---|---|---|
-| `GitError` | `class GitError(RuntimeError)` | Raised on a non-zero exit or a timeout |
-| `GIT_TIMEOUT_SECONDS` | `int` | `GSPWN_GIT_TIMEOUT_SECONDS`, default 300 |
-| `GIT_CONFIG_ARGS` | `tuple[str, ...]` | The three pinned `-c` overrides |
-
-Git invocation:
-
-| Signature | Returns |
-|---|---|
-| `run_git(repo, args, error=GitError, timeout=None)` | stdout as `str`. `args` holds the arguments after the global options, `error` is the exception class raised on failure, and `timeout` is seconds |
-| `list_tags(repo, error=GitError)` | `list[str]` in git's own order, blank lines dropped |
-
-Release tags:
-
-| Signature | Returns |
-|---|---|
-| `version_key(tag)` | `tuple[int, ...]`, placing `v1.9.0` below `v1.17.0` |
-| `first_release_tag(repo, sha, pattern=RELEASE_TAG_RE, error=GitError)` | The earliest tag matching `pattern` that contains `sha`, or `None` |
-| `previous_tag(repo, ref, error=GitError)` | `git describe --tags --abbrev=0 <ref>`, stripped. Raises `error` when `ref` has no tagged ancestor |
-| `RELEASE_TAG_RE` | `re.Pattern`, `^v?\d+\.\d+\.\d+$` |
-
-Diff parsing:
-
-| Signature | Returns |
-|---|---|
-| `parse_unified_diff(text)` | `list[DiffFile]` |
-| `parse_hunk_header(line)` | A `Hunk` with empty `added` and `removed`, or `None` |
-| `HUNK_HEADER_RE` | `re.Pattern` with five groups: old start, old count, new start, new count, trailing context |
-
-Function attribution:
-
-| Signature | Returns |
-|---|---|
-| `context_function(context)` | The last identifier before an open parenthesis in a hunk header's trailing context, or `None` |
-| `function_ranges(text)` | `list[tuple[str, int, int]]` of name, first line and last line, 1-based and inclusive, for one C translation unit |
-| `declarator_name(lines, brace_index)` | The name in the declarator above a column-zero opening brace, or `None`. `lines` is the file split on newlines and `brace_index` is 0-based |
-| `enclosing(ranges, line)` | The innermost range holding a 1-based line, or `None` |
-
-## Record shapes
-
-`DiffFile` is a namedtuple of `old_path`, `new_path`, `status` and `hunks`.
-`old_path` is `None` for an added file and `new_path` is `None` for a deleted
-one. A rename is `modified` with the two paths differing.
-
-`Hunk` is a namedtuple of `old_start`, `old_count`, `new_start`, `new_count`,
-`context`, `added` and `removed`. A count absent from the header is 1, per the
-unified diff format. `context` is the header's trailing text, stripped. `added`
-and `removed` hold the line texts with the leading `+` or `-` removed.
 
 ## Callers
 
@@ -140,18 +86,16 @@ Recognition at the entry header resets the file name, the hunk list and the
 line budget, and every subsequent line of the entry is skipped, including its
 `---` and `+++` pair. Recognition at the hunk header arrives after the file
 header has already produced a record, so that record is popped. Either route
-drops the whole entry. A caller that reaches this with combined input gets no
-record at all.
+drops the whole entry.
 
 ## Design notes
 
-The deletion rule closes the defect the extraction was written around.
-`patch_mine.changed_functions` tested `line.startswith("+++ b/")` and then
-compared the remainder against `/dev/null`. The line never matched the prefix
-test, so the remainder was never compared, the guard branch was unreachable,
-and the current file name kept pointing at the previous entry.
+Both defects the extraction closed were in file-header handling.
+`patch_mine.changed_functions` tested `line.startswith("+++ b/")` before
+comparing the remainder against `/dev/null`, so the guard branch was
+unreachable and the current file name kept pointing at the previous entry.
 
-The fix moves no mined number on either container repository today. A
+The deletion fix moves no mined number on either container repository. A
 whole-file deletion hunk starts at pre-image line 1, and git derives a hunk
 header's trailing context by scanning backwards from the line above the hunk,
 so every deletion hunk carries an empty context. The old loop skipped an empty
@@ -160,15 +104,11 @@ hand and no function name was derived from it. All 11 fix candidates across the
 two repositories that delete a file were run through both attribution rules,
 and no file list and no function map differs.
 
-The guard held only by accident, because it depended on a property of git's
-output that nothing in the parser asserted.
-
-The line-budget parser closes a second defect in the same class. Neither old
-parser tracked where a hunk body ends: `patch_mine` treated any line beginning
-`+++ b/` as a file header, and `cve_patch_map` dropped any body line beginning
-`+++` or `---` from its added and removed lists. A test fixture committing a
-line whose own text is `++ b/injected.c` produced a file list holding
-`injected.c`, a path the commit never touched, ranked as a hot spot.
+Neither old parser tracked where a hunk body ends. `patch_mine` treated any
+line beginning `+++ b/` as a file header, and `cve_patch_map` dropped any body
+line beginning `+++` or `---` from its added and removed lists. A test fixture
+committing a line whose own text is `++ b/injected.c` produced a file list
+holding `injected.c`, a path the commit never touched, ranked as a hot spot.
 
 The timeout default is 300 seconds, where `surface_verify.py` uses 30.
 `open-gpu-kernel-modules` carries 216 tags and `git tag --contains` runs once

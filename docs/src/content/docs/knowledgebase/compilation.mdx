@@ -3,11 +3,9 @@ title: Compilation pipeline
 description: "Source to PTX to SASS to fatbin, what -arch and -code select, when the driver compiles at load time, and one binary traced onto a newer GPU."
 ---
 
-CUDA device code passes through two compilers and two instruction sets. The
-first instruction set is virtual and forward-compatible; the second is
-architecture-specific and has no compatibility guarantee across major versions.
-Which one a binary carries determines whether it runs on a GPU released after
-it was built.
+CUDA device code passes through two compilers and two instruction sets. Which
+one a binary carries determines whether it runs on a GPU released after it was
+built.
 
 ```mermaid
 flowchart TB
@@ -127,14 +125,10 @@ an H100 at compute capability 9.0.
 5. The driver finds the `compute_80` PTX and passes it to
    `libnvidia-ptxjitcompiler.so`, which compiles it for `sm_90`.
 6. The result is cached under `~/.nv/ComputeCache`. The first launch is delayed
-   by the compilation; later runs of the same binary skip step 5.
+   by the compilation. Later runs of the same binary skip step 5.
 7. The kernel runs, using no Hopper-specific feature. Thread block clusters and
    the tensor memory accelerator are unreachable from `compute_80` PTX, so the
    code is correct and leaves the new hardware idle.
-
-Step 7 is the cost of relying on the just-in-time path. It preserves
-correctness across a generation and gives none of the generation's new
-capability.
 
 ## See also
 

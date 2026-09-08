@@ -9,8 +9,8 @@ commands of an ordering, and the describe phase's work order asks for the same
 ordering.
 
 The ordering this module replaced was a four-value ladder on the SDK class id,
-hardcoded in the generator. That ladder read no measurement and put 216 of the
-531 commands in one bucket, separating nothing inside it.
+hardcoded in the generator. It read no measurement and put 216 of the 531
+commands in one bucket.
 
 The module runs off the driver source tree and the committed artefacts. It
 reaches no device, opens no socket, and needs no GPU.
@@ -32,22 +32,12 @@ It writes only that file.
 | A handler with more than one definition resolves the same way every run | `SUFFIX_RANK` orders `IMPL`, `KERNEL`, `PHYSICAL`, `VF`, then sorted path, then line number. 8 of the 531 carry more than one candidate |
 | A null `impl_file` is distinguishable from a scan that failed | `impl_state` reads `resolved` or `no hand-written definition`, and `impl_suffix` names the suffix that won |
 
-## Interface
+## Operations
 
 | Subcommand | Output |
 |---|---|
-| `rank [--src DIR] [--control PATH] [--chains PATH] [--hotspots PATH] [--sizes PATH] [--out PATH]` | `rm-control-rank.json`: one record per targetable command, the counts block, the source block and the weighting |
-| `report [--rank PATH] [--top N]` | The head of the ranking as a table |
-
-| Function | Returns |
-|---|---|
-| `scan_impl_definitions(src)` | Handler name to `(file, line, suffix)` for every hand-written definition under `src/`, over the four suffixes `IMPL`, `KERNEL`, `PHYSICAL` and `VF` |
-| `hotspot_index(hotspots)` | The by-file and by-function lookups, built from the two JSON arrays |
-| `chain_index(chains)` | Owning class to chain length, target class and no-chain reason |
-| `targetable(control)` | The methods the inventory marks reachable by an unprivileged client |
-| `build_records(...)` | One record per command, with the three raw measurements attached |
-| `score_records(rows)` | The same records carrying `rank_components`, `rank_score` and `rank` |
-| `sort_key(row)` | The ordering tuple, reachability first |
+| `rank` | `rm-control-rank.json`: one record per targetable command, the counts block, the source block and the weighting |
+| `report` | The head of the ranking as a table |
 
 ## Record fields
 
@@ -71,15 +61,15 @@ It writes only that file.
 
 ## Failure modes
 
-| Condition | Behaviour | Exit |
-|---|---|---|
-| An input artefact is absent | Message naming the file and stating the ranking cannot be computed without it | 1 |
-| An input artefact does not parse | Message naming the file and the parse error | 1 |
-| The control inventory carries no `methods` array | Message naming the file | 1 |
-| `cve-hotspots.json` carries no `hotspots` object | Message naming the file | 1 |
-| The `src` tree is absent under `--src` | Message naming the path and the flag to override it | 1 |
-| A handler resolves to no implementation file | `impl_file` and `impl_line` are null, `impl_state` reads `no hand-written definition`, and the CVE component scores zero | 0 |
-| A parameter struct has no measured size | `param_size_state` is `unmeasured` and the size component scores zero | 0 |
+| Condition | Behaviour |
+|---|---|
+| An input artefact is absent | Message naming the file and stating the ranking cannot be computed without it |
+| An input artefact does not parse | Message naming the file and the parse error |
+| The control inventory carries no `methods` array | Message naming the file |
+| `cve-hotspots.json` carries no `hotspots` object | Message naming the file |
+| The `src` tree is absent under `--src` | Message naming the path and the flag to override it |
+| A handler resolves to no implementation file | `impl_file` and `impl_line` are null, `impl_state` reads `no hand-written definition`, and the CVE component scores zero |
+| A parameter struct has no measured size | `param_size_state` is `unmeasured` and the size component scores zero |
 
 ## Concurrency and durability
 
@@ -103,8 +93,6 @@ phase invokes it once.
 
 ## Design notes
 
-The score is a weighted sum of three normalised components.
-
 ```
 rank_score = 0.50 * depth + 0.30 * cve + 0.20 * size
 ```
@@ -115,21 +103,19 @@ rank_score = 0.50 * depth + 0.30 * cve + 0.20 * size
 | `cve` | Driver releases that changed the handler's function, or the file holding it | `log2(releases + 1) / log2(max + 1)`, with a function-level match scaled by 1.5 |
 | `size` | Bytes of attacker-controlled parameter struct, from `ctrl-param-sizes.json` | `log2(bytes + 1) / log2(max + 1)` |
 
-The weights are a judgement no measurement settles, and no campaign has run to
-tune them against. All three components are written out beside the score, so a
-consumer that disagrees re-sorts without re-running the scan.
+A consumer that disagrees with the weights re-sorts on `rank_components`
+without re-running the scan.
 
 The definition scan gives the CVE component a non-zero value. Control handlers
 are declared in the NVOC generated tables the inventory reads and defined
 elsewhere under a suffix: `subdeviceCtrlCmdGpuGetInfoV2` is defined as
-`subdeviceCtrlCmdGpuGetInfoV2_IMPL`. The hot-spot file names implementation
-files, so a join on the inventory's own `source` field matches nothing.
+`subdeviceCtrlCmdGpuGetInfoV2_IMPL`.
 
 Four suffixes are accepted. `_IMPL` is the sole implementation wherever there
 is no HAL split. Where there is one, the NVOC table dispatches to a per-variant
-symbol instead: `_KERNEL` and `_PHYSICAL` divide the kernel-side and GSP-side
-halves, and `_VF` is the SR-IOV guest variant. All four are hand-written code
-with their own release history, which is the only property the CVE join needs.
+symbol: `_KERNEL` and `_PHYSICAL` divide the kernel-side and GSP-side halves,
+and `_VF` is the SR-IOV guest variant. All four are hand-written code with
+their own release history, which is the only property the CVE join needs.
 
 | Measure | Count |
 |---|---|
@@ -146,16 +132,13 @@ forwards to `kgrctxCtrlHandle`. A null `impl_file` is the correct reading for
 them, `impl_state` says so, and their `cve_file_releases` of 0 is not a scan
 failure.
 
-The reordering against the ladder is substantial and it moves nothing in the
-shipping invocation. With no `--max-control` cap the ordering decides the order
-of the emitted blocks and nothing else, so `nvidia_ctrl.txt` and
-`nvidia_structs.txt` are permutations of the pre-change files with identical
-line multisets. Two consumers read the order: `--max-control`, and the describe
-phase's work order.
+With no `--max-control` cap the ordering decides the order of the emitted
+blocks and nothing else, so `nvidia_ctrl.txt` and `nvidia_structs.txt` are
+permutations of the pre-change files with identical line multisets.
 
-`impl_file` and `impl_line` are provenance for the inventory and they sit on
-the rank record. Merging them into `rm-control-inventory.json` belongs with
-`ctrl_surface.py`, which is the module that writes that file.
+`impl_file` and `impl_line` are provenance for the inventory and sit on the
+rank record. Merging them into `rm-control-inventory.json` belongs with
+`ctrl_surface.py`, which writes that file.
 
 ## Stated limits
 

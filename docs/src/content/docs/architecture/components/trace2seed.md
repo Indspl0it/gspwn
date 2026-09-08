@@ -16,9 +16,6 @@ real workloads are difficult for random generation to produce. `chains` exists
 because `NV_ESC_RM_CONTROL` and `NV_ESC_RM_ALLOC` dispatch on a field inside the
 parameter struct that no trace records.
 
-The module is self-contained: it imports nothing from `tools/` and nothing in
-`tools/` imports it.
-
 ## Responsibility
 
 The module owns the strace-to-syzlang translation and the ioctl request lookup.
@@ -39,55 +36,27 @@ It writes only the seed file it names.
 | No chain-shaped program exceeds syzkaller's call limit | `--max-calls`, default 40, splits a command list and repeats the prologue |
 | Every targetable control command is accounted for | The run reports emitted commands plus commands with no chain, and reads the artefact's `unresolved_owning_classes` block so the base classes with no `RS_ENTRY` row are counted |
 
-## Interface
+## Output
 
-| Subcommand | Arguments | Output |
-|---|---|---|
-| `convert` | `--trace`, `--out-dir`, `--map` defaulting to `tools/ioctl_map.json` | One `seed-NNNN.syz`, and a summary line counting mapped calls, unmapped requests and multiplexer calls carrying no decodable command |
-| `chains` | `--chains`, `--rank`, `--no-rank`, `--descriptions`, `--out-dir`, `--max-calls` | One `chain-<class>-NN.syz` per prologue, and a per-class account of the commands no chain reaches |
+Conversion writes one `seed-NNNN.syz` per trace, plus a summary counting mapped
+calls, unmapped requests, and multiplexer calls carrying no decodable command.
+The chain mode writes one `chain-<class>-NN.syz` per prologue, plus a per-class
+account of the commands no chain reaches.
 
-The pre-subcommand form `--trace X --out-dir Y` routes to `convert`, so a
-script written against the older command line keeps working. `--max-calls`
-reads `GSPWN_SEED_MAX_CALLS` for its default and falls back to 40.
+Nothing is dropped in silence. A request the decoder cannot interpret, and a
+request number the map does not carry, are both emitted as comments inside the
+seed and counted in the printed ratio, so a map gap is visible in the artefact
+itself. A trace naming an out-of-scope device is refused with a comment naming
+it, because a call name the description set does not declare fails the
+syzkaller parse gate and takes the whole seed bank down with it.
 
-| Function | Returns |
-|---|---|
-| `convert(trace_text, ioctl_map, multiplexers=None)` | The generated program text |
-| `parse_request(raw)` | The ioctl request number, or `None` when the argument cannot be interpreted |
-| `dev_desc(path)` | The syzlang description for a device path |
-| `load_map(path)` | The request-number to call-name map, comment keys dropped, and the multiplexer records |
-| `declared_calls(desc_dir)` | Call name to pinned request number, read off the description set |
-| `reachable(paths, path)` | Whether a built prologue already covers one chain path |
-| `group_chains(paths)` | The greedy prologue grouping, on commands per allocation |
-| `buildable_paths(paths, declared, max_calls)` | The chains whose every allocation step has a declared variant and whose prologue fits the call limit |
-| `unreached(chains)` | The owning classes no chain reaches, with the reason and the command count |
+The chain mode refuses to run at all when the artefact it reads is absent or
+carries a schema it does not recognise, and names the command that regenerates
+it. A single chain whose deepest allocation has no declared variant is dropped
+before the grouping, so the shorter chains it covered keep their commands.
 
-Exported constants: `DEV_TO_DESC`, `OUT_OF_SCOPE`, `AT_FDCWD`.
-
-## Callers
-
-| Direction | Modules |
-|---|---|
-| Imports this module | Nothing at run time. `selftest.py` exercises `convert`, `parse_request` and `dev_desc` |
-| This module imports | Nothing in `tools/` |
-
-## Failure modes
-
-| Condition | Behaviour |
-|---|---|
-| Request argument is a symbolic name the decoder cannot interpret | `parse_request` returns `None` and the call is emitted as a comment |
-| Request number absent from the map | Emitted as `# unmapped ioctl` and counted in the printed ratio |
-| Trace references an out-of-scope device | Refused with a comment naming the device |
-| Trace contains bytes that are not valid text | Read with `errors="replace"` |
-| Output directory has gaps in its seed numbering | The lowest unused index is used, so no existing file is overwritten |
-| Map file contains `comment` keys | They are ignored on load |
-| A request number is recorded twice in the multiplexer section | Refused, naming the number |
-| A multiplexer record carries no parameter struct | Refused, naming the record |
-| `chains` runs with `rm-chains.json` absent | Exits, naming `tools/object_graph.py chains` as the remedy |
-| `chains` runs with the ranking absent and no `--rank` | Warning, and the commands fall back to handler-name order |
-| `--rank` names a file that does not exist | Exits, naming the flag |
-| A chain artefact of the wrong schema | Refused, naming the schema it expected |
-| A chain's deepest allocation has no declared variant | That chain alone is dropped, before the grouping, so the shorter chains it covered keep their commands |
+An existing seed is never overwritten. The output name is the lowest unused
+index, so a bank with gaps in its numbering does not collide.
 
 ## Concurrency and durability
 
@@ -116,15 +85,9 @@ testable.
 
 ## Design notes
 
-An unmapped ioctl is emitted as a comment, so the ratio in the output line is
-meaningful and the missing entries are visible in the seed itself.
-
 The `_IOC` decoder handles hex and decimal fields, and a direction that either
 combines `_IOC_READ` and `_IOC_WRITE` or is numeric. The reassembled request is
 `dir << 30 | size << 16 | type << 8 | nr`.
-
-Map keys beginning with `comment` are ignored, so notes can be kept in
-the file.
 
 `close` removes the descriptor from the tracking table and emits a `close` on
 the resource, so the generated program's object lifetimes match the workload's.
@@ -147,9 +110,6 @@ family a command-targeted call would come from. `convert` writes a comment:
 # A trace carries the object chain and the fd lifecycle and cannot carry those commands.
 # The command-targeted programs come from `tools/trace2seed.py chains`.
 ```
-
-The summary line carries a third count, so the seeds gate separates a real map
-gap from a call the map cannot hold.
 
 `convert` counts multiplexer calls per request number and not per escape, so
 one escape traced under two calling forms is reported as two. `request_size()`
@@ -212,10 +172,8 @@ no chain for ProfilerBase, so its 9 command(s) reach no program: no RS_ENTRY row
 | 4 | 18 | 95 |
 | 5 | 1 | 1 |
 
-No prologue is one allocation long. A class whose own path is a prefix of a
-longer path is allocated on the way, so `RmClientResource`'s 91 commands sit
-behind the three-allocation subdevice prologue and not behind a program of
-their own.
+No prologue is one allocation long. `RmClientResource`'s 91 commands sit behind
+the three-allocation subdevice prologue.
 
 The largest group is `NV01_ROOT -> NV01_DEVICE_0 -> NV20_SUBDEVICE_0`, carrying
 315 commands. That reproduces the `cumulative_reach` figure in `rm-chains.json`
@@ -230,8 +188,7 @@ The saving, counted in allocation calls the fuzzer executes to reach the same
 | Chain-shaped, `--max-calls 40` | 142 |
 
 1365 is the sum of `chain_length` over the 514 chained commands. 142 is the
-count of `ioctl$NV_ESC_RM_ALLOC_*` lines across the 44 emitted programs. Both
-count calls a fuzzer would issue and neither is a coverage measurement.
+count of `ioctl$NV_ESC_RM_ALLOC_*` lines across the 44 emitted programs.
 
 Program count against the call limit is 58 at `--max-calls 20`, 44 at 40 and 41
 at 60. The prologue, chain and command counts do not move with the limit.
@@ -270,4 +227,4 @@ the first run that has a syzkaller tree to compile against.
 - [Seeds from traces](/gspwn/guides/generating-seeds-from-traces/)
 - [object_graph.py](/gspwn/architecture/components/object-graph/)
 - [ctrl_rank.py](/gspwn/architecture/components/ctrl-rank/)
-- [trace2seed.py reference](/gspwn/reference/cli/trace2seed/)
+- [trace2seed.py reference](/gspwn/architecture/components/trace2seed/)

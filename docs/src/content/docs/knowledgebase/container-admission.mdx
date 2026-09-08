@@ -92,9 +92,6 @@ See [Container device access](/gspwn/knowledgebase/container-device-access/).
 6. `runc start` executes the entrypoint. The process sees `/dev/nvidiactl` and
    a `libcuda.so` matching the host driver, and can open both.
 
-Steps 3 through 5 all run as root on the host. Step 6 is the first one that
-runs as the image's user.
-
 ## See also
 
 - [Partitioning modes](/gspwn/knowledgebase/partitioning/)

@@ -1,6 +1,6 @@
 ---
 title: Spend accounting
-description: How run-hours are derived from coverage samples, the two billing points, the scope of the ledger, and the two places the cap is enforced.
+description: How run-hours are derived from coverage samples, the two billing points, the reconciliation between the ledger and the state file, and the two places the cap is enforced.
 ---
 
 `loop.max_total_run_hours` is the ceiling an unattended loop spends against.
@@ -22,10 +22,10 @@ hours = (max(ts) - min(ts)) / 3600
 | The run left no usable samples, and `campaign_ctl.py` is billing | The configured window, from the install event | `configured window (no usable coverage samples)` |
 | The run left no usable samples, and `round-end` is billing | Nothing. `round-end` declines, so the `campaign_ctl.py` fallback stands | A warning naming the run |
 
-A run that died after three hours does not bill the configured twenty-four:
+A run that died after three hours does not bill the configured thousand:
 
 ```
-billed 24.00 run-hours for run r2-1 (configured window (no usable coverage samples); campaign window elapsed)
+billed 1000.00 run-hours for run r2-1 (configured window (no usable coverage samples); campaign window elapsed)
 ```
 
 A run with no samples at all bills nothing, and the tool reports that case
@@ -50,8 +50,10 @@ flowchart LR
   SS["status --run-id<br/>deadline already passed"] --> MH
   RE["round-end --from-run"] --> MH
 
-  LG --> CB["check_budget()<br/>at every campaign install"]
-  LG --> LD["loop_decision()<br/>at every round-decide"]
+  LG --> RX["spend_for_budget()<br/>reconcile the ledger against<br/>the state file, take the larger"]
+  PJ[("state/pipeline.json<br/>round.run_hours_by_run")] --> RX
+  RX --> CB["check_budget()<br/>at every campaign install"]
+  RX --> LD["loop_decision()<br/>at every round-decide"]
   CB -->|"spent + hours &gt; cap"| REF["refuse the install"]
   LD -->|"spent &gt;= cap"| STOP["stop, and refuse an override"]
 ```
@@ -86,12 +88,8 @@ run, so `round.run_hours` accumulates across calls.
 Re-billing a run id corrects its entry, and adjusts the round total by the
 delta.
 
-```
-python3 tools/pipeline_ctl.py round-end --from-run r2-1 --from-run r2-2
-```
-
-Each run is measured and billed independently. A campaign left off the command
-is never billed.
+Each run named at a round's close is measured and billed independently, and a
+campaign left off that list is never billed.
 
 ## Hours entered by hand
 
@@ -131,16 +129,31 @@ error: spend ledger state/spend.json is missing, but the state file records 47.2
 | Ledger absent, no hours recorded in the state file | Return 0.0 and start normally |
 | Ledger absent, hours recorded in the state file | Raise `SpendLedgerMissing` |
 
-Every command that reads spend raises through this path. A fallback to zero
-hands the loop a fresh budget with no indication that hours were already spent.
-The exception carries its own remediation, and callers surface it. No caller
-substitutes a spend figure of its own.
+Every command that reads spend raises through this path, and no caller
+substitutes a spend figure of its own. A fallback to zero hands the loop a
+fresh budget with no indication that hours were already spent.
+
+## Reconciliation
+
+The campaign-start guard reads both records and takes the larger. A ledger that
+exists is not the same as a ledger that received every write: a billing call
+that fails on permissions warns and returns, and in an unattended loop nothing
+reads that warning. Closing a round has the same failure by another route,
+because the round's hours are saved first and the ledger write follows, so a
+write that raises leaves the hours on record and out of the ledger. Either way
+the ledger sits below what the state file recorded, the cap reads headroom that
+was already spent, and the loop keeps admitting campaigns.
+
+| Comparison | Reading | Figure used |
+|---|---|---|
+| Ledger at or above the state file | The ordinary case. The ledger is machine-global and the state file covers one pipeline, so the ledger standing higher says nothing | The ledger |
+| Ledger below the state file | Writes were lost, because every billed run should have reached the ledger | The state file, with a warning naming the gap |
+
+```
+WARNING: spend ledger state/spend.json holds 3200.0 run-hours while the state file records 4100.0. 900.0 h of spend never reached the ledger, most likely a write that failed on permissions. Using the larger figure so the cap counts what actually ran. Fix the ledger's ownership and re-run: python3 tools/pipeline_ctl.py spend-init
+```
 
 ## Re-seeding
-
-```
-python3 tools/pipeline_ctl.py spend-init
-```
 
 `seed_spend_ledger()` rebuilds the ledger from what the state file already
 recorded.
@@ -178,7 +191,7 @@ budget stops the loop on its own, and takes precedence while coverage is still
 growing.
 
 ```
-error: computed decision is stop (run-hour budget spent (216.0 of 216.0 h)). A budget or round-cap stop cannot be overridden
+error: computed decision is stop (run-hour budget spent (5000.0 of 5000.0 h)). A budget or round-cap stop cannot be overridden
 ```
 
 | Stop reason | Overridable with `--decision continue --reason` |
@@ -197,8 +210,7 @@ error: computed decision is stop (run-hour budget spent (216.0 of 216.0 h)). A b
 | `state/spend.json.lock` | `state/spend.json` | The whole read-modify-write |
 
 The two are separate, so billing a run is safe while a state transaction is
-open. One lock covering both deadlocks the moment `round-end` bills inside its
-own transaction.
+open.
 
 After a root write, the ledger and its lock are handed back to `$SUDO_USER`.
 `campaign_ctl.py start` and `stop` run as root, and every later non-root

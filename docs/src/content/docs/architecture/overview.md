@@ -5,9 +5,8 @@ description: The five layers, the four state stores, the round loop, and the mec
 
 gspwn drives a fuzzing campaign against the NVIDIA GPU kernel driver (Track K)
 and the NVIDIA Container Toolkit (Track U) with no human at the console. It is
-built in five layers: systemd units, one orchestrating agent, twelve sub-agents,
-deterministic tools, and four state stores. Track K fuzzing panics the machine
-as a normal part of its work, so no layer holds durable state in a process.
+built in five layers. Track K fuzzing panics the machine as a normal part of
+its work, so no layer holds durable state in a process.
 
 ## Layers
 
@@ -35,9 +34,10 @@ flowchart TB
     COV["gspwn-coverage.timer"]
   end
 
-  ORCH -->|"dispatches, one per phase"| SA["sub-agents<br/>agents/*.md"]
+  ORCH -->|"harvests, then launches"| AG["the orchestrating agent<br/>executing AGENTS.md"]
+  AG -->|"dispatches, one per phase"| SA["sub-agents<br/>agents/*.md"]
   SA -->|"invokes"| T["tools/*.py<br/>the only writers"]
-  ORCH -->|"next, brief, set-phase"| T
+  AG -->|"next, brief, set-phase"| T
 
   T -->|"atomic write under flock"| PJ[("state/pipeline.json<br/>execution position")]
   T -->|"idempotent per run id"| SJ[("state/spend.json<br/>run-hour ledger")]
@@ -67,13 +67,13 @@ written into `state/pipeline.json` is lost when the box is rebuilt.
 
 `state/spend.json` is machine-global. `GSPWN_STATE` redirects
 `state/pipeline.json` so a side run keeps its own registry. The ledger does
-not follow it, so that run still counts against `loop.max_total_run_hours`.
+not follow it, so that run still counts against `loop.max_total_run_hours`,
+which is checked at every campaign install and at every round decision. See
+[Spend accounting](/gspwn/architecture/spend-accounting/).
 
 Three locks cover these stores. `state/.pipeline.lock` follows `GSPWN_STATE` and
 sits beside the file it protects. `state/spend.json.lock` and `state/repro.lock`
-do not follow it. One lock covering both the state file and the ledger deadlocks
-when `round-end` bills a run inside its own state transaction. See
-[Durability](/gspwn/architecture/durability/).
+do not follow it. See [Durability](/gspwn/architecture/durability/).
 
 ## The round loop
 
@@ -123,9 +123,6 @@ Entry conditions, carried state and termination for all ten loops are in
 
 ## Crash resilience
 
-The kernel dies, the agent dies with it, and the campaign resumes with no memory
-of the session that started it.
-
 | Mechanism | Implementation | Failure it prevents |
 |---|---|---|
 | Durable position | `state/pipeline.json`, rendered by `pipeline_ctl.py brief`, which derives its output at read time | A resumed agent cannot locate the pipeline and restarts phases that already ran |
@@ -134,7 +131,7 @@ of the session that started it.
 | Exclusive transactions | An `flock` held across the whole read-modify-write cycle | Parallel `describe`, `seeds` and `harness` sub-agents overwrite each other's updates |
 | Process supervision | `gspwn-orchestrator.service`, `Restart=always`, `RestartSec=60` | The pipeline stops at the first panic and waits for a human to log in |
 | Circuit breaker | Same-boot starts and reboots counted separately inside `orchestrator.window_min`, against `orchestrator.max_same_boot_starts` and `orchestrator.max_reboots`. A trip records the block and exits 78, which systemd does not restart | A crash-looping agent restarts forever with no token ceiling. Separate counters keep expected panic reboots from tripping the same limit |
-| Launch cap | `orchestrator.max_agent_hours` kills the process group of a launch that exceeds it | A stalled agent holds the pipeline open while the instance bills |
+| Launch cap | `orchestrator.max_agent_hours` kills the process group of a launch that exceeds it. It is 0 in the shipped configuration, which disables it, and a non-zero value has to exceed `loop.campaign_hours` because `fuzz` waits out the whole window inside one launch | A stalled agent holds the pipeline open while the instance bills |
 | Deadline on disk | `artifacts/runs/<run-id>/deadline` holds one absolute epoch second, `fsync`ed at install. `gspwn-deadline@<run-id>.timer` rechecks it every `loop.deadline_check_min` and after each boot. A lost file is reconstructed from the install event in the state file | A one-shot timer dies with the machine and the campaign runs past its window unbounded |
 | Stop plus disable | Deadline enforcement runs `systemctl stop` and `systemctl disable` on both fuzz units | An enabled `Restart=always` unit resumes fuzzing at the next boot, after the campaign was stopped |
 | Idempotent billing | `record_run_hours` overwrites the entry for a run id | A `round-end` retried after an interruption bills the campaign twice against `loop.max_total_run_hours` |
@@ -150,6 +147,7 @@ sequenceDiagram
   participant SD as systemd
   participant OC as orchestrator_ctl.py run
   participant T as tools
+  participant AG as the agent
   participant ST as state/pipeline.json
 
   K->>PS: KASAN report and panic record persisted
@@ -158,54 +156,39 @@ sequenceDiagram
   SD->>SD: gspwn-deadline@<run-id>.timer returns, OnBootSec
   SD->>OC: start the unit, Restart=always RestartSec=60
   OC->>OC: breaker check against orchestrator.window_min
+  OC->>OC: resolve the session id and store it BEFORE launching
   OC->>ST: is the pipeline drivable?
   ST-->>OC: blocked, complete or unreadable state exits 78
   OC->>T: crashlog_ctl.py harvest, as root
   T->>PS: copy every record out, then unlink it
   T->>ST: recovered crashes reach the registry at triage
-  OC->>T: pipeline_ctl.py brief
-  T->>ST: read
-  ST-->>OC: position, crash registry, findings, knowledge tail
-  OC->>OC: launch an agent, bounded by orchestrator.max_agent_hours
+  OC->>AG: launch, bounded by orchestrator.max_agent_hours
+  Note over OC,AG: a resumed launch carries the anchor telling the agent<br/>its last turn predates the interruption
+  AG->>ST: read the position through pipeline_ctl.py brief
+  ST-->>AG: position, crash registry, findings, knowledge tail
+  AG->>AG: continue from the phase it reports
 ```
+
+The orchestrator harvests and launches. The agent reads the position as its
+first act, because the position is derived at read time and a copy taken before
+the launch would already be stale.
 
 A harvest failure warns and does not stop the launch. A blocked phase, a
 complete pipeline or an unreadable state file exits 78, and systemd leaves the
-unit stopped until `orchestrator_ctl.py reset`.
+unit stopped until the breaker is reset. `orchestrator.max_agent_hours` is 0 in
+the shipped configuration, which disables the per-launch wall-clock ceiling and
+leaves the circuit breaker as the only bound on a stalled agent.
 
-### Manual recovery
-
-Three commands restore the position after a panic, a reboot, a session restart
-or a compacted context:
-
-```
-sudo python3 tools/crashlog_ctl.py harvest
-python3 tools/pipeline_ctl.py brief
-python3 tools/pipeline_ctl.py next
-```
-
-`brief` is derived from the state file at read time, so a stored copy of it goes
-out of date as soon as the pipeline moves. `gspwn-orchestrator.service` runs the
-first two commands and launches an agent.
-
-## Enforcement points
-
-| Property | Enforced by |
-|---|---|
-| A campaign ends on time | A deadline file plus a per-run systemd timer, which survives reboots and needs no follow-up command |
-| The run-hour budget is not overshot | A machine-global ledger, checked at every campaign install and at every round decision |
-| A round is measured over its whole campaign | `next` returning `wait`, and `round-end` refusing a live campaign |
-| A dead GPU is not reported as a plateau | The GPU status recorded in every Track K coverage sample |
-| A campaign stops on measured completion and not on a round count | The completion ledger, read by `round-decide` before `loop.max_rounds`, which is a backstop |
-| An unattended agent cannot loop forever | A circuit breaker on starts, a wall-clock cap on one launch, and an exit code systemd will not restart |
-| Crash evidence survives a panic | pstore and kdump, harvested before anything else on resume |
-| A write survives a panic mid-write | A temporary file, `fsync`, an atomic rename, and an `fsync` of the directory |
+The same sequence restores the position by hand after a panic, a reboot, a
+session restart or a compacted context: harvest the crash evidence, read the
+recorded position, ask what comes next. The position is derived from the state
+file at read time, so a stored copy of it goes out of date as soon as the
+pipeline moves.
 
 ## Refusal conditions
 
-Each condition causes the named command to exit non-zero without producing a
-result. The shared failure class is a broken measurement path that returns a
-well-formed wrong number.
+The shared failure class is a broken measurement path that returns a well-formed
+wrong number.
 
 | Condition | Tool and command | Behaviour | Rationale |
 |---|---|---|---|

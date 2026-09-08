@@ -1,24 +1,104 @@
 ---
 title: Attack surface
-description: "The Track K surface measured from driver source. 34 escapes, 1372 control methods, 222 object classes, and the 531 commands where a kernel-side bug can be seen."
+description: "The Track K surface measured from driver source: 852 targets across seven command families, 351 enumerated and excluded, and the object chaining that decides whether any of it is reached."
 ---
 
 Every number on this page is derived from a checkout of
 `NVIDIA/open-gpu-kernel-modules` at `610.57.04`, commit `e4a5faa`, together
 with `libnvidia-container` and `nvidia-container-toolkit`. No GPU took part.
 
-Three commands regenerate the inventories from a checkout:
+The version is read from `NVIDIA_VERSION` in the checkout's `version.mk`, never
+from a running driver, so the inventories describe the source they were built
+from and not whatever card happens to be in the machine.
+
+Five commands regenerate the inventories from a checkout:
 
 | Tool | Output |
 |---|---|
-| [`ioctl_inventory.py`](/gspwn/architecture/components/ioctl-inventory/) | The escape and UVM commands, their parameter structs and their request numbers |
+| [`ioctl_inventory.py`](/gspwn/architecture/components/ioctl-inventory/) | The escape and UVM commands, their parameter structs and their request numbers, and the driver's registered entry points |
 | [`ctrl_surface.py`](/gspwn/architecture/components/ctrl-surface/) | The RM control command space and its privilege classification |
 | [`object_graph.py`](/gspwn/architecture/components/object-graph/) | The RM object allocation DAG and its chaining depth |
+| [`nvkms_inventory.py`](/gspwn/architecture/components/nvkms-inventory/) | The `/dev/nvidia-modeset` command family, its dispatch ordinals and its parameter structs |
+| `drm_inventory.py` | The `DRM_NVIDIA_*` command family on `/dev/dri`, with the permission flag and the node each command reaches |
 
-The records land under `surface/`, a committed tree. All ten artefacts
-travel with the repository, so a clean checkout runs the tools that consume
-them without a driver source tree. Producing them needs that tree; reading
-them does not.
+The records land under `surface/`, a committed tree of fourteen JSON artefacts
+plus the round-1 worklist. They travel with the repository, so a clean checkout
+runs the tools that consume them without a driver source tree. The
+[Enumerated surface](/gspwn/reference/surface/) pages render them: the escapes,
+the control commands, the allocation classes, the modeset commands, the DRM
+commands and the CVE record, one row per enumerated thing.
+
+## The measured denominator
+
+A campaign is measured against 852 targets across seven families. The families
+are the device-node command spaces the modelled attacker can issue. Every
+family total below is a count over the inventories.
+
+| Family | Targetable | Reached through |
+|---|---|---|
+| `escape` | 32 | `NV_ESC_*` on `/dev/nvidiactl` and `/dev/nvidiaN` |
+| `uvm` | 39 | `/dev/nvidia-uvm` |
+| `uvm_tools` | 7 | `/dev/nvidia-uvm-tools` |
+| `control` | 531 | `NV_ESC_RM_CONTROL`, the multiplexer behind escape 0x2A |
+| `alloc` | 155 | `NV_ESC_RM_ALLOC`, one per allocatable class |
+| `modeset` | 64 | `/dev/nvidia-modeset` |
+| `drm` | 24 | `/dev/dri/card*` and `/dev/dri/renderD*` |
+
+351 further commands are enumerated and excluded, in six groups.
+
+| Excluded | Count | Reason |
+|---|---|---|
+| `control_gsp` | 236 | The handler is compiled out and the parameter buffer crosses the RPC queue to GSP, where KCOV cannot follow |
+| `uvm_test` | 104 | Compiled out unless the module is built with `uvm_enable_builtin_tests=1` |
+| `drm_undispatched` | 4 | Declared at 0x19 to 0x1c and absent from `nv_drm_fops` |
+| `escape_dead` | 3 | Declared with no dispatch case, so no kernel code runs |
+| `escape_mux` | 2 | Multiplexers whose leaves are counted in the `control` and `alloc` families |
+| `modeset_undispatched` | 2 | Declared and not reached by the modeset dispatcher |
+
+```mermaid
+flowchart LR
+  ENUM["everything the inventories<br/>enumerate: 1203 commands"] --> SPLIT{"can the modelled<br/>attacker reach it, and<br/>can KCOV see it?"}
+  SPLIT -->|yes| DEN["852 targetable<br/>the campaign's denominator"]
+  SPLIT -->|no| EXC["351 excluded,<br/>each with a recorded reason"]
+
+  DEN --> F1["control 531"]
+  DEN --> F2["alloc 155"]
+  DEN --> F3["modeset 64"]
+  DEN --> F4["uvm 39"]
+  DEN --> F5["escape 32"]
+  DEN --> F6["drm 24"]
+  DEN --> F7["uvm_tools 7"]
+
+  EXC --> E1["control_gsp 236<br/>runs on GSP"]
+  EXC --> E2["uvm_test 104<br/>compiled out"]
+  EXC --> E3["drm_undispatched 4"]
+  EXC --> E4["escape_dead 3"]
+  EXC --> E5["escape_mux 2"]
+  EXC --> E6["modeset_undispatched 2"]
+```
+
+A campaign is complete when every one of the 852 is either exercised by a
+corpus program or carries a written reason in the completion ledger. The 351
+above are excluded before that ledger opens, so they are never counted as work
+remaining.
+
+The 852 figure is an upper bound on two counts, both measured. 16 control
+commands carry a capability check inside the handler body that the RMCTRL flag
+word does not expose, and that count is itself a floor because it comes from
+reading handlers. 2 DRM commands carry `DRM_MASTER` and reach a handler only
+while the opening file is the current DRM master.
+
+Entry points are counted apart from the command total and never inside it. The
+driver registers 42 entry points across every `file_operations` table it
+defines, and 24 of those sit on the six device nodes the campaign models. An
+entry point carries no method id, no parameter struct and no inventory row, so
+it cannot be a target in the same sense a command is.
+
+The description set that covers this denominator compiles to 957 syscalls, 181
+resources and 4939 types with 0 unsupported constructs, over 951 declared
+calls plus the six pseudo-syscalls the syzkaller compiler prepends. 72 static
+value families were derived from the parameter structs, of which 53 were
+accepted by the audit and bound to a field.
 
 The platform-side detail behind the numbers is in the knowledgebase:
 [RM control surface](/gspwn/knowledgebase/rm-control-surface/),
@@ -42,9 +122,6 @@ were left unresolved, so every request number in the table is computed and not
 estimated.
 
 ## Effort allocation across the control space
-
-The control multiplexer holds the surface, and most of it is not where KASAN
-can see a bug.
 
 | Set | Count | Consequence |
 |---|---|---|
@@ -131,8 +208,7 @@ and records one chain per owning class in
 | 15 | 455 | 86% | `SemaphoreSurface` |
 | 38 | 514 | 97% | `ZbcApi` |
 
-Nothing unlocks beyond 38 allocations. Three allocations reach 59% of the
-control surface and four reach 63%.
+Nothing unlocks beyond 38 allocations.
 
 The greedy step buys the class with the highest command count per allocation
 the built set does not already hold, and every class allocated along the way
@@ -152,7 +228,7 @@ reach these numbers describe is unverified.
 | Reached by no chain | 17 |
 | Internal classes carrying an unprivileged chain | 82 of the 98 recorded |
 
-The three counts are different measurements and none replaces another. All
+The three counts are different measurements. All
 531 name an owning class in the control inventory. 516 of those name a class
 the object graph carries an `RS_ENTRY` record for, the 15 absent belonging to
 `ProfilerBase` (9) and `Memory` (6). 514 of those have a chain an unprivileged
@@ -171,7 +247,7 @@ completion ledger closes under `chain-unbuildable` and `needs-privilege`.
 
 Four surfaces are reachable by the modelled attacker and were absent from the
 [threat model](/gspwn/architecture/threat-model/) until this measurement. Each
-is now named there. The evidence for each is below.
+is now named there.
 
 ### NV04_DISPLAY_COMMON and 20 control commands
 
@@ -197,9 +273,8 @@ parameter shape appears at the client level as
 
 The display *channel* tree is closed. `NVC570_DISPLAY` and all 38 classes
 below it carry `RS_FLAGS_ALLOC_PRIVILEGED`, and zero unprivileged classes sit
-in that subtree. The exclusion holds there on the privilege flag, which is a
-stronger argument than the device-node one and belongs in the threat model
-next to it.
+in that subtree, so the exclusion holds there on the privilege flag as well as
+on the device-node list.
 
 ### NVSwitch nodes, reachable through the image environment
 

@@ -5,9 +5,7 @@ sidebar:
   order: 5
 ---
 
-Round 1 runs from a provisioned machine to a recorded round outcome. Each
-section below names the sub-agent that carries the phase out, the commands it
-runs, and the evidence its gate needs.
+Round 1 runs from a provisioned machine to a recorded round outcome.
 
 The orchestrator asks `pipeline_ctl.py next` what to run, dispatches the
 sub-agent for that phase, confirms the gate evidence on disk, and records the
@@ -104,8 +102,8 @@ sudo JOBS=$(nproc) LINUX_SRC=artifacts/src/linux \
 ```
 
 Rungs 2 and 3 add `SKIP_KERNEL=1`. Only the NVIDIA module CFLAGS differ between
-rungs. The kernel image is identical, and rebuilding it per rung spends hours
-of machine time from the same budget as the fuzzing.
+rungs, so rebuilding the identical kernel image per rung spends hours of
+machine time from the same budget as the fuzzing.
 
 The script sets the GRUB default to the entry it installed and verifies the
 setting persisted, so the reboot needs no manual step. Reboot, then check the
@@ -133,10 +131,9 @@ Authors syzlang descriptions for the ioctl surface of `/dev/nvidiactl`,
 `/dev/nvidiaX`, `/dev/nvidia-uvm[-tools]` and `/dev/nvidia-modeset`. Every
 number and struct layout comes from the driver source, because the ABI shifts
 between branches and a wrong direction bit produces descriptions that compile,
-run and never reach the driver. `nvidia-drm` and `/dev/dri/*` sit inside the
-tenant surface on the CDI injection path, which a stock instance resolves to,
-and carry no descriptions in this branch. They are reachable surface outside
-the modelled denominator.
+run and never reach the driver. `/dev/dri/card*` and `/dev/dri/renderD*` are
+modelled too, under the `ioctl$DRM_NVIDIA_*`, `mmap$dri*` and `poll$dri*`
+patterns. See [Scope and targets](/gspwn/guides/scope-and-targets/).
 
 Agent-authored descriptions are treated as untrusted until measured, so the
 gate needs four items:
@@ -149,8 +146,9 @@ gate needs four items:
 
 ### seeds
 
-Builds the seed bank from two sources. `convert` turns an strace of a real
-CUDA workload into seed programs:
+Builds the seed bank from the two sources
+[Seeds from traces](/gspwn/guides/generating-seeds-from-traces/) covers in
+full. `convert` turns an strace of a real CUDA workload into seed programs:
 
 ```
 strace -v -f -P /dev/nvidiactl -P /dev/nvidia0 -P /dev/nvidia-uvm \
@@ -168,11 +166,8 @@ The three counts depend on the workload. No CUDA workload trace has been
 captured in this repository, so the numbers above are the shape of the line and
 not a measurement.
 
-Read the unmapped ratio. Unmapped requests become comments, so a
-mostly-unmapped seed is an open-and-close chain that exercises nothing.
-Extend `tools/ioctl_map.json` and re-run. The multiplexer count is never a
-map gap, because `strace` decodes no NVIDIA parameter struct and no trace names
-a control command.
+Read the unmapped ratio: extend `tools/ioctl_map.json` and re-run the
+conversion. The multiplexer count is never a map gap.
 
 `chains` covers those commands from the allocation graph:
 
@@ -186,8 +181,7 @@ wrote 44 chain-shaped program(s) to artifacts/seeds: 36 prologue(s) over 38 dist
 ```
 
 Four `no chain for <class>` lines sit between the two shown, one per owning
-class, each naming the command count and the reason. Those 17 commands belong
-in the completion ledger.
+class. Those 17 commands belong in the completion ledger.
 
 ### harness
 
@@ -204,9 +198,9 @@ looks. The harness names go into `track_u.targets` in `config/campaign.yaml`.
 
 ## 4. fuzz
 
-Pick one run id of the form `r<round>-<n>` covering both tracks. Track U data
-lives under `artifacts/runs/<id>/u/`, and the sampler and the deadline timer
-key on the single id, so per-track ids leave Track U unsampled.
+Pick one run id of the form `r<round>-<n>` covering both tracks. Per-track ids
+leave Track U unsampled. See
+[Running a campaign](/gspwn/guides/running-a-campaign/).
 
 ```
 python3 tools/campaign_ctl.py gen-config --run-id r1-1
@@ -221,7 +215,7 @@ python3 tools/pipeline_ctl.py round-add-run --run-id r1-1
 `install-k` prints the window it wrote and the budget it checked:
 
 ```
-campaign window: 24 h (stops at epoch 1786000000, enforced by gspwn-deadline@r1-1.timer); budget 0.0 of 216 run-hours spent before this campaign
+campaign window: 1000 h (stops at epoch 1786000000, enforced by gspwn-deadline@r1-1.timer); budget 0.0 of 5000 run-hours spent before this campaign
 fresh corpus for run r1-1
 packed 12 seed program(s) from artifacts/seeds into artifacts/runs/r1-1/workdir/corpus.db (0 carried program(s) preserved)
 wrote artifacts/runs/r1-1/syz-manager.cfg (workdir artifacts/runs/r1-1/workdir)
@@ -257,8 +251,8 @@ python3 tools/campaign_ctl.py wait --run-id r1-1
 ```
 
 ```
-run r1-1: 23.9 h left of its campaign window (ends 2026-08-16 15:31:04)
-run r1-1: 23.9 h left of its campaign window (ends 2026-08-16 15:31:04)
+run r1-1: 999.4 h left of its campaign window (ends 2026-09-27 04:12:11)
+run r1-1: 999.3 h left of its campaign window (ends 2026-09-27 04:12:11)
 ...
 run r1-1: campaign window has elapsed
 ```
@@ -268,8 +262,8 @@ same deadline when the command is re-run after the reboot.
 
 :::caution[The campaign window is the gate]
 Every phase after `fuzz` measures the run. Advancing at half an hour into a
-24-hour campaign leaves `triage` scanning a nearly empty workdir, satisfies the
-later gates with no data to process, and bills a full campaign for thirty
+1000-hour campaign leaves `triage` scanning a nearly empty workdir, satisfies
+the later gates with no data to process, and bills a full campaign for thirty
 minutes of measurement. `pipeline_ctl.py next` reports `wait` while a campaign
 is live, and `round-end` refuses to measure one.
 :::
@@ -277,6 +271,8 @@ is live, and `round-end` refuses to measure one.
 ## 5. triage
 
 Turns raw crash artifacts into a deduplicated registry.
+[Results and triage](/gspwn/guides/results-and-triage/) covers the queue and
+the Xid classes in full.
 
 ```
 python3 tools/crash_parse.py --run-id r1-1
@@ -298,8 +294,8 @@ registry now holds 8 crashes
 1 flagged — every one needs a decision before the triage gate holds: python3 tools/pipeline_ctl.py crash-list --status flagged
 ```
 
-Work the flagged queue down. `crash-set` takes several ids and is
-all-or-nothing, so a rejected id leaves the queue untouched:
+Work the flagged queue down with `crash-set`, which takes several ids and is
+all-or-nothing:
 
 ```
 python3 tools/pipeline_ctl.py crash-set crash-0008 --duplicate-of crash-0003
@@ -349,8 +345,7 @@ with how many records can carry a severity.
 
 Turns unique crashes into verified reproducers. Stop the campaign first: a
 Track K run counts as a reproduction partly because the machine went down
-during it, and that inference holds only when the reproducer is the sole
-possible cause of the panic.
+during it, and the fuzzer panics this machine by design.
 
 ```
 python3 tools/repro_ctl.py extract crash-0001
@@ -365,10 +360,10 @@ run 2 (2/10 counted): clean
 crash-0001: 9/10 (90%) -> reliable [1 void run(s) excluded]
 ```
 
-Every Track K crash that reached reliable or flaky then takes a profile check:
-re-run the reproducer inside a container matching the threat model, as a
-non-root user, with the default capability set. Record one outcome per crash in
-the PoC README.
+Every Track K crash that reached reliable or flaky then takes the container
+profile check that
+[Reproducing a crash](/gspwn/guides/reproducing-a-crash/) gives the command
+for. Record one outcome per crash in the PoC README.
 
 | Outcome | Meaning |
 |---|---|
@@ -390,9 +385,9 @@ python3 tools/coverage_ctl.py series --run-id r1-1
 ```
 
 ```
-run r1-1 track k: 141 samples over 23.5 h
+run r1-1 track k: 5949 samples over 991.6 h
   sources: json:/stats?format=json
-  gpu: healthy across all 141 sample(s)
+  gpu: healthy across all 5949 sample(s)
   disk free: 412.6 GB -> 388.1 GB (low water 388.1 GB)
   edges: 18422 -> 41907 (+23485)
   corpus: 512 -> 4183
@@ -413,7 +408,7 @@ python3 tools/coverage_ctl.py plateau --run-id r1-1
 ```
 
 ```
-r1-1: growing (k: growing (41907 distinct edges after 3.41e+09 executions; beta 0.412, R2 0.987 over 68 samples. At 1.45e+08 exec/h another 24 h is expected to find ~1180 new edge(s), 2.8% more (plateau below 50)); u: growing (...))
+r1-1: growing (k: growing (41907 distinct edges after 1.44e+11 executions; beta 0.412, R2 0.987 over 2974 samples. At 1.45e+08 exec/h another 1000 h is expected to find ~13949 new edge(s), 33.3% more (plateau below 50)); u: growing (...))
 Coverage is kernel-side reachable code only. GSP firmware is not instrumented, so no verdict here says anything about it.
 ```
 
@@ -428,7 +423,7 @@ python3 tools/pipeline_ctl.py round-end --from-run r1-1 \
 ```
 
 ```
-round 1 closed: growing, crashes=6, run_h=23.5
+round 1 closed: growing, crashes=6, run_h=991.63
   measured from run r1-1: k: growing (...); u: growing (...)
 ```
 

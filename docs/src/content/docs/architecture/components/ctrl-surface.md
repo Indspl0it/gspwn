@@ -31,15 +31,9 @@ file it is given.
 | A table format change fails loudly | Zero parsed methods exits with a message naming the directory |
 | A flag bit the header does not name is preserved | Undecoded bits are recorded per record as `unknown_flag_bits` |
 
-## Interface
+## Output
 
 One invocation walks the generated directory and writes the inventory.
-
-| Flag | Effect | Default |
-|---|---|---|
-| `--src` | The open-gpu-kernel-modules checkout to read | `artifacts/src/open-gpu-kernel-modules` |
-| `--out` | The JSON inventory to write | `surface/rm-control-inventory.json` |
-| `-v`, `--verbose` | Logs every table found at DEBUG level | Off |
 
 Standard output carries the totals: methods, owning classes, driver version,
 the count in each privilege class, the test-only count, the count with no
@@ -52,24 +46,6 @@ prefix, the owning class, the handler and export symbol, the parameter struct,
 the raw flags with their decoded names, the access rights, the privilege
 class, the test-only and routing booleans, and the source file and line.
 
-| Function | Returns | Raises |
-|---|---|---|
-| `load_flag_defs(src_root)` | `{bit value: flag name}` from `control.h` | `SourceError` on a missing header, a multi-bit value, a duplicate bit, or a missing privilege flag |
-| `load_access_right_defs(src_root)` | `{bit value: right name}` from `rs_access.h` | `SourceError` on a missing header or an empty result |
-| `read_driver_version(src_root)` | The `NVIDIA_VERSION` string, or `None` | |
-| `decode_bits(value, defs)` | The names for the set bits, and a mask of the bits with no name | |
-| `classify_reachability(flag_names)` | One of `internal`, `privileged`, `non_privileged`, `kernel_only` | |
-| `parse_entry(lines, first_line_no, rel_path, table_class)` | `(fields, None)`, or `(None, reason)` when the entry is rejected | |
-| `scan_file(path, rel_path)` | `(entries, tables, rejected)` for one source file | |
-| `build_record(fields, flag_defs, access_defs)` | One inventory record | |
-| `summarise(records)` | The counts printed and written under `summary` | |
-| `collect(src_root)` | The whole inventory | `SourceError` on a missing generated directory, an unpopulated tree, or zero methods |
-| `write_json(inventory, out_path)` | `None` | `SourceError` when the directory or the file cannot be written |
-
-Exported constants: `SCHEMA`, `DEFAULT_SRC`, `DEFAULT_OUT`, `GENERATED_DIR`,
-`CONTROL_H`, `RS_ACCESS_H`, the `F_*` flag names, and the four `REACH_*`
-values.
-
 ## Callers
 
 | Direction | Modules |
@@ -79,23 +55,23 @@ values.
 
 ## Failure modes
 
-| Condition | Behaviour | Exit |
-|---|---|---|
-| `--src` is not a directory | Message naming the path | 2 |
-| `src/nvidia/generated/` absent under `--src` | Message naming the expected path and what `--src` should point at | 2 |
-| `control.h` or `rs_access.h` absent | Message naming the file and what it was being read for | 2 |
-| A `RMCTRL_FLAGS_*` value has more than one bit set | Message naming the flag, the file and the value | 2 |
-| `control.h` names none of the seven privilege flags the classifier reads | Message listing the missing names and stating the classification would be wrong | 2 |
-| The generated directory holds no `.c` files | Message stating the tree looks unpopulated | 2 |
-| Zero exported methods parsed | Message naming the directory and the expected table name | 2 |
-| The output directory cannot be created, or the file cannot be written | Message naming the path and the operating-system error | 2 |
-| An entry's gate constant disagrees with its flags | The entry is rejected, counted, and logged as a warning | 0 |
-| An entry's `pClassInfo` names another class | The entry is rejected, counted, and logged as a warning | 0 |
-| An entry lacks a field | The entry is rejected with the field named, counted, and logged as a warning | 0 |
-| An entry is not closed before end of file | The entry is rejected and counted | 0 |
-| `version.mk` absent or without `NVIDIA_VERSION` | `driver_version` reads null, and a warning is logged | 0 |
-| A source file holds bytes that are not valid text | Read with `errors="replace"` | 0 |
-| The output directory does not exist | Created, and the creation is logged | 0 |
+| Condition | Behaviour |
+|---|---|
+| `--src` is not a directory | Message naming the path |
+| `src/nvidia/generated/` absent under `--src` | Message naming the expected path and what `--src` should point at |
+| `control.h` or `rs_access.h` absent | Message naming the file and what it was being read for |
+| A `RMCTRL_FLAGS_*` value has more than one bit set | Message naming the flag, the file and the value |
+| `control.h` names none of the seven privilege flags the classifier reads | Message listing the missing names and stating the classification would be wrong |
+| The generated directory holds no `.c` files | Message stating the tree looks unpopulated |
+| Zero exported methods parsed | Message naming the directory and the expected table name |
+| The output directory cannot be created, or the file cannot be written | Message naming the path and the operating-system error |
+| An entry's gate constant disagrees with its flags | The entry is rejected, counted, and logged as a warning |
+| An entry's `pClassInfo` names another class | The entry is rejected, counted, and logged as a warning |
+| An entry lacks a field | The entry is rejected with the field named, counted, and logged as a warning |
+| An entry is not closed before end of file | The entry is rejected and counted |
+| `version.mk` absent or without `NVIDIA_VERSION` | `driver_version` reads null, and a warning is logged |
+| A source file holds bytes that are not valid text | Read with `errors="replace"` |
+| The output directory does not exist | Created, and the creation is logged |
 
 ## Concurrency and durability
 
