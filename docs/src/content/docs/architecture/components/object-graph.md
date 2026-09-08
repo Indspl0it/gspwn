@@ -203,7 +203,11 @@ Three limits bound the graph and everything derived from it.
   is gated, with at most 2 of its 8 members appearing together on any one part.
 - Nothing in CI runs `chains`, so the artefact goes stale against a driver
   bump. `regression_check.py derived` reports the drift against the control
-  inventory and does not repair it.
+  inventory and does not repair it. `regression_check.py reach` reports a
+  chain record whose reachability verdict disagrees with the handle type the
+  description set gives that owning class's commands, which is the disagreement
+  the `RS_ENTRY`-only join produced over the 15 `Memory` and `ProfilerBase`
+  commands.
 - No chain has been allocated. The cumulative-reach curve, the chain lengths
   and the 529 count are arithmetic over the `RS_ENTRY` table and the NVOC
   hierarchy. No GPU was

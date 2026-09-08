@@ -38,6 +38,7 @@ Usage: python3 tools/selftest.py [-v]      exit 0 = all passed
 import ast
 import collections
 import contextlib
+import copy
 import csv
 import fcntl
 import hashlib
@@ -13845,7 +13846,7 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
 
     def test_all_runs_the_checks_in_the_documented_order(self):
         self.assertEqual(regression_check.check_order(),
-                         ["names", "pins", "coverage", "derived",
+                         ["names", "pins", "coverage", "derived", "reach",
                           "families", "pages", "stale", "harnesses",
                           "agents", "figures", "citations", "commands"])
 
@@ -14527,16 +14528,16 @@ class TestHarnessTargetListsAgree(Phase0Fixtures):
 class TestTheTwoGuardsAreRegistered(unittest.TestCase):
     """Both guards run under `regression_check.py all`."""
 
-    def test_the_registry_holds_twelve_checks(self):
-        self.assertEqual(len(regression_check.check_order()), 12)
+    def test_the_registry_holds_thirteen_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 13)
 
     def test_both_guards_are_registered_and_ordered(self):
         for name in ("stale", "harnesses", "agents", "figures"):
             self.assertIn(name, regression_check.CHECKS, name)
             self.assertIn(name, regression_check.CHECK_ORDER, name)
 
-    def test_the_module_docstring_names_twelve_checks(self):
-        self.assertIn("Twelve CI checks", regression_check.__doc__)
+    def test_the_module_docstring_names_thirteen_checks(self):
+        self.assertIn("Thirteen CI checks", regression_check.__doc__)
 
     def test_the_workflow_runs_both_guards(self):
         with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
@@ -21480,7 +21481,7 @@ class TestStatedCheckCountsMatchTheRegistry(CheckSetFixtures):
 
     def test_a_count_equal_to_the_registry_passes(self):
         code, out = self.check(
-            "agents", AGENTS_DIR=self.brief(self.BRIEF % ("twelve", ".")))
+            "agents", AGENTS_DIR=self.brief(self.BRIEF % ("thirteen", ".")))
         self.assertEqual(code, 0, out)
         self.assertIn("stated count(s) of these checks", out)
 
@@ -21488,7 +21489,7 @@ class TestStatedCheckCountsMatchTheRegistry(CheckSetFixtures):
         code, out = self.check(
             "agents", AGENTS_DIR=self.brief(self.BRIEF % ("nine", ".")))
         self.assertEqual(code, 1)
-        self.assertIn("states 9 check(s) and the registry carries 12", out)
+        self.assertIn("states 9 check(s) and the registry carries 13", out)
 
     def test_a_count_written_in_digits_is_read(self):
         code, out = self.check(
@@ -21508,7 +21509,7 @@ class TestStatedCheckCountsMatchTheRegistry(CheckSetFixtures):
     def test_an_enumeration_short_of_the_set_names_what_it_omits(self):
         code, out = self.check("agents", AGENTS_DIR=self.brief(
             "# Probe\n\n`python3 tools/regression_check.py all` runs the "
-            "twelve checks: `names`, `pins`, `coverage`.\n"))
+            "thirteen checks: `names`, `pins`, `coverage`.\n"))
         self.assertEqual(code, 1)
         self.assertIn("the enumeration beside it omits", out)
         self.assertIn("commands", out)
@@ -21516,7 +21517,7 @@ class TestStatedCheckCountsMatchTheRegistry(CheckSetFixtures):
     def test_an_enumeration_of_the_whole_set_passes(self):
         code, out = self.check("agents", AGENTS_DIR=self.brief(
             "# Probe\n\n`python3 tools/regression_check.py all` runs the "
-            "twelve checks: %s.\n"
+            "thirteen checks: %s.\n"
             % ", ".join("`%s`" % n for n in regression_check.CHECK_ORDER)))
         self.assertEqual(code, 0, out)
 
@@ -25607,6 +25608,450 @@ def pipeline_ctl_cmd_round_end(args):
     """Import lazily: pipeline_ctl reads config at parser-build time only."""
     import pipeline_ctl
     return pipeline_ctl.cmd_round_end(args)
+
+
+# ---------------------------------------------------------------------------
+# ANCHOR-PHASE-9-REACH
+#
+# regression_check reach: the reachability surface/rm-chains.json reports for
+# an owning class and the handle type descriptions/generation.json gives that
+# class's commands.
+#
+# The passing case reads the committed artefacts, so a checkout missing one
+# fails here for the same reason the CI step fails. Every failing case builds
+# a scratch tree and points the module constants at it, which is the only way
+# to see an offender reported without editing a committed file.
+# ---------------------------------------------------------------------------
+
+
+class ReachFixtures(unittest.TestCase):
+    """A four-file scratch tree the check reads through its own constants.
+
+    The tree models one owning class, Widget, whose two allocatable external
+    classes give it a family resource, and one owning class, Gadget, with a
+    single external class and so a plain resource. Each case below moves one
+    statement in one file.
+    """
+
+    GRAPH = {
+        "record_count": 3,
+        "source": "a scratch tree",
+        "records": [
+            {"external_class": "NV01_WIDGET_A", "internal_class": "WidgetA",
+             "internal_ancestors": ["Object", "Widget"]},
+            {"external_class": "NV01_WIDGET_B", "internal_class": "WidgetB",
+             "internal_ancestors": ["Object", "Widget"]},
+            {"external_class": "NV01_GADGET", "internal_class": "Gadget",
+             "internal_ancestors": ["Object"]},
+        ],
+    }
+
+    ALLOCATIONS = [
+        {"class": "NV01_WIDGET_A", "resource": "nvh_nv01_widget_a"},
+        {"class": "NV01_WIDGET_B", "resource": "nvh_nv01_widget_b"},
+        {"class": "NV01_GADGET", "resource": "nvh_nv01_gadget"},
+    ]
+
+    CONTROL = [
+        {"handler": "widgetCtrlCmdPoke", "owning_class": "Widget",
+         "object_resource": "nvh_any_widget", "emitted": True},
+        {"handler": "gadgetCtrlCmdPoke", "owning_class": "Gadget",
+         "object_resource": "nvh_nv01_gadget", "emitted": True},
+    ]
+
+    CHAINS = {
+        "schema": "gspwn.rm-chains/1",
+        "source": "a scratch tree",
+        "chains": [
+            {"internal_class": "Widget",
+             "target_external_class": "NV01_WIDGET_B",
+             "chain": [{"external_class": "NV01_WIDGET_B"}],
+             "chain_borrowed_from": "WidgetB"},
+            {"internal_class": "Gadget",
+             "target_external_class": "NV01_GADGET",
+             "chain": [{"external_class": "NV01_GADGET"}],
+             "chain_borrowed_from": None},
+        ],
+        "unresolved_owning_classes": [],
+    }
+
+    def setUp(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.root = holder.name
+        os.makedirs(os.path.join(self.root, "descriptions"))
+        os.makedirs(os.path.join(self.root, "surface"))
+        self.addCleanup(_restore, _patched(
+            DESC_DIR=os.path.join(self.root, "descriptions"),
+            GENERATION=os.path.join(self.root, "descriptions",
+                                    "generation.json"),
+            CHAINS=os.path.join(self.root, "surface", "rm-chains.json"),
+            OBJECT_GRAPH=os.path.join(self.root, "surface",
+                                      "rm-object-graph.json")))
+
+    def write(self, relative, payload):
+        path = os.path.join(self.root, *relative.split("/"))
+        with open(path, "w", encoding="utf-8") as handle:
+            if isinstance(payload, str):
+                handle.write(payload)
+            else:
+                json.dump(payload, handle)
+        return path
+
+    def descriptions(self, control):
+        """The syzlang the manifest's control records describe.
+
+        One call per command and one parameter struct per call, with hObject
+        rendered as the resource the manifest records. A case that moves the
+        rendering passes its own text.
+        """
+        lines = []
+        for record in control:
+            name = "NV_ESC_RM_CONTROL_" + record["handler"]
+            struct = "nvos54_ctrl_" + record["handler"]
+            lines.append(
+                "ioctl$%s(fd fd_nvidiactl, cmd const[0xc020462a], "
+                "arg ptr[inout, %s])" % (name, struct))
+            lines.append("")
+            lines.append("%s {" % struct)
+            lines.append("\thClient\tnvh_nv01_root")
+            lines.append("\thObject\t%s" % record["object_resource"])
+            lines.append("}")
+            lines.append("")
+        self.write("descriptions/nvidia.txt", "\n".join(lines))
+
+    def tree(self, control=None, chains=None, graph=None, allocations=None,
+             text=None):
+        """Write one scratch tree, defaulting every file to the agreeing one."""
+        control = copy.deepcopy(self.CONTROL if control is None else control)
+        chains = copy.deepcopy(self.CHAINS if chains is None else chains)
+        graph = copy.deepcopy(self.GRAPH if graph is None else graph)
+        allocations = copy.deepcopy(self.ALLOCATIONS if allocations is None
+                                    else allocations)
+        self.write("descriptions/generation.json",
+                   {"generated_from": {"driver_version": "610.57.04"},
+                    "control": control, "allocations": allocations})
+        self.write("surface/rm-chains.json", chains)
+        self.write("surface/rm-object-graph.json", graph)
+        if text is None:
+            self.descriptions(control)
+        else:
+            self.write("descriptions/nvidia.txt", text)
+
+    def check(self):
+        """-> (exit code, stdout and stderr) for `reach`."""
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = regression_check.main(["reach"])
+        return code, out.getvalue() + err.getvalue()
+
+
+class TestReachJoinsTheChainArtefactToTheTypedHandles(ReachFixtures):
+    """The two artefacts state the same reachability and nothing compared
+    them.
+
+    tools/object_graph.py chains joined on RS_ENTRY rows alone, so the NVOC
+    base classes Memory and ProfilerBase carried no chain and their 15
+    commands sat under unresolved_owning_classes. tools/syzlang_gen.py emit
+    read internal_ancestors and typed all 15 on nvh_any_memory and
+    nvh_any_profilerbase, whose members a chain does reach. The contradiction
+    stood for the whole life of a branch with twelve of twelve checks green.
+    """
+
+    def test_an_agreeing_tree_passes(self):
+        self.tree()
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("reach: OK", out)
+
+    def test_an_unresolved_owning_class_typed_on_a_family_is_reported(self):
+        # The historical defect, in the shape it stood in: the artefact
+        # reports the owning class unreachable and the description set types
+        # its commands on a family whose members a chain reaches.
+        chains = copy.deepcopy(self.CHAINS)
+        chains["chains"] = [c for c in chains["chains"]
+                            if c["internal_class"] != "Widget"]
+        chains["unresolved_owning_classes"] = [
+            {"owning_class": "Widget", "commands": ["widgetCtrlCmdPoke"],
+             "reason": "no RS_ENTRY row for this class"}]
+        self.tree(chains=chains)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("widgetCtrlCmdPoke", out)
+        self.assertIn("reports Widget unreachable", out)
+
+    def test_a_reached_class_outside_the_handle_type_is_reported(self):
+        # The chain ends on a class the resource does not accept. The family
+        # is left holding WidgetA alone, so a handle of it never names the
+        # WidgetB the chain builds.
+        graph = copy.deepcopy(self.GRAPH)
+        graph["records"][1]["internal_ancestors"] = ["Object"]
+        self.tree(graph=graph)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("widgetCtrlCmdPoke", out)
+        self.assertIn("ends on NV01_WIDGET_B", out)
+
+    def test_a_reached_owning_class_typed_untyped_is_reported(self):
+        control = copy.deepcopy(self.CONTROL)
+        control[1]["object_resource"] = "nv_handle"
+        self.tree(control=control)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("gadgetCtrlCmdPoke", out)
+        self.assertIn("takes the untyped handle", out)
+
+    def test_an_unreached_owning_class_typed_untyped_passes(self):
+        # The state the two commands owned by MmuFaultBuffer and NvDispApi
+        # sit in on the committed tree: no chain, and nv_handle.
+        control = copy.deepcopy(self.CONTROL)
+        control[1]["object_resource"] = "nv_handle"
+        chains = copy.deepcopy(self.CHAINS)
+        chains["chains"][1]["chain"] = None
+        chains["chains"][1]["target_external_class"] = None
+        chains["unresolved_owning_classes"] = [
+            {"owning_class": "Gadget", "commands": ["gadgetCtrlCmdPoke"],
+             "reason": "every external class requires allocation privilege"}]
+        self.tree(control=control, chains=chains)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+
+    def test_an_owning_class_the_artefact_never_names_is_reported(self):
+        chains = copy.deepcopy(self.CHAINS)
+        chains["chains"] = [c for c in chains["chains"]
+                            if c["internal_class"] != "Gadget"]
+        self.tree(chains=chains)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("gadgetCtrlCmdPoke", out)
+        self.assertIn("no reachability verdict", out)
+
+    def test_a_class_stated_both_ways_is_reported_as_a_contradiction(self):
+        chains = copy.deepcopy(self.CHAINS)
+        chains["unresolved_owning_classes"] = [
+            {"owning_class": "Gadget", "commands": ["gadgetCtrlCmdPoke"],
+             "reason": "no RS_ENTRY row for this class"}]
+        self.tree(chains=chains)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("contradiction(s)", out)
+        self.assertIn("states both that", out)
+
+    def test_a_family_naming_an_unknown_nvoc_class_is_reported(self):
+        control = copy.deepcopy(self.CONTROL)
+        control[0]["object_resource"] = "nvh_any_sprocket"
+        self.tree(control=control)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("'sprocket'", out)
+
+    def test_a_resource_no_allocation_names_is_reported(self):
+        control = copy.deepcopy(self.CONTROL)
+        control[1]["object_resource"] = "nvh_nv01_sprocket"
+        self.tree(control=control)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("none of the 3 resource(s)", out)
+
+    def test_a_family_covering_no_allocatable_class_is_reported(self):
+        # The NVOC hierarchy places two classes under Widget and the
+        # description set allocates neither, so no handle of the family can
+        # be built and typing a command on it states a chain that does not
+        # exist.
+        allocations = [a for a in self.ALLOCATIONS
+                       if not a["class"].startswith("NV01_WIDGET")]
+        self.tree(allocations=allocations)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("no allocatable external class", out)
+
+    def test_the_rendered_handle_type_is_compared_against_the_manifest(self):
+        # Without this the check would compare a manifest field against an
+        # artefact while syzkaller resolves a different resource entirely.
+        control = copy.deepcopy(self.CONTROL)
+        text = ("ioctl$NV_ESC_RM_CONTROL_gadgetCtrlCmdPoke(fd fd_nvidiactl, "
+                "cmd const[0xc020462a], arg ptr[inout, "
+                "nvos54_ctrl_gadgetCtrlCmdPoke])\n\n"
+                "nvos54_ctrl_gadgetCtrlCmdPoke {\n"
+                "\thObject\tnv_handle\n}\n\n"
+                "ioctl$NV_ESC_RM_CONTROL_widgetCtrlCmdPoke(fd fd_nvidiactl, "
+                "cmd const[0xc020462a], arg ptr[inout, "
+                "nvos54_ctrl_widgetCtrlCmdPoke])\n\n"
+                "nvos54_ctrl_widgetCtrlCmdPoke {\n"
+                "\thObject\tnvh_any_widget\n}\n")
+        self.tree(control=control, text=text)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("renders hObject as 'nv_handle'", out)
+
+    def test_a_command_the_descriptions_declare_no_call_for_is_reported(self):
+        text = ("ioctl$NV_ESC_RM_CONTROL_widgetCtrlCmdPoke(fd fd_nvidiactl, "
+                "cmd const[0xc020462a], arg ptr[inout, "
+                "nvos54_ctrl_widgetCtrlCmdPoke])\n\n"
+                "nvos54_ctrl_widgetCtrlCmdPoke {\n"
+                "\thObject\tnvh_any_widget\n}\n")
+        self.tree(text=text)
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("declares no ioctl$NV_ESC_RM_CONTROL_gadgetCtrlCmdPoke",
+                      out)
+
+    def test_an_unemitted_record_is_counted_and_not_compared(self):
+        # An unemitted command declares no call and so has no handle type for
+        # the artefacts to disagree about. Skipping it silently would leave
+        # the reader unable to tell a clean run from an empty one.
+        control = copy.deepcopy(self.CONTROL)
+        control.append({"handler": "sprocketCtrlCmdPoke",
+                        "owning_class": "Sprocket",
+                        "object_resource": "nvh_any_sprocket",
+                        "emitted": False})
+        self.tree(control=control)
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 unemitted record(s) not compared", out)
+
+
+class TestReachRefusesAnUnreadableInput(ReachFixtures):
+    """Exit 2 and a message naming the artefact, never a traceback.
+
+    A checkout missing an input has no verdict to report, and exit 1 would
+    read in CI as an offending entry.
+    """
+
+    def test_an_absent_chain_artefact_stops_the_check(self):
+        self.tree()
+        os.remove(os.path.join(self.root, "surface", "rm-chains.json"))
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("rm-chains.json", out)
+        self.assertIn("object_graph.py chains", out)
+
+    def test_an_absent_object_graph_stops_the_check(self):
+        self.tree()
+        os.remove(os.path.join(self.root, "surface", "rm-object-graph.json"))
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("rm-object-graph.json", out)
+        self.assertIn("object_graph.py extract", out)
+
+    def test_an_empty_object_graph_stops_the_check(self):
+        # An empty graph resolves every family to no class and would report
+        # every typed command as an offender, which reads as 531 defects.
+        self.tree(graph={"records": []})
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("no `records` array", out)
+
+    def test_a_graph_record_without_ancestors_stops_the_check(self):
+        graph = copy.deepcopy(self.GRAPH)
+        del graph["records"][0]["internal_ancestors"]
+        self.tree(graph=graph)
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("internal_ancestors", out)
+
+    def test_two_nvoc_names_differing_only_in_case_stop_the_check(self):
+        # A family resource name is the class name lowered, so two such
+        # classes produce one resource and no answer to which it resolves to.
+        graph = copy.deepcopy(self.GRAPH)
+        graph["records"][2]["internal_ancestors"] = ["Object", "WIDGET"]
+        self.tree(graph=graph)
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("differ only in case", out)
+
+    def test_a_manifest_without_a_control_array_stops_the_check(self):
+        self.tree()
+        self.write("descriptions/generation.json",
+                   {"generated_from": {"driver_version": "610.57.04"},
+                    "allocations": self.ALLOCATIONS})
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("no `control` array", out)
+
+    def test_a_manifest_without_an_allocation_array_stops_the_check(self):
+        self.tree()
+        self.write("descriptions/generation.json",
+                   {"generated_from": {"driver_version": "610.57.04"},
+                    "control": self.CONTROL})
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("no `allocations` array", out)
+
+    def test_a_duplicated_external_class_stops_the_check(self):
+        graph = copy.deepcopy(self.GRAPH)
+        graph["records"].append(copy.deepcopy(graph["records"][0]))
+        graph["records"][-1]["internal_ancestors"] = ["Object"]
+        self.tree(graph=graph)
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("twice", out)
+
+    def test_a_duplicated_internal_class_stops_the_check(self):
+        chains = copy.deepcopy(self.CHAINS)
+        chains["chains"].append(copy.deepcopy(chains["chains"][0]))
+        self.tree(chains=chains)
+        code, out = self.check()
+        self.assertEqual(code, 2)
+        self.assertIn("two reachability verdicts", out)
+
+
+class TestReachIsRegistered(unittest.TestCase):
+    """The check runs under `all` and under its own CI step."""
+
+    def test_it_is_in_the_registry_and_the_order(self):
+        self.assertIn("reach", regression_check.CHECKS)
+        self.assertIn("reach", regression_check.CHECK_ORDER)
+
+    def test_it_follows_derived_and_precedes_families(self):
+        order = regression_check.check_order()
+        self.assertEqual(order[order.index("derived") + 1], "reach")
+        self.assertEqual(order[order.index("reach") + 1], "families")
+
+    def test_the_docstring_describes_it(self):
+        self.assertIn("\n    reach       ", regression_check.__doc__)
+
+    def test_the_parser_accepts_it_as_a_subcommand(self):
+        args = regression_check.build_parser().parse_args(["reach"])
+        self.assertEqual(args.check, "reach")
+
+    def test_the_workflow_runs_it(self):
+        path = os.path.join(os.path.dirname(HERE), ".github", "workflows",
+                            "selftest.yml")
+        with open(path, encoding="utf-8") as handle:
+            workflow = handle.read()
+        self.assertTrue("regression_check.py reach" in workflow,
+                        "the workflow runs no reach step")
+
+
+class TestReachOverTheCommittedArtefacts(unittest.TestCase):
+    """The committed tree satisfies the invariant.
+
+    Read against the real files, which is the case the CI step runs. The two
+    owning classes with no chain, MmuFaultBuffer and NvDispApi, are the ones
+    the committed description set types nv_handle.
+    """
+
+    def test_the_committed_artefacts_agree(self):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = regression_check.main(["reach"])
+        text = out.getvalue() + err.getvalue()
+        self.assertEqual(code, 0, text)
+        self.assertIn("reach: OK", text)
+
+    def test_every_owning_class_carries_one_handle_type(self):
+        # The join is at owning-class granularity, and a class whose commands
+        # carried two handle types would make the comparison ambiguous
+        # without the check saying so.
+        with open(regression_check.GENERATION, encoding="utf-8") as handle:
+            control = json.load(handle)["control"]
+        by_owner = {}
+        for record in control:
+            by_owner.setdefault(record["owning_class"], set()).add(
+                record["object_resource"])
+        split = {k: sorted(v) for k, v in by_owner.items() if len(v) > 1}
+        self.assertEqual(split, {})
 
 
 if __name__ == "__main__":

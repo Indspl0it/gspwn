@@ -114,7 +114,7 @@ coverage alone.
    against the installed release before modelling anything, and do not proceed
    on a mismatch. Exit 4 means fewer than two independent version sources
    answered, so nothing was compared and the check established nothing.
-   Independence is counted by group. The six committed artefact files all take
+   Independence is counted by group. The eleven stamped artefact files all take
    their version from one `version.mk`, so they are one source however many of
    them carry a stamp, and a workstation with no driver loaded and no checkout
    reaches exit 4 on a tree that is entirely healthy. On the target it means
@@ -175,7 +175,7 @@ coverage alone.
    `surface/ioctl-sizes.json`, which is committed, and every request
    number is derived from a size in it. A build that measures fewer sizes than
    the committed inventory records is refused, so the command above cannot
-   replace 183 measured sizes with none. A new driver release needs the
+   replace 184 measured sizes with none. A new driver release needs the
    sizes measured again first, on a machine with gcc:
 
    ```
@@ -214,7 +214,7 @@ coverage alone.
    against what is committed, so a commit that carries the artefacts and not
    the pages fails.
 
-   `python3 tools/regression_check.py all` runs the twelve checks CI runs, and
+   `python3 tools/regression_check.py all` runs the thirteen checks CI runs, and
    each one reads a different pair of artefacts that have to agree:
 
    | Check | Artefact pair compared |
@@ -223,6 +223,7 @@ coverage alone.
    | `names` | every name in `tools/ioctl_map.json` is declared by the descriptions |
    | `pins` | every emitted leaf selector renders as a const, including the `NV_ESC_IOCTL_XFER_CMD` inner `cmd` |
    | `derived` | the chain and ranking artefacts still match the control inventory |
+   | `reach` | every control command's `hObject` handle type accepts the class the allocation chain for its owning class ends on, and a command whose owning class the chain artefact reports unreachable takes `nv_handle` |
    | `families` | every field bound to a value family carries one the committed audit accepted, and every accepted family is bound with its own set emitted |
    | `pages` | the generated reference pages still match the surface artefacts |
    | `stale` | every surface artefact `descriptions/generation.json` records still hashes to the recorded digest |
@@ -235,7 +236,13 @@ coverage alone.
    `derived` fails when the regeneration stopped before `object_graph.py
    chains` or `ctrl_rank.py rank`, and `pages` fails when it stopped before
    `refgen.py`. Both remedies are to run the missing command from the block
-   above and commit its output. Run `all` before the commit, not after.
+   above and commit its output. `reach` fails when the chain artefact and the
+   description set state different reachability for one owning class, and its
+   remedy is to run `object_graph.py extract`, `object_graph.py chains` and
+   `syzlang_gen.py emit` from the block above, because the two statements come
+   from the driver source by two routes: `chains` re-parses it, and the
+   emitter reads the `surface/rm-object-graph.json` that `extract` writes.
+   Run `all` before the commit, not after.
 
    `syzlang_gen.py` emits a first-cut description set into
    descriptions/. Any struct whose derived layout did not match its
@@ -360,15 +367,27 @@ coverage alone.
    structure either, so they import nothing this set does not already type.
    A crash found only in imported descriptions is not this campaign's finding
    to claim. (Round 1 only, because later rounds start from the worklist.)
-2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools]
-   and /dev/nvidia-modeset. Skip nvidia-drm and /dev/dri/*, which are out of
-   scope. Those two exist only when the container asks for the `graphics` or
-   `display` capability, and the threat model is a default tenant
-   (`compute,utility`), which gets neither. A crash found there could not be
-   claimed under the model, so the descriptions are not worth the round.
+2. Coverage targets: /dev/nvidiactl, /dev/nvidiaX, /dev/nvidia-uvm[-tools],
+   /dev/nvidia-modeset, /dev/dri/cardN and /dev/dri/renderDN.
+   `surface/entry-points.json` records all six with `tenant_surface: true`
+   and carries the reason for each.
    /dev/nvidia-modeset is inside the model: `lookup_devices` at
-   `libnvidia-container/src/nvc_info.c:515` creates it beside the other four
-   and withholds it only under `OPT_NO_MODESET`.
+   `libnvidia-container/src/nvc_info.c:515` creates it beside the four
+   `/dev/nvidia*` nodes and withholds it only under `OPT_NO_MODESET`.
+   Both DRM nodes are inside it on the CDI path, which adds every /dev/dri
+   node found for the GPU's PCI bus id to that device's spec with no
+   capability check (`nvidia-container-toolkit`
+   `internal/platform-support/dgpu/nvml.go:48-55`), and
+   `internal/edits/device.go:76` grants them `rwm`. Neither the `graphics`
+   nor the `display` capability gates them, so a default `compute,utility`
+   tenant receives both. The legacy path injects no DRM node and
+   libnvidia-container carries no reference to /dev/dri, so a scope read off
+   the legacy path alone excludes them and is wrong wherever the CDI path
+   runs. The 24 dispatched DRM ioctls are the drm family of the 852-target
+   denominator and `descriptions/nvidia_drm.txt` declares them. 21 carry
+   `DRM_RENDER_ALLOW` and reach both nodes, 3 reach `cardN` alone, and 2 of
+   those 3 require the opening file to be the current DRM master, so the card
+   node and the render node are separate resources.
    Widening scope is a decision recorded in the threat model first. This phase
    does not widen it because the ioctls looked reachable.
 
@@ -410,7 +429,7 @@ coverage alone.
       targets` ranks the parents by subtree size for the same reason. One
       correct allocation chain makes that class's whole command set emittable:
       one allocation reaches 91 commands, three reach 315 and fifteen reach
-      455. A chain correction is worth its subtree.
+      458. A chain correction is worth its subtree.
 
       `tools/ctrl_surface.py` picks the target set. Of 1372 exported control
       methods, the 531 that are non-privileged and carry a kernel-side handler
@@ -534,7 +553,7 @@ Record progress with the state tool, never by editing pipeline.json:
   `artifacts/seeds`, and the after reading with `--run-id <smoke run id>`
   against the smoke run's own corpus, with the smoke run id named. That delta
   is this round's measured output.
-- Where a regeneration ran, `regression_check.py all` output with all twelve
+- Where a regeneration ran, `regression_check.py all` output with all thirteen
   checks passing, and the reference pages under
   `docs/src/content/docs/reference/surface/` regenerated and committed with the
   artefacts.
