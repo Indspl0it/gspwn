@@ -3,96 +3,123 @@ title: Knowledgebase
 description: "Background on the NVIDIA GPU platform, ordered from the highest abstraction down to firmware, with the reading order and what each page carries."
 ---
 
-The rest of the site documents the pipeline. These pages document the platform
-it runs on, and stand on their own as reference material.
+These pages document the NVIDIA GPU platform: what the hardware and the
+software stack are, and how they behave. They stand on their own as reference
+material.
 
-Pages are ordered by descending abstraction. Each carries one figure, the
-reference tables behind it, and one example traced end to end.
+Pages are grouped into seven tiers, ordered by descending abstraction. Tier 1
+is the product range as a buyer sees it, tier 6 is the firmware that runs
+before the driver loads, and tier 7 records the disclosures already published
+against the stack.
 
 ## Orientation
 
-| Page | Contents |
-| --- | --- |
-| [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/) | The eight layers from application code to silicon, and the boundaries between them |
+- [NVIDIA GPU stack](/gspwn/knowledgebase/gpu-stack/). The eight layers from
+  application code to silicon, and the boundaries between them.
 
 ## Tier 1, platform
 
-The product range, part naming, and the version couplings between toolkit,
-driver and firmware.
+The product range and part naming.
 
-| Page | Contents |
-| --- | --- |
-| [Product lines](/gspwn/knowledgebase/product-lines/) | Segments against architecture generations, part naming, form factors and memory |
-| [Driver and toolkit versions](/gspwn/knowledgebase/driver-versions/) | The three version lanes, the couplings between them, and the compatibility mechanisms |
-| [Installed stack](/gspwn/knowledgebase/installed-stack/) | Every artefact an installation leaves, where it lives, and the module dependency order |
-| [Telemetry](/gspwn/knowledgebase/telemetry/) | NVML, DCGM, Xid events, ECC counters, clocks and throttle reasons |
+- [Product lines](/gspwn/knowledgebase/product-lines/). Segments against
+  architecture generations, part naming, form factors and memory.
+- [Installed stack](/gspwn/knowledgebase/installed-stack/). Every artefact an
+  installation leaves, where it lives, and the module dependency order.
+- [Telemetry](/gspwn/knowledgebase/telemetry/). NVML, DCGM, Xid events, ECC
+  counters, clocks and clock event reasons.
 
 ## Tier 2, sharing one GPU
 
 One card divided between processes and tenants.
 
-| Page | Contents |
-| --- | --- |
-| [Container admission path](/gspwn/knowledgebase/container-admission/) | Image to runtime to hook to injected mounts, with the privilege level of each stage |
-| [Container device access](/gspwn/knowledgebase/container-device-access/) | Capability values and environment variables against the device nodes each grants, for both injection mechanisms |
-| [Orchestration](/gspwn/knowledgebase/orchestration/) | The device plugin protocol and the GPU Operator components on one node |
-| [Partitioning modes](/gspwn/knowledgebase/partitioning/) | Passthrough, time-slicing, MPS, MIG and vGPU, with the isolation line drawn in each |
+- [Container admission path](/gspwn/knowledgebase/container-admission/). Image
+  to runtime to hook to injected mounts, with the privilege level of each
+  stage.
+- [Container device access](/gspwn/knowledgebase/container-device-access/).
+  Capability values and environment variables against the device nodes each
+  grants, for both injection mechanisms.
+- [Orchestration](/gspwn/knowledgebase/orchestration/). The device plugin
+  protocol and the GPU Operator components on one node.
+- [Partitioning modes](/gspwn/knowledgebase/partitioning/). Passthrough,
+  time-slicing, MPS, MIG and vGPU, with the isolation line drawn in each.
 
 ## Tier 3, programming model
 
 Work expressed before any of it reaches the driver.
 
-| Page | Contents |
-| --- | --- |
-| [Execution model](/gspwn/knowledgebase/execution-model/) | Grid, block, warp and thread, and the mapping onto streaming multiprocessors |
-| [Memory model](/gspwn/knowledgebase/memory-model/) | Address spaces by scope and latency, and the migration path |
-| [Compilation pipeline](/gspwn/knowledgebase/compilation/) | Source to PTX to SASS to fatbin, with the just-in-time branch |
+- [Execution model](/gspwn/knowledgebase/execution-model/). Grid, block, warp
+  and thread, and the mapping onto streaming multiprocessors.
+- [Memory model](/gspwn/knowledgebase/memory-model/). Address spaces by scope
+  and latency, and the migration path.
+- [Compilation pipeline](/gspwn/knowledgebase/compilation/). Source to PTX to
+  SASS to fatbin, with the just-in-time branch.
 
 ## Tier 4, runtime and driver
 
 That work crossing into the kernel.
 
-| Page | Contents |
-| --- | --- |
-| [API split and contexts](/gspwn/knowledgebase/api-split/) | One call descending from the runtime to the driver API to the ioctl |
-| [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/) | The handle hierarchy, the class number space, and the ioctl families that act on it |
-| [RM control command surface](/gspwn/knowledgebase/rm-control-surface/) | The 1372 control commands behind one ioctl, their privilege classes and parameter structs |
-| [UVM subsystem](/gspwn/knowledgebase/uvm/) | The fault path: touch, fault, migrate, replay |
-| [GSP offload](/gspwn/knowledgebase/gsp-offload/) | The split between kernel-side and firmware-side RM, and the RPC queue between them |
+- [API split and contexts](/gspwn/knowledgebase/api-split/). One call
+  descending from the runtime to the driver API to the ioctl.
+- [Resource Manager object model](/gspwn/knowledgebase/rm-object-model/). The
+  handle hierarchy, the class number space, and the ioctl families that act on
+  it.
+- [RM control command surface](/gspwn/knowledgebase/rm-control-surface/). The
+  1372 control commands behind one ioctl, their privilege classes and
+  parameter structs.
+- [UVM subsystem](/gspwn/knowledgebase/uvm/). The fault path: touch, fault,
+  migrate, replay.
+- [GSP offload](/gspwn/knowledgebase/gsp-offload/). The split between
+  kernel-side and firmware-side RM, and the RPC queue between them.
 
 ## Tier 5, device architecture
 
 The hardware executing the work once it arrives.
 
-| Page | Contents |
-| --- | --- |
-| [Chip organisation](/gspwn/knowledgebase/chip-organisation/) | Graphics processing clusters down to one streaming multiprocessor |
-| [Memory hierarchy](/gspwn/knowledgebase/memory-hierarchy/) | Capacity, bandwidth and latency from registers to device memory |
-| [Scheduling and preemption](/gspwn/knowledgebase/scheduling/) | Channels, time-slice groups, runlists, and where preemption is possible |
-| [Interconnect](/gspwn/knowledgebase/interconnect/) | The BAR windows, the IOMMU, NVLink topology and the peer-to-peer paths |
+- [Chip organisation](/gspwn/knowledgebase/chip-organisation/). Graphics
+  processing clusters down to one streaming multiprocessor.
+- [Memory hierarchy](/gspwn/knowledgebase/memory-hierarchy/). Capacity,
+  bandwidth and latency from registers to device memory.
+- [Scheduling and preemption](/gspwn/knowledgebase/scheduling/). Channels,
+  time-slice groups, runlists, and where preemption is possible.
+- [Interconnect](/gspwn/knowledgebase/interconnect/). The BAR windows, the
+  IOMMU, NVLink topology and the peer-to-peer paths.
 
 ## Tier 6, firmware and boot
 
-| Page | Contents |
-| --- | --- |
-| [Boot and firmware chain](/gspwn/knowledgebase/boot-firmware/) | VBIOS, the microcontrollers, signature gates, and the point at which the GSP is running |
+What runs before the driver loads.
+
+- [Boot and firmware chain](/gspwn/knowledgebase/boot-firmware/). VBIOS, the
+  microcontrollers, signature gates, and the point at which the GSP is
+  running.
 
 ## Tier 7, disclosure history
 
 What has already been found in the stack, and by whom.
 
-| Page | Contents |
-| --- | --- |
-| [Prior vulnerabilities](/gspwn/knowledgebase/prior-vulnerabilities/) | Every disclosed GPU driver and Container Toolkit CVE from 2018, classified by the layer NVIDIA names, with the seven that carry public technical detail and the published work on fuzzing this surface |
-| [Container stack fixes](/gspwn/knowledgebase/container-stack-fixes/) | The commits behind those Container Toolkit disclosures, mapped through the submodule pin each toolkit release carries, with the evidence for each mapping and the three disclosures no commit could be tied to |
+- [Prior vulnerabilities](/gspwn/knowledgebase/prior-vulnerabilities/). Every
+  disclosed GPU driver and Container Toolkit CVE from 2018, classified by the
+  layer NVIDIA names, with the seven that carry public technical detail and
+  the published work on fuzzing this surface.
+- [Container stack fixes](/gspwn/knowledgebase/container-stack-fixes/). The
+  commits behind those Container Toolkit disclosures, mapped through the
+  submodule pin each toolkit release carries, with the evidence for each
+  mapping and the three disclosures no commit could be tied to.
 
 ## Sourcing
 
-Driver facts come from the headers in `open-gpu-kernel-modules` at `610.57.04`,
-commit `e4a5faa`. Programming model and toolchain facts come from the CUDA
-Programming Guide and the PTX ISA specification. Container stack facts come
-from `libnvidia-container` and `nvidia-container-toolkit`.
+Three checked-out trees supply every claim these pages make about source.
 
-Constant values and struct layouts are not reproduced here, because they move
-between driver branches. Where a number matters, the page names the header it
-is defined in, so it can be read from a tree checked out at the matching tag.
+| Tree | Version | Commit | Supplies |
+| --- | --- | --- | --- |
+| `open-gpu-kernel-modules` | 610.57.04 | `e4a5faa` | Kernel module, Resource Manager and UVM facts |
+| `libnvidia-container` | packaged with the toolkit | `08cb279` | The C library that mounts devices and libraries into a container |
+| `nvidia-container-toolkit` | 25 commits past `v1.20.0` | `1780ac6` | The Go runtime, hook and CDI generator |
+
+Programming model and toolchain facts come from the CUDA Programming Guide and
+the PTX ISA specification. NVML field semantics come from `nvml.h`, vendored
+inside the toolkit tree at
+`vendor/github.com/NVIDIA/go-nvml/pkg/nvml/nvml.h`.
+
+Constant values and struct layouts move between driver branches, so these
+pages name the header a constant is defined in and leave the value to be read
+from a tree checked out at the matching tag.

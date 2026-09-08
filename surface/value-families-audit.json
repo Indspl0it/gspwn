@@ -39,7 +39,7 @@
       "set_name": "nv0000_ctrl_client_get_handle_info_params_index",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000client.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000client.h",
@@ -64,7 +64,7 @@
       "set_name": "nv0000_ctrl_diag_profile_rpc_params_rpc_profile_cmd",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000diag.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000diag.h",
@@ -92,7 +92,7 @@
       "set_name": "nv0000_ctrl_event_set_notification_params_action",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000event.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000event.h",
@@ -144,7 +144,7 @@
       "set_name": "nv0000_ctrl_nvd_get_timestamp_params_cpu_clk_id",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000nvd.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000nvd.h",
@@ -200,7 +200,7 @@
       "set_name": "nv0000_ctrl_os_unix_flush_user_cache_params_cache_ops",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000unix.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000unix.h",
@@ -228,7 +228,7 @@
       "set_name": "nv0000_ctrl_system_debug_rmmsg_ctrl_params_cmd",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it, and a control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
@@ -253,7 +253,7 @@
       "set_name": "nv0000_ctrl_system_notify_event_params_event_type",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
@@ -287,7 +287,7 @@
       "set_name": "nv0000_ctrl_system_nvpcf_get_power_mode_info_params_sub_func",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
@@ -327,7 +327,7 @@
       "set_name": "nv0000_ctrl_system_pfm_req_hndlr_ctrl_params_cmd",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0000/ctrl0000system.h",
@@ -474,7 +474,7 @@
       "set_name": "nv0073_ctrl_event_set_notification_params_action",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0073/ctrl0073event.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0073/ctrl0073event.h",
@@ -540,7 +540,7 @@
       "set_name": "nv0080_ctrl_dma_get_pde_info_params_pde_addr_space",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
@@ -568,7 +568,7 @@
       "set_name": "nv0080_ctrl_dma_get_pde_info_params_pde_size",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080dma.h",
@@ -642,7 +642,7 @@
       "set_name": "nv0080_ctrl_fb_set_default_vidmem_physicality_params_value",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fb.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fb.h",
@@ -673,7 +673,7 @@
       "set_name": "nv0080_ctrl_fifo_get_engine_context_properties_params_engine_id",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fifo.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl0080/ctrl0080fifo.h",
@@ -773,7 +773,7 @@
       "set_name": "nv00f1_ctrl_fabric_event_type",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl00f1.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl00f1.h",
@@ -804,7 +804,7 @@
       "set_name": "nv2080_ctrl_cmd_fifo_get_userd_location_params_aperture",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h",
@@ -829,7 +829,7 @@
       "set_name": "nv2080_ctrl_cmd_fifo_get_userd_location_params_attribute",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fifo.h",
@@ -857,7 +857,7 @@
       "set_name": "nv2080_ctrl_cmd_gpu_illum_params_attribute",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
@@ -951,7 +951,7 @@
       "set_name": "nv2080_ctrl_event_set_notification_params_action",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it, and a control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080event.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080event.h",
@@ -1023,7 +1023,7 @@
       "set_name": "nv2080_ctrl_fb_get_gpu_cache_info_params_bypass_mode",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
@@ -1048,7 +1048,7 @@
       "set_name": "nv2080_ctrl_fb_get_gpu_cache_info_params_power_state",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
@@ -1073,7 +1073,7 @@
       "set_name": "nv2080_ctrl_fb_get_gpu_cache_info_params_rcm_state",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
@@ -1104,7 +1104,7 @@
       "set_name": "nv2080_ctrl_fb_get_gpu_cache_info_params_write_mode",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
@@ -1158,7 +1158,7 @@
       "set_name": "nv2080_ctrl_fb_get_semaphore_surface_layout_params_caps",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
@@ -1183,7 +1183,7 @@
       "set_name": "nv2080_ctrl_fb_is_kind_params_operation",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it, and a control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080fb.h",
@@ -1229,7 +1229,7 @@
       "set_name": "nv2080_ctrl_gpu_get_pids_params_id_type",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
@@ -1254,7 +1254,7 @@
       "set_name": "nv2080_ctrl_gpu_get_simulation_info_params_type",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gpu.h",
@@ -1331,7 +1331,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_dp",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1356,7 +1356,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_ffma",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1393,7 +1393,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_fmla16",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1430,7 +1430,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_fmla32",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1467,7 +1467,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla0",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1507,7 +1507,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla1",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1547,7 +1547,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla2",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1587,7 +1587,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla3",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1627,7 +1627,7 @@
       "set_name": "nv2080_ctrl_gr_get_sm_issue_rate_modifier_params_imla4",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080gr.h",
@@ -1667,7 +1667,7 @@
       "set_name": "nv2080_ctrl_nvlink_device_info_device_id_flags",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
@@ -1695,7 +1695,7 @@
       "set_name": "nv2080_ctrl_nvlink_device_info_device_type",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl2080/ctrl2080nvlink.h",
@@ -1826,7 +1826,7 @@
       "set_name": "nv30f1_ctrl_gsync_get_caps_params_board_id",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
@@ -1851,7 +1851,7 @@
       "set_name": "nv30f1_ctrl_gsync_get_caps_params_cap_flags",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
@@ -1903,7 +1903,7 @@
       "set_name": "nv30f1_ctrl_gsync_get_optimized_timing_params_adjust",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
@@ -1951,7 +1951,7 @@
       "set_name": "nv30f1_ctrl_gsync_get_optimized_timing_params_protocol",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
@@ -1998,7 +1998,7 @@
       "set_name": "nv30f1_ctrl_gsync_get_optimized_timing_params_structure",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
@@ -2023,7 +2023,7 @@
       "set_name": "nv30f1_ctrl_gsync_set_event_notification_params_action",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrl30f1.h",
@@ -2103,7 +2103,7 @@
       "set_name": "nva081_ctrl_vgpu_config_event_set_notification_params_action",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
@@ -2131,7 +2131,7 @@
       "set_name": "nva081_ctrl_vgpu_get_capability_params_capability",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
@@ -2186,7 +2186,7 @@
       "set_name": "nva081_ctrl_vgpu_set_capability_params_capability",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla081.h",
@@ -2214,7 +2214,7 @@
       "set_name": "nva084_ctrl_kernel_host_vgpu_device_event_set_notification_params_action",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrla084.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla084.h",
@@ -2242,7 +2242,7 @@
       "set_name": "nva0bd_ctrl_nvfbc_sw_session_update_info_params_capture_call_flags",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "A control handler switches on this field and compares it against these defines. The set passes the boolean-pair test. The bit-range decomposition test is not applied to a family the switch rule derived, because the handler compares the field itself. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/ctrl/ctrla0bd.h",
         "struct_header": "src/common/sdk/nvidia/inc/ctrl/ctrla0bd.h",
@@ -2270,7 +2270,7 @@
       "set_name": "nvb0b5_allocation_parameters_version",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/class/clb0b5sw.h",
         "struct_header": "src/common/sdk/nvidia/inc/class/clb0b5sw.h",
@@ -2503,7 +2503,7 @@
       "set_name": "nvos32_parameters_function",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/nvos.h",
         "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
@@ -2642,7 +2642,7 @@
       "set_name": "nvos38_parameters_access_type",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/nvos.h",
         "struct_header": "src/common/sdk/nvidia/inc/nvos.h",
@@ -2878,7 +2878,7 @@
       "set_name": "nv_vaspace_allocation_parameters_index",
       "verdict": "accepted",
       "verdict_source": "mechanical",
-      "reason": "The defines are the enumerated values of this field, anchored on the struct name and read against the header named in the evidence.",
+      "reason": "The define names are anchored on the struct name or a stem of it. The set passes the bit-range decomposition test and the boolean-pair test. No header was read for this family, and the verdict rests on those mechanical tests.",
       "evidence": {
         "header": "src/common/sdk/nvidia/inc/nvos.h",
         "struct_header": "src/common/sdk/nvidia/inc/nvos.h",

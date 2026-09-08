@@ -1,0 +1,141 @@
+---
+// A block whose thread count is not a multiple of the warp width, drawn warp
+// by warp.
+//
+// The waste is stated as "the last warp runs with 28 of its 32 lanes masked
+// off", which is one sentence and one arithmetic step away from being felt.
+// Drawn, the ragged row is the whole argument, and the same lane idiom as the
+// divergence figure carries over: a dark cell is an idle issue slot.
+
+const WARP = 32;
+const THREADS = 100;
+const WARPS = Math.ceil(THREADS / WARP);
+
+const rows = Array.from({ length: WARPS }, (_, w) => ({
+	index: w,
+	active: Math.min(WARP, THREADS - w * WARP),
+}));
+
+const idle = WARPS * WARP - THREADS;
+---
+
+<div
+	class="bw"
+	role="group"
+	aria-label={`A block of ${THREADS} threads across ${WARPS} warps`}
+>
+	<p class="cap">
+		<code>blockDim.x = {THREADS}</code>
+		<span class="sub">{WARPS} warps allocated, {WARPS * WARP} lane-slots</span>
+	</p>
+
+	{
+		rows.map((r) => (
+			<div class="warp">
+				<span class="lbl">warp {r.index}</span>
+				<div
+					class="lanes"
+					role="img"
+					aria-label={`Warp ${r.index}: ${r.active} of ${WARP} lanes active`}
+				>
+					{Array.from({ length: WARP }, (_, i) => (
+						<span class={i < r.active ? 'lane on' : 'lane off'} />
+					))}
+				</div>
+				<span class="cnt">{r.active}/{WARP}</span>
+			</div>
+		))
+	}
+
+	<p class="cost">
+		{idle} lane-slots idle for the kernel's whole duration
+	</p>
+</div>
+
+<style>
+	.bw {
+		--edge: var(--sl-color-gray-5);
+		border: 1px solid var(--edge);
+		border-top: 3px solid var(--gs-hue-amber);
+		border-radius: 0.5rem;
+		background: var(--sl-color-gray-6);
+		padding: 0.75rem 0.85rem 0.6rem;
+		margin-block: 1.5rem;
+	}
+
+	.cap {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.5rem;
+		margin: 0 0 0.6rem;
+	}
+	.cap code {
+		font-family: var(--sl-font-mono);
+		font-size: 0.74rem;
+		color: var(--sl-color-white);
+		background: none;
+		border: 0;
+		padding: 0;
+	}
+	.cap .sub {
+		font-size: 0.68rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.warp {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.3rem;
+	}
+
+	.lbl {
+		font-family: var(--sl-font-mono);
+		font-size: 0.66rem;
+		color: var(--sl-color-gray-2);
+		flex: none;
+		width: 3.2rem;
+	}
+	.cnt {
+		font-family: var(--sl-font-mono);
+		font-size: 0.62rem;
+		color: var(--sl-color-gray-3);
+		flex: none;
+		width: 2.6rem;
+		text-align: right;
+	}
+
+	.lanes {
+		display: grid;
+		grid-template-columns: repeat(32, minmax(0, 1fr));
+		gap: 1px;
+		flex: 1;
+		min-width: 0;
+	}
+
+	.lane {
+		height: 0.8rem;
+		border-radius: 1px;
+	}
+	.lane.on { background: var(--gs-hue-cyan); }
+	.lane.off {
+		background: var(--sl-color-gray-4);
+		opacity: 0.28;
+	}
+
+	.cost {
+		font-family: var(--sl-font-mono);
+		font-size: 0.64rem;
+		color: var(--sl-color-gray-3);
+		margin: 0.5rem 0 0;
+		padding-top: 0.45rem;
+		border-top: 1px solid var(--edge);
+	}
+
+	@media (max-width: 48rem) {
+		.lbl { width: 2.6rem; font-size: 0.6rem; }
+		.cnt { width: 2.2rem; }
+		.lane { height: 0.65rem; }
+	}
+</style>

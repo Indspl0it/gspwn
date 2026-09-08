@@ -5,6 +5,9 @@ description: Symptom to cause to fix, for the failure modes the tools guard agai
 
 ## Coverage and measurement
 
+A flat curve, an unreachable source and a missing edge count all leave the
+round without a coverage claim.
+
 | Symptom | Cause | Action |
 |---|---|---|
 | Coverage flat across the whole smoke window | The GPU has fallen off the bus, so the fuzzer runs against nothing | `python3 tools/coverage_ctl.py gpu-health`. Recover with `nvidia-smi -r`, a module reload, a guest reboot, then an instance stop and start |
@@ -48,6 +51,9 @@ cannot end a campaign.
 
 ## Campaigns
 
+`campaign_ctl.py install` refuses a live campaign, an exhausted run-hour
+budget, a reused run id and a harness tree with nothing built in it.
+
 | Symptom | Cause | Action |
 |---|---|---|
 | `refusing to install run X: another campaign is still live` | The single global units `gspwn-k` and `gspwn-u` belong to another run, or another run's deadline timer is enabled | Stop the old campaign, or pass `--replace` to retire it |
@@ -63,6 +69,9 @@ cannot end a campaign.
 
 ## The round
 
+A round refuses to advance while a campaign is live, while a phase is
+unfinished, and while a hard stop stands unoverridden.
+
 | Symptom | Cause | Action |
 |---|---|---|
 | `next` prints `wait (run X has N h left ...)` | A campaign in this round is still inside its window | Block on `campaign_ctl.py wait --run-id X` |
@@ -74,6 +83,9 @@ cannot end a campaign.
 
 ## Triage
 
+`pipeline_ctl.py` refuses an unlinked duplicate and a duplicate chain, and a
+single rejected id aborts the whole `crash-set` call.
+
 | Symptom | Cause | Action |
 |---|---|---|
 | `WARN: no crashes dir under ...` | The run id is wrong, or the campaign wrote nowhere | Check the id. This means nothing was scanned, and says nothing about whether the run crashed |
@@ -82,9 +94,14 @@ cannot end a campaign.
 | `X is itself a duplicate. Link directly to the surviving entry` | A duplicate chain | Point at the surviving entry. Chains and cycles are refused |
 | `crash-set` changed nothing | A rejected id aborted the whole call | The error names the id. Fix it and re-run |
 | The crash count looks enormous | Noise Xids dominate the registry | `show` and `brief` print how many are noise. They are excluded from every derived count |
-| `X carries no sanitizer signature — skipped, not registered` | A file in the Track U crash directory is a log, a manifest or a README | Expected. A file with no signature is not a crash |
+| `X was replayed and its output carries no sanitizer signature — skipped, not registered` | The input did not crash this build of the harness | Confirm the binary under `harnesses/<name>/build/` is the sanitizer build that found the input |
+| `X is a fuzzer crash input and no .sanlog report sits beside it — skipped, not registered` | The input was never replayed, so no sanitizer output exists to take a title from | Run `harnesses/replay_crashes.sh`, which `run_all.sh` runs at harvest |
+| `N file(s) under X and not one carries a sanitizer signature` | Every input in the directory fell into one of the two rows above | The message names the split between the two and the fix for each |
 
 ## Reproduction
+
+`repro_ctl.py verify` refuses a session whose runs cannot be scored, and exits
+non-zero when a rate would rest on too few counted runs.
 
 | Symptom | Cause | Action |
 |---|---|---|
@@ -100,10 +117,14 @@ cannot end a campaign.
 
 ## The state file
 
+The state file's checks fire on unreadable JSON, a missing spend ledger, and a
+record `rca` left incomplete.
+
 | Symptom | Cause | Action |
 |---|---|---|
 | `... is not valid JSON` | A truncated or hand-edited state file | Restore from `state/pipeline.json.bak`, or re-init |
 | `spend ledger ... is missing, but the state file records N billed run-hours` | The ledger was lost or predates this version | `pipeline_ctl.py spend-init` |
+| `WARNING: spend ledger ... holds N run-hours while the state file records M` | A ledger write failed and the campaign-start guard would otherwise read headroom that was already spent | The guard takes the larger figure, so the cap holds. Find the failed write before the next install |
 | `X was analysed by rca but has no finding` | The analysis happened and nothing survived it for the next round | Record one with `finding-set` |
 | `X has a finding that steers nothing` | `adjacent` is empty with no `no_adjacent_reason`, or repeats `ioctls` | Read the source for the object's other callers, or state why there are none |
 | `X was analysed by rca but has no impact record` | The report would carry a reproducer with no argued severity | Record one with `impact-set` |
@@ -113,9 +134,12 @@ cannot end a campaign.
 
 ## The orchestrator
 
+Exit 78 stops the unit deliberately. The remaining failures are configuration
+the installer could not infer.
+
 | Symptom | Cause | Action |
 |---|---|---|
-| The unit stops and is not restarted | `run` exited 78, listed in `RestartPreventExitStatus` | The journal says which of the four causes: a tripped breaker, an unset command, a blocked phase, or a complete pipeline |
+| The unit stops and is not restarted | `run` exited 78, listed in `RestartPreventExitStatus` | The journal names which of the eight causes fired. [Conditions that stop the unit](/gspwn/guides/unattended-operation/#conditions-that-stop-the-unit) lists them |
 | `circuit breaker tripped` | Too many same-boot starts, or too many reboots in the window | Read the journal, fix the cause, then `orchestrator_ctl.py reset` |
 | `orchestrator.command is not set` | No agent invocation configured | Set it in `config/campaign.yaml` |
 | `refusing to install: no non-root user to run the agent as` | `install` had no `--user` and no `$SUDO_USER` | Pass `--user`, or install with `sudo` from that user's shell |
@@ -129,34 +153,129 @@ cannot end a campaign.
 disagree, and 2 when nothing was measured. The `provision` phase blocks on
 both.
 
-| Symptom | Cause | Action |
-|---|---|---|
-| `'docker' is not on PATH` | No container runtime installed | Install `docker.io`, or pass `--runtime` with the runtime this host uses |
-| `the container did not run` and the error names an unknown runtime `nvidia` | The NVIDIA container toolkit is absent, or `nvidia-ctk runtime configure` was never run | [Installation](/gspwn/getting-started/installation/) step 5. The distribution's `docker.io` package carries no `nvidia` runtime |
-| `could not pull ubuntu:22.04` | The instance has no registry access | Pre-load the image and pass `--no-pull`, or set `GSPWN_VERIFY_IMAGE` to one already present |
-| `REACHABLE AND NOT MODELLED` | The container received a node the record places outside the tenant surface | Stop. The threat model understates the attacker, and every coverage figure would be measured against the wrong denominator. Widen the model before spending |
-| `MODELLED AND NOT REACHABLE` naming the modeset and DRM nodes | The measurement reached the legacy injection path | Check `runtime-mode`. A `legacy` verdict means this host withholds those nodes. A measurement taken with `--via gpus` on Docker 29.1.x or older reports legacy whatever the host is configured for |
-| `MODELLED AND NOT REACHABLE` naming `/dev/nvidia-nvswitch*` | Those nodes are conditional on `NVIDIA_NVSWITCH` | Expected on a host without NVSwitch. Record the condition and continue |
-| `runtime-mode` reports `not stated on this host` | No `config.toml` was found | The toolkit default applies. `measure` settles what the host actually does |
-| `surface/entry-points.json does not exist` | The artefact was never generated | `python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules --emit-entry-points surface/entry-points.json` |
+### No container runtime on PATH
+
+`'docker' is not on PATH`. Install `docker.io`, or pass `--runtime` with the
+runtime this host uses.
+
+### The nvidia runtime is unknown
+
+`the container did not run`, and the error names an unknown runtime `nvidia`.
+The NVIDIA container toolkit is absent, or `nvidia-ctk runtime configure` was
+never run. Follow
+[Installation](/gspwn/getting-started/installation/) step 5. The
+distribution's `docker.io` package carries no `nvidia` runtime.
+
+### No registry access
+
+`could not pull ubuntu:22.04`. Pre-load the image and pass `--no-pull`, or set
+`GSPWN_VERIFY_IMAGE` to one already present.
+
+### Reachable and not modelled
+
+`REACHABLE AND NOT MODELLED` means the container received a node the record
+places outside the tenant surface. Stop. The threat model understates the
+attacker, and every coverage figure would be measured against the wrong
+denominator. Widen the model before spending.
+
+### Modelled and not reachable, on the modeset and DRM nodes
+
+`MODELLED AND NOT REACHABLE` naming the modeset and DRM nodes means the
+measurement reached the legacy injection path. Check `runtime-mode`. A
+`legacy` verdict means this host withholds those nodes. A measurement taken
+with `--via gpus` on Docker 29.1.x or older reports legacy whatever the host is
+configured for.
+
+### Modelled and not reachable, on the NVSwitch nodes
+
+`MODELLED AND NOT REACHABLE` naming `/dev/nvidia-nvswitch*` is expected on a
+host without NVSwitch, because those nodes are conditional on
+`NVIDIA_NVSWITCH`. Record the condition and continue.
+
+### The host states no runtime mode
+
+`runtime-mode` reports `not stated on this host` when no `config.toml` was
+found. The toolkit default applies, and `measure` settles what the host
+actually does.
+
+### The entry-point artefact is missing
+
+`surface/entry-points.json does not exist` because it was never generated.
+
+```
+python3 tools/ioctl_inventory.py --src artifacts/src/open-gpu-kernel-modules --emit-entry-points surface/entry-points.json
+```
 
 ## The build
 
-| Symptom | Cause | Action |
-|---|---|---|
-| `ERROR: these did not survive olddefconfig: ...` | `olddefconfig` silently dropped an instrumentation option | The named symbols make coverage and symbolization work. Fix the base config |
-| `WARNING: ... falling back to 'make defconfig'` | `/boot/config-$(uname -r)` is absent | A defconfig kernel usually lacks the storage and network drivers the machine boots with. Set `BASE_CONFIG` |
-| `ERROR: Secure Boot is enabled` | Unsigned out-of-tree modules will not load | Disable it in firmware, or enrol a MOK and sign each `nvidia*.ko` |
-| `WARNING: mokutil is not installed` | Secure Boot state is unknown | Install `mokutil`, or confirm Secure Boot is off in firmware |
-| `ERROR: no GRUB menu entry for <kver>` | The kernel installed but nothing would boot it | The next reboot would come back on the old kernel and fail the build gate for a reason that looks like the build |
-| The NVIDIA module build drops the instrumentation flags | `conftest.sh` strips unknown CFLAGS from the environment | Patch `kernel-open/conftest.sh` minimally to append them, log the patch, retry once per rung |
-| `make: go: No such file or directory` in the syzkaller tree | No Go toolchain is installed. `build-essential` carries none, and syzkaller builds on the host | [Installation](/gspwn/getting-started/installation/) step 7 |
-| `go.mod requires go >= 1.26.0` from `make` or from `syzlang_gen.py compile` | The toolchain is below the floor and did not switch. Go 1.21 and later download it under `GOTOOLCHAIN=auto`, so this means a toolchain below 1.21, `GOTOOLCHAIN=local`, or no route to `proxy.golang.org` | Install the upstream tarball, [Installation](/gspwn/getting-started/installation/) step 7 |
-| `syzlang_gen.py compile` exits 3 with `go` installed | The phase's shell has no `/usr/local/go/bin` on `PATH`. The install step's `export` covers one shell | Add the `PATH` line to the campaign user's shell profile |
+The build gate stops on a dropped instrumentation option, a module that will
+not load, a kernel that will not boot, and a missing Go toolchain.
+
+### Instrumentation options dropped by olddefconfig
+
+`ERROR: these are not set in .config (after olddefconfig):` naming the symbols,
+followed by `Fuzzing without them measures and symbolizes nothing.`
+`olddefconfig` drops anything the tree does not offer, so the check runs after
+it. The seven symbols it requires are `CONFIG_KCOV`,
+`CONFIG_KCOV_INSTRUMENT_ALL`, `CONFIG_KCOV_ENABLE_COMPARISONS`,
+`CONFIG_KASAN`, `CONFIG_KASAN_GENERIC`, `CONFIG_KALLSYMS_ALL`, and any one of
+the `CONFIG_DEBUG_INFO` variants. Fix the base config.
+
+### Fallback to make defconfig
+
+`WARNING: <path> not found, falling back to 'make defconfig'.` means
+`BASE_CONFIG` names no file. It defaults to `/boot/config-$(uname -r)`. A
+defconfig kernel usually lacks the storage and network drivers the machine
+boots with. Set `BASE_CONFIG` to a config known good for this hardware.
+
+### Secure Boot is enabled
+
+`ERROR: Secure Boot is enabled`. Unsigned out-of-tree modules will not load.
+Disable it in firmware, or enrol a MOK and sign each `nvidia*.ko`.
+
+### Secure Boot state is unknown
+
+`WARNING: mokutil is not installed`. Install `mokutil`, or confirm Secure Boot
+is off in firmware.
+
+### No GRUB entry for the new kernel
+
+`ERROR: no GRUB menu entry for <kver>`. The kernel installed and nothing would
+boot it. The next reboot would come back on the old kernel and fail the build
+gate for a reason that looks like the build.
+
+### The NVIDIA module build drops the instrumentation flags
+
+`conftest.sh` strips unknown CFLAGS from the environment. Patch
+`kernel-open/conftest.sh` minimally to append them, log the patch, and retry
+once per rung.
+
+### No Go toolchain
+
+`make: go: No such file or directory` in the syzkaller tree. `build-essential`
+carries no Go toolchain, and syzkaller builds on the host. Follow
+[Installation](/gspwn/getting-started/installation/) step 7.
+
+### The Go toolchain is below the floor
+
+`go.mod requires go >= 1.26.0` from `make` or from `syzlang_gen.py compile`.
+The toolchain is below the floor and did not switch. Go 1.21 and later download
+it under `GOTOOLCHAIN=auto`, so this means a toolchain below 1.21,
+`GOTOOLCHAIN=local`, or no route to `proxy.golang.org`. Install the upstream
+tarball, [Installation](/gspwn/getting-started/installation/) step 7.
+
+### go is installed and the compile phase cannot find it
+
+`syzlang_gen.py compile` exits 3 with `go` installed. The phase's shell has no
+`/usr/local/go/bin` on `PATH`, and the install step's `export` covers one
+shell. Add the `PATH` line to the campaign user's shell profile.
 
 ## Disk
 
-| Symptom | Cause | Action |
-|---|---|---|
-| `WARN: N GB free, under loop.min_free_disk_gb` | kdump dumps and the corpus have grown | `sudo python3 tools/crashlog_ctl.py prune --keep 10`, or grow the volume |
-| Everything fails at once | The disk is full | The fuzzer, the sampler and every state write stop together |
+Two symptoms cover the disk.
+
+- `WARN: 12.4 GB free, under loop.min_free_disk_gb (20 GB).` means kdump dumps
+  and the corpus have grown. Run
+  `sudo python3 tools/crashlog_ctl.py prune --keep 10`, or grow the volume.
+- Everything failing at once means the disk is full. The fuzzer, the sampler
+  and every state write stop together.

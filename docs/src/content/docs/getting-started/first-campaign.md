@@ -13,11 +13,17 @@ result. A phase whose evidence cannot be confirmed is marked `blocked`, which
 stops the pipeline.
 
 ```mermaid
-flowchart LR
+flowchart TB
   P["provision"] --> B["build"]
-  B --> D["describe"]
-  B --> S["seeds"]
-  B --> H["harness"]
+  subgraph PAR[" "]
+    direction LR
+    D["describe"]
+    S["seeds"]
+    H["harness"]
+  end
+  B --> D
+  B --> S
+  B --> H
   D --> F["fuzz"]
   S --> F
   H --> F
@@ -27,14 +33,14 @@ flowchart LR
   C --> E["eval"]
   E --> RF["refine"]
   RF --> DEC{"round-decide"}
+  DEC -->|stop| REP["report"]
   DEC -->|continue| ADV["round-advance"]
   ADV -.->|"worklist + corpus"| D
   ADV -.-> S
-  DEC -->|stop| REP["report"]
 ```
 
-The dashed edges are the only state a new round inherits: the worklist and the
-corpus.
+The dashed edges carry the only state a new round inherits, the worklist and
+the corpus, into `describe` and `seeds`. The boxed trio runs in parallel.
 
 ## Phase order and gates
 
@@ -49,7 +55,7 @@ corpus.
 | `triage` | Every raw crash registered unique, duplicate or flagged, and the flagged queue is empty |
 | `rca` | An RCA file, a research record and an impact record for every unique crash selected for PoC |
 | `poc` | A reproduction rate and classification per unique crash, plus a profile-check outcome per reliable or flaky Track K crash |
-| `eval` | `artifacts/eval/` holds the coverage series, findings table, round progression and `version-persistence.md` |
+| `eval` | `artifacts/eval/` holds the coverage series, the surface coverage report, the findings table, the round progression and `version-persistence.md` |
 | `refine` | `gaps.md` and `worklist.md` written with every item tagged, and the round outcome recorded |
 | `report` | Report and PSIRT packages exist, disclosure status recorded |
 
@@ -166,8 +172,9 @@ The three counts depend on the workload. No CUDA workload trace has been
 captured in this repository, so the numbers above are the shape of the line and
 not a measurement.
 
-Read the unmapped ratio: extend `tools/ioctl_map.json` and re-run the
-conversion. The multiplexer count is never a map gap.
+A high unmapped count means `tools/ioctl_map.json` is missing entries. Extend
+it and re-run the conversion. The multiplexer count never moves with the map,
+because those calls carry no command the trace can decode.
 
 `chains` covers those commands from the allocation graph:
 
@@ -180,7 +187,7 @@ wrote 44 chain-shaped program(s) to artifacts/seeds: 36 prologue(s) over 38 dist
 531 control command(s) accounted for: 514 emitted, 0 dropped before emission, 17 with no chain
 ```
 
-Four `no chain for <class>` lines sit between the two shown, one per owning
+Four `no chain for <class>` lines appear between the two shown, one per owning
 class. Those 17 commands belong in the completion ledger.
 
 ### harness
@@ -343,9 +350,10 @@ with how many records can carry a severity.
 
 ## 7. poc
 
-Turns unique crashes into verified reproducers. Stop the campaign first: a
+Turns unique crashes into verified reproducers. Stop the campaign first. A
 Track K run counts as a reproduction partly because the machine went down
-during it, and the fuzzer panics this machine by design.
+during it, and a live campaign panics this machine on its own, so a panic
+scored against the reproducer may have come from the fuzzer.
 
 ```
 python3 tools/repro_ctl.py extract crash-0001
@@ -365,7 +373,7 @@ profile check that
 [Reproducing a crash](/gspwn/guides/reproducing-a-crash/) gives the command
 for. Record one outcome per crash in the PoC README.
 
-| Outcome | Meaning |
+| Outcome | Condition |
 |---|---|
 | `tenant-reachable` | the reproducer reached the fault under the threat model |
 | `not-tenant-reachable` | the reproducer did not reach the fault |
@@ -376,9 +384,11 @@ container tenant can reach the fault.
 
 ## 8. eval
 
-Measures what the round did. Coverage series per run, a findings table from the
-registry, the cross-round progression, an audit of a sample of `[UNVERIFIED]`
-RCA claims, an impact audit, and a version-persistence result.
+Measures what the round did. Seven results go into `artifacts/eval/`: a
+coverage series per run, the surface coverage report against the 852 enumerated
+targets, a findings table derived from the registry, the cross-round
+progression, a version-persistence result, an audit of a sample of
+`[UNVERIFIED]` RCA claims, and an impact audit.
 
 ```
 python3 tools/coverage_ctl.py series --run-id r1-1

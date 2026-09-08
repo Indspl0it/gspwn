@@ -3,8 +3,8 @@ title: pipeline_ctl.py
 description: The command surface of the state machine.
 ---
 
-The command surface over `pipeline_state.py`. Twenty subcommands, no root
-required. Every state change an agent makes passes through it.
+The command surface over `pipeline_state.py`. 23 subcommands, no root required.
+Every state change an agent makes passes through it.
 
 ## Responsibility
 
@@ -23,19 +23,17 @@ views built from state at read time. It writes state only through
 
 ## The command vocabulary
 
-Twenty subcommands cover five groups of state change.
+The 23 subcommands fall into seven groups.
 
-| Group | Covers |
-|---|---|
-| Phases | Reading the phase table, the next phase to run, and setting a phase status |
-| Crashes | Listing the registry, and bulk-editing entries with their status, duplicate links and reproduction rates |
-| Research | Writing and reading the finding and impact records that carry a crash's analysis |
-| Rounds | Attaching runs, recording a round's measured outcome, applying the caps, and opening the next round |
-| Completion | Accounting a target as closed, reopening one, and printing the ledger grouped by reason |
-
-Alongside those sit the derived views: a handoff brief for a replacement agent,
-the worklist a round's sub-agents execute, and an integrity report over the
-registry and the state file.
+| Group | Subcommands | Effect |
+|---|---|---|
+| Phase | `show`, `next`, `set-phase` | Reads the phase table, names the next phase to run, and sets a phase status |
+| Crash | `crash-list`, `crash-set` | Lists the registry, and bulk-edits entries with their status, duplicate links and reproduction rates |
+| Research | `finding-set`, `finding-list`, `impact-set`, `impact-list` | Writes and reads the finding and impact records that carry a crash's analysis |
+| Round | `round-show`, `round-add-run`, `round-end`, `round-decide`, `round-advance` | Attaches runs, records a round's measured outcome, applies the caps, and opens the next round |
+| Completion | `surface-account`, `surface-unaccount`, `surface-ledger` | Accounts a target as closed, reopens one, and prints the ledger grouped by reason |
+| Derived view | `brief`, `worklist`, `validate` | A handoff brief for a replacement agent, the worklist a round's sub-agents execute, and an integrity report over the registry and the state file |
+| File | `init`, `campaign-add`, `spend-init` | Creates `state/pipeline.json`, appends a campaign entry, and rebuilds a lost spend ledger from the hours the state file records |
 
 ## Concurrency and durability
 
@@ -48,17 +46,34 @@ Read-only commands take the same lock only where they also write.
 
 ## Prohibited behaviour
 
-| Rule | Rationale |
-|---|---|
-| Never fall back to a default for the loop caps or the agent settings | The loop spends machine time unattended, so the caps come from the configuration or the command exits |
-| Never run ahead of a live campaign | A round measured while its fuzzer is running records a number the campaign has not finished producing. The `fuzz` phase is exempt, because it starts the campaign |
-| Never let a bulk edit half-apply | A rejected id exits before the write, so the flagged queue is never left half-decided |
-| Never count duplicates, unresolved flagged entries or noise Xids as findings | They are the fuzzer's own repeat output, and counting them inflates the round's measured result |
-| Never silently accept a hand-typed number in place of a measured one | Explicit flags override the derivation, and the notes carry the derived detail so the override is visible |
-| Never accept an accounting record with an unknown field | A misspelled `reasons` would leave `reason` empty while the command reported success, closing out no target and saying it had |
-| Never accept an accounting record with no written detail | The reason vocabulary groups the count and the detail carries the argument, and a closed-out target is closed permanently |
-| Never write the completion ledger inside the state file | `state/pipeline.json` is 1177 bytes and is rewritten whole under a lock on every phase transition and every crash registration |
-| Never count an accounted target against a different driver release | The inventories are keyed by release, and a ledger written for one accounts for targets another does not contain |
+Nine rules bound the command surface.
+
+- Never fall back to a default for the loop caps or the agent settings. The
+  loop spends machine time unattended, so the caps come from the configuration
+  or the command exits.
+- Never run ahead of a live campaign. A round measured while its fuzzer is
+  running records a number the campaign has not finished producing. The `fuzz`
+  phase is exempt, because it starts the campaign.
+- Never let a bulk edit half-apply. A rejected id exits before the write, so
+  the flagged queue is never left half-decided.
+- Never count duplicates, unresolved flagged entries or noise Xids as findings.
+  They are the fuzzer's own repeat output, and counting them inflates the
+  round's measured result.
+- Never silently accept a hand-typed number in place of a measured one.
+  Explicit flags override the derivation, and the notes carry the derived
+  detail so the override is visible.
+- Never accept an accounting record with an unknown field. A misspelled
+  `reasons` would leave `reason` empty while the command reported success,
+  closing out no target and saying it had.
+- Never accept an accounting record with no written detail. The reason
+  vocabulary groups the count and the detail carries the argument, and a
+  closed-out target is closed permanently.
+- Never write the completion ledger inside the state file.
+  `state/pipeline.json` is 1177 bytes and is rewritten whole under a lock on
+  every phase transition and every crash registration.
+- Never count an accounted target against a different driver release. The
+  inventories are keyed by release, and a ledger written for one accounts for
+  targets another does not contain.
 
 ## Design notes
 
@@ -74,7 +89,7 @@ in the history the report is built from.
 A hand-maintained handoff drifts as soon as a phase changes without it being
 rewritten, which is why `cmd_brief` derives every line at read time.
 
-`finding-set` and `impact-set` take JSON. The records are nine and eighteen
+`finding-set` and `impact-set` take JSON. The records are ten and eighteen
 fields, several of them lists, and `rca` authors each as a whole. A dozen
 repeatable flags would be filled in one call at a time, and a half-written
 record must never be stored. `surface-account` takes JSON for the same reason
@@ -97,7 +112,7 @@ resolves through the inventories as `surface-account` does. `--key` names the
 stored ABI key, and it is the only handle on a row whose target no inventory
 contains any more, which is the state a driver bump leaves behind. Without a
 removal operation, a wrong accounting was recoverable only by hand-editing
-`surface/completion-ledger.json`, and 852 wrong rows fire a
+`state/completion-ledger.json`, and 852 wrong rows fire a
 non-overridable completion stop.
 
 `cmd_round_end` takes the completion reading before `ps.transaction()` opens.
@@ -123,4 +138,7 @@ where a relative path is a run of `..` segments.
 
 ## See also
 
-- [pipeline_ctl.py reference](/gspwn/architecture/components/pipeline-ctl/)
+- [pipeline_state.py](/gspwn/architecture/components/pipeline-state/)
+- [surface_cov.py](/gspwn/architecture/components/surface-cov/)
+- [coverage_ctl.py](/gspwn/architecture/components/coverage-ctl/)
+- [Concepts](/gspwn/getting-started/concepts/)

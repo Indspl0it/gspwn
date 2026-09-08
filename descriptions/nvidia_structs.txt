@@ -3185,7 +3185,7 @@ NV0000_CTRL_GPUACCT_GET_ACCOUNTING_PIDS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuAcctGetAccountingPids {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000b04, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPUACCT_GET_ACCOUNTING_PIDS_PARAMS]
@@ -3207,7 +3207,7 @@ NV0000_CTRL_SYSTEM_GET_P2P_CAPS_V2_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetP2pCapsV2 {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000012b, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_P2P_CAPS_V2_PARAMS]
@@ -3228,7 +3228,7 @@ NV0000_CTRL_GPU_GET_ACTIVE_DEVICE_IDS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetActiveDeviceIds {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000288, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_ACTIVE_DEVICE_IDS_PARAMS]
@@ -3251,7 +3251,7 @@ NV0000_SYNC_GPU_BOOST_GROUP_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSyncGpuBoostGroupInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000a04, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_SYNC_GPU_BOOST_GROUP_INFO_PARAMS]
@@ -3272,7 +3272,7 @@ NV0000_CTRL_OS_UNIX_EXPORT_OBJECTS_TO_FD_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixExportObjectsToFd {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d0b, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_EXPORT_OBJECTS_TO_FD_PARAMS]
@@ -3294,7 +3294,7 @@ NV0000_CTRL_SYSTEM_GET_P2P_CAPS_MATRIX_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetP2pCapsMatrix {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000013a, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_P2P_CAPS_MATRIX_PARAMS]
@@ -3314,7 +3314,7 @@ NV0000_CTRL_SYSTEM_GET_VGX_SYSTEM_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetVgxSystemInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000133, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_VGX_SYSTEM_INFO_PARAMS]
@@ -3333,7 +3333,7 @@ NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetBuildVersionV2 {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000013e, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_BUILD_VERSION_V2_PARAMS]
@@ -3357,7 +3357,7 @@ NV0000_CTRL_OS_UNIX_MEMACCT_GET_LIMITS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixMemacctGetLimits {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d0e, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_MEMACCT_GET_LIMITS_PARAMS]
@@ -3428,7 +3428,7 @@ NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemNVPCFGetPowerModeInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000013b, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_NVPCF_GET_POWER_MODE_INFO_PARAMS]
@@ -3447,7 +3447,7 @@ NV0000_CTRL_OS_UNIX_IMPORT_OBJECTS_FROM_FD_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixImportObjectsFromFd {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d0c, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_IMPORT_OBJECTS_FROM_FD_PARAMS]
@@ -3463,7 +3463,7 @@ NV0000_CTRL_SYSTEM_DEBUG_RMMSG_CTRL_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemDebugCtrlRmMsg {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000121, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_DEBUG_RMMSG_CTRL_PARAMS]
@@ -3479,7 +3479,7 @@ NV0000_CTRL_GPU_GET_PROBED_IDS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetProbedIds {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000214, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_PROBED_IDS_PARAMS]
@@ -3497,7 +3497,7 @@ NV0000_CTRL_GPU_GET_UUID_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetUuidInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000274, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_UUID_INFO_PARAMS]
@@ -3514,7 +3514,7 @@ NV0000_CTRL_GPU_GET_UUID_FROM_GPU_ID_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetUuidFromGpuId {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000275, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_UUID_FROM_GPU_ID_PARAMS]
@@ -3536,7 +3536,7 @@ NV0000_CTRL_SYSTEM_GET_P2P_CAPS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetP2pCaps {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000127, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_P2P_CAPS_PARAMS]
@@ -3564,7 +3564,7 @@ NV0000_CTRL_SYSTEM_GET_CHIPSET_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetChipsetInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000104, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_CHIPSET_INFO_PARAMS]
@@ -3583,7 +3583,7 @@ NV0000_CTRL_SYSTEM_GPS_GET_PERF_SENSOR_COUNTERS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetPerfSensorCounters {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000012c, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GPS_GET_PERF_SENSOR_COUNTERS_PARAMS]
@@ -3593,7 +3593,7 @@ nvos54_ctrl_cliresCtrlCmdSystemGetPerfSensorCounters {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetExtendedPerfSensorCounters {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000012e, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GPS_GET_PERF_SENSOR_COUNTERS_PARAMS]
@@ -3612,7 +3612,7 @@ NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_GET_PERF_SENSOR_COUNTERS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrGetPerfSensorCounters {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000146, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_GET_PERF_SENSOR_COUNTERS_PARAMS]
@@ -3622,7 +3622,7 @@ nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrGetPerfSensorCounters {
 
 nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrGetExtendedPerfSensorCounters {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000147, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_GET_PERF_SENSOR_COUNTERS_PARAMS]
@@ -3644,7 +3644,7 @@ NV0000_CTRL_SYSTEM_GPS_BATCH_CONTROL_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGpsBatchControl {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000123, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GPS_BATCH_CONTROL_PARAMS]
@@ -3666,7 +3666,7 @@ NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_BATCH_CONTROL_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrBatchControl {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000141, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_BATCH_CONTROL_PARAMS]
@@ -3681,7 +3681,7 @@ NV0000_CTRL_SYSTEM_GET_CLASSLIST_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetClassList {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000108, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_CLASSLIST_PARAMS]
@@ -3696,7 +3696,7 @@ NV0000_CTRL_GPU_ATTACH_IDS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuAttachIds {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000215, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_ATTACH_IDS_PARAMS]
@@ -3710,7 +3710,7 @@ NV0000_CTRL_GPU_GET_ATTACHED_IDS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetAttachedIds {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000201, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_ATTACHED_IDS_PARAMS]
@@ -3724,7 +3724,7 @@ NV0000_CTRL_GPU_DETACH_IDS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuDetachIds {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000216, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_DETACH_IDS_PARAMS]
@@ -3754,7 +3754,7 @@ NV0000_CTRL_SYSTEM_GET_CPU_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetCpuInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000102, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_CPU_INFO_PARAMS]
@@ -3769,7 +3769,7 @@ NV0000_CTRL_SET_SUB_PROCESS_ID_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSetSubProcessID {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000901, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SET_SUB_PROCESS_ID_PARAMS]
@@ -3788,7 +3788,7 @@ NV0000_CTRL_OS_UNIX_GET_EXPORT_OBJECT_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixGetExportObjectInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d08, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_GET_EXPORT_OBJECT_INFO_PARAMS]
@@ -3806,7 +3806,7 @@ NV0000_CTRL_OS_UNIX_CREATE_EXPORT_OBJECT_FD_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixCreateExportObjectFd {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d0a, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_CREATE_EXPORT_OBJECT_FD_PARAMS]
@@ -3822,7 +3822,7 @@ NV0000_CTRL_SYSTEM_GET_GPUS_POWER_STATUS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetGpusPowerStatus {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000134, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_GPUS_POWER_STATUS_PARAMS]
@@ -3846,7 +3846,7 @@ NV0000_CTRL_GPUACCT_GET_PROC_ACCOUNTING_INFO_V2_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuAcctGetProcAccountingInfo_v2 {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000b06, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPUACCT_GET_PROC_ACCOUNTING_INFO_V2_PARAMS]
@@ -3868,7 +3868,7 @@ NV0000_CTRL_GPU_IDLE_CHANNELS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdIdleChannels {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000283, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_IDLE_CHANNELS_PARAMS]
@@ -3890,7 +3890,7 @@ NV0000_CTRL_GPUACCT_GET_PROC_ACCOUNTING_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuAcctGetProcAccountingInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000b03, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPUACCT_GET_PROC_ACCOUNTING_INFO_PARAMS]
@@ -3912,7 +3912,7 @@ NV0000_CTRL_SYSTEM_EXECUTE_ACPI_METHOD_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemExecuteAcpiMethod {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000130, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_EXECUTE_ACPI_METHOD_PARAMS]
@@ -3934,7 +3934,7 @@ NV0000_CTRL_GPU_GET_ID_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetIdInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000202, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_ID_INFO_PARAMS]
@@ -3954,7 +3954,7 @@ NV0000_CTRL_OS_UNIX_FLUSH_USER_CACHE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixFlushUserCache {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d02, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_FLUSH_USER_CACHE_PARAMS]
@@ -3975,7 +3975,7 @@ NV0000_CTRL_GPU_GET_ID_INFO_V2_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetIdInfoV2 {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000205, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_ID_INFO_V2_PARAMS]
@@ -3999,7 +3999,7 @@ NV0000_CTRL_GPU_DISABLE_NVLINK_INIT_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuDisableNvlinkInit {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000281, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_DISABLE_NVLINK_INIT_PARAMS]
@@ -4016,7 +4016,7 @@ NV0000_CTRL_GPU_PUSH_UCODE_IMAGE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdPushUcodeImage {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000285, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_PUSH_UCODE_IMAGE_PARAMS]
@@ -4047,7 +4047,7 @@ NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixExportObjectToFd {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d05, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_PARAMS]
@@ -4064,7 +4064,7 @@ NV0000_CTRL_OS_UNIX_MEMACCT_SET_LIMITS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixMemacctSetLimits {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d0d, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_MEMACCT_SET_LIMITS_PARAMS]
@@ -4079,7 +4079,7 @@ NV0000_CTRL_OS_UNIX_IMPORT_OBJECT_FROM_FD_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdOsUnixImportObjectFromFd {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00003d06, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_OS_UNIX_IMPORT_OBJECT_FROM_FD_PARAMS]
@@ -4096,7 +4096,7 @@ NV0000_CTRL_VGPU_GET_VGPU_VERSION_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdVgpuGetVgpuVersion {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000137, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_VGPU_GET_VGPU_VERSION_PARAMS]
@@ -4110,7 +4110,7 @@ NV0000_CTRL_GSYNC_GET_ATTACHED_IDS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGsyncGetAttachedIds {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000301, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GSYNC_GET_ATTACHED_IDS_PARAMS]
@@ -4126,7 +4126,7 @@ NV0000_CTRL_NVD_GET_TIMESTAMP_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdNvdGetTimestamp {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000603, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_NVD_GET_TIMESTAMP_PARAMS]
@@ -4147,7 +4147,7 @@ NV0000_CTRL_CLIENT_GET_HANDLE_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdClientGetHandleInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000d02, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CLIENT_GET_HANDLE_INFO_PARAMS]
@@ -4174,7 +4174,7 @@ NV0000_CTRL_CLIENT_SHARE_OBJECT_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdClientShareObject {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000d06, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CLIENT_SHARE_OBJECT_PARAMS]
@@ -4190,7 +4190,7 @@ NV0000_CTRL_CLIENT_SUBSCRIBE_TO_IMEX_CHANNEL_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdClientSubscribeToImexChannel {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000d08, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CLIENT_SUBSCRIBE_TO_IMEX_CHANNEL_PARAMS]
@@ -4207,7 +4207,7 @@ NV0000_CTRL_SYSTEM_NOTIFY_EVENT_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemNotifyEvent {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000110, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_NOTIFY_EVENT_PARAMS]
@@ -4224,7 +4224,7 @@ NV0000_CTRL_GPU_GET_PCI_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetPciInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000021b, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_PCI_INFO_PARAMS]
@@ -4240,7 +4240,7 @@ NV0000_CTRL_GPU_QUERY_DRAIN_STATE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuQueryGpuDrainState {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000279, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_QUERY_DRAIN_STATE_PARAMS]
@@ -4256,7 +4256,7 @@ NV0000_CTRL_GSYNC_GET_ID_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGsyncGetIdInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000302, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GSYNC_GET_ID_INFO_PARAMS]
@@ -4296,7 +4296,7 @@ NV0000_CTRL_GET_SYSTEM_EVENT_DATA_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdEventGetSystemEventData {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000502, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GET_SYSTEM_EVENT_DATA_PARAMS]
@@ -4312,7 +4312,7 @@ NV0000_CTRL_GPUACCT_GET_ACCOUNTING_STATE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuAcctGetAccountingState {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000b02, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPUACCT_GET_ACCOUNTING_STATE_PARAMS]
@@ -4328,7 +4328,7 @@ NV0000_CTRL_CLIENT_GET_ADDR_SPACE_TYPE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdClientGetAddrSpaceType {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000d01, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CLIENT_GET_ADDR_SPACE_TYPE_PARAMS]
@@ -4344,7 +4344,7 @@ NV0000_CTRL_CLIENT_GET_ACCESS_RIGHTS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdClientGetAccessRights {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000d03, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CLIENT_GET_ACCESS_RIGHTS_PARAMS]
@@ -4358,7 +4358,7 @@ NV0000_CTRL_CLIENT_SET_INHERITED_SHARE_POLICY_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdClientSetInheritedSharePolicy {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000d04, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CLIENT_SET_INHERITED_SHARE_POLICY_PARAMS]
@@ -4374,7 +4374,7 @@ NV0000_CTRL_CMD_CLIENT_GET_CHILD_HANDLE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdClientGetChildHandle {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000d05, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CMD_CLIENT_GET_CHILD_HANDLE_PARAMS]
@@ -4391,7 +4391,7 @@ NV0000_CTRL_CLIENT_OBJECTS_ARE_DUPLICATES_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdObjectsAreDuplicates {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000d07, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CLIENT_OBJECTS_ARE_DUPLICATES_PARAMS]
@@ -4407,7 +4407,7 @@ NV0000_CTRL_SYSTEM_GPS_CONTROL_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGpsControl {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000122, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GPS_CONTROL_PARAMS]
@@ -4422,7 +4422,7 @@ NV0000_CTRL_VGPU_SET_VGPU_VERSION_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdVgpuSetVgpuVersion {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000138, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_VGPU_SET_VGPU_VERSION_PARAMS]
@@ -4436,7 +4436,7 @@ NV0000_CTRL_SYSTEM_GET_RM_INSTANCE_ID_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetRmInstanceId {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000139, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_RM_INSTANCE_ID_PARAMS]
@@ -4452,7 +4452,7 @@ NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CONTROL_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrControl {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000140, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CONTROL_PARAMS]
@@ -4467,7 +4467,7 @@ NV0000_CTRL_GPU_GET_INIT_STATUS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetInitStatus {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000203, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_INIT_STATUS_PARAMS]
@@ -4482,7 +4482,7 @@ NV0000_CTRL_EVENT_SET_NOTIFICATION_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdEventSetNotification {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000501, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_EVENT_SET_NOTIFICATION_PARAMS]
@@ -4497,7 +4497,7 @@ NV0000_CTRL_NVD_GET_DUMP_SIZE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdNvdGetDumpSize {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000601, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_NVD_GET_DUMP_SIZE_PARAMS]
@@ -4511,7 +4511,7 @@ NV0000_CTRL_CMD_SYSTEM_GET_PLATFORM_TYPE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetPlatformType {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000111, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CMD_SYSTEM_GET_PLATFORM_TYPE_PARAMS]
@@ -4525,7 +4525,7 @@ NV0000_CTRL_SYSTEM_GET_FABRIC_STATUS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetFabricStatus {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000136, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_FABRIC_STATUS_PARAMS]
@@ -4539,7 +4539,7 @@ NV0000_CTRL_SYSTEM_GET_FEATURES_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetFeatures {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x000001f0, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_FEATURES_PARAMS]
@@ -4553,7 +4553,7 @@ NV0000_CTRL_GPU_GET_DEVICE_IDS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetDeviceIds {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000204, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_DEVICE_IDS_PARAMS]
@@ -4567,7 +4567,7 @@ NV0000_CTRL_GPU_GET_MEMOP_ENABLE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetMemOpEnable {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000027b, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_MEMOP_ENABLE_PARAMS]
@@ -4581,7 +4581,7 @@ NV0000_CTRL_GPU_ASYNC_ATTACH_ID_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuAsyncAttachId {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000289, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_ASYNC_ATTACH_ID_PARAMS]
@@ -4595,7 +4595,7 @@ NV0000_CTRL_GPU_WAIT_ATTACH_ID_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuWaitAttachId {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000290, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_WAIT_ATTACH_ID_PARAMS]
@@ -4610,7 +4610,7 @@ NV0000_CTRL_GPU_GET_NVLINK_BW_MODE_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetNvlinkBwMode {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000287, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_NVLINK_BW_MODE_PARAMS]
@@ -4624,7 +4624,7 @@ NV0000_CTRL_SYSTEM_GET_PRIVILEGED_STATUS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGetPrivilegedStatus {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000135, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GET_PRIVILEGED_STATUS_PARAMS]
@@ -4638,7 +4638,7 @@ NV0000_CTRL_DISABLE_SUB_PROCESS_USERD_ISOLATION_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdDisableSubProcessUserdIsolation {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000902, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_DISABLE_SUB_PROCESS_USERD_ISOLATION_PARAMS]
@@ -4652,7 +4652,7 @@ NV0000_SYNC_GPU_BOOST_INFO_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSyncGpuBoostInfo {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000a01, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_SYNC_GPU_BOOST_INFO_PARAMS]
@@ -4685,7 +4685,7 @@ NV0000_CTRL_CMD_NVD_GET_RCERR_RPT_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdNvdGetRcerrRpt {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000607, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_CMD_NVD_GET_RCERR_RPT_PARAMS]
@@ -4727,7 +4727,7 @@ NV0000_CTRL_DIAG_DUMP_RPC_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdDiagDumpRpc {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000489, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_DIAG_DUMP_RPC_PARAMS]
@@ -4772,7 +4772,7 @@ NV0000_CTRL_SYSTEM_GPS_CALL_ACPI_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGpsCallAcpi {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000012d, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GPS_CALL_ACPI_PARAMS]
@@ -4789,7 +4789,7 @@ NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CALL_ACPI_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrCallAcpi {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000143, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CALL_ACPI_PARAMS]
@@ -4808,7 +4808,7 @@ NV0000_CTRL_GPU_GET_VIDEO_LINKS_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdGpuGetVideoLinks {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000219, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_GPU_GET_VIDEO_LINKS_PARAMS]
@@ -4832,7 +4832,7 @@ NV0000_CTRL_SYSTEM_GPS_GET_FRM_DATA_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGpsGetFrmData {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000012f, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GPS_GET_FRM_DATA_PARAMS]
@@ -4856,7 +4856,7 @@ NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_GET_FRM_DATA_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrGetFrmData {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000144, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_GET_FRM_DATA_PARAMS]
@@ -5001,7 +5001,7 @@ NV0000_CTRL_SYSTEM_GPS_CTRL_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGpsCtrl {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x0000012a, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GPS_CTRL_PARAMS]
@@ -5017,7 +5017,7 @@ NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CTRL_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrCtrl {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000142, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_CTRL_PARAMS]
@@ -5127,7 +5127,7 @@ NV0000_CTRL_SYSTEM_GPS_SET_FRM_DATA_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemGpsSetFrmData {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000132, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_GPS_SET_FRM_DATA_PARAMS]
@@ -5141,7 +5141,7 @@ NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_SET_FRM_DATA_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdSystemPfmreqhndlrSetFrmData {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000145, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_SYSTEM_PFM_REQ_HNDLR_SET_FRM_DATA_PARAMS]
@@ -5280,7 +5280,7 @@ NV0000_CTRL_DIAG_PROFILE_RPC_PARAMS {
 
 nvos54_ctrl_cliresCtrlCmdDiagProfileRpc {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root
+	hObject   	nvh_any_rmclientresource
 	cmd       	const[0x00000488, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0000_CTRL_DIAG_PROFILE_RPC_PARAMS]
@@ -5678,7 +5678,7 @@ NVC56F_CTRL_CMD_GET_KMB_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdGetKmb {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_ampere_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xc56f010b, int32]
 	flags     	int32
 	params    	ptr64[inout, NVC56F_CTRL_CMD_GET_KMB_PARAMS]
@@ -5693,7 +5693,7 @@ NVC56F_CTRL_ROTATE_SECURE_CHANNEL_IV_PARAMS {
 
 nvos54_ctrl_kchannelCtrlRotateSecureChannelIv {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_ampere_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xc56f010c, int32]
 	flags     	int32
 	params    	ptr64[inout, NVC56F_CTRL_ROTATE_SECURE_CHANNEL_IV_PARAMS]
@@ -6261,7 +6261,7 @@ NV906F_CTRL_GET_CLASS_ENGINEID_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdGetClassEngineid {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_gf100_channel_gpfifo
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0x906f0101, int32]
 	flags     	int32
 	params    	ptr64[inout, NV906F_CTRL_GET_CLASS_ENGINEID_PARAMS]
@@ -6279,7 +6279,7 @@ NV906F_CTRL_CMD_RESET_CHANNEL_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdResetChannel {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_gf100_channel_gpfifo
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0x906f0102, int32]
 	flags     	int32
 	params    	ptr64[inout, NV906F_CTRL_CMD_RESET_CHANNEL_PARAMS]
@@ -6452,7 +6452,7 @@ NV506F_CTRL_CMD_RESET_ISOLATED_CHANNEL_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdResetIsolatedChannel {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0x506f0105, int32]
 	flags     	int32
 	params    	ptr64[inout, NV506F_CTRL_CMD_RESET_ISOLATED_CHANNEL_PARAMS]
@@ -6725,7 +6725,7 @@ NVA06F_CTRL_BIND_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdBind {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kepler_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xa06f0104, int32]
 	flags     	int32
 	params    	ptr64[inout, NVA06F_CTRL_BIND_PARAMS]
@@ -6739,7 +6739,7 @@ NVA06F_CTRL_INTERLEAVE_LEVEL_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdSetInterleaveLevel {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kepler_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xa06f0109, int32]
 	flags     	int32
 	params    	ptr64[inout, NVA06F_CTRL_INTERLEAVE_LEVEL_PARAMS]
@@ -6753,7 +6753,7 @@ NVA06F_CTRL_GET_CONTEXT_ID_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdGetContextId {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kepler_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xa06f0113, int32]
 	flags     	int32
 	params    	ptr64[inout, NVA06F_CTRL_GET_CONTEXT_ID_PARAMS]
@@ -6767,7 +6767,7 @@ NVC36F_CTRL_CMD_GPFIFO_GET_WORK_SUBMIT_TOKEN_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdGpfifoGetWorkSubmitToken {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_volta_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xc36f0108, int32]
 	flags     	int32
 	params    	ptr64[inout, NVC36F_CTRL_CMD_GPFIFO_GET_WORK_SUBMIT_TOKEN_PARAMS]
@@ -6781,7 +6781,7 @@ NVC36F_CTRL_GPFIFO_SET_WORK_SUBMIT_TOKEN_NOTIF_INDEX_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdGpfifoSetWorkSubmitTokenNotifIndex {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_volta_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xc36f010a, int32]
 	flags     	int32
 	params    	ptr64[inout, NVC36F_CTRL_GPFIFO_SET_WORK_SUBMIT_TOKEN_NOTIF_INDEX_PARAMS]
@@ -6918,7 +6918,7 @@ NVA06F_CTRL_GPFIFO_SCHEDULE_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdGpFifoSchedule {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kepler_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xa06f0103, int32]
 	flags     	int32
 	params    	ptr64[inout, NVA06F_CTRL_GPFIFO_SCHEDULE_PARAMS]
@@ -7109,7 +7109,7 @@ NVA06F_CTRL_SET_ERROR_NOTIFIER_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdSetErrorNotifier {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kepler_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xa06f0108, int32]
 	flags     	int32
 	params    	ptr64[inout, NVA06F_CTRL_SET_ERROR_NOTIFIER_PARAMS]
@@ -7123,7 +7123,7 @@ NVA06F_CTRL_STOP_CHANNEL_PARAMS {
 
 nvos54_ctrl_kchannelCtrlCmdStopChannel {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kepler_channel_gpfifo_a
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0xa06f0112, int32]
 	flags     	int32
 	params    	ptr64[inout, NVA06F_CTRL_STOP_CHANNEL_PARAMS]
@@ -7725,7 +7725,7 @@ NV_CONF_COMPUTE_CTRL_GET_SECURITY_POLICY_PARAMS {
 
 nvos54_ctrl_confComputeApiCtrlCmdSystemGetSecurityPolicy {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_ampere_channel_gpfifo_a
+	hObject   	nvh_nv_confidential_compute
 	cmd       	const[0xc56f010e, int32]
 	flags     	int32
 	params    	ptr64[inout, NV_CONF_COMPUTE_CTRL_GET_SECURITY_POLICY_PARAMS]
@@ -10307,7 +10307,7 @@ NV0090_CTRL_TPC_PARTITION_MODE_PARAMS {
 
 nvos54_ctrl_kchannelCtrlSetTpcPartitionMode {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0x00900101, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_TPC_PARTITION_MODE_PARAMS]
@@ -10317,7 +10317,7 @@ nvos54_ctrl_kchannelCtrlSetTpcPartitionMode {
 
 nvos54_ctrl_kchangrpapiCtrlSetTpcPartitionMode {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_kepler_channel_group_a
 	cmd       	const[0x00900101, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_TPC_PARTITION_MODE_PARAMS]
@@ -10327,7 +10327,7 @@ nvos54_ctrl_kchangrpapiCtrlSetTpcPartitionMode {
 
 nvos54_ctrl_kchannelCtrlGetTpcPartitionMode {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0x00900103, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_TPC_PARTITION_MODE_PARAMS]
@@ -10337,7 +10337,7 @@ nvos54_ctrl_kchannelCtrlGetTpcPartitionMode {
 
 nvos54_ctrl_kchangrpapiCtrlGetTpcPartitionMode {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_kepler_channel_group_a
 	cmd       	const[0x00900103, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_TPC_PARTITION_MODE_PARAMS]
@@ -10356,7 +10356,7 @@ NV0090_CTRL_PROGRAM_VIDMEM_PROMOTE_PARAMS {
 
 nvos54_ctrl_kchannelCtrlProgramVidmemPromote {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0x00900107, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_PROGRAM_VIDMEM_PROMOTE_PARAMS]
@@ -10366,7 +10366,7 @@ nvos54_ctrl_kchannelCtrlProgramVidmemPromote {
 
 nvos54_ctrl_kchangrpapiCtrlProgramVidmemPromote {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_kepler_channel_group_a
 	cmd       	const[0x00900107, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_PROGRAM_VIDMEM_PROMOTE_PARAMS]
@@ -10721,7 +10721,7 @@ NV0090_CTRL_SET_LG_SECTOR_PROMOTION_PARAMS {
 
 nvos54_ctrl_kchannelCtrlSetLgSectorPromotion {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0x0090010b, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_SET_LG_SECTOR_PROMOTION_PARAMS]
@@ -10731,7 +10731,7 @@ nvos54_ctrl_kchannelCtrlSetLgSectorPromotion {
 
 nvos54_ctrl_kchangrpapiCtrlSetLgSectorPromotion {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_kepler_channel_group_a
 	cmd       	const[0x0090010b, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_SET_LG_SECTOR_PROMOTION_PARAMS]
@@ -11170,7 +11170,7 @@ NV0090_CTRL_GET_MMU_DEBUG_MODE_PARAMS {
 
 nvos54_ctrl_kchannelCtrlGetMMUDebugMode {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_any_kernelchannel
 	cmd       	const[0x00900105, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_GET_MMU_DEBUG_MODE_PARAMS]
@@ -11180,7 +11180,7 @@ nvos54_ctrl_kchannelCtrlGetMMUDebugMode {
 
 nvos54_ctrl_kchangrpapiCtrlGetMMUDebugMode {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_kernel_graphics_context
+	hObject   	nvh_kepler_channel_group_a
 	cmd       	const[0x00900105, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0090_CTRL_GET_MMU_DEBUG_MODE_PARAMS]
@@ -12627,7 +12627,7 @@ NVB0CC_CTRL_PMA_STREAM_UPDATE_GET_PUT_PARAMS {
 
 nvos54_ctrl_profilerBaseCtrlCmdPmaStreamUpdateGetPut {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0109, int32]
 	flags     	int32
 	params    	ptr64[inout, NVB0CC_CTRL_PMA_STREAM_UPDATE_GET_PUT_PARAMS]
@@ -12648,7 +12648,7 @@ NVB0CC_CTRL_INTERNAL_SRIOV_PROMOTE_PMA_STREAM_PARAMS {
 
 nvos54_ctrl_profilerBaseCtrlCmdInternalSriovPromotePmaStream {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0202, int32]
 	flags     	int32
 	params    	ptr64[inout, NVB0CC_CTRL_INTERNAL_SRIOV_PROMOTE_PMA_STREAM_PARAMS]
@@ -12664,7 +12664,7 @@ NVB0CC_CTRL_POWER_REQUEST_FEATURES_PARAMS {
 
 nvos54_ctrl_profilerBaseCtrlCmdRequestCgControls {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0301, int32]
 	flags     	int32
 	params    	ptr64[inout, NVB0CC_CTRL_POWER_REQUEST_FEATURES_PARAMS]
@@ -12688,7 +12688,7 @@ NVB0CC_CTRL_ALLOC_PMA_STREAM_PARAMS {
 
 nvos54_ctrl_profilerBaseCtrlCmdAllocPmaStream {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0105, int32]
 	flags     	int32
 	params    	ptr64[inout, NVB0CC_CTRL_ALLOC_PMA_STREAM_PARAMS]
@@ -12702,7 +12702,7 @@ NVB0CC_CTRL_FREE_PMA_STREAM_PARAMS {
 
 nvos54_ctrl_profilerBaseCtrlCmdFreePmaStream {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0106, int32]
 	flags     	int32
 	params    	ptr64[inout, NVB0CC_CTRL_FREE_PMA_STREAM_PARAMS]
@@ -12712,7 +12712,7 @@ nvos54_ctrl_profilerBaseCtrlCmdFreePmaStream {
 
 nvos54_ctrl_profilerBaseCtrlCmdBindPmResources {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0107, int32]
 	flags     	int32
 	params    	const[0, int64]
@@ -12722,7 +12722,7 @@ nvos54_ctrl_profilerBaseCtrlCmdBindPmResources {
 
 nvos54_ctrl_profilerBaseCtrlCmdUnbindPmResources {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0108, int32]
 	flags     	int32
 	params    	const[0, int64]
@@ -12736,7 +12736,7 @@ NVB0CC_CTRL_RESERVE_HWPM_LEGACY_PARAMS {
 
 nvos54_ctrl_profilerBaseCtrlCmdReserveHwpmLegacy {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0101, int32]
 	flags     	int32
 	params    	ptr64[inout, NVB0CC_CTRL_RESERVE_HWPM_LEGACY_PARAMS]
@@ -12752,7 +12752,7 @@ NV0041_CTRL_GET_SURFACE_INFO_PARAMS {
 
 nvos54_ctrl_memCtrlCmdGetSurfaceInfoLvm {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root_client
+	hObject   	nvh_any_memory
 	cmd       	const[0x00410110, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0041_CTRL_GET_SURFACE_INFO_PARAMS]
@@ -12769,7 +12769,7 @@ NV0041_CTRL_GET_SURFACE_COMPRESSION_COVERAGE_PARAMS {
 
 nvos54_ctrl_memCtrlCmdGetSurfaceCompressionCoverageLvm {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root_client
+	hObject   	nvh_any_memory
 	cmd       	const[0x00410112, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0041_CTRL_GET_SURFACE_COMPRESSION_COVERAGE_PARAMS]
@@ -12800,7 +12800,7 @@ NV0041_CTRL_GET_MEM_PAGE_SIZE_PARAMS {
 
 nvos54_ctrl_memCtrlCmdGetMemPageSize {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root_client
+	hObject   	nvh_any_memory
 	cmd       	const[0x00410118, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0041_CTRL_GET_MEM_PAGE_SIZE_PARAMS]
@@ -12814,7 +12814,7 @@ NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_PARAMS {
 
 nvos54_ctrl_memCtrlCmdSurfaceFlushGpuCache {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root_client
+	hObject   	nvh_any_memory
 	cmd       	const[0x00410116, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0041_CTRL_SURFACE_FLUSH_GPU_CACHE_PARAMS]
@@ -12828,7 +12828,7 @@ NV0041_CTRL_CMD_SET_TAG_PARAMS {
 
 nvos54_ctrl_memCtrlCmdSetTag {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root_client
+	hObject   	nvh_any_memory
 	cmd       	const[0x00410120, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0041_CTRL_CMD_SET_TAG_PARAMS]
@@ -12842,7 +12842,7 @@ NV0041_CTRL_CMD_GET_TAG_PARAMS {
 
 nvos54_ctrl_memCtrlCmdGetTag {
 	hClient   	nvh_nv01_root
-	hObject   	nvh_nv01_root_client
+	hObject   	nvh_any_memory
 	cmd       	const[0x00410121, int32]
 	flags     	int32
 	params    	ptr64[inout, NV0041_CTRL_CMD_GET_TAG_PARAMS]
@@ -12870,7 +12870,7 @@ NVB0CC_CTRL_POWER_RELEASE_FEATURES_PARAMS {
 
 nvos54_ctrl_profilerBaseCtrlCmdReleaseCgControls {
 	hClient   	nvh_nv01_root
-	hObject   	nv_handle
+	hObject   	nvh_any_profilerbase
 	cmd       	const[0xb0cc0302, int32]
 	flags     	int32
 	params    	ptr64[inout, NVB0CC_CTRL_POWER_RELEASE_FEATURES_PARAMS]

@@ -68,6 +68,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+
 logger = logging.getLogger(__name__)
 
 # Source files the inventory is derived from, relative to --src. Every one is
@@ -258,9 +261,16 @@ RE_NVKMS_MAGIC = re.compile(r"^#define\s+NVKMS_IOCTL_MAGIC\s+'(.)'", re.M)
 RE_NVKMS_CMD = re.compile(r"^#define\s+NVKMS_IOCTL_CMD\s+(\d+)\s*$", re.M)
 RE_NVKMS_PARAMS = re.compile(
     r"struct\s+NvKmsIoctlParams\s*\{(?P<body>[^}]*)\}\s*;")
-RE_NVKMS_MEMBER = re.compile(
-    r"^\s*(?P<type>\w+)\s+(?P<name>\w+)"
-    r"(?:\s+NV_ALIGN_BYTES\(\s*(?P<align>\d+)\s*\))?\s*;\s*$", re.M)
+# One member declaration of the modeset envelope, split into its type and the
+# declarator list that follows it. A declaration this pair does not match is
+# refused by name, because skipping it sizes the struct short and the request
+# number is derived from that size.
+RE_NVKMS_DECLARATION = re.compile(r"^(?P<type>\w+)\s+(?P<declarators>.+)$")
+RE_NVKMS_DECLARATOR = re.compile(
+    r"^(?P<name>\w+)(?P<arrays>(?:\s*\[\s*\d+\s*\])*)"
+    r"(?:\s+NV_ALIGN_BYTES\(\s*(?P<align>\d+)\s*\))?$")
+RE_NVKMS_ARRAY_BOUND = re.compile(r"\[\s*(\d+)\s*\]")
+RE_C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
 
 DEV_NVIDIA = ["/dev/nvidiactl", "/dev/nvidiaN"]
 DEV_UVM = ["/dev/nvidia-uvm"]
@@ -774,7 +784,27 @@ def parse_uvm_dispatch(src, rel, known):
 
 
 def rm_request(magic, nr, size):
-    """Linux ioctl request number, matching tools/trace2seed.py's decoder."""
+    """Linux ioctl request number, matching tools/trace2seed.py's decoder.
+
+    Each field is bounded before it is shifted. _IOC_SIZE carries 14 bits, so
+    a parameter struct above IOC_SIZE_MAX has no direct request number at all:
+    shifting it anyway spills the high bits into the direction field and
+    produces a number the driver never sees. nvkms_request() refuses the same
+    condition, and build_rm_commands() records such a command as xfer_only
+    with an empty request list.
+    """
+    for field, value, ceiling in (("size", size, IOC_SIZE_MAX),
+                                  ("magic", magic, 0xFF),
+                                  ("nr", nr, 0xFF)):
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise InventoryError(
+                "ioctl request %s must be an integer, got %r" % (field, value))
+        if value < 0 or value > ceiling:
+            raise InventoryError(
+                "ioctl request %s is %d, outside the 0 to %d the encoding "
+                "carries. Encoding it anyway would overwrite the neighbouring "
+                "field and name a request number the driver never sees."
+                % (field, value, ceiling))
     return (DIRECTION_BITS << 30) | (size << 16) | (magic << 8) | nr
 
 
@@ -818,19 +848,26 @@ def build_rm_commands(src, magic, numbers, origin, table, sites, sizes,
             rec["param_struct_alt"] = alt
             rec["param_size_alt"] = sizes.get(alt)
 
+        # A size above IOC_SIZE_MAX has no direct request number: the 14-bit
+        # _IOC_SIZE field cannot carry it, and NV_ESC_IOCTL_XFER_CMD is the
+        # only route to such a command. Every encoding below is gated on the
+        # ceiling, so the record carries an empty request list and xfer_only
+        # says why. rm_request() refuses the same condition, so a gate lost
+        # here stops the run and never writes a wrapped number.
         requests = []
         if rec["is_argument_array"]:
             # arg_size is validated as a nonzero multiple of paramSize, so the
             # request number carries an element count and no single value
             # represents the command. The one-element form is the smallest
             # legal request and the only one a fixed map key can name.
-            if size:
+            if size and size <= IOC_SIZE_MAX:
                 rec["request_one_element"] = hex(rm_request(magic, rec["nr"], size))
                 rec["max_direct_elements"] = IOC_SIZE_MAX // size
-        elif size is not None:
+        elif size is not None and size <= IOC_SIZE_MAX:
             requests.append(rm_request(magic, rec["nr"], size))
-        if rec.get("param_size_alt") is not None:
-            requests.append(rm_request(magic, rec["nr"], rec["param_size_alt"]))
+        alt_size = rec.get("param_size_alt")
+        if alt_size is not None and alt_size <= IOC_SIZE_MAX:
+            requests.append(rm_request(magic, rec["nr"], alt_size))
         rec["requests"] = [hex(v) for v in requests]
 
         sizes_needed = [s for s in (size, rec.get("param_size_alt")) if s is not None]
@@ -1089,7 +1126,7 @@ def build_map(inventory, stamp=None, modeset=None):
 
     The two multiplexers in MULTIPLEXER_SELECTOR are left out of the name map
     for the same reason and recorded under MAP_MULTIPLEXER_KEY instead. Their
-    request numbers carry 686 of the 764 targets between them and dominate a
+    request numbers carry 686 of the 852 targets between them and dominate a
     real CUDA trace, and the name the escape used to carry is declared by no
     description.
 
@@ -1205,6 +1242,56 @@ MODESET_DOC = (
     "as a description name.")
 
 
+def nvkms_members(body, where):
+    """-> [(type, name, element count, forced alignment)] for one struct body.
+
+    Every declaration in the body is read. A declaration this parser cannot
+    decompose raises and names the member, because a skipped declaration sizes
+    the envelope short and the request number is derived from that size. An
+    array is sized as its element count times its element width; a declarator
+    carrying a pointer, a bitfield, a function type or a non-literal array
+    bound raises, and so does a declaration whose type is more than one token,
+    which is every struct and union.
+    """
+    members = []
+    for statement in RE_C_COMMENT.sub(" ", body).split(";"):
+        statement = " ".join(statement.split())
+        if not statement:
+            continue
+        declaration = RE_NVKMS_DECLARATION.match(statement)
+        if declaration is None:
+            raise InventoryError(
+                "%s declares %r in struct %s, which carries no type and no "
+                "member name this parser can read. The request number is "
+                "derived from sizeof(%s), and a declaration read as nothing "
+                "sizes the struct short."
+                % (where, statement, NVKMS_PARAM_STRUCT, NVKMS_PARAM_STRUCT))
+        kind = declaration.group("type")
+        for text in declaration.group("declarators").split(","):
+            declarator = RE_NVKMS_DECLARATOR.match(text.strip())
+            if declarator is None:
+                raise InventoryError(
+                    "%s declares %s in struct %s, which this parser cannot "
+                    "size: it reads a member name, optional array bounds "
+                    "written as decimal literals, and an optional "
+                    "NV_ALIGN_BYTES attribute. The request number is derived "
+                    "from sizeof(%s), and no size is ever guessed to fill a "
+                    "row."
+                    % (where, ("%s %s" % (kind, text.strip())),
+                       NVKMS_PARAM_STRUCT, NVKMS_PARAM_STRUCT))
+            count = 1
+            for bound in RE_NVKMS_ARRAY_BOUND.findall(declarator.group("arrays")):
+                count *= int(bound)
+            members.append((kind, declarator.group("name"), count,
+                            declarator.group("align")))
+    if not members:
+        raise InventoryError(
+            "%s declares struct %s with no member this parser recognises, so "
+            "its size cannot be derived and neither can the one request "
+            "number %s accepts" % (where, NVKMS_PARAM_STRUCT, NVKMS_NODE))
+    return members
+
+
 def nvkms_struct_size(body, where):
     """-> sizeof the modeset envelope, from its own member declarations.
 
@@ -1217,28 +1304,20 @@ def nvkms_struct_size(body, where):
     a request number built on an assumed width. The measured JSON still wins
     where it carries this struct; see nvkms_request().
     """
-    members = list(RE_NVKMS_MEMBER.finditer(body))
-    if not members:
-        raise InventoryError(
-            "%s declares struct %s with no member this parser recognises, so "
-            "its size cannot be derived and neither can the one request "
-            "number %s accepts" % (where, NVKMS_PARAM_STRUCT, NVKMS_NODE))
     offset, widest = 0, 1
-    for member in members:
-        kind = member.group("type")
+    for kind, name, count, forced in nvkms_members(body, where):
         if kind not in NVKMS_SCALARS:
             raise InventoryError(
                 "%s declares %s.%s as %s, which is not one of the "
                 "fixed-width scalars this parser sizes (%s). The request "
                 "number is derived from sizeof(%s), and no size is ever "
                 "guessed to fill a row."
-                % (where, NVKMS_PARAM_STRUCT, member.group("name"), kind,
+                % (where, NVKMS_PARAM_STRUCT, name, kind,
                    ", ".join(sorted(NVKMS_SCALARS)), NVKMS_PARAM_STRUCT))
         width, align = NVKMS_SCALARS[kind]
-        forced = member.group("align")
         if forced:
             align = max(align, int(forced))
-        offset = -(-offset // align) * align + width
+        offset = -(-offset // align) * align + width * count
         widest = max(widest, align)
     return -(-offset // widest) * widest
 
@@ -1413,7 +1492,7 @@ NV_DRM_C = "kernel-open/nvidia-drm/nvidia-drm-drv.c"
 # nvidia-uvm, nvidia-uvm-tools and nvidia-modeset, and the per-GPU
 # /dev/nvidiaN nodes alongside them. A node absent from that function is
 # absent from a default container and therefore outside the tenant surface.
-TENANT_DEVICE_SOURCE = "libnvidia-container/src/nvc_info.c:515"
+TENANT_DEVICE_SOURCE = "libnvidia-container/src/nvc_info.c:517"
 
 OUTSIDE_TENANT_SURFACE = (
     "lookup_devices at %s creates /dev/nvidiactl, /dev/nvidia-uvm, "
@@ -1481,6 +1560,26 @@ DRM_TENANT_SURFACE = (
 )
 
 
+# Every file_operations table the driver registers, with the one criterion
+# `modelled` is applied under: the description set declares a call for every
+# mmap and poll this table registers. Nothing else decides the field. The
+# criterion is written here because the field name alone reads as a claim
+# about the device node, and the node's command surface is a separate
+# question the `reason` of each record answers.
+#
+# Under it, four tables are modelled and the description set declares ten
+# calls across their six nodes: mmap and poll on /dev/nvidiactl and
+# /dev/nvidiaN, mmap on /dev/nvidia-uvm, poll on /dev/nvidia-uvm-tools, and
+# mmap and poll on /dev/dri/cardN and /dev/dri/renderDN. nvkms_fops registers
+# both and the set declares neither, so it is False while its 64 commands are
+# inside the command denominator. A reader taking `modelled_nodes` for the
+# count of nodes whose commands are modelled reads six where the campaign
+# models seven, which is why the criterion is stated and not inferred.
+#
+# regression_check.py coverage enforces it: it counts the mmap and poll
+# entries of the modelled tables and fails where the description set declares
+# a different number, so marking a table modelled without declaring its calls
+# stops that check.
 FOPS_TABLES = (
     {
         "fops": "nvidia_fops",
@@ -1660,6 +1759,12 @@ def parse_fops_table(text, symbol):
                     guards[-1] = rest.strip()
                 else:
                     guards.append(rest.strip())
+            elif head == "else" and guards:
+                # A member in the else arm is registered under the negation of
+                # the arm above it. Recording the unnegated condition names the
+                # opposite build, which is the one case where a table entry
+                # reads as conditional on the condition that excludes it.
+                guards[-1] = "!(%s)" % guards[-1]
             elif head == "endif" and guards:
                 guards.pop()
             continue
@@ -1843,27 +1948,61 @@ def build_inventory(src, sizes):
     }
 
 
+def serialise(payload):
+    """The committed text form of an artefact this tool emits.
+
+    indent=2, sort_keys=False and the trailing newline are the shape
+    regression_check.py stale hashes. Every write path here goes through this
+    function so the three artefacts cannot drift apart.
+    """
+    return json.dumps(payload, indent=2, sort_keys=False) + "\n"
+
+
+def ensure_out_dir(path):
+    """Create the containing directory of `path` where it does not exist."""
+    out_dir = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+        logger.info("created output directory %s", out_dir)
+    return out_dir
+
+
 def write_json(path, payload):
-    """Write JSON through a temp file in the same directory.
+    """Write one artefact durably.
 
     An interrupted run leaves the previous file intact and never a truncated
     one. tools/ioctl_map.json is committed data the seeds phase reads on a
     machine where regenerating it needs a compiler.
     """
-    out_dir = os.path.dirname(os.path.abspath(path))
-    if not os.path.isdir(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
-        logger.info("created output directory %s", out_dir)
-    tmp = path + ".tmp"
+    ensure_out_dir(path)
     try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(payload, f, indent=2, sort_keys=False)
-            f.write("\n")
-        os.replace(tmp, path)
+        atomic_write.atomic_write_text(path, serialise(payload))
     except OSError as e:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
         raise InventoryError("cannot write %s: %s" % (path, e))
+
+
+def write_json_set(items):
+    """Write several artefacts as one group: `items` is a (path, payload) list.
+
+    One run emits up to three files that downstream reads as one set, so a
+    failure part way through must not leave a new map beside an old inventory.
+    Every payload is serialised and flushed to a temporary beside its target
+    before any target changes, then the renames run back to back. The group is
+    not atomic across files, and tools/atomic_write.py states exactly what the
+    staging does and does not guarantee. A failure anywhere leaves no
+    temporary behind.
+    """
+    for path, _ in items:
+        ensure_out_dir(path)
+    try:
+        with atomic_write.StagedWriteSet() as staged:
+            for path, payload in items:
+                staged.stage(path, serialise(payload))
+            staged.commit()
+    except OSError as e:
+        raise InventoryError("cannot write %s: %s"
+                             % (", ".join(p for p, _ in items), e))
+    return [p for p, _ in items]
 
 
 def build_parser():
@@ -1935,37 +2074,55 @@ def main(argv=None):
         logger.error("%s", e)
         return 1
 
+    # One run writes up to three artefacts and downstream reads them as one
+    # set: trace2seed resolves a request number through the map and then reads
+    # the inventory for the command behind it. Every derivation and every
+    # refusal therefore runs before the first write, so a refused run leaves
+    # all three files as they were and exit 1 means no byte moved. Deriving
+    # first also keeps a parse error in the entry-point census from landing
+    # after the map is already on disk. The writes themselves then go through
+    # write_json_set, which serialises and flushes every file before renaming
+    # any of them, so a write failure also leaves all three as they were.
+    modeset = mapping = skipped = entry_points = None
     try:
         if a.emit_map:
             modeset = nvkms_request(a.src, sizes)
             mapping, skipped = build_map(inventory, version_stamp(a.src),
                                          modeset)
-            write_json(a.emit_map, mapping)
-            requests = sum(1 for k in mapping if not k.startswith("comment"))
-            muxes = len(mapping.get(MAP_MULTIPLEXER_KEY, {}).get("requests", {}))
-            print("wrote %s (%d request numbers, %d multiplexer request "
-                  "numbers carrying no call name, %d commands omitted)"
-                  % (a.emit_map, requests, muxes, len(skipped)))
-            for request, record in sorted(modeset["requests"].items()):
-                print("  %s is %s's one request number, family %s only: the "
-                      "sub-command is %s.%s and no trace carries it (F18)"
-                      % (request, record["node"], record["escape"],
-                         record["param_struct"], record["selector_field"]))
         if a.emit_entry_points:
             entry_points = build_entry_points(a.src)
-            write_json(a.emit_entry_points, entry_points)
-            counts = entry_points["counts"]
-            print("wrote %s (%d file_operations table(s), %d modelled over "
-                  "%d device node(s), %d entry point(s) on the modelled "
-                  "tables of %d registered in total)"
-                  % (a.emit_entry_points, counts["tables"],
-                     counts["modelled_tables"], counts["modelled_nodes"],
-                     counts["modelled_entry_points"], counts["entry_points"]))
         refuse_size_regression(a.out, inventory)
-        write_json(a.out, inventory)
+
+        pending = []
+        if a.emit_map:
+            pending.append((a.emit_map, mapping))
+        if a.emit_entry_points:
+            pending.append((a.emit_entry_points, entry_points))
+        pending.append((a.out, inventory))
+        write_json_set(pending)
     except InventoryError as e:
         logger.error("%s", e)
         return 1
+
+    if a.emit_map:
+        requests = sum(1 for k in mapping if not k.startswith("comment"))
+        muxes = len(mapping.get(MAP_MULTIPLEXER_KEY, {}).get("requests", {}))
+        print("wrote %s (%d request numbers, %d multiplexer request "
+              "numbers carrying no call name, %d commands omitted)"
+              % (a.emit_map, requests, muxes, len(skipped)))
+        for request, record in sorted(modeset["requests"].items()):
+            print("  %s is %s's one request number, family %s only: the "
+                  "sub-command is %s.%s and no trace carries it (F18)"
+                  % (request, record["node"], record["escape"],
+                     record["param_struct"], record["selector_field"]))
+    if a.emit_entry_points:
+        counts = entry_points["counts"]
+        print("wrote %s (%d file_operations table(s), %d modelled over "
+              "%d device node(s), %d entry point(s) on the modelled "
+              "tables of %d registered in total)"
+              % (a.emit_entry_points, counts["tables"],
+                 counts["modelled_tables"], counts["modelled_nodes"],
+                 counts["modelled_entry_points"], counts["entry_points"]))
 
     c = inventory["counts"]
     print("wrote %s" % a.out)

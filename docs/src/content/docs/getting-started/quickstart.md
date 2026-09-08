@@ -109,11 +109,18 @@ python3 tools/pipeline_ctl.py validate
 state is consistent
 ```
 
-`validate` reports integrity problems and exits 1 when it finds any: a phase
-marked done ahead of its dependency, a duplicate with no link to a surviving
-entry, a crash analysed by `rca` with no research record, an impact record
-whose consequence outruns its primitive, or dedup settings that moved
-underneath the registry's stored hashes.
+`validate` exits 1 on any recorded state that contradicts itself, and prints
+one line per problem. Seven classes are checked.
+
+| Class | Example problem |
+|---|---|
+| Phase order | a phase marked `done` while an earlier phase is `pending` |
+| Vocabulary | a crash whose `status`, `track` or `disclosure` value is outside its closed set |
+| Duplicate links | a crash marked `duplicate` with no `duplicate_of`, a link to an unknown crash, or a chain through another duplicate |
+| Range | a `repro_rate` outside 0 to 1 |
+| Findings | a crash `rca` analysed with no research record, or a record that names no adjacent call and no `no_adjacent_reason` |
+| Impact | an impact record whose consequence outruns its primitive, or which argues an outcome above denial of service from an attacker who controls nothing |
+| Dedup drift | `triage` dedup settings that moved after the registry's stack hashes were built |
 
 ## Session recovery
 
@@ -156,11 +163,10 @@ GSPWN_STATE=/tmp/scratch/pipeline.json python3 tools/pipeline_ctl.py init
 ```
 
 The spend ledger does not follow `GSPWN_STATE`. A run with its own state file
-still bills the one machine-global budget. See
-Environment variables.
+still bills the one machine-global budget.
 
 ## Next
 
 - [First campaign](/gspwn/getting-started/first-campaign/) runs round 1 on
   real hardware.
-- Command line overview lists every tool.
+- [Components](/gspwn/architecture/components/) documents every tool.

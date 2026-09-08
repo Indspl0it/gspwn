@@ -109,10 +109,13 @@ DEFAULTS = {
         # Wall-clock ceiling on one agent launch. The breaker counts starts,
         # not stalls, so without this an agent blocked on a prompt or a wedged
         # tool holds the pipeline open indefinitely while the instance bills.
-        # It has to exceed loop.campaign_hours, because the fuzz phase blocks
-        # on `campaign_ctl.py wait` for the whole campaign window; validation
-        # refuses a value that does not. 0 disables the timeout.
-        "max_agent_hours": 0,
+        #
+        # The fuzz launch blocks on `campaign_ctl.py wait` for the whole of
+        # loop.campaign_hours, so orchestrator_ctl.py `launch_hours` adds that
+        # window for that launch and for no other. This value is therefore the
+        # headroom one launch gets beyond the work it is waiting on, and
+        # validation caps it at loop.campaign_hours. "unbounded" turns it off.
+        "max_agent_hours": 24,
         # Substituted for {anchor} in resume_command. This is the first thing a
         # resumed agent reads after a panic, and what stops it from continuing
         # a half-finished tool call issued at the moment the kernel died — so
@@ -270,6 +273,11 @@ DEFAULTS = {
 }
 
 # (section, key, predicate, message) — checked on every load.
+# The one value of orchestrator.max_agent_hours that turns the per-launch
+# stall bound off. A word, not 0: the setting shipped as 0, every reader took
+# that for "unset", and it meant the supervisor never bounded a launch at all.
+UNBOUNDED_AGENT_HOURS = "unbounded"
+
 _POSITIVE = ("must be a positive number", lambda v: _num(v) and v > 0)
 # Caps that count things (rounds, processes, minutes) are integers: a float
 # like max_rounds: 2.5 must fail loudly, not silently truncate in one place
@@ -343,8 +351,13 @@ _RULES = [
      ("must be a number >= 0 (0 disables the size check)",
       lambda v: _num(v) and v >= 0)),
     ("orchestrator", "max_agent_hours",
-     ("must be a number >= 0 (0 disables the per-launch timeout)",
-      lambda v: _num(v) and v >= 0)),
+     ("must be a positive number of hours, or the string %r to run with no "
+      "per-launch bound at all. It bounds one agent launch, so it takes a "
+      "duration an operator meant to write. 0 was accepted before, every "
+      "reader took it for unset, and it left the shipped configuration with "
+      "no guard against a wedged agent holding a billing GPU instance"
+      % UNBOUNDED_AGENT_HOURS,
+      lambda v: v == UNBOUNDED_AGENT_HOURS or (_num(v) and v > 0))),
     ("orchestrator", "resume_anchor",
      ("must be a non-empty string containing no apostrophe or double quote. "
       "It is substituted into a shell command line the operator has already "
@@ -491,18 +504,31 @@ def validate(cfg):
             "no round could finish inside the budget"
             % (cfg["loop"]["campaign_hours"],
                cfg["loop"]["max_total_run_hours"]))
-    # The fuzz phase blocks on `campaign_ctl.py wait` for the whole campaign
-    # window, so a timeout at or below it kills every healthy agent at the
-    # same point in every round and the pipeline never gets past fuzz.
-    if (_num(orch.get("max_agent_hours")) and orch["max_agent_hours"]
-            and _num(cfg["loop"]["campaign_hours"])
-            and orch["max_agent_hours"] <= cfg["loop"]["campaign_hours"]):
+    # The ceiling, and the reason it is a ceiling and not the floor this rule
+    # used to impose. The fuzz phase does block on `campaign_ctl.py wait` for
+    # the whole campaign window inside one launch, but that exemption belongs
+    # to the launch that needs it and not to the setting: orchestrator_ctl.py
+    # `launch_hours` adds loop.campaign_hours for the fuzz launch and for no
+    # other. Requiring the setting itself to exceed the window made every
+    # admissible value longer than the campaign, so the bound on a stalled
+    # describe agent was 41 days at the shipped 1000 h.
+    #
+    # A bound longer than a whole campaign fires only after the campaign has
+    # already ended, so it stops bounding anything. That is the ceiling. It
+    # catches a value written with an extra zero and passes one inside the
+    # window, which no rule can distinguish from a deliberate choice.
+    if (_num(orch.get("max_agent_hours")) and _num(cfg["loop"]["campaign_hours"])
+            and orch["max_agent_hours"] > cfg["loop"]["campaign_hours"]):
         problems.append(
-            "orchestrator.max_agent_hours (%s) must exceed "
-            "loop.campaign_hours (%s) — the fuzz phase waits out the whole "
-            "campaign window in one agent launch, so a shorter timeout would "
-            "kill every healthy agent at the same point in every round"
-            % (orch["max_agent_hours"], cfg["loop"]["campaign_hours"]))
+            "orchestrator.max_agent_hours (%s) exceeds loop.campaign_hours "
+            "(%s). It bounds one agent launch, and a bound longer than a "
+            "whole campaign fires only after the campaign has ended. The fuzz "
+            "launch is the only long one, and it already gets "
+            "loop.campaign_hours added on top of this value, so this is the "
+            "headroom a launch gets beyond the work it waits on. Use %r to "
+            "run with no bound."
+            % (orch["max_agent_hours"], cfg["loop"]["campaign_hours"],
+               UNBOUNDED_AGENT_HOURS))
     if (_num(cfg["loop"]["plateau_window_min"])
             and _num(cfg["loop"]["coverage_sample_min"])
             and cfg["loop"]["plateau_window_min"] < cfg["loop"][
@@ -659,8 +685,10 @@ def main():
     print("guards: deadline checked every %d min, agent launch capped at %s, "
           "warn below %s GB free"
           % (lp["deadline_check_min"],
-             ("%.0f h" % orch["max_agent_hours"]) if orch["max_agent_hours"]
-             else "no limit",
+             ("no limit" if orch["max_agent_hours"] == UNBOUNDED_AGENT_HOURS
+              else "%.0f h (fuzz: %.0f h)"
+              % (orch["max_agent_hours"],
+                 orch["max_agent_hours"] + lp["campaign_hours"])),
              lp["min_free_disk_gb"] or "(check off)"))
     if cv["horizon_hours"] != lp["campaign_hours"]:
         print("  note: horizon %.0f h differs from loop.campaign_hours %.0f h, "

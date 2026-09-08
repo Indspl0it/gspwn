@@ -20,10 +20,16 @@ The patterns match across one line break, because prose in the documentation
 tree wraps at 80 columns and a construction split by the wrap is the same
 construction. The reported line number is the line it starts on.
 
+Code is blanked before any rule runs: <style> and <script> elements, fenced
+blocks, inline code spans, and the frontmatter fence of an `.astro` component,
+whose body is JavaScript and whose comments are addressed to a maintainer. The
+register governs prose written for a reader, and prose is what is left.
+
 Exempt content is listed in EXEMPT below, each entry with the reason it is
-exempt. Verbatim reproductions are immutable: documentation has to match what
-the program actually prints, so a banned construction inside quoted tool
-output is a defect in the tool, not in the page.
+exempt. Every entry is a verbatim reproduction, and a verbatim reproduction is
+immutable: documentation has to match what the program actually prints, so a
+banned construction inside quoted tool output is a defect in the tool and not
+in the page.
 """
 import os
 import re
@@ -50,13 +56,19 @@ SUFFIXES = (".md", ".mdx", ".astro")
 # one command".
 CODE_SPAN = "\x01"
 
+# The frontmatter fence of an `.astro` component: `---` alone on the first
+# line, closed by the next line that is exactly `---`. The body between them is
+# JavaScript. A `---` further down the file is markup or a horizontal rule and
+# opens nothing, so the pattern is anchored at the start of the source.
+ASTRO_FRONTMATTER = re.compile(r"\A---\n.*?^---$", re.S | re.M)
+
 # path suffix -> (rule name, a tuple of rule names, or "*" for all, reason)
+#
+# Every entry names a verbatim reproduction. A source comment reaches no entry
+# here: strip_exempt_regions blanks the `.astro` frontmatter that holds one,
+# which covers every component at once. An exemption list that grows one file
+# at a time for one recurring cause hides the cause.
 EXEMPT = {
-    "components/ThemeProvider.astro": (
-        "rather",
-        "A source comment. The register governs prose for a reader, not code "
-        "comments.",
-    ),
     "knowledgebase/gsp-offload.mdx": (
         "marketing adjective",
         "Robust channel is NVIDIA's name for the recovery mechanism. Renaming "
@@ -161,6 +173,75 @@ PATTERNS = [
                          r"\bturns out\b|\bis the one that\b|"
                          r"\bmeans something other than\b|\bthe (trick|catch) is\b|"
                          r"\bis where the .{0,30}happens\b"),
+    # A clause hung off a comma asserting a consequence it never measures.
+    # "the flag is set, ensuring the campaign completes" states no mechanism.
+    # These are the fake-depth verbs. "enabling" and "providing" are absent
+    # because each carries a literal technical sense often enough that the
+    # pattern would report ordinary prose.
+    ("trailing -ing clause",
+     r",\s+(ensuring|highlighting|reflecting|underscoring|demonstrating|"
+     r"showcasing|emphasi[sz]ing|illustrating|signall?ing|paving|"
+     r"allowing for|making it (possible|easier|clear|simple))\b"),
+    # A datasheet states a magnitude. An intensifier is the substitute for
+    # one and carries no quantity.
+    # "the very next start" is a determiner and stays. "very different
+    # amounts" is the intensifier standing in for the difference.
+    ("hollow intensifier",
+     r"\bvery (?!next|first|last|same|least|most|thing)\w|"
+     r"\b(extremely|incredibly|remarkably|truly|utterly|vastly|"
+     r"immensely|highly)\b"),
+    # Telling a reader an operation is easy. Where it is, saying so adds
+    # nothing. Where it is not, the reader is now wrong and blames themselves.
+    ("dismissive qualifier",
+     r"\b(simply|easily|obviously|trivially|straightforward|of course|"
+     r"needless to say)\b"),
+    # Marketing superlatives. None of them is a measurement.
+    ("significance inflation",
+     r"\b(game.?chang\w+|revolutionar\w+|cutting.edge|state.of.the.art|"
+     r"best.in.class|world.class|unparalleled|unprecedented|"
+     r"paradigm shift|next.generation)\b"),
+    # A claim with no source. Cite the source or state the fact.
+    ("vague attribution",
+     r"\b(experts? (say|agree|believe)|studies show|research shows|"
+     r"it is (widely|generally) (known|accepted|considered)|"
+     r"many believe|is often regarded|some would argue)\b"),
+    # A quantity the writer did not look up. The inventories carry the number.
+    ("vague quantity",
+     r"\ba (wide|broad|vast|large) (range|variety|array|number) of\b|"
+     r"\ba number of\b|\bnumerous\b|\bmyriad\b|\bplethora\b"),
+    # A closing that restates the section without adding a fact. Anchored to
+    # a line opening with an explicit newline alternative, because check_file
+    # compiles with re.I alone and a bare ^ would match the file start only.
+    ("generic conclusion",
+     r"(?:^|\n)\s*[>*+-]*\s*(In (conclusion|summary|short)|To summari[sz]e|"
+     r"Overall|Ultimately|At its core|All in all|In essence)\b"),
+    # Two hedges on one claim. A specification states the condition under
+    # which the behaviour holds.
+    ("hedge stack",
+     r"\b(may|might|could|can) (potentially|possibly|perhaps|sometimes|"
+     r"occasionally)\b|\b(generally|typically|usually) tends? to\b|"
+     r"\bit (may|might) be (possible|worth)\b"),
+    # Latin abbreviations. Write the English.
+    ("latin abbreviation", r"\b(e\.g\.|i\.e\.|etc\.|viz\.|cf\.)"),
+    # Winding up before the fact, or addressing the reader to introduce it.
+    ("throat clearing",
+     r"\bIn today's\b|\bIn the world of\b|\bIn the realm of\b|"
+     r"\bWhen it comes to\b|\bAt the heart of\b|"
+     r"\bIt goes without saying\b|\bKeep in mind\b|\bBear in mind\b|"
+     # Anchored to a sentence opening. Unanchored, "note that" matches inside
+     # "with the note that NVIDIA backfilled only to 2022", which is a noun.
+     r"(?:^|[.!?:]\s|\n)(Note|Remember) that\b"),
+    # Spatial verbs standing in for a relation the writer did not name. A
+    # record is written to a path, a field is at an offset, a gate is a module
+    # parameter. None of them sits, lands or lives anywhere.
+    ("spatial verb",
+     r"\b(sits?|sat|lands?|landed|lives?|resides?|nestles?)\s+"
+     r"(in|on|at|under|inside|beside|within|beneath|next to)\b"),
+    # A question in body prose sets up an answer the sentence could have
+    # stated. A genuine question-and-answer page declares an exemption.
+    ("body question",
+     r"(?<![\w`])(So|But|And|Why|What|How|Ever wonder)\b"
+     r"[^.?!\n]{5,120}\?"),
 ]
 
 QUESTION_START = re.compile(r"^(what|why|how|where|when|who|which)\b", re.I)
@@ -202,13 +283,18 @@ def _mark_span(match):
     return CODE_SPAN * len(match.group(0))
 
 
-def strip_exempt_regions(src):
+def strip_exempt_regions(src, suffix=""):
     """Blank code, keeping line numbers.
 
     Covers <style>, <script>, fenced blocks and inline code spans. Everything
     in a code span is a reproduction: a path, a command, a string literal the
     program prints, or an example of a construction being described. The
     register governs prose, and prose is what is left.
+
+    suffix is the file's extension, lowercased, and decides the file-type
+    regions. For ".astro" the leading frontmatter fence goes first, because its
+    body is JavaScript and its comments are written for a maintainer. Any other
+    suffix, and the empty default, leave the source's opening lines alone.
 
     The regions are blanked, never deleted. Deleting shifts every line number
     after the first edit, which makes the reported location useless.
@@ -220,7 +306,8 @@ def strip_exempt_regions(src):
     continuation. Both fills are non-word characters, so a pattern anchored on
     \\b reads either as a boundary and no other rule can see the difference.
     """
-    out = re.sub(r"<(style|script)\b.*?</\1>", _blank, src, flags=re.S | re.I)
+    out = ASTRO_FRONTMATTER.sub(_blank, src) if suffix == ".astro" else src
+    out = re.sub(r"<(style|script)\b.*?</\1>", _blank, out, flags=re.S | re.I)
     out = re.sub(r"^```.*?^```", _blank, out, flags=re.S | re.M)
     out = re.sub(r"``[^`]+``", _mark_span, out)
     return re.sub(r"`[^`\n]+`", _mark_span, out)
@@ -244,7 +331,8 @@ def md_table_headers(src):
 def check_file(path, rel_path):
     """Return a list of (rule, line, detail) for one file."""
     with open(path, encoding="utf-8") as handle:
-        prose = strip_exempt_regions(handle.read())
+        prose = strip_exempt_regions(handle.read(),
+                                     os.path.splitext(path)[1].lower())
 
     hits = []
 
@@ -336,7 +424,7 @@ def main():
 
     print("register_check: %d file(s), %d hit(s)" % (len(files), total))
     if total:
-        print("See ~/.claude/rules/technical-writing-register.md. If a hit is "
+        print("See ~/.claude/output-styles/technical.md. If a hit is "
               "a verbatim reproduction, add it to EXEMPT with its reason.")
     return 1 if total else 0
 

@@ -51,6 +51,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -59,6 +60,7 @@ from contextlib import redirect_stderr, redirect_stdout
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import atomic_write
 import campaign_ctl
 import corpus_ctl
 import coverage_ctl
@@ -84,6 +86,167 @@ import surface_verify
 import syzlang_gen
 import trace2seed
 import value_families
+
+
+# --------------------------------------------------------------------------
+# Temporary-path guard.
+#
+# Three tests built os.path.join(repro_ctl.REPO_ROOT, "artifacts", "pocs",
+# "crash-0001") and shutil.rmtree'd it on cleanup while REPO_ROOT still
+# pointed at the checkout, so the suite deleted a real crash's proof of
+# concept on any machine carrying a campaign. CI passed because artifacts/ is
+# gitignored and empty there. The guard below runs for every test in the file
+# and fails the test that reaches one of these paths outside a temporary
+# directory.
+# --------------------------------------------------------------------------
+
+# The module-level path constants a test redirects before it touches them.
+GUARDED_PATHS = (("repro_ctl", "REPO_ROOT"),
+                 ("pipeline_state", "STATE_DIR"),
+                 ("pipeline_state", "STATE_PATH"),
+                 ("pipeline_state", "SPEND_PATH"),
+                 ("pipeline_state", "DEFAULT_STATE_PATH"))
+
+_GUARDED_ATTRS = frozenset(attr for _, attr in GUARDED_PATHS)
+_GUARDED_KEYS = frozenset(GUARDED_PATHS)
+
+# (module, attribute) pairs read through the module object since the current
+# test started. A test that names none of them is asked to redirect none of
+# them.
+_PATH_READS = set()
+
+# Directories tempfile hands out. A guarded value resolving under one of these
+# belongs to the test that set it.
+_TEMP_ROOTS = tuple(sorted({
+    os.path.realpath(p) for p in
+    [tempfile.gettempdir()] +
+    [os.environ[v] for v in ("TMPDIR", "TEMP", "TMP") if os.environ.get(v)]}))
+
+# Real paths the guarded constants pointed at before any test ran, keyed by
+# resolved path and carrying the name that produced them. _REAL_FINGERPRINTS
+# holds (mtime_ns, size) per path, or None where the path is absent, sampled
+# at the start of every test.
+_REAL_PATHS = {}
+_REAL_FINGERPRINTS = {}
+
+
+def _under_temp(path):
+    """True where path resolves inside a directory tempfile hands out."""
+    real = os.path.realpath(path)
+    return any(real == root or real.startswith(root + os.sep)
+               for root in _TEMP_ROOTS)
+
+
+def _path_fingerprint(path):
+    """(mtime_ns, size) for path, or None where it does not exist."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _sample_real_paths():
+    for path in _REAL_PATHS:
+        _REAL_FINGERPRINTS[path] = _path_fingerprint(path)
+
+
+class _PathReadRecordingModule(types.ModuleType):
+    """Module type recording reads of the guarded path constants.
+
+    Reads through the module object are recorded. A read of the same global
+    from inside the owning module's own function is a plain global load and
+    reaches no hook, so the name check covers a test that builds a path out of
+    the constant, which is the shape every instance found takes. The
+    fingerprint check in _assert_paths_stayed_temporary covers the rest.
+    """
+
+    def __getattribute__(self, name):
+        value = types.ModuleType.__getattribute__(self, name)
+        if name in _GUARDED_ATTRS:
+            key = (types.ModuleType.__getattribute__(self, "__name__"), name)
+            if key in _GUARDED_KEYS:
+                _PATH_READS.add(key)
+        return value
+
+
+def _assert_paths_stayed_temporary(test):
+    """Fail test where it reached a guarded path outside a temporary directory.
+
+    Two checks run. The name check reads every guarded constant the test
+    touched and requires it to resolve under a temporary directory; it runs at
+    tearDown, which is after the test body and before addCleanup restores the
+    redirect. The effect check compares the real state file, spend ledger and
+    poc directory against the fingerprint taken when the test started, so a
+    test reaching them by any other route fails too.
+    """
+    failures = []
+    for mod_name, attr in sorted(_PATH_READS):
+        module = sys.modules[mod_name]
+        value = types.ModuleType.__getattribute__(module, attr)
+        if isinstance(value, str) and not _under_temp(value):
+            failures.append("read %s.%s, which resolves to %s"
+                            % (mod_name, attr, os.path.realpath(value)))
+    for path, label in sorted(_REAL_PATHS.items()):
+        if _path_fingerprint(path) != _REAL_FINGERPRINTS.get(path):
+            failures.append("changed %s, the real path %s names" % (path,
+                                                                    label))
+    _PATH_READS.clear()
+    if failures:
+        raise AssertionError(
+            "%s reached outside its temporary directory: %s. Redirect the "
+            "name to the test's own tempfile.TemporaryDirectory in setUp; on "
+            "a machine carrying a campaign the real path holds live state and "
+            "crash proofs of concept."
+            % (test.id(), "; and ".join(failures)))
+
+
+def _install_temp_path_guard():
+    """Record guarded reads and check them at tearDown, for every test.
+
+    unittest calls _callTearDown inside the executor that turns an exception
+    into a failure on the running test, and it calls it before doCleanups
+    restores the redirects. No public hook occupies that position, so the
+    guard patches it and fails loudly where a future Python drops the name.
+    """
+    if getattr(unittest.TestCase, "_gspwn_path_guard", False):
+        return
+    if not hasattr(unittest.TestCase, "_callTearDown"):
+        raise RuntimeError(
+            "unittest.TestCase._callTearDown is absent on Python %s, so the "
+            "temporary-path guard has no hook between tearDown and the "
+            "cleanups that restore the redirects"
+            % ".".join(str(n) for n in sys.version_info[:3]))
+    for mod_name, attr in GUARDED_PATHS:
+        module = sys.modules[mod_name]
+        value = types.ModuleType.__getattribute__(module, attr)
+        if isinstance(value, str) and not _under_temp(value):
+            target = (os.path.join(value, "artifacts", "pocs")
+                      if attr == "REPO_ROOT" else value)
+            _REAL_PATHS.setdefault(os.path.realpath(target),
+                                   "%s.%s" % (mod_name, attr))
+        if not isinstance(module, _PathReadRecordingModule):
+            module.__class__ = _PathReadRecordingModule
+    _sample_real_paths()
+
+    original_run = unittest.TestCase.run
+    original_call_tear_down = unittest.TestCase._callTearDown
+
+    def run(self, result=None):
+        _PATH_READS.clear()
+        _sample_real_paths()
+        return original_run(self, result)
+
+    def call_tear_down(self):
+        original_call_tear_down(self)
+        _assert_paths_stayed_temporary(self)
+
+    unittest.TestCase.run = run
+    unittest.TestCase._callTearDown = call_tear_down
+    unittest.TestCase._gspwn_path_guard = True
+
+
+_install_temp_path_guard()
 
 
 def csv_line(ts, edges=None, source="test", gpu="ok", **extra):
@@ -154,7 +317,17 @@ class StateTempMixin:
     running the tests on a campaign box would inject phantom hours into the
     ledger that gates live campaigns, and leak state between tests in the
     same run. DEFAULT_STATE_PATH is redirected too: it is the fail-closed
-    fallback spend_for_budget() reads when the ledger is absent.
+    fallback spend_for_budget() reads when the ledger is absent. STATE_DIR
+    joins them because repro_ctl._acquire_lock() reads it at call time and
+    deliberately ignores GSPWN_STATE, so cmd_verify under test created and
+    flocked the machine's own state/repro.lock; two suite runs on one box
+    then failed each other with "another repro_ctl verify session holds".
+
+    repro_ctl.REPO_ROOT joins them for the same reason. repro_ctl writes every
+    extracted proof of concept under REPO_ROOT/artifacts/pocs/<crash id> and
+    three tests in this file built that path and removed it on cleanup, which
+    on a campaign box deleted the real crash's artefacts. Redirecting here
+    covers every test in the mixin, including the ones written next.
     """
 
     def setUp(self):
@@ -163,11 +336,14 @@ class StateTempMixin:
         state_dir = os.path.join(self.tmp.name, "state")
         self.state_path = os.path.join(state_dir, "pipeline.json")
         self.spend_path = os.path.join(state_dir, "spend.json")
-        for attr, value in (("STATE_PATH", self.state_path),
+        for attr, value in (("STATE_DIR", state_dir),
+                            ("STATE_PATH", self.state_path),
                             ("DEFAULT_STATE_PATH", self.state_path),
                             ("SPEND_PATH", self.spend_path)):
             self.addCleanup(setattr, ps, attr, getattr(ps, attr))
             setattr(ps, attr, value)
+        self.addCleanup(setattr, repro_ctl, "REPO_ROOT", repro_ctl.REPO_ROOT)
+        repro_ctl.REPO_ROOT = self.tmp.name
 
 
 class TestState(StateTempMixin, unittest.TestCase):
@@ -815,8 +991,8 @@ class TestReproHelpers(unittest.TestCase):
         # The hit count and the logged verdict come from one predicate, so
         # they cannot disagree about whether a run reproduced.
         sig = {"funcs": ["nv_free"], "phrases": ["use-after-free in nv_free"]}
-        self.assertEqual(repro_ctl.matched_signature("oops nv_free here", sig),
-                         "nv_free")
+        self.assertIn("nv_free",
+                      repro_ctl.matched_signature("oops nv_free here", sig))
         self.assertIsNone(repro_ctl.matched_signature("all quiet", sig))
 
     def test_a_different_bug_does_not_count_as_a_reproduction(self):
@@ -831,8 +1007,8 @@ class TestReproHelpers(unittest.TestCase):
         # Report-less crashes still have to be scorable, so the title's
         # stable phrases are the fallback evidence.
         sig = {"funcs": [], "phrases": ["soft lockup in nv_uvm"]}
-        self.assertEqual(repro_ctl.matched_signature(
-            "x soft lockup in nv_uvm y", sig), "soft lockup in nv_uvm")
+        self.assertIn("soft lockup in nv_uvm", repro_ctl.matched_signature(
+            "x soft lockup in nv_uvm y", sig))
 
 
 class TestReproVerifyBookkeeping(StateTempMixin, unittest.TestCase):
@@ -864,8 +1040,11 @@ class TestReproVerifyBookkeeping(StateTempMixin, unittest.TestCase):
         pocs = os.path.join(self.tmp.name, "artifacts", "pocs", self.cid)
         os.makedirs(pocs)
         exe = os.path.join(pocs, "repro")
+        # The reproducer records that it ran, so _fake_dmesg can model the
+        # ring buffer by what the run did to it.
+        self.ran_marker = os.path.join(pocs, "ran")
         with open(exe, "w") as f:
-            f.write("#!/bin/sh\nexit 0\n")   # a repro that never reproduces
+            f.write("#!/bin/sh\ntouch %s\nexit 0\n" % self.ran_marker)
         os.chmod(exe, 0o755)
         st = ps.default_state()
         ps.register_crash(st, {"track": "K", "title": "KASAN: UAF in nv_zzz",
@@ -874,12 +1053,21 @@ class TestReproVerifyBookkeeping(StateTempMixin, unittest.TestCase):
         ps.save(st)
 
     def _fake_dmesg(self):
-        """Called twice per run: once before the repro, once after."""
+        """Model the ring buffer by what the run did to it.
+
+        The reproducer touches a marker when it runs, so the first read after
+        it is the one that sees what it printed. Keying on call parity
+        instead encoded one particular number of reads per run, and inverted
+        the moment the first run stopped reusing the probe's text as its
+        baseline.
+        """
         self.calls += 1
-        is_after = self.calls % 2 == 0
-        if is_after and self.wrapping:
+        ran = os.path.exists(self.ran_marker)
+        if ran:
+            os.unlink(self.ran_marker)
+        if ran and self.wrapping:
             return "a totally different buffer %d\n" % self.calls
-        if is_after and self.crashing:
+        if ran and self.crashing:
             self.log += "KASAN: use-after-free in nv_zzz\n"
         return self.log
 
@@ -1665,17 +1853,33 @@ class TestTrackUCoverage(StateTempMixin, unittest.TestCase):
         ps.current_round(st)["run_ids"] = [run_id]
         ps.save(st)
 
-    def harness(self, run_id, name, stats=None, queue=0):
+    def harness(self, run_id, name, stats=None, queue=0, corpus=0,
+                layout="afl"):
+        """Build one harness output directory in the layout its fuzzer writes.
+
+        layout="afl" puts fuzzer_stats and queue/ under default/, which is
+        where `afl-fuzz -o <harness>` writes them and where run_all.sh
+        harvests default/crashes from. layout="flat" puts them at the top of
+        the harness directory, which is the single-instance layout the
+        sampler still falls back to. A libFuzzer harness takes corpus= and no
+        stats, because that mode writes no stats file at all.
+        """
         d = os.path.join(coverage_ctl.track_u_dir(run_id), name)
-        os.makedirs(d, exist_ok=True)
+        out = os.path.join(d, "default") if layout == "afl" else d
+        os.makedirs(out, exist_ok=True)
         if stats:
-            with open(os.path.join(d, "fuzzer_stats"), "w") as f:
+            with open(os.path.join(out, "fuzzer_stats"), "w") as f:
                 f.write(stats)
         if queue:
-            q = os.path.join(d, "queue")
+            q = os.path.join(out, "queue")
             os.makedirs(q, exist_ok=True)
             for i in range(queue):
                 open(os.path.join(q, "id%03d" % i), "w").close()
+        if corpus:
+            c = os.path.join(d, "corpus")
+            os.makedirs(c, exist_ok=True)
+            for i in range(corpus):
+                open(os.path.join(c, "c%03d" % i), "w").close()
         return d
 
     def test_afl_stats_are_summed_across_harnesses(self):
@@ -1694,7 +1898,7 @@ class TestTrackUCoverage(StateTempMixin, unittest.TestCase):
 
     def test_libfuzzer_harness_reports_corpus_but_no_edges(self):
         # Corpus size must never stand in for coverage.
-        self.harness("r1-u1", "oci_parse", queue=7)
+        self.harness("r1-u1", "oci_parse", corpus=7, layout="libfuzzer")
         row, source = coverage_ctl.collect_u("r1-u1")
         self.assertEqual(row["corpus"], 7)
         self.assertIsNone(row.get("edges"))
@@ -3819,7 +4023,9 @@ class TestAgentStallTimeout(unittest.TestCase):
         """shell=True means the immediate child is a shell. Killing only that
         leaves the agent running, detached, still stuck on whatever it was
         stuck on."""
-        marker = os.path.join(tempfile.mkdtemp(), "alive")
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        marker = os.path.join(directory, "alive")
         self.kill_after_a_second("sh -c 'sleep 20; touch %s' & wait" % marker)
         time.sleep(3)
         self.assertFalse(os.path.exists(marker))
@@ -4066,7 +4272,9 @@ class TestConfigValidatesWhatReachesTheSystem(unittest.TestCase):
     """The unvalidated keys were the ones that fail late, on the target."""
 
     def load(self, text):
-        path = os.path.join(tempfile.mkdtemp(), "campaign.yaml")
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "campaign.yaml")
         with open(path, "w") as f:
             f.write(text)
         return gspwn_config.load(path)
@@ -4096,20 +4304,26 @@ class TestConfigValidatesWhatReachesTheSystem(unittest.TestCase):
     def test_an_empty_docker_image_is_caught(self):
         self.rejects("track_u:\n  docker_image: ''\n", "docker_image")
 
-    def test_an_agent_timeout_under_the_campaign_window_is_caught(self):
-        """The fuzz phase waits out the whole window in one launch, so a
-        shorter timeout kills every healthy agent at the same point."""
+    def test_an_agent_timeout_over_the_campaign_window_is_caught(self):
+        """A stall bound longer than a whole campaign never fires. The fuzz
+        launch gets loop.campaign_hours added to this value in
+        orchestrator_ctl.launch_hours, so the setting does not carry it."""
         self.rejects("loop:\n  campaign_hours: 24\norchestrator:\n"
-                     "  max_agent_hours: 12\n", "max_agent_hours")
+                     "  max_agent_hours: 30\n", "max_agent_hours")
 
-    def test_a_longer_agent_timeout_passes(self):
+    def test_a_timeout_inside_the_campaign_window_passes(self):
         cfg = self.load("loop:\n  campaign_hours: 24\norchestrator:\n"
-                        "  max_agent_hours: 30\n")
-        self.assertEqual(cfg["orchestrator"]["max_agent_hours"], 30)
+                        "  max_agent_hours: 12\n")
+        self.assertEqual(cfg["orchestrator"]["max_agent_hours"], 12)
 
-    def test_zero_disables_the_agent_timeout(self):
-        cfg = self.load("orchestrator:\n  max_agent_hours: 0\n")
-        self.assertEqual(cfg["orchestrator"]["max_agent_hours"], 0)
+    def test_zero_no_longer_disables_the_agent_timeout(self):
+        """It shipped as 0, which read as unset and bounded no launch at all.
+        Turning the bound off is now a word that says so."""
+        self.rejects("orchestrator:\n  max_agent_hours: 0\n",
+                     "max_agent_hours")
+        cfg = self.load("orchestrator:\n  max_agent_hours: 'unbounded'\n")
+        self.assertEqual(cfg["orchestrator"]["max_agent_hours"],
+                         gspwn_config.UNBOUNDED_AGENT_HOURS)
 
     def test_the_reliable_threshold_must_be_a_fraction(self):
         self.rejects("poc:\n  reliable_threshold: 80\n", "reliable_threshold")
@@ -4256,6 +4470,7 @@ typedef struct
 
     def emitter(self, sizes):
         directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
         path = os.path.join(directory, "fix.h")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(self.HEADER)
@@ -5390,6 +5605,7 @@ typedef struct
 
     def setUp(self):
         directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
         path = os.path.join(directory, "xfer.h")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(self.HEADER)
@@ -5579,13 +5795,23 @@ class TestSelectorPinAssertion(XferFixture):
 
     def test_an_override_naming_a_field_that_does_not_exist_fails(self):
         """The dropped-override case. The override dict is well formed and the
-        rendered struct does not carry the pin."""
-        syzlang_gen.variant_struct(
-            self.emitter, "SMALL_PARAMS", "renamed",
-            {"hRootRenamed": "const[0x5, int32]"})
-        with self.assertRaises(SystemExit):
-            syzlang_gen.require_pinned(self.emitter, "renamed", "hRoot",
-                                       "a test")
+        layout declares no field of that name.
+
+        render_struct dropped the override and left the selector free, and
+        require_pinned caught it one step later. render_struct now refuses the
+        override itself, so the build stops before the variant is rendered and
+        the message names the field and the struct's own field list. That
+        covers the overrides require_pinned and require_pointer do not: a
+        renamed hObject, hClient, params, status, hRoot, hObjectParent,
+        hObjectNew or pAllocParms had no check at all."""
+        with self.assertRaises(SystemExit) as caught:
+            syzlang_gen.variant_struct(
+                self.emitter, "SMALL_PARAMS", "renamed",
+                {"hRootRenamed": "const[0x5, int32]"})
+        message = str(caught.exception)
+        self.assertIn("hRootRenamed", message)
+        self.assertIn("hRoot", message)
+        self.assertNotIn("renamed", self.emitter.rendered)
 
     def test_a_variant_that_was_never_rendered_fails(self):
         with self.assertRaises(SystemExit):
@@ -5628,6 +5854,7 @@ class TestMeasuredSizesAreRecorded(unittest.TestCase):
 
     def setUp(self):
         self.directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.directory, True)
         self.path = os.path.join(self.directory, "sizes.json")
         with open(self.path, "w", encoding="utf-8") as fh:
             json.dump({"A_PARAMS": 8, "B_PARAMS": 16}, fh)
@@ -5729,8 +5956,14 @@ def _restore(old):
 # one the inventory does not carry. NVKMS_IOCTL_ALLOC_DEVICE sits at ordinal
 # 0, which is also the value a field that lost its pin would most plausibly
 # still render, so the wrong-value fixture below moves it off 0.
+#
+# The control call names a real command for the same reason. `pins` now fails
+# on a variant its group's authority does not carry, because such a variant's
+# selector is compared against nothing and `coverage` reports it only as a
+# declared variant outside the denominator. cliresCtrlCmdClientGetAccessRights
+# carries method id 0x00000d03 in the committed control inventory.
 PINNED_SET = """\
-ioctl$NV_ESC_RM_CONTROL_fooCtrlCmdBar(fd fd_nvidiactl, cmd const[0xc020462a], arg ptr[inout, nvos54_ctrl_fooCtrlCmdBar])
+ioctl$NV_ESC_RM_CONTROL_cliresCtrlCmdClientGetAccessRights(fd fd_nvidiactl, cmd const[0xc020462a], arg ptr[inout, nvos54_ctrl_fooCtrlCmdBar])
 ioctl$NV_ESC_RM_ALLOC_FOO_A(fd fd_nv, cmd const[0xc030462b], arg ptr[inout, nvos64_alloc_foo_a])
 ioctl$NV_ESC_IOCTL_XFER_CMD_RM_FREE(fd fd_nvidiactl, cmd const[0xc01046d3], arg ptr[inout, nv_xfer_rm_free])
 ioctl$NVKMS_IOCTL_ALLOC_DEVICE(fd fd_nvidia_modeset, cmd const[0xc0106d00], arg ptr[inout, nvkms_params_alloc_device])
@@ -5738,7 +5971,7 @@ ioctl$DRM_NVIDIA_GET_DEV_INFO(fd fd_dri, cmd const[0xc0246443], arg ptr[inout, d
 
 nvos54_ctrl_fooCtrlCmdBar {
 \thClient\tnvh_nv01_root
-\tcmd\tconst[0x00000102, int32]
+\tcmd\tconst[0x00000d03, int32]
 \tstatus\tint32
 } [packed]
 
@@ -5801,11 +6034,25 @@ class TestNameClosureAgainstTheDescriptions(Phase4Fixtures):
         self.assertTrue(calls, "the committed description set declares no call")
         return sorted(calls)[0]
 
+    def _a_declared_entry(self):
+        """-> {request number: call name} for one call, keyed on the request
+        that call renders.
+
+        `names` compares the key as well as the value, so a fixture keyed on
+        an invented number states the defect the check reports rather than the
+        clean case these two want.
+        """
+        requests = regression_check.read_call_requests()
+        calls, _structs = regression_check.read_descriptions()
+        named = sorted(n for n in calls if n in requests)
+        self.assertTrue(named, "no declared call renders a request number")
+        name = named[0]
+        key = "0x%08x" % regression_check.const_value(requests[name])
+        return key, "ioctl$" + name
+
     def test_a_map_naming_only_declared_calls_passes(self):
-        code, out = self._names({
-            "comment": "fixture",
-            "0xc0000001": "ioctl$" + self._a_declared_name(),
-        })
+        key, value = self._a_declared_entry()
+        code, out = self._names({"comment": "fixture", key: value})
         self.assertEqual(code, 0, out)
         self.assertIn("names: OK", out)
 
@@ -5837,10 +6084,11 @@ class TestNameClosureAgainstTheDescriptions(Phase4Fixtures):
         self.assertIn("control", out)
 
     def test_comment_keys_are_not_read_as_entries(self):
+        key, value = self._a_declared_entry()
         code, out = self._names({
             "comment": "ioctl$NV_ESC_NOT_A_REAL_CALL appears here in prose",
             "comment_arrays": "ioctl$NV_ESC_ALSO_NOT_REAL",
-            "0xc0000001": "ioctl$" + self._a_declared_name(),
+            key: value,
         })
         self.assertEqual(code, 0, out)
 
@@ -5878,9 +6126,10 @@ class TestSelectorPinsInTheEmittedSet(Phase4Fixtures):
 
     def test_a_free_control_cmd_fails_and_names_the_variant(self):
         code, out = self._pins(PINNED_SET.replace(
-            "\tcmd\tconst[0x00000102, int32]", "\tcmd\tint32"))
+            "\tcmd\tconst[0x00000d03, int32]", "\tcmd\tint32"))
         self.assertEqual(code, 1)
-        self.assertIn("NV_ESC_RM_CONTROL_fooCtrlCmdBar", out)
+        self.assertIn("NV_ESC_RM_CONTROL_cliresCtrlCmdClientGetAccessRights",
+                      out)
         self.assertIn("nvos54_ctrl_fooCtrlCmdBar", out)
         self.assertIn("cmd", out)
 
@@ -8211,6 +8460,7 @@ typedef struct
 
     def setUp(self):
         directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
         path = os.path.join(directory, "alloc.h")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(self.HEADER)
@@ -9147,12 +9397,39 @@ static const RS_ENTRY g_resourceClassInfo[] =
 };
 """
 
+    # The NVOC hierarchy in the shape the generator emits it. object_graph
+    # reads the ancestor chain from these headers, because resource_list.h
+    # names one internal class per allocatable class and never a base, and a
+    # control command names the class its handler is compiled into, which is
+    # often a base.
+    HIERARCHY = """
+struct RmClientResource {
+    struct RsClientResource __nvoc_base_RsClientResource;
+    struct Object *__nvoc_pbase_Object;
+    struct RsResource *__nvoc_pbase_RsResource;
+    struct RmClientResource *__nvoc_pbase_RmClientResource;
+};
+
+struct Device {
+    struct GpuResource __nvoc_base_GpuResource;
+    struct Object *__nvoc_pbase_Object;
+    struct RsResource *__nvoc_pbase_RsResource;
+    struct GpuResource *__nvoc_pbase_GpuResource;
+    struct Device *__nvoc_pbase_Device;
+};
+"""
+
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.src = os.path.join(self.dir, "src-tree")
         table = os.path.join(self.src, "src", "nvidia", "src", "kernel",
                              "rmapi")
         os.makedirs(table)
+        generated = os.path.join(self.src, "src", "nvidia", "generated")
+        os.makedirs(generated)
+        with open(os.path.join(generated, "g_fixture_nvoc.h"), "w",
+                  encoding="utf-8", newline="\n") as handle:
+            handle.write(self.HIERARCHY)
         with open(os.path.join(table, "resource_list.h"), "w",
                   encoding="utf-8", newline="\n") as handle:
             handle.write(self.TABLE)
@@ -9185,40 +9462,47 @@ static const RS_ENTRY g_resourceClassInfo[] =
         self.assertEqual(doc["source"]["driver_version"], "610.57.04")
 
     def test_a_failure_mid_write_leaves_the_previous_artefact_intact(self):
+        """The failure is injected at the fsync, so the temporary already
+        holds the new bytes when it lands. Injecting it at the serialisation
+        would leave nothing on disk and prove less."""
         self.extract()
         with open(self.out, "rb") as handle:
             good = handle.read()
 
-        saved = object_graph.json.dump
+        saved = object_graph.os.fsync
 
         def die(*_args, **_kwargs):
             raise OSError(28, "No space left on device")
 
-        object_graph.json.dump = die
+        object_graph.os.fsync = die
         try:
             with self.assertRaises(OSError):
                 self.extract()
         finally:
-            object_graph.json.dump = saved
+            object_graph.os.fsync = saved
         with open(self.out, "rb") as handle:
             self.assertEqual(handle.read(), good)
 
     def test_a_failure_mid_write_leaves_no_temp_file_behind(self):
-        saved = object_graph.json.dump
+        saved = object_graph.os.fsync
 
         def die(*_args, **_kwargs):
             raise OSError(28, "No space left on device")
 
-        object_graph.json.dump = die
+        object_graph.os.fsync = die
         try:
             with self.assertRaises(OSError):
                 self.extract()
         finally:
-            object_graph.json.dump = saved
+            object_graph.os.fsync = saved
         self.assertEqual([n for n in os.listdir(os.path.dirname(self.out))
                           if n.endswith(".tmp")], [])
 
     def test_the_target_is_replaced_and_never_truncated_in_place(self):
+        """One rename onto the target, from a temporary in its own directory.
+        The temporary is named by mkstemp: the fixed <path>.tmp two runs in
+        one directory used to share is gone, so the assertion is on the shape
+        of the name and not on the name."""
         seen = []
         saved = object_graph.os.replace
 
@@ -9231,8 +9515,12 @@ static const RS_ENTRY g_resourceClassInfo[] =
             self.extract()
         finally:
             object_graph.os.replace = saved
-        self.assertEqual(seen, [("rm-object-graph.json.tmp",
-                                 "rm-object-graph.json")])
+        self.assertEqual(len(seen), 1)
+        source, destination = seen[0]
+        self.assertEqual(destination, "rm-object-graph.json")
+        self.assertTrue(source.startswith("rm-object-graph.json."), source)
+        self.assertTrue(source.endswith(".tmp"), source)
+        self.assertNotEqual(source, "rm-object-graph.json.tmp")
 
     def test_the_written_bytes_carry_no_carriage_return(self):
         self.extract()
@@ -9450,8 +9738,15 @@ class TestRefgenRendersTheMeasuredCounts(RefgenFixture):
              reach["kernel_only"], "`reachability` = `kernel_only`"),
             ("Gated on a privileged client",
              reach["privileged"], "`reachability` = `privileged`"),
+            # Counted from the inventory rows and not as
+            # reach["non_privileged"] - 531, which is the expression the page
+            # itself used and which holds only while the rank set is exactly
+            # the non-privileged commands whose handler is present.
             ("Routed to GSP, so the CPU-side handler is compiled out",
-             reach["non_privileged"] - 531, "`handler_compiled_out`"),
+             sum(1 for m in _read_json(surface_cov.CTRL_INV)["methods"]
+                 if m["handler_compiled_out"]
+                 and m["reachability"] == "non_privileged"),
+             "`handler_compiled_out` with `reachability` = `non_privileged`"),
             ("Targetable", 531, "(the set below)"),
         ]
         self.assertEqual(
@@ -11962,19 +12257,28 @@ class TestStampWritesTheSameBytesOnEveryPlatform(unittest.TestCase):
 
     def test_no_temporary_file_is_left_behind(self):
         self.stamp()
-        self.assertFalse(os.path.exists(self.map_path + ".tmp"))
+        # The temporary is named uniquely now, so a fixed name is no longer
+        # the thing to look for: nothing beside the map may survive the run.
+        leftovers = [name for name
+                     in os.listdir(os.path.dirname(self.map_path))
+                     if name.endswith(".tmp")
+                     or (name.startswith(os.path.basename(self.map_path))
+                         and name != os.path.basename(self.map_path))]
+        self.assertEqual(leftovers, [])
 
-    def test_the_line_ending_is_pinned_rather_than_inherited(self):
+    def test_the_stamp_routes_through_the_shared_durable_writer(self):
         # The byte assertions above cannot fail on a platform whose default
-        # translation is already LF, and the defect only appears on Windows.
-        # object_graph.write_json and syzlang_gen.write_file pin it for the
-        # same reason, so the pin itself is what is asserted here.
+        # translation is already LF, and the defect only appears on Windows,
+        # so the pin itself is asserted. It moved: the temporary, the LF
+        # newline, the two fsyncs and the rename now live in atomic_write,
+        # which nine other writers share, and this test follows them there.
+        # The pinning is covered by that module's own tests.
+        self.assertIs(surface_verify.atomic_write, atomic_write)
         source = inspect.getsource(surface_verify.cmd_stamp)
-        # The open() call, not the comment above it that names the same
-        # argument.
-        self.assertIn(r'open(tmp, "w", encoding="utf-8", newline="\n")',
-                      source)
-        self.assertIn("os.fsync(fh.fileno())", source)
+        self.assertIn("atomic_write.atomic_write_text(", source)
+        # No private fixed temporary name survives, which is the collision
+        # between two stamp runs against one directory.
+        self.assertNotIn('".tmp"', inspect.getsource(surface_verify))
 
 
 class TestImplScanFindsEveryDefinitionStyle(unittest.TestCase):
@@ -12461,7 +12765,7 @@ typedef struct
             {"name": syzlang_gen.CONTROL_ESCAPE,
              "requests": ["0xc020462a"]}]}]}
         return syzlang_gen.emit_control(
-            emitter, inventory, {"methods": methods}, {},
+            emitter, inventory, {"methods": methods}, {}, {},
             {"records": []}, None, 0, None)
 
     def test_two_handlers_rendering_alike_are_refused(self):
@@ -13032,8 +13336,12 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
     was dropped from the examination with no record, so any number of calls
     short of a whole family could fall out unnoticed."""
 
+    # The control call names a real command and its own method id, because
+    # `pins` fails on a variant the control inventory does not carry: its
+    # selector is compared against nothing.
     PINNED = (
-        "ioctl$NV_ESC_RM_CONTROL_fooCtrlCmdBar(fd fd_nvidiactl, "
+        "ioctl$NV_ESC_RM_CONTROL_cliresCtrlCmdClientGetAccessRights("
+        "fd fd_nvidiactl, "
         "cmd const[0xc020462a], arg ptr[inout, nvos54_ctrl_foo])\n"
         "ioctl$NV_ESC_RM_ALLOC_FOO_A(fd fd_nv, cmd const[0xc030462b], "
         "arg ptr[inout, nvos64_alloc_foo])\n"
@@ -13044,7 +13352,7 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
         "ioctl$DRM_NVIDIA_FENCE_SUPPORTED(fd fd_dri, "
         "cmd const[0x00006444])\n"
         "\n"
-        "nvos54_ctrl_foo {\n\tcmd\tconst[0x00000102, int32]\n} [packed]\n"
+        "nvos54_ctrl_foo {\n\tcmd\tconst[0x00000d03, int32]\n} [packed]\n"
         "\n"
         "nvos64_alloc_foo {\n\thClass\tconst[0xc997, int32]\n} [packed]\n"
         "\n"
@@ -13078,7 +13386,8 @@ class TestPinsSeesEveryCallInAGroup(unittest.TestCase):
         code, out = self.pins(self.PINNED.replace("nvos54_ctrl_foo])",
                                                   "nvos54_ctrl_gone])"))
         self.assertEqual(code, 1, out)
-        self.assertIn("NV_ESC_RM_CONTROL_fooCtrlCmdBar", out)
+        self.assertIn("NV_ESC_RM_CONTROL_cliresCtrlCmdClientGetAccessRights",
+                      out)
         self.assertIn("nvos54_ctrl_gone", out)
 
     def test_an_alloc_call_whose_arg_names_no_struct_fails(self):
@@ -13195,15 +13504,22 @@ class TestPinsChecksTheValueAndNotOnlyTheForm(unittest.TestCase):
         code, out = self.pins("NV0000_CTRL_CMD_SYSTEM_GET_CPU_INFO")
         self.assertEqual(code, 1, out)
 
-    def test_a_variant_the_inventory_does_not_carry_is_counted(self):
+    def test_a_variant_the_inventory_does_not_carry_fails(self):
+        # Counted and passing before. A variant the group's own authority has
+        # no row for has its selector compared against nothing, and `coverage`
+        # does not cover it: that check compares targets against declared
+        # variants in one direction, and reports the reverse as a count of
+        # declared variants outside the denominator without failing.
         self.fake_targets("0x00000102")
         saved = surface_cov.load_targets
         surface_cov.load_targets = lambda: (
             {}, {}, {"driver_version": "610.57.04"})
         self.addCleanup(setattr, surface_cov, "load_targets", saved)
         code, out = self.pins("0xdeadbe")
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 1, out)
         self.assertIn("1 call(s) the inventory does not carry", out)
+        self.assertIn("does not carry 1 of the variant(s) it was read for",
+                      out)
 
     def test_the_committed_set_agrees_with_the_committed_inventory(self):
         # The committed artefacts, so a regeneration that moved either one is
@@ -13497,7 +13813,7 @@ class TestTheCheckOrderMatchesTheDocumentedOne(unittest.TestCase):
         self.assertEqual(regression_check.check_order(),
                          ["names", "pins", "coverage", "derived",
                           "families", "pages", "stale", "harnesses",
-                          "agents", "figures"])
+                          "agents", "figures", "citations", "commands"])
 
     def test_every_registered_check_is_in_the_order(self):
         self.assertEqual(sorted(regression_check.check_order()),
@@ -13862,12 +14178,25 @@ class Phase0Fixtures(unittest.TestCase):
         return hashlib.sha256(payload).hexdigest()
 
     def generation(self, root, record):
-        """Write descriptions/generation.json and point `stale` at it."""
+        """Write descriptions/generation.json and point `stale` at it.
+
+        The `generated` block is mandatory, so the scratch tree carries one
+        emitted file and the digest recorded for it. Every case in this class
+        is about the input side, and an output side that matches keeps the
+        two apart.
+        """
         directory = os.path.join(root, "descriptions")
         os.makedirs(directory, exist_ok=True)
+        emitted = b"# a scratch description file\n"
+        with open(os.path.join(directory, "nvidia.txt"), "wb") as fh:
+            fh.write(emitted)
         path = os.path.join(directory, "generation.json")
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump({"generated_from": record}, fh)
+            json.dump({"generated_from": record,
+                       "generated": {
+                           "descriptions/nvidia.txt": {
+                               "sha256": hashlib.sha256(emitted).hexdigest(),
+                               "bytes": len(emitted)}}}, fh)
         self.use(GENERATION=path)
         return path
 
@@ -14164,16 +14493,16 @@ class TestHarnessTargetListsAgree(Phase0Fixtures):
 class TestTheTwoGuardsAreRegistered(unittest.TestCase):
     """Both guards run under `regression_check.py all`."""
 
-    def test_the_registry_holds_ten_checks(self):
-        self.assertEqual(len(regression_check.check_order()), 10)
+    def test_the_registry_holds_twelve_checks(self):
+        self.assertEqual(len(regression_check.check_order()), 12)
 
     def test_both_guards_are_registered_and_ordered(self):
         for name in ("stale", "harnesses", "agents", "figures"):
             self.assertIn(name, regression_check.CHECKS, name)
             self.assertIn(name, regression_check.CHECK_ORDER, name)
 
-    def test_the_module_docstring_names_ten_checks(self):
-        self.assertIn("Ten CI checks", regression_check.__doc__)
+    def test_the_module_docstring_names_twelve_checks(self):
+        self.assertIn("Twelve CI checks", regression_check.__doc__)
 
     def test_the_workflow_runs_both_guards(self):
         with open(os.path.join(os.path.dirname(HERE), ".github", "workflows",
@@ -16221,8 +16550,11 @@ class TestTheDenominatorVersionVocabulary(unittest.TestCase):
         self.assertEqual(ps.denominator_total("v2-828"), 828)
 
     def test_a_total_maps_to_the_label_for_it(self):
-        self.assertEqual(ps.denominator_version_for_total(764), "v1-764")
-        self.assertEqual(ps.denominator_version_for_total(828), "v2-828")
+        """Only the current denominator. A recount is a measurement taken now,
+        so a total matching a retired entry is a truncated inventory and not a
+        round measured years ago."""
+        label, total = ps.DENOMINATOR_VERSIONS[-1]
+        self.assertEqual(ps.denominator_version_for_total(total), label)
 
     def test_a_total_with_no_table_entry_still_records_the_total(self):
         """A denominator that moves before the table does still lands a label
@@ -16240,10 +16572,16 @@ class TestTheDenominatorVersionVocabulary(unittest.TestCase):
             ps.denominator_total("latest")
         self.assertIn("latest", str(cm.exception))
 
-    def test_the_default_is_the_first_denominator(self):
-        self.assertEqual(ps.DEFAULT_DENOMINATOR_VERSION, "v1-764")
+    def test_the_default_is_the_current_denominator(self):
+        """What a round closing now is stamped with. The first entry is the
+        fill-in for a record predating the field, and it is a separate name so
+        one cannot be reached where the other is meant."""
+        label, total = ps.DENOMINATOR_VERSIONS[-1]
+        self.assertEqual(ps.DEFAULT_DENOMINATOR_VERSION, label)
         self.assertEqual(ps.denominator_total(ps.DEFAULT_DENOMINATOR_VERSION),
-                         764)
+                         total)
+        self.assertEqual(ps.LEGACY_DENOMINATOR_VERSION,
+                         ps.DENOMINATOR_VERSIONS[0][0])
 
 
 class TestARoundRecordPredatingTheField(DenominatorFixture,
@@ -16441,15 +16779,16 @@ class TestRoundEndWritesTheDenominatorVersion(DenominatorFixture,
         self.assertEqual(r["denominator_version"], "v2-828")
         self.assertEqual(r["surface_total"], 828)
 
-    def test_an_unmeasurable_reading_leaves_the_first_denominator_on_record(
-            self):
+    def test_an_unmeasurable_reading_records_the_current_denominator(self):
         """The counts are None when the reading fails, so the label describes
-        nothing and the default is the honest one."""
+        no counts. It still describes the surface the round ran against, which
+        is the one in force now and never the oldest in the table."""
         self.stub_completion(verdict="unknown", exercised=None,
                              accounted=None, closed=None, total=None,
                              denominator_version=None)
         r = self.end_round()
-        self.assertEqual(r["denominator_version"], "v1-764")
+        self.assertEqual(r["denominator_version"],
+                         ps.DENOMINATOR_VERSIONS[-1][0])
         self.assertIsNone(r["surface_total"])
 
     def test_a_reading_that_names_no_denominator_at_all_is_tolerated(self):
@@ -17869,7 +18208,7 @@ class TestTheDrmInventoryScrape(unittest.TestCase):
     def test_a_changed_dispatched_count_is_a_hard_failure(self):
         """The count feeds a published figure, so drift stops the run and
         never rewrites the artefact."""
-        src = os.path.join(os.path.dirname(os.path.dirname(HERE)),
+        src = os.path.join(os.path.dirname(HERE),
                            "artifacts", "src", "open-gpu-kernel-modules")
         if not os.path.isdir(src):
             self.skipTest("driver source tree not present")
@@ -19325,6 +19664,5541 @@ class TestTheHostBinaryPreflight(unittest.TestCase):
         total = len(orchestrator_ctl.HOST_BINARIES)
         _code, text = self.preflight(set(self.all_names()) - {"aws"})
         self.assertIn("binaries:  %d of %d on PATH" % (total - 1, total), text)
+
+
+# ANCHOR-PHASE-0-REGISTER
+
+
+class TestTheRegisterCheckBlanksAstroFrontmatter(unittest.TestCase):
+    """register_check: the frontmatter fence of an .astro component is
+    JavaScript and was scanned as prose, so the source comment at
+    ExecutionModel.astro:2 fired the spatial verb rule and the workflow step
+    at selftest.yml:152 exited 1."""
+
+    BANNED = "The block is scheduled rather than queued."
+
+    def hits(self, text, name="Case.astro"):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        return register_check.check_file(path, "scratch/" + name)
+
+    def test_a_banned_construction_in_the_frontmatter_produces_no_hit(self):
+        self.assertEqual(self.hits("---\n// %s\nconst N = 32;\n---\n\n"
+                                   "<p>One block per SM.</p>\n" % self.BANNED),
+                         [])
+
+    def test_the_same_construction_in_the_markup_body_still_hits(self):
+        self.assertEqual([(h[0], h[1]) for h in self.hits(
+            "---\nconst N = 32;\n---\n\n<p>%s</p>\n" % self.BANNED)],
+            [("rather", 5)])
+
+    def test_a_file_carrying_no_frontmatter_is_unchanged(self):
+        self.assertEqual([(h[0], h[1]) for h in self.hits(
+            "<p>One block per SM.</p>\n\n---\n\n<p>%s</p>\n" % self.BANNED)],
+            [("rather", 5)])
+
+    def test_an_unclosed_leading_fence_opens_nothing(self):
+        self.assertEqual([(h[0], h[1]) for h in self.hits(
+            "---\n// A comment.\n\n<p>%s</p>\n" % self.BANNED)],
+            [("rather", 4)])
+
+    def test_a_markdown_frontmatter_block_is_still_prose(self):
+        # A `.md` frontmatter carries the title and the description, which the
+        # site renders for a reader. Only the `.astro` suffix blanks it.
+        self.assertEqual([(h[0], h[1]) for h in self.hits(
+            "---\ntitle: %s\n---\n\nBody.\n" % self.BANNED, "case.md")],
+            [("rather", 2)])
+
+    def test_blanking_the_fence_preserves_the_line_count(self):
+        source = "---\n// One.\n// Two.\nconst N = 32;\n---\n\n<p>Three.</p>\n"
+        self.assertEqual(
+            register_check.strip_exempt_regions(source, ".astro").count("\n"),
+            source.count("\n"))
+
+    def test_every_component_in_the_tree_passes(self):
+        root = os.path.join(register_check.REPO_ROOT, "docs", "src",
+                            "components")
+        checked = 0
+        for directory, _sub, names in os.walk(root):
+            for name in sorted(names):
+                if not name.endswith(".astro"):
+                    continue
+                path = os.path.join(directory, name)
+                rel = os.path.relpath(path, register_check.REPO_ROOT)
+                rel = rel.replace(os.sep, "/")
+                self.assertEqual(register_check.check_file(path, rel), [], rel)
+                checked += 1
+        self.assertGreaterEqual(checked, 1)
+
+    def test_no_component_is_carried_by_an_exemption(self):
+        # The blanker covers the whole class, so a per-file entry for one
+        # component would hide the next one.
+        self.assertEqual([k for k in register_check.EXEMPT
+                          if k.endswith(".astro")], [])
+
+
+# ANCHOR-PHASE-1-TRACKU
+
+
+class TestTheSanitizerOptionsFollowTheirConsumer(unittest.TestCase):
+    """Every build.sh wrote symbolize=1 into build/env.sh and run_all.sh
+    sources it, so afl-fuzz aborted at startup with `Custom ASAN_OPTIONS set
+    without symbolize=0` and every AFL-mode campaign run produced nothing.
+    The two consumers want opposite values: afl-fuzz parses the sanitizer's
+    output itself, and the .sanlog a replay writes is what crash_parse.py
+    hashes and a human reads."""
+
+    HARNESSES = os.path.join(os.path.dirname(HERE), "harnesses")
+
+    def build_scripts(self):
+        found = sorted(os.path.join(self.HARNESSES, name, "build.sh")
+                       for name in os.listdir(self.HARNESSES)
+                       if name.startswith("fuzz_")
+                       and os.path.isfile(os.path.join(self.HARNESSES, name,
+                                                       "build.sh")))
+        self.assertEqual(len(found), 6, found)
+        return found
+
+    def read(self, *parts):
+        with io.open(os.path.join(self.HARNESSES, *parts),
+                     encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_no_build_script_pins_symbolize(self):
+        for path in self.build_scripts():
+            with io.open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertNotIn('symbolize=1"', text, path)
+            self.assertIn("symbolize=${HARNESS_SYMBOLIZE:-1}", text, path)
+
+    def test_each_build_script_keeps_its_own_leak_policy(self):
+        # The value that follows the consumer is symbolize alone. A rewrite
+        # that also unified detect_leaks would drop the per-target policy
+        # TARGETS.md records.
+        policies = set()
+        for path in self.build_scripts():
+            with io.open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    if "ASAN_OPTIONS=" in line and "detect_leaks" in line:
+                        policies.add(line.split("detect_leaks=")[1][0])
+        self.assertEqual(policies, {"0", "1"})
+
+    def test_the_fuzz_run_asks_for_no_symbols(self):
+        text = self.read("run_all.sh")
+        self.assertIn("HARNESS_SYMBOLIZE=0", text)
+        self.assertLess(text.index("export HARNESS_SYMBOLIZE"),
+                        text.index('. "${here}/${t}/build/env.sh"'))
+
+    def test_the_replay_leaves_the_default_in_place(self):
+        # A replay with no symbols gives crash_parse.py no frames to hash.
+        self.assertNotIn("HARNESS_SYMBOLIZE", self.read("replay_crashes.sh"))
+
+
+class TestTheBuildResolvesItsCapabilityHeader(unittest.TestCase):
+    """The AFL++ image config/campaign.yaml names carries no libcap headers,
+    and every C target compiles src/utils.h, which includes
+    <sys/capability.h>, and links -lcap. All six targets failed to build in
+    the container the campaign runs them in."""
+
+    COMMON = os.path.join(os.path.dirname(HERE), "harnesses", "common",
+                          "build_common.sh")
+
+    def text(self):
+        with io.open(self.COMMON, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_build_resolves_the_dependency_before_compiling(self):
+        text = self.text()
+        self.assertIn("harness_prepare_deps()", text)
+        self.assertLess(text.index("    harness_prepare_deps\n"),
+                        text.index('"${HARNESS_CC}" \\'))
+
+    def test_the_probe_asks_the_compiler_and_not_a_path(self):
+        # A hardcoded /usr/include path answers for one image only.
+        text = self.text()
+        self.assertIn("-fsyntax-only -x c -", text)
+        self.assertIn("sys/capability.h", text)
+
+    def test_an_unprivileged_build_names_the_package(self):
+        text = self.text()
+        self.assertIn("HARNESS_CAP_PACKAGE:=libcap-dev", text)
+        self.assertIn("libcap-devel", text)
+
+    def test_it_parses(self):
+        if not shutil.which("bash"):
+            self.skipTest("bash is not on PATH")
+        r = subprocess.run(["bash", "-n", self.COMMON], capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class TestTheTrackUUnitNamesAnInterpreter(unittest.TestCase):
+    """campaign_ctl 1.1: the unit ran /harnesses/run_all.sh as the container
+    command while every tracked .sh was mode 100644, so docker run exited 126
+    and Restart=always with RestartSec=30 retried to the campaign deadline."""
+
+    def test_the_container_command_names_bin_bash(self):
+        self.assertIn("/bin/bash /harnesses/run_all.sh",
+                      campaign_ctl.UNIT_U_TMPL)
+
+    def test_the_script_is_never_the_bare_container_command(self):
+        for line in campaign_ctl.UNIT_U_TMPL.splitlines():
+            self.assertNotEqual(line.strip().rstrip("\\").strip(),
+                                "/harnesses/run_all.sh")
+
+    def test_the_unit_still_mounts_both_trees(self):
+        # The interpreter change sits on the same continuation as the image
+        # and the mounts, so a mangled edit is visible here and not on the
+        # instance.
+        for fragment in (":/artifacts", ":/harnesses", "-e RUN_ID="):
+            self.assertIn(fragment, campaign_ctl.UNIT_U_TMPL, fragment)
+
+
+class TestTheExecutedScriptsAreExecutableInTheIndex(unittest.TestCase):
+    """regression_check harnesses, second case: a script another tracked file
+    invokes with no interpreter has to carry the execute bit in the index.
+    The working copy says nothing about it, because core.fileMode is false on
+    the Windows checkout and every file reads there as rwxr-xr-x."""
+
+    def setUp(self):
+        if not shutil.which("git"):
+            self.skipTest("git is not on PATH")
+
+    def test_every_executed_script_is_mode_100755(self):
+        modes = regression_check.tracked_script_modes()
+        sourced = {"harnesses/common/build_common.sh"}
+        for path, mode in sorted(modes.items()):
+            if path in sourced:
+                continue
+            self.assertEqual(mode, regression_check.SCRIPT_MODE, path)
+
+    def test_the_sourced_helper_needs_no_execute_bit(self):
+        # build_common.sh is read with `.` by each build.sh and is never run,
+        # so 100644 states that and a 100755 there would claim otherwise.
+        modes = regression_check.tracked_script_modes()
+        self.assertEqual(modes["harnesses/common/build_common.sh"], "100644")
+
+    def test_a_bare_command_line_is_recognised(self):
+        self.assertEqual(
+            regression_check._script_token("  /harnesses/run_all.sh"),
+            "/harnesses/run_all.sh")
+        self.assertEqual(
+            regression_check._script_token("ExecStart=/w/build_all.sh --all"),
+            "/w/build_all.sh")
+
+    def test_an_interpreter_in_front_of_it_is_not_one(self):
+        for line in ('bash "${here}/replay_crashes.sh"',
+                     '. "${here}/../common/build_common.sh"',
+                     'if bash "${here}/${t}/build.sh"; then'):
+            self.assertIsNone(regression_check._script_token(line), line)
+
+    def test_prose_naming_a_script_is_not_one(self):
+        # Five docstring lines across the tools open with a script path. A
+        # citation read as an invocation makes the case fail on a file
+        # nothing runs.
+        for line in ("harnesses/replay_crashes.sh, which run_all.sh runs",
+                     "harnesses/run_all.sh copies each harness's inputs",
+                     "# /harnesses/run_all.sh",
+                     "run_all.sh writes each harness's fuzzer output"):
+            self.assertIsNone(regression_check._script_token(line), line)
+
+    def test_the_tree_carries_no_bare_invocation(self):
+        offenders, _modes, _invocations = (
+            regression_check.script_mode_offenders())
+        self.assertEqual(offenders, [])
+
+
+class TestTheHarnessSourceSearch(unittest.TestCase):
+    """build_common.sh 1.2: SRC defaulted to <harness root>/../src/, which
+    exists in neither context. The checkout is at <repo>/artifacts/src/ on the
+    host and at /artifacts/src/ in the container, where the harness tree
+    arrives on its own bind mount."""
+
+    COMMON = os.path.join(os.path.dirname(HERE), "harnesses", "common",
+                          "build_common.sh")
+
+    def setUp(self):
+        if not shutil.which("bash"):
+            self.skipTest("bash is not on PATH")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = os.path.join(self.tmp.name, "harnesses")
+        os.makedirs(os.path.join(self.root, "common"))
+        shutil.copyfile(self.COMMON,
+                        os.path.join(self.root, "common", "build_common.sh"))
+
+    def checkout(self, *parts):
+        """Create a checkout carrying the src/ directory the search wants."""
+        d = os.path.join(self.tmp.name, *parts)
+        os.makedirs(os.path.join(d, "src"), exist_ok=True)
+        return d
+
+    def source(self, extra=None):
+        """-> (returncode, stdout, stderr) from sourcing the helper."""
+        env = dict(os.environ)
+        env.update(extra or {})
+        script = ('. "%s/common/build_common.sh"; echo "SRC=${SRC}"'
+                  % self.root.replace(os.sep, "/"))
+        return subprocess.run(["bash", "-c", script], capture_output=True,
+                              text=True, env=env)
+
+    def src_of(self, result):
+        for line in result.stdout.splitlines():
+            if line.startswith("SRC="):
+                return line[len("SRC="):]
+        return None
+
+    def test_it_parses(self):
+        r = subprocess.run(["bash", "-n", self.COMMON], capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_the_host_checkout_is_found_under_artifacts(self):
+        want = self.checkout("artifacts", "src", "libnvidia-container")
+        r = self.source()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(os.path.realpath(self.src_of(r)),
+                         os.path.realpath(want))
+
+    def test_the_artifacts_tree_wins_over_the_legacy_path(self):
+        want = self.checkout("artifacts", "src", "libnvidia-container")
+        self.checkout("src", "libnvidia-container")
+        r = self.source()
+        self.assertEqual(os.path.realpath(self.src_of(r)),
+                         os.path.realpath(want))
+
+    def test_the_legacy_path_is_still_searched(self):
+        want = self.checkout("src", "libnvidia-container")
+        r = self.source()
+        self.assertEqual(os.path.realpath(self.src_of(r)),
+                         os.path.realpath(want))
+
+    def test_a_candidate_without_a_src_directory_is_not_taken(self):
+        os.makedirs(os.path.join(self.tmp.name, "artifacts", "src",
+                                 "libnvidia-container"))
+        want = self.checkout("src", "libnvidia-container")
+        r = self.source()
+        self.assertEqual(os.path.realpath(self.src_of(r)),
+                         os.path.realpath(want))
+
+    def test_an_explicit_src_is_never_searched_over(self):
+        self.checkout("artifacts", "src", "libnvidia-container")
+        r = self.source({"SRC": "/an/operator/answer"})
+        self.assertEqual(self.src_of(r), "/an/operator/answer")
+
+    def test_the_failure_names_every_path_tried(self):
+        script = ('. "%s/common/build_common.sh"; harness_prepare_src'
+                  % self.root.replace(os.sep, "/"))
+        r = subprocess.run(["bash", "-c", script], capture_output=True,
+                           text=True, env=dict(os.environ))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        for fragment in ("/artifacts/src/libnvidia-container",
+                         "../src/libnvidia-container"):
+            self.assertIn(fragment, r.stderr, fragment)
+        self.assertIn("SRC=", r.stderr)
+
+    def test_the_container_path_is_a_candidate(self):
+        # HARNESS_ROOT is /harnesses inside the container and the checkout is
+        # on a different mount, so no path relative to the harness tree
+        # reaches it. The absolute candidate is the one that does.
+        with io.open(self.COMMON, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn('"/artifacts/src"', text)
+
+
+class TestTheGoTargetFindsItsToolkit(unittest.TestCase):
+    """go_cudacompat_elf/build.sh 1.2: TOOLKIT_SRC carried the same defaulting
+    defect. The toolkit is a Go tree and holds no src/ directory, so the
+    search accepts the cudacompat package as evidence of a checkout."""
+
+    SCRIPT = os.path.join(os.path.dirname(HERE), "harnesses",
+                          "go_cudacompat_elf", "build.sh")
+
+    def setUp(self):
+        if not shutil.which("bash"):
+            self.skipTest("bash is not on PATH")
+
+    def test_it_parses(self):
+        r = subprocess.run(["bash", "-n", self.SCRIPT], capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_the_search_names_the_same_three_candidates(self):
+        with io.open(self.SCRIPT, encoding="utf-8") as fh:
+            text = fh.read()
+        for fragment in ('"${HARNESS_ROOT}/../artifacts/src"',
+                         '"/artifacts/src"',
+                         '"${HARNESS_ROOT}/../src"'):
+            self.assertIn(fragment, text, fragment)
+
+    def test_the_package_directory_is_accepted_as_a_checkout(self):
+        # The toolkit carries cmd/, internal/ and pkg/ and no src/, so a
+        # search keyed on src/ alone would never find it.
+        with io.open(self.SCRIPT, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn('[ -d "${base}/${TOOLKIT_NAME}/${PKG_REL}" ]', text)
+
+
+class TestTheTrackUSamplerReadsTheAflOutputRoot(StateTempMixin,
+                                                unittest.TestCase):
+    """coverage_ctl 1.3: the sampler read <harness>/fuzzer_stats while
+    afl-fuzz writes <harness>/default/fuzzer_stats. found_stats stayed 0, the
+    edges column was never written, and plateau read 'unknown' for every
+    Track U window."""
+
+    STATS = ("edges_found : 300\nexecs_done : 1000\n"
+             "unique_crashes : 2\ncorpus_count : 40\n")
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, coverage_ctl, "RUNS_DIR",
+                        coverage_ctl.RUNS_DIR)
+        coverage_ctl.RUNS_DIR = os.path.join(self.tmp.name, "runs")
+
+    def harness_dir(self, run_id, name):
+        d = os.path.join(coverage_ctl.track_u_dir(run_id), name)
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def afl(self, run_id, name, stats=STATS, queue=0):
+        """The layout afl-fuzz -o <harness> writes."""
+        d = self.harness_dir(run_id, name)
+        out = os.path.join(d, "default")
+        os.makedirs(out, exist_ok=True)
+        if stats is not None:
+            with io.open(os.path.join(out, "fuzzer_stats"), "w") as f:
+                f.write(stats)
+        for i in range(queue):
+            os.makedirs(os.path.join(out, "queue"), exist_ok=True)
+            open(os.path.join(out, "queue", "id%03d" % i), "w").close()
+        return d
+
+    def libfuzzer(self, run_id, name, corpus=0):
+        """The layout run_all.sh creates for a libFuzzer-mode target."""
+        d = self.harness_dir(run_id, name)
+        os.makedirs(os.path.join(d, "corpus"), exist_ok=True)
+        for i in range(corpus):
+            open(os.path.join(d, "corpus", "c%03d" % i), "w").close()
+        return d
+
+    def test_the_afl_layout_yields_an_edge_count(self):
+        self.afl("r1-u1", "fuzz_path_join")
+        row, source = coverage_ctl.collect_u("r1-u1")
+        self.assertEqual(row["edges"], 300)
+        self.assertEqual(row["execs"], 1000)
+        self.assertEqual(row["crashes"], 2)
+        self.assertEqual(row["corpus"], 40)
+        self.assertEqual(source, "afl-fuzzer_stats:1")
+
+    def test_the_flat_layout_is_still_read(self):
+        d = self.harness_dir("r1-u1", "fuzz_ldcache")
+        with io.open(os.path.join(d, "fuzzer_stats"), "w") as f:
+            f.write(self.STATS)
+        row, source = coverage_ctl.collect_u("r1-u1")
+        self.assertEqual(row["edges"], 300)
+        self.assertEqual(source, "afl-fuzzer_stats:1")
+
+    def test_the_nested_root_wins_over_the_flat_one(self):
+        d = self.afl("r1-u1", "fuzz_path_join")
+        with io.open(os.path.join(d, "fuzzer_stats"), "w") as f:
+            f.write("edges_found : 7\n")
+        self.assertEqual(coverage_ctl.afl_output_root(d),
+                         os.path.join(d, "default"))
+        row, _source = coverage_ctl.collect_u("r1-u1")
+        self.assertEqual(row["edges"], 300)
+
+    def test_the_libfuzzer_layout_reports_corpus_and_no_edges(self):
+        self.libfuzzer("r1-u1", "oci_parse", corpus=5)
+        row, source = coverage_ctl.collect_u("r1-u1")
+        self.assertEqual(row["corpus"], 5)
+        self.assertIsNone(row.get("edges"))
+        self.assertEqual(source, "corpus-count-only")
+
+    def test_the_queue_is_read_from_the_resolved_root(self):
+        # A stats file carrying no corpus_count leaves the queue as the only
+        # corpus signal, and the queue sits beside the stats file.
+        self.afl("r1-u1", "fuzz_ldcache", stats="edges_found : 12\n", queue=6)
+        row, _source = coverage_ctl.collect_u("r1-u1")
+        self.assertEqual(row["corpus"], 6)
+
+    def test_a_harness_holding_neither_is_named(self):
+        self.afl("r1-u1", "fuzz_path_join")
+        self.harness_dir("r1-u1", "fuzz_ldcache")
+        self.assertEqual(coverage_ctl.u_harnesses_without_stats("r1-u1"),
+                         ["fuzz_ldcache"])
+
+    def test_a_started_harness_is_not_an_unreachable_track(self):
+        self.harness_dir("r1-u1", "fuzz_ldcache")
+        row, source = coverage_ctl.collect_u("r1-u1")
+        self.assertEqual(source, "corpus-count-only")
+        self.assertIsNone(row.get("edges"))
+        self.assertNotEqual(source, "unreachable")
+
+    def test_an_absent_run_names_no_harness(self):
+        self.assertEqual(coverage_ctl.u_harnesses_without_stats("never-ran"),
+                         [])
+
+    def register_run(self, run_id):
+        st = ps.default_state()
+        ps.current_round(st)["run_ids"] = [run_id]
+        ps.save(st)
+
+    class Args:
+        def __init__(self, run_id, track="u"):
+            self.run_id = run_id
+            self.track = track
+            self.url = "http://127.0.0.1:1/"
+            self.force = True
+            self.surface = False
+
+    def sample(self, run_id):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = coverage_ctl.cmd_sample(self.Args(run_id))
+        return code, buf.getvalue()
+
+    def test_a_sample_over_the_real_layout_writes_the_edges_column(self):
+        self.register_run("r1-u1")
+        self.afl("r1-u1", "fuzz_path_join")
+        code, text = self.sample("r1-u1")
+        self.assertEqual(code, 0, text)
+        with io.open(coverage_ctl.csv_path("r1-u1", "u"), newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        self.assertEqual(rows[-1]["edges"], "300")
+
+    def test_a_sample_with_no_stats_names_the_silent_harnesses(self):
+        self.register_run("r1-u1")
+        self.libfuzzer("r1-u1", "oci_parse", corpus=3)
+        code, text = self.sample("r1-u1")
+        self.assertEqual(code, 0, text)
+        self.assertIn("no AFL++ fuzzer_stats", text)
+        self.assertIn("oci_parse", text)
+
+    def test_a_sample_over_the_real_layout_warns_about_nothing(self):
+        self.register_run("r1-u1")
+        self.afl("r1-u1", "fuzz_path_join")
+        _code, text = self.sample("r1-u1")
+        self.assertNotIn("no AFL++ fuzzer_stats", text)
+
+
+# ANCHOR-PHASE-2-TENANT
+
+
+# A live `measure` needs a container runtime holding an NVIDIA device set, and
+# no machine running this suite is required to have one. The measurement is
+# therefore split and both halves are covered here: the half a shell decides
+# runs the real listing program against a directory tree standing in for a
+# container's /dev, and the half Python decides runs measure_nodes and compare
+# over a recorded listing.
+class TestTenantProbeListingScript(unittest.TestCase):
+    """What the probe container's listing program prints, and its exit
+    status, under a real POSIX shell."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sh = shutil.which("sh")
+        if cls.sh is None:
+            raise unittest.SkipTest("no POSIX sh on PATH")
+        if not os.path.exists("/dev/null"):
+            raise unittest.SkipTest("/dev/null is absent on this host")
+
+    def listing(self, directories):
+        """-> (exit status, non-empty output lines) of the real program."""
+        import verify_tenant_surface as vts
+        proc = subprocess.run([self.sh, "-c", vts.listing_script(directories)],
+                              capture_output=True, text=True, timeout=60)
+        return proc.returncode, [line.strip()
+                                 for line in proc.stdout.splitlines()
+                                 if line.strip()]
+
+    def sentinel(self):
+        import verify_tenant_surface as vts
+        return vts.LISTING_SENTINEL
+
+    def test_an_absent_last_directory_still_exits_0(self):
+        # The gate's own configuration. /dev/nvidia-caps-imex-channels is
+        # absent on a host with no IMEX domain and is last in the candidate
+        # list, so a loop taking its status from the directory test reports a
+        # valid reading as a failed run.
+        with tempfile.TemporaryDirectory() as root:
+            code, lines = self.listing([root, os.path.join(root, "absent")])
+        self.assertEqual(code, 0)
+        self.assertEqual(lines, [self.sentinel()])
+
+    def test_an_empty_last_directory_still_exits_0(self):
+        with tempfile.TemporaryDirectory() as root:
+            empty = os.path.join(root, "empty")
+            os.mkdir(empty)
+            code, lines = self.listing([root, empty])
+        self.assertEqual(code, 0)
+        self.assertEqual(lines, [self.sentinel()])
+
+    def test_a_symlink_is_listed_as_the_device_it_points_at(self):
+        # /dev/dri/by-path holds symlinks the CDI create-symlinks hook makes.
+        # A tenant opening one opens the node it names, so the measurement
+        # records that node.
+        with tempfile.TemporaryDirectory() as root:
+            by_path = os.path.join(root, "by-path")
+            os.mkdir(by_path)
+            os.symlink("/dev/null",
+                       os.path.join(by_path, "pci-0000:00:1e.0-card"))
+            code, lines = self.listing([by_path])
+        self.assertEqual(code, 0)
+        self.assertEqual(lines, ["/dev/null", self.sentinel()])
+
+    def test_a_directory_and_a_plain_file_are_not_listed(self):
+        # The old test was `[ -e "$f" ]`, which admitted the by-path directory
+        # itself. No declared pattern covers a directory, so it read as
+        # reachable surface the artefact does not model.
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(os.path.join(root, "by-path"))
+            plain = os.path.join(root, "plain")
+            with open(plain, "w", encoding="utf-8") as fh:
+                fh.write("not a device\n")
+            code, lines = self.listing([root])
+        self.assertEqual(code, 0)
+        self.assertEqual(lines, [self.sentinel()])
+
+    def test_a_directory_a_shell_would_reinterpret_is_refused(self):
+        import verify_tenant_surface as vts
+        with self.assertRaises(vts.VerifyError) as caught:
+            vts.listing_script(["/dev; rm -rf /"])
+        self.assertIn("/dev; rm -rf /", str(caught.exception))
+
+    def test_the_shipped_candidate_directories_are_accepted(self):
+        import verify_tenant_surface as vts
+        script = vts.listing_script()
+        for directory in vts.CANDIDATE_DIRECTORIES:
+            self.assertIn(directory, script)
+
+
+class TenantProbeMeasurementFixture(unittest.TestCase):
+    """Drives measure_nodes over a recorded container listing."""
+
+    # What a CDI container hands a tenant, as the listing program prints it:
+    # canonical paths, with the two /dev/dri/by-path entries already resolved
+    # onto the card and render nodes they name.
+    CDI_LISTING = "\n".join([
+        "/dev/nvidiactl",
+        "/dev/nvidia0",
+        "/dev/dri/card0",
+        "/dev/dri/renderD128",
+        "/dev/dri/card0",
+        "/dev/dri/renderD128",
+        "__GSPWN_LISTING_COMPLETE__",
+        ""])
+
+    def drive(self, stdout, code=0, run_error=None, runtime="docker"):
+        """-> measure_nodes over `stdout`, recording argv and the removal."""
+        import verify_tenant_surface as vts
+        self.argv = None
+        self.removed = []
+        original = (vts.run, vts.which_runtime, vts.remove_container)
+
+        def fake_run(argv, timeout, what):
+            self.argv = argv
+            if run_error is not None:
+                raise vts.VerifyError(run_error)
+            return code, stdout, "recorded stderr"
+
+        def restore():
+            vts.run, vts.which_runtime, vts.remove_container = original
+
+        self.addCleanup(restore)
+        vts.run = fake_run
+        vts.which_runtime = lambda name: name
+        vts.remove_container = (
+            lambda name, container: self.removed.append(container))
+        return vts.measure_nodes(runtime, "ubuntu:22.04", "compute,utility",
+                                 False, vts.VIA_RUNTIME)
+
+
+class TestTenantProbeMeasurement(TenantProbeMeasurementFixture):
+    """What measure_nodes makes of a listing, and what it refuses."""
+
+    def test_a_listing_ending_in_the_sentinel_measures_its_nodes(self):
+        self.assertEqual(self.drive(self.CDI_LISTING),
+                         ["/dev/dri/card0", "/dev/dri/renderD128",
+                          "/dev/nvidia0", "/dev/nvidiactl"])
+
+    def test_an_alias_and_its_target_count_as_one_node(self):
+        # Six printed paths, four nodes. A by-path pattern in the artefact
+        # would have made this eight, and declared an alias as a second
+        # attack surface.
+        self.assertEqual(
+            len([line for line in self.CDI_LISTING.splitlines()
+                 if line.startswith("/dev/")]), 6)
+        self.assertEqual(len(self.drive(self.CDI_LISTING)), 4)
+
+    def test_the_sentinel_itself_is_not_measured_as_a_node(self):
+        for node in self.drive(self.CDI_LISTING):
+            self.assertTrue(node.startswith("/dev/"), node)
+
+    def test_a_listing_without_the_sentinel_is_refused_as_truncated(self):
+        import verify_tenant_surface as vts
+        with self.assertRaises(vts.VerifyError) as caught:
+            self.drive("/dev/nvidiactl\n/dev/nvidia0\n")
+        message = str(caught.exception)
+        self.assertIn("truncated", message)
+        self.assertIn("2 line", message)
+
+    def test_an_empty_listing_without_the_sentinel_is_refused(self):
+        # A container killed before it printed anything exits 0 through a
+        # runtime that reports the kill as success. Nothing was measured.
+        import verify_tenant_surface as vts
+        with self.assertRaises(vts.VerifyError) as caught:
+            self.drive("")
+        self.assertIn("truncated", str(caught.exception))
+
+    def test_a_container_that_exited_non_zero_is_refused(self):
+        import verify_tenant_surface as vts
+        with self.assertRaises(vts.VerifyError) as caught:
+            self.drive("", code=125)
+        self.assertIn("did not run", str(caught.exception))
+
+    def test_the_probe_container_carries_a_name(self):
+        # Without --name the container cannot be found or removed after the
+        # Python side times out on RUN_TIMEOUT_SECONDS.
+        import verify_tenant_surface as vts
+        self.drive(self.CDI_LISTING)
+        self.assertIn("--name", self.argv)
+        self.assertEqual(self.argv[self.argv.index("--name") + 1],
+                         vts.CONTAINER_NAME_PREFIX + str(os.getpid()))
+
+    def test_the_probe_container_is_removed_after_a_reading(self):
+        import verify_tenant_surface as vts
+        self.drive(self.CDI_LISTING)
+        self.assertEqual(self.removed,
+                         [vts.CONTAINER_NAME_PREFIX + str(os.getpid())])
+
+    def test_the_probe_container_is_removed_after_a_timeout(self):
+        import verify_tenant_surface as vts
+        expired = "container run did not finish within 120s"
+        with self.assertRaises(vts.VerifyError) as caught:
+            self.drive("", run_error=expired)
+        self.assertIn("did not finish", str(caught.exception))
+        self.assertEqual(self.removed,
+                         [vts.CONTAINER_NAME_PREFIX + str(os.getpid())])
+
+    def test_the_probe_container_is_removed_after_a_truncated_listing(self):
+        import verify_tenant_surface as vts
+        with self.assertRaises(vts.VerifyError):
+            self.drive("/dev/nvidiactl\n")
+        self.assertEqual(self.removed,
+                         [vts.CONTAINER_NAME_PREFIX + str(os.getpid())])
+
+
+class TestTenantProbeContainerRemoval(unittest.TestCase):
+    """remove_container runs from a `finally`, so it reports every outcome
+    and raises none of them."""
+
+    class Recording(object):
+        """The two names remove_container reads off the subprocess module."""
+
+        TimeoutExpired = subprocess.TimeoutExpired
+
+        def __init__(self, outcome):
+            self.outcome = outcome
+            self.calls = []
+
+        def run(self, argv, **kwargs):
+            self.calls.append((argv, kwargs))
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+    def remove(self, outcome):
+        import verify_tenant_surface as vts
+        stub = self.Recording(outcome)
+        original = vts.subprocess
+        self.addCleanup(lambda: setattr(vts, "subprocess", original))
+        vts.subprocess = stub
+        vts.remove_container("docker", "gspwn-tenant-probe-1")
+        return stub
+
+    def test_a_removal_names_the_container_and_forces_it(self):
+        import verify_tenant_surface as vts
+        stub = self.remove(types.SimpleNamespace(returncode=0, stderr=""))
+        argv, kwargs = stub.calls[0]
+        self.assertEqual(argv, ["docker", "rm", "-f",
+                                "gspwn-tenant-probe-1"])
+        self.assertEqual(kwargs["timeout"], vts.REMOVE_TIMEOUT_SECONDS)
+
+    def test_an_already_removed_container_raises_nothing(self):
+        stub = self.remove(types.SimpleNamespace(
+            returncode=1, stderr="Error: No such container"))
+        self.assertEqual(len(stub.calls), 1)
+
+    def test_a_removal_timeout_is_logged_and_not_raised(self):
+        import verify_tenant_surface as vts
+        with self.assertLogs(vts.logger, "WARNING") as caught:
+            self.remove(subprocess.TimeoutExpired("docker rm", 30))
+        self.assertIn("gspwn-tenant-probe-1", "\n".join(caught.output))
+
+    def test_a_runtime_that_cannot_start_is_logged_and_not_raised(self):
+        import verify_tenant_surface as vts
+        with self.assertLogs(vts.logger, "WARNING") as caught:
+            self.remove(OSError("no such binary"))
+        self.assertIn("gspwn-tenant-probe-1", "\n".join(caught.output))
+
+
+class TestTenantProbeVerdict(TenantProbeMeasurementFixture):
+    """The exit status the gate reaches from a measured listing."""
+
+    def verdict(self, stdout):
+        """-> (exit contribution, printed report) for one measured path."""
+        import verify_tenant_surface as vts
+        inside, outside = vts.expected_surface(
+            TenantSurfaceFixture.TABLES)
+        measured = self.drive(stdout)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = vts.report_one(vts.VIA_RUNTIME, measured, inside, outside)
+        return code, buf.getvalue()
+
+    def test_the_recorded_device_set_reaches_exit_0(self):
+        # The configuration the tool exists to accept. It exited 2 before the
+        # sentinel, because the listing's own exit status was the status of a
+        # false directory test, and it exited 1 before the canonical paths,
+        # because /dev/dri/by-path matched no declared pattern.
+        code, report = self.verdict(self.CDI_LISTING)
+        self.assertEqual(code, 0)
+        self.assertIn("nodes received: 4", report)
+        self.assertIn("matches the recorded tenant surface", report)
+
+    def test_an_undeclared_node_reaches_exit_1_and_is_named(self):
+        listing = self.CDI_LISTING.replace(
+            "__GSPWN_LISTING_COMPLETE__",
+            "/dev/nvidia-uvm\n__GSPWN_LISTING_COMPLETE__")
+        code, report = self.verdict(listing)
+        self.assertEqual(code, 1)
+        self.assertIn("REACHABLE AND NOT MODELLED", report)
+        self.assertIn("/dev/nvidia-uvm", report)
+        self.assertIn("no fops table", report)
+
+
+# ANCHOR-PHASE-3-DURABILITY
+
+
+class TestOrchestratorExitCodeTable(StateTempMixin, unittest.TestCase):
+    """One test per row of the exit-code table in orchestrator_ctl's docstring.
+
+    The code is the whole contract with systemd: the unit names BLOCKED_EXIT in
+    RestartPreventExitStatus, so 78 stops the unit and 1 restarts it every
+    RestartSec. A corrupt breaker file and a campaign.yaml typo both exited 1,
+    which is a 60-second relaunch against a condition no restart can change.
+    """
+
+    NO_SUCH_USER = "gspwn-no-such-user-8f3c1d"
+
+    def setUp(self):
+        super().setUp()
+        self.orch_path = os.path.join(self.tmp.name, "orch.json")
+        self.addCleanup(setattr, orchestrator_ctl, "ORCH_PATH",
+                        orchestrator_ctl.ORCH_PATH)
+        orchestrator_ctl.ORCH_PATH = self.orch_path
+        # Built from DEFAULTS so a new orchestrator key cannot make a command
+        # raise KeyError here while working in production.
+        self.conf = {"orchestrator": dict(
+            gspwn_config.DEFAULTS["orchestrator"], window_min=60,
+            max_same_boot_starts=2, max_reboots=10, command="true")}
+        # Kept before the stub replaces it: one row of the table is cfg's own
+        # exit, which the stub would never reach.
+        self.real_cfg = orchestrator_ctl.cfg
+        self.patch(orchestrator_ctl, "cfg", lambda: self.conf)
+        # Harvest shells out to crashlog_ctl as root; this suite runs offline.
+        self.patch(orchestrator_ctl, "harvest", lambda: None)
+        ps.save(ps.default_state())
+
+    def patch(self, module, name, value):
+        self.addCleanup(setattr, module, name, getattr(module, name))
+        setattr(module, name, value)
+
+    def run_once(self, command="true"):
+        args = types.SimpleNamespace(command=command)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = orchestrator_ctl.cmd_run(args)
+        return rc, out.getvalue() + err.getvalue()
+
+    def exits(self, fn, *args):
+        """-> (exit code, output) for a call that raises SystemExit."""
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            with self.assertRaises(SystemExit) as caught:
+                fn(*args)
+        return caught.exception.code, out.getvalue() + err.getvalue()
+
+    def corrupt(self, path):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+
+    def install_args(self, **over):
+        base = {"command": "agent --drive", "user": "root", "force": True,
+                "restart_sec": 60}
+        base.update(over)
+        return types.SimpleNamespace(**base)
+
+    # ------------------------------------------------ 78: only a human ---
+
+    def test_an_invalid_config_stops_the_unit(self):
+        """A campaign.yaml typo is fixed by editing campaign.yaml. Exit 1 here
+        relaunched the agent against the same typo every RestartSec."""
+        def die(*_a, **_k):
+            raise gspwn_config.ConfigError("loop.max_rounds must be an int")
+
+        self.patch(orchestrator_ctl.gspwn_config, "load", die)
+        code, out = self.exits(self.real_cfg)
+        self.assertEqual(code, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("loop.max_rounds", out)
+
+    def test_an_unset_command_stops_the_unit(self):
+        self.conf["orchestrator"]["command"] = ""
+        rc, out = self.run_once(command=None)
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("orchestrator.command", out)
+
+    def test_an_unreadable_breaker_file_stops_run(self):
+        """`reset` is the way out, and only a human runs it."""
+        self.corrupt(self.orch_path)
+        code, out = self.exits(orchestrator_ctl.cmd_run,
+                               types.SimpleNamespace(command="true"))
+        self.assertEqual(code, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("refusing to start", out)
+
+    def test_an_unreadable_breaker_file_stops_status(self):
+        self.corrupt(self.orch_path)
+        code, out = self.exits(orchestrator_ctl.cmd_status,
+                               types.SimpleNamespace())
+        self.assertEqual(code, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("not valid JSON", out)
+
+    def test_a_recorded_block_stops_the_unit(self):
+        for _ in range(3):
+            self.run_once()
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("is blocked", out)
+
+    def test_a_tripped_threshold_stops_the_unit(self):
+        for _ in range(2):
+            self.run_once()
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("circuit breaker tripped", out)
+
+    def test_an_unreadable_pipeline_state_stops_the_unit(self):
+        self.corrupt(ps.STATE_PATH)
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("pipeline state cannot be read", out)
+
+    def test_a_blocked_phase_stops_the_unit(self):
+        with ps.transaction() as st:
+            st["phases"]["fuzz"]["status"] = "blocked"
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("blocked", out)
+
+    def test_a_complete_pipeline_stops_the_unit(self):
+        with ps.transaction() as st:
+            for phase in ps.PHASES:
+                st["phases"][phase]["status"] = "done"
+            st["rounds"][-1]["decision"] = "stop"
+        rc, out = self.run_once()
+        self.assertEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("complete", out)
+
+    def test_a_command_needing_root_stops_without_it(self):
+        self.patch(orchestrator_ctl.os, "geteuid", lambda: 1000)
+        code, out = self.exits(orchestrator_ctl.require_root, "install")
+        self.assertEqual(code, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("must run as root", out)
+
+    def test_install_without_an_agent_command_stops(self):
+        self.patch(orchestrator_ctl, "require_root", lambda what: None)
+        self.conf["orchestrator"]["command"] = ""
+        code, out = self.exits(orchestrator_ctl.cmd_install,
+                               self.install_args(command=None))
+        self.assertEqual(code, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("no agent command", out)
+
+    def test_install_without_a_non_root_user_stops(self):
+        self.patch(orchestrator_ctl, "require_root", lambda what: None)
+        code, out = self.exits(orchestrator_ctl.cmd_install,
+                               self.install_args(user="root"))
+        self.assertEqual(code, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("no non-root user", out)
+
+    def test_install_naming_an_unknown_user_stops(self):
+        self.patch(orchestrator_ctl, "require_root", lambda what: None)
+        code, out = self.exits(orchestrator_ctl.cmd_install,
+                               self.install_args(user=self.NO_SUCH_USER))
+        self.assertEqual(code, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn(self.NO_SUCH_USER, out)
+
+    # -------------------------------------- 1: the next start may differ ---
+
+    def test_a_failing_agent_returns_its_own_status(self):
+        """A restart clears a failed launch, so the code must not be 78."""
+        rc, _ = self.run_once(command="false")
+        self.assertEqual(rc, 1)
+        self.assertNotEqual(rc, orchestrator_ctl.BLOCKED_EXIT)
+
+    def test_a_stalled_agent_is_killed_with_a_restartable_status(self):
+        started = time.time()
+        with redirect_stdout(io.StringIO()):
+            result = orchestrator_ctl.launch_agent("sleep 30", 1.0 / 3600.0)
+        self.assertLess(time.time() - started, 25)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(result.returncode, orchestrator_ctl.BLOCKED_EXIT)
+
+    def test_status_reporting_a_block_exits_one(self):
+        """`status` declines no work, so it keeps 1 for a finding. The unit
+        never runs it."""
+        for _ in range(3):
+            self.run_once()
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = orchestrator_ctl.cmd_status(types.SimpleNamespace())
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOCKED since", out.getvalue())
+
+    def test_preflight_finding_problems_exits_one(self):
+        self.patch(orchestrator_ctl.gspwn_config, "load", lambda *a, **k: {
+            "orchestrator": dict(gspwn_config.DEFAULTS["orchestrator"],
+                                 command="agent --drive",
+                                 resume_command="agent --resume {session}",
+                                 session_transcript_glob="")})
+        self.patch(orchestrator_ctl, "sudo_ok",
+                   lambda user=None: (True, "sudo -n succeeds"))
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = orchestrator_ctl.cmd_preflight(
+                types.SimpleNamespace(user=None))
+        self.assertEqual(rc, 1)
+        self.assertIn("session_transcript_glob", out.getvalue())
+
+    def test_the_docstring_records_the_table(self):
+        """The distinction is the tool's contract with systemd and nothing
+        else records it."""
+        doc = orchestrator_ctl.__doc__
+        self.assertIn("| Condition | Subcommand | Exit | Cleared by |", doc)
+        self.assertIn("RestartPreventExitStatus", doc)
+
+    def test_every_exit_in_the_module_is_audited(self):
+        """A new bare sys.exit is a new row nobody wrote, and the default is
+        the restart loop this table exists to stop."""
+        path = os.path.join(ps.REPO_ROOT, "tools", "orchestrator_ctl.py")
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        calls = [line.strip() for line in lines
+                 if "sys.exit(" in line and not line.strip().startswith("#")]
+        # One in blocked_exit(), one under __main__. Every other exit path
+        # goes through blocked_exit or returns a code.
+        self.assertEqual(calls, ["sys.exit(BLOCKED_EXIT)", "sys.exit(main())"])
+
+
+class TestStateBackupIsDurable(StateTempMixin, unittest.TestCase):
+    """The .bak both corrupt-state messages name has to load.
+
+    It was written with shutil.copyfile, which is neither atomic nor fsynced,
+    on a machine that panics by design. A panic inside the copy left a torn
+    file under the name the recovery path tells the operator to restore from.
+    """
+
+    def test_the_backup_reads_back_as_json(self):
+        ps.save(ps.default_state())
+        with ps.transaction() as st:
+            st["phases"]["build"]["status"] = "done"
+        with open(ps.STATE_PATH + ".bak", encoding="utf-8") as handle:
+            backup = json.load(handle)
+        self.assertEqual(backup["phases"]["build"]["status"], "pending")
+
+    def test_the_backup_holds_the_previous_write_not_the_current_one(self):
+        ps.save(ps.default_state())
+        with ps.transaction() as st:
+            st["phases"]["provision"]["status"] = "done"
+        with ps.transaction() as st:
+            st["phases"]["provision"]["status"] = "failed"
+        with open(ps.STATE_PATH + ".bak", encoding="utf-8") as handle:
+            backup = json.load(handle)
+        self.assertEqual(backup["phases"]["provision"]["status"], "done")
+        self.assertEqual(ps.load()["phases"]["provision"]["status"], "failed")
+
+    def test_a_truncated_state_file_names_a_backup_that_loads(self):
+        ps.save(ps.default_state())
+        with ps.transaction() as st:
+            st["phases"]["build"]["status"] = "done"
+        with open(ps.STATE_PATH, "w", encoding="utf-8") as handle:
+            handle.write('{"phases": ')
+        with self.assertRaises(ValueError) as caught:
+            ps.load()
+        self.assertIn(ps.STATE_PATH + ".bak", str(caught.exception))
+        with open(ps.STATE_PATH + ".bak", encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["version"], ps.SCHEMA_VERSION)
+
+    def test_no_first_save_writes_a_backup_of_nothing(self):
+        ps.save(ps.default_state())
+        self.assertFalse(os.path.exists(ps.STATE_PATH + ".bak"))
+
+    def test_a_save_leaves_no_temporary_file_behind(self):
+        ps.save(ps.default_state())
+        ps.save(ps.default_state())
+        leftovers = [name for name in os.listdir(os.path.dirname(ps.STATE_PATH))
+                     if name.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+
+    def test_the_bytes_on_disk_are_unchanged_by_the_new_write_path(self):
+        """The write is a durability fix. An artefact byte moving with it
+        would be a second, unreviewed change."""
+        state = ps.default_state()
+        ps.save(state)
+        with open(ps.STATE_PATH, "rb") as handle:
+            written = handle.read()
+        self.assertEqual(written,
+                         json.dumps(state, indent=2,
+                                    sort_keys=True).encode("utf-8"))
+
+
+class TestInitWritesUnderTheStateLock(StateTempMixin, unittest.TestCase):
+    """`init` wrote through a bare ps.save(), against the rule at the top of
+    pipeline_state: a parallel subagent's transaction could interleave with
+    it, and the existence test sat outside the lock as well."""
+
+    def init(self, force=False):
+        import pipeline_ctl
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc = pipeline_ctl.cmd_init(types.SimpleNamespace(force=force))
+        return rc, out.getvalue()
+
+    def test_init_leaves_a_loadable_state_file(self):
+        rc, out = self.init()
+        self.assertEqual(rc, 0)
+        self.assertIn("initialized", out)
+        st = ps.load()
+        self.assertEqual(set(st["phases"]), set(ps.PHASES))
+        self.assertEqual(st["version"], ps.SCHEMA_VERSION)
+
+    def test_force_recovers_a_corrupt_state_file(self):
+        """transaction's load() raises on the very file --force exists to
+        replace, so init takes the lock through state_lock and reads nothing."""
+        os.makedirs(os.path.dirname(ps.STATE_PATH), exist_ok=True)
+        with open(ps.STATE_PATH, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+        rc, _ = self.init(force=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(ps.load()["version"], ps.SCHEMA_VERSION)
+
+    def test_init_without_force_keeps_the_existing_state(self):
+        with ps.transaction() as st:
+            st["phases"]["provision"]["status"] = "done"
+        rc, out = self.init()
+        self.assertEqual(rc, 0)
+        self.assertIn("already exists", out)
+        self.assertEqual(ps.load()["phases"]["provision"]["status"], "done")
+
+    def test_no_state_write_in_pipeline_ctl_runs_outside_a_lock(self):
+        path = os.path.join(ps.REPO_ROOT, "tools", "pipeline_ctl.py")
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        writes = [n for n, line in enumerate(lines) if "ps.save(" in line
+                  and not line.strip().startswith("#")]
+        self.assertTrue(writes, "cmd_init's state write disappeared")
+        tops = [n for n, line in enumerate(lines) if line.startswith("def ")]
+        for write in writes:
+            start = max(n for n in tops if n < write)
+            end = min([n for n in tops if n > write] or [len(lines)])
+            body = "\n".join(lines[start:end])
+            self.assertTrue("with ps.state_lock()" in body
+                            or "with ps.transaction()" in body,
+                            "%s:%d writes state outside a lock"
+                            % (path, write + 1))
+
+
+class TestReInitKeepsTheLastLoadableBackup(StateTempMixin, unittest.TestCase):
+    """`init --force` overwrote the good backup with the corrupt bytes.
+
+    load()'s message offers two remedies, restoring from `<path>.bak` and
+    re-initialising, and performing the second destroyed the first: save()
+    copied the file's current bytes into the backup without looking at them,
+    and init --force replaces a file it never read. The crash registry, the
+    round history and the phase table went with it.
+    """
+
+    def init(self, force=False):
+        import pipeline_ctl
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = pipeline_ctl.cmd_init(types.SimpleNamespace(force=force))
+        return rc, out.getvalue() + err.getvalue()
+
+    def corrupt_the_state(self):
+        with open(ps.STATE_PATH, "a", encoding="utf-8") as handle:
+            handle.write("GARBAGE")
+
+    def good_history(self):
+        """A state file worth losing, and a backup that holds it.
+
+        Three writes, because a backup is always one write behind: the second
+        puts the history in the file and the third moves it into the backup.
+        """
+        self.init()
+        with ps.transaction() as st:
+            st["phases"]["provision"]["status"] = "done"
+            st["crashes"]["c1"] = dict(ps.DEFAULT_CRASH)
+        with ps.transaction() as st:
+            st["phases"]["build"]["status"] = "in_progress"
+
+    def test_force_over_a_corrupt_file_keeps_the_backup(self):
+        """The reviewer's reproduction, end to end."""
+        self.good_history()
+        self.corrupt_the_state()
+        # `init` without --force reads the file and refuses, naming the backup.
+        with self.assertRaises(ValueError) as caught:
+            self.init()
+        self.assertIn(ps.STATE_PATH + ".bak", str(caught.exception))
+        rc, out = self.init(force=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("is unchanged", out)
+        with open(ps.STATE_PATH + ".bak", encoding="utf-8") as handle:
+            backup = json.load(handle)
+        self.assertEqual(backup["phases"]["provision"]["status"], "done")
+        self.assertIn("c1", backup["crashes"])
+
+    def test_the_message_the_operator_follows_still_resolves(self):
+        """load() names the backup. After --force it still has to load."""
+        self.good_history()
+        self.corrupt_the_state()
+        with self.assertRaises(ValueError) as caught:
+            ps.load()
+        self.assertIn(ps.STATE_PATH + ".bak", str(caught.exception))
+        self.init(force=True)
+        with open(ps.STATE_PATH + ".bak", "rb") as handle:
+            self.assertTrue(ps._parses(handle.read()))
+
+    def test_a_good_save_still_replaces_the_backup(self):
+        """The rule declines unloadable bytes and nothing else."""
+        self.good_history()
+        with ps.transaction() as st:
+            st["phases"]["build"]["status"] = "done"
+        with open(ps.STATE_PATH + ".bak", encoding="utf-8") as handle:
+            backup = json.load(handle)
+        self.assertEqual(backup["phases"]["provision"]["status"], "done")
+        self.assertEqual(backup["phases"]["build"]["status"], "in_progress")
+
+    def test_corrupt_bytes_replace_a_backup_that_is_itself_corrupt(self):
+        """Declining then would keep the older of two files neither of which
+        loads, and lose the newer one for nothing."""
+        self.good_history()
+        with open(ps.STATE_PATH + ".bak", "w", encoding="utf-8") as handle:
+            handle.write("{ older garbage")
+        self.corrupt_the_state()
+        self.init(force=True)
+        with open(ps.STATE_PATH + ".bak", encoding="utf-8") as handle:
+            self.assertIn("GARBAGE", handle.read())
+
+    def test_corrupt_bytes_are_not_recorded_as_a_first_backup(self):
+        """Writing them names a file the recovery path cannot use."""
+        self.init()
+        if os.path.exists(ps.STATE_PATH + ".bak"):
+            os.unlink(ps.STATE_PATH + ".bak")
+        self.corrupt_the_state()
+        self.init(force=True)
+        self.assertFalse(os.path.exists(ps.STATE_PATH + ".bak"))
+
+
+class TestUnreadableFilesStopTheUnit(StateTempMixin, unittest.TestCase):
+    """An OSError escaped as a traceback and exit 1, which the unit restarts.
+
+    Both reads that the exit-code table promises 78 for go through open():
+    pipeline_stop_reason caught ValueError only and cfg() caught ConfigError
+    only, so a permission bit on either file produced the 60-second relaunch
+    the table says it prevents.
+    """
+
+    def setUp(self):
+        super().setUp()
+        if os.geteuid() == 0:
+            self.skipTest("root reads a 0-mode file, so the case cannot arise")
+        ps.save(ps.default_state())
+
+    def unreadable(self, path):
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o644)
+
+    def test_an_unreadable_state_file_is_a_stop_reason(self):
+        self.unreadable(ps.STATE_PATH)
+        reason = orchestrator_ctl.pipeline_stop_reason()
+        self.assertIsNotNone(reason)
+        self.assertIn("pipeline state cannot be read", reason)
+
+    def test_an_unreadable_config_stops_the_unit(self):
+        path = os.path.join(self.tmp.name, "campaign.yaml")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("loop:\n  max_rounds: 3\n")
+        self.unreadable(path)
+        real_load = orchestrator_ctl.gspwn_config.load
+        self.addCleanup(setattr, orchestrator_ctl.gspwn_config, "load",
+                        real_load)
+        orchestrator_ctl.gspwn_config.load = lambda *a, **k: real_load(path)
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            with self.assertRaises(SystemExit) as caught:
+                orchestrator_ctl.cfg()
+        self.assertEqual(caught.exception.code, orchestrator_ctl.BLOCKED_EXIT)
+
+    def test_an_os_error_from_any_subcommand_stops_the_unit(self):
+        """The guard sits in main(), so it covers taking the breaker lock and
+        writing the file back as well as reading them."""
+        def die(_a):
+            raise PermissionError(13, "Permission denied", "/state/orch.json")
+
+        self.addCleanup(setattr, orchestrator_ctl, "cmd_status",
+                        orchestrator_ctl.cmd_status)
+        orchestrator_ctl.cmd_status = die
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            with self.assertRaises(SystemExit) as caught:
+                orchestrator_ctl.main(["status"])
+        self.assertEqual(caught.exception.code, orchestrator_ctl.BLOCKED_EXIT)
+        self.assertIn("PermissionError", err.getvalue())
+
+
+class TestBriefSurvivesAMissingLedger(StateTempMixin, unittest.TestCase):
+    """The spend figure took the whole brief with it.
+
+    `brief` is the recovery tool a resumed agent is pointed at by
+    resume_anchor, and pipeline_stop_reason never reads spend, so the
+    orchestrator launches that agent whatever the ledger says.
+    """
+
+    def run_command(self, name, **args):
+        import pipeline_ctl
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = getattr(pipeline_ctl, "cmd_" + name)(
+                types.SimpleNamespace(**args))
+        return rc, out.getvalue() + err.getvalue()
+
+    def brief(self):
+        return self.run_command("brief", last=None)
+
+    def show(self):
+        return self.run_command("show", json=False)
+
+    def round_show(self):
+        return self.run_command("round_show", json=False)
+
+    def billed_hours_without_a_ledger(self):
+        with ps.transaction() as st:
+            st["rounds"][-1]["run_hours"] = 12.5
+            st["phases"]["provision"]["status"] = "done"
+        if os.path.exists(ps.SPEND_PATH):
+            os.unlink(ps.SPEND_PATH)
+
+    def test_the_brief_still_reports_the_position(self):
+        self.billed_hours_without_a_ledger()
+        rc, out = self.brief()
+        self.assertEqual(rc, 0)
+        self.assertIn("Where the pipeline is", out)
+        self.assertIn("next action", out)
+
+    def test_the_unknown_figure_names_its_remedy(self):
+        self.billed_hours_without_a_ledger()
+        _rc, out = self.brief()
+        self.assertIn("unknown of", out)
+        self.assertIn("spend-init", out)
+
+    def test_a_present_ledger_still_prints_the_figure(self):
+        ps.save(ps.default_state())
+        ps.record_run_hours("run-1", 3.0)
+        _rc, out = self.brief()
+        self.assertIn("3.0 of", out)
+
+    def test_show_still_reports_the_phases(self):
+        """An operator runs `show` when a campaign is behaving oddly, which is
+        when the ledger is most likely to be gone."""
+        self.billed_hours_without_a_ledger()
+        rc, out = self.show()
+        self.assertEqual(rc, 0)
+        self.assertIn("unknown run-hours", out)
+        self.assertIn("spend-init", out)
+        for phase in ps.PHASES:
+            self.assertIn(phase, out)
+
+    def test_round_show_still_reports_the_round_history(self):
+        self.billed_hours_without_a_ledger()
+        rc, out = self.round_show()
+        self.assertEqual(rc, 0)
+        self.assertIn("run-hours: unknown", out)
+        self.assertIn("spend-init", out)
+        self.assertIn("round 1", out)
+
+    def test_show_and_round_show_print_the_figure_when_the_ledger_is_there(self):
+        ps.save(ps.default_state())
+        ps.record_run_hours("run-1", 3.0)
+        self.assertIn("3.0 run-hours", self.show()[1])
+        self.assertIn("run-hours: 3.0", self.round_show()[1])
+
+    def test_an_unparseable_ledger_costs_no_command_its_output(self):
+        """The ledger raises ValueError, not SpendLedgerMissing, on this one."""
+        ps.save(ps.default_state())
+        ps.record_run_hours("run-1", 3.0)
+        with open(ps.SPEND_PATH, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+        for name in ("brief", "show", "round_show"):
+            rc, out = getattr(self, name)()
+            self.assertEqual(rc, 0, "%s exited %s" % (name, rc))
+            self.assertIn("unknown", out)
+
+
+class TestTheStallBoundIsPerLaunch(StateTempMixin, unittest.TestCase):
+    """One figure cannot bound both kinds of launch.
+
+    The fuzz phase blocks on `campaign_ctl.py wait` for the whole campaign
+    window inside one launch. Requiring the setting to exceed that made every
+    admissible value longer than 1000 h, so the bound on a stalled describe
+    agent was 41 days, and the shipped default of 0 disabled it outright.
+    """
+
+    def conf(self, hours=24, campaign=1000):
+        return {"orchestrator": {"max_agent_hours": hours},
+                "loop": {"campaign_hours": campaign}}
+
+    def at_phase(self, phase):
+        with ps.transaction() as st:
+            for p in ps.PHASES:
+                st["phases"][p]["status"] = (
+                    "done" if ps.PHASES.index(p) < ps.PHASES.index(phase)
+                    else "pending")
+        self.assertEqual(ps.next_action(ps.load()), ("phase", phase))
+
+    def test_a_short_phase_gets_the_setting_alone(self):
+        self.at_phase("describe")
+        self.assertEqual(orchestrator_ctl.launch_hours(self.conf()), 24)
+
+    def test_the_fuzz_launch_carries_the_campaign_window(self):
+        self.at_phase("fuzz")
+        self.assertEqual(orchestrator_ctl.launch_hours(self.conf()), 1024)
+
+    def test_zero_still_disables_the_timeout(self):
+        self.at_phase("fuzz")
+        self.assertEqual(orchestrator_ctl.launch_hours(self.conf(hours=0)), 0)
+
+    def test_an_unreadable_state_file_falls_back_to_the_shorter_bound(self):
+        os.makedirs(os.path.dirname(ps.STATE_PATH), exist_ok=True)
+        with open(ps.STATE_PATH, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+        self.assertEqual(orchestrator_ctl.launch_hours(self.conf()), 24)
+
+    def test_the_unbounded_sentinel_disables_the_bound(self):
+        self.at_phase("fuzz")
+        conf = self.conf(hours=gspwn_config.UNBOUNDED_AGENT_HOURS)
+        self.assertEqual(orchestrator_ctl.launch_hours(conf), 0)
+
+    def test_the_shipped_config_bounds_a_stalled_agent(self):
+        conf = gspwn_config.load(shipped_config())
+        hours = conf["orchestrator"]["max_agent_hours"]
+        self.assertNotEqual(hours, gspwn_config.UNBOUNDED_AGENT_HOURS,
+                            "no launch is bounded as shipped")
+        self.at_phase("describe")
+        self.assertEqual(orchestrator_ctl.launch_hours(conf), hours)
+        self.at_phase("fuzz")
+        self.assertEqual(orchestrator_ctl.launch_hours(conf),
+                         hours + conf["loop"]["campaign_hours"])
+
+
+def shipped_config():
+    """The committed config/campaign.yaml, the one an instance provisions."""
+    return os.path.join(os.path.dirname(HERE), "config", "campaign.yaml")
+
+
+class TestTheShippedConfigValidates(unittest.TestCase):
+    """A config the repository's own validator rejects breaks every caller of
+    cfg(), and nothing in the suite read the shipped file against the rules
+    that judge it."""
+
+    def test_the_committed_config_loads(self):
+        conf = gspwn_config.load(shipped_config())
+        self.assertIn("orchestrator", conf)
+        self.assertIn("loop", conf)
+
+    def test_every_default_key_is_expressible(self):
+        """Round-tripping the defaults catches a rule that no admissible value
+        satisfies, which is what the max_agent_hours cross rule was."""
+        for section, keys in gspwn_config.DEFAULTS.items():
+            if not isinstance(keys, dict):
+                continue
+            for key, value in keys.items():
+                self.assertIsNotNone(
+                    value, "%s.%s has no default" % (section, key))
+
+
+class TestTheStallBoundIsExpressible(unittest.TestCase):
+    """The rule that replaced the one requiring max_agent_hours to exceed
+    loop.campaign_hours. That rule admitted only values above 41 days, so the
+    setting could not express what its name says it bounds."""
+
+    def load(self, **orch):
+        text = ["loop:", "  campaign_hours: 100", "orchestrator:"]
+        for key, value in orch.items():
+            text.append("  %s: %s" % (key, value))
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "campaign.yaml")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(text) + "\n")
+        return gspwn_config.load(path)
+
+    def rejects(self, needle, **orch):
+        with self.assertRaises(gspwn_config.ConfigError) as caught:
+            self.load(**orch)
+        self.assertIn(needle, str(caught.exception))
+
+    def test_a_bound_shorter_than_the_campaign_is_accepted(self):
+        conf = self.load(max_agent_hours=24)
+        self.assertEqual(conf["orchestrator"]["max_agent_hours"], 24)
+
+    def test_a_bound_longer_than_the_campaign_is_refused(self):
+        """A bound longer than a whole campaign never fires."""
+        self.rejects("exceeds loop.campaign_hours", max_agent_hours=101)
+
+    def test_zero_is_refused(self):
+        """It shipped as 0, every reader took it for unset, and it meant no
+        launch was bounded at all."""
+        self.rejects("positive number of hours", max_agent_hours=0)
+
+    def test_the_sentinel_is_accepted_and_says_what_it_does(self):
+        conf = self.load(max_agent_hours='"unbounded"')
+        self.assertEqual(conf["orchestrator"]["max_agent_hours"],
+                         gspwn_config.UNBOUNDED_AGENT_HOURS)
+
+    def test_another_string_is_refused(self):
+        self.rejects("positive number of hours", max_agent_hours='"off"')
+
+    def test_the_message_names_the_fuzz_exemption(self):
+        """The message is where the next reader learns that the fuzz launch
+        gets loop.campaign_hours added to this value."""
+        with self.assertRaises(gspwn_config.ConfigError) as caught:
+            self.load(max_agent_hours=101)
+        self.assertIn("fuzz", str(caught.exception))
+        self.assertIn("campaign_hours", str(caught.exception))
+
+
+class TestTheSpendLedgerValidatesItsValues(unittest.TestCase):
+    """The ledger is the spend authority, and its load boundary ran
+    float() over whatever the file held: TypeError on a null or a list, and a
+    ValueError naming nothing on a string."""
+
+    def ledger(self, doc):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "spend.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(doc if isinstance(doc, str) else json.dumps(doc))
+        return path
+
+    def refuses(self, doc, *needles):
+        path = self.ledger(doc)
+        with self.assertRaises(ValueError) as caught:
+            ps._read_ledger(path)
+        message = str(caught.exception)
+        self.assertIn(path, message)
+        for needle in needles:
+            self.assertIn(needle, message)
+        return message
+
+    def test_a_null_is_refused_by_run_id(self):
+        self.refuses({"run-7": None}, "run-7", "a number of hours")
+
+    def test_a_list_is_refused_by_run_id(self):
+        self.refuses({"run-7": [1, 2]}, "run-7")
+
+    def test_a_numeric_string_is_refused(self):
+        """The writer emits floats, so a string is a hand edit."""
+        self.refuses({"run-7": "3.5"}, "run-7")
+
+    def test_true_does_not_bill_one_hour(self):
+        """bool is an int subclass, so `true` read as 1.0 before this."""
+        self.refuses({"run-7": True}, "run-7")
+
+    def test_negative_hours_are_refused_at_both_boundaries(self):
+        self.refuses({"run-7": -4}, "run-7", "Negative spend")
+        with self.assertRaises(ValueError):
+            ps.record_run_hours("run-7", -4, self.ledger({}))
+
+    def test_the_remedy_is_named(self):
+        self.assertIn("spend-init", self.refuses({"run-7": None}))
+
+    def test_a_good_ledger_still_reads(self):
+        path = self.ledger({"run-1": 3, "run-2": 4.5})
+        self.assertEqual(ps._read_ledger(path), {"run-1": 3.0, "run-2": 4.5})
+
+    def test_a_document_that_is_not_an_object_is_refused(self):
+        path = self.ledger([1, 2])
+        with self.assertRaises(ValueError) as caught:
+            ps._read_ledger(path)
+        self.assertIn("must contain a JSON object", str(caught.exception))
+
+
+# ANCHOR-PHASE-4-FIGURES
+
+
+class CheckSetFixtures(unittest.TestCase):
+    """A temporary directory and a check runner the check-set cases share."""
+
+    def tempdir(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return holder.name
+
+    def write(self, directory, name, text):
+        path = os.path.join(directory, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        return path
+
+    def committed(self):
+        """Point the path constants at the committed artefacts for one test.
+
+        A case reading the real tree through the module's own constants is
+        otherwise at the mercy of any class that patches one and does not put
+        it back, and the failure surfaces only in whole-suite order. Restored
+        through addCleanup, so it survives an assertion raising.
+        """
+        old = _patched(DESC_DIR=surface_cov.DEFAULT_DESC,
+                       IOCTL_MAP=os.path.join(HERE, "ioctl_map.json"))
+        self.addCleanup(_restore, old)
+
+    def check(self, name, **constants):
+        """-> (exit code, both streams). Several checks write their offender
+        lines to stderr and their summary to stdout, so a case asserting on
+        the offender needs the two joined."""
+        old = _patched(**constants)
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf), redirect_stderr(buf):
+                code = regression_check.main([name])
+        finally:
+            _restore(old)
+        return code, buf.getvalue()
+
+
+class TestStatedCheckCountsMatchTheRegistry(CheckSetFixtures):
+    """AGENTS.md named the wrong number of checks three times.
+
+    It said "the ten artefact checks CI runs" over a list of nine while CHECKS
+    carried twelve, so an agent following it ran nine. The count is prose and
+    drifted twice, which is why `agents` reads it.
+    """
+
+    BRIEF = ("# Probe\n\nRun `python3 tools/regression_check.py all`, which "
+             "is the local form of the %s artefact checks CI runs%s\n")
+
+    def brief(self, body):
+        directory = self.tempdir()
+        self.write(directory, "probe.md", body)
+        return directory
+
+    def test_a_count_equal_to_the_registry_passes(self):
+        code, out = self.check(
+            "agents", AGENTS_DIR=self.brief(self.BRIEF % ("twelve", ".")))
+        self.assertEqual(code, 0, out)
+        self.assertIn("stated count(s) of these checks", out)
+
+    def test_a_count_below_the_registry_is_reported_with_both_numbers(self):
+        code, out = self.check(
+            "agents", AGENTS_DIR=self.brief(self.BRIEF % ("nine", ".")))
+        self.assertEqual(code, 1)
+        self.assertIn("states 9 check(s) and the registry carries 12", out)
+
+    def test_a_count_written_in_digits_is_read(self):
+        code, out = self.check(
+            "agents", AGENTS_DIR=self.brief(self.BRIEF % ("10", ".")))
+        self.assertEqual(code, 1)
+        self.assertIn("states 10 check(s)", out)
+
+    def test_a_count_naming_no_tool_is_not_read_as_one_of_these(self):
+        # "All four checks are required" in the describe brief's validation
+        # section counts validation steps. Nothing binds it to this tool, so
+        # the rule leaves it alone.
+        code, out = self.check("agents", AGENTS_DIR=self.brief(
+            "# Probe\n\nRun `python3 tools/regression_check.py all`.\n\n"
+            + "Filler. " * 40 + "\n\nAll four checks are required.\n"))
+        self.assertEqual(code, 0, out)
+
+    def test_an_enumeration_short_of_the_set_names_what_it_omits(self):
+        code, out = self.check("agents", AGENTS_DIR=self.brief(
+            "# Probe\n\n`python3 tools/regression_check.py all` runs the "
+            "twelve checks: `names`, `pins`, `coverage`.\n"))
+        self.assertEqual(code, 1)
+        self.assertIn("the enumeration beside it omits", out)
+        self.assertIn("commands", out)
+
+    def test_an_enumeration_of_the_whole_set_passes(self):
+        code, out = self.check("agents", AGENTS_DIR=self.brief(
+            "# Probe\n\n`python3 tools/regression_check.py all` runs the "
+            "twelve checks: %s.\n"
+            % ", ".join("`%s`" % n for n in regression_check.CHECK_ORDER)))
+        self.assertEqual(code, 0, out)
+
+    def test_the_committed_prose_states_the_registry_count(self):
+        # The case the whole rule exists for, read against the real files.
+        self.committed()
+        for rel, line, stated, _listed in \
+                regression_check.stated_check_counts():
+            self.assertEqual(stated, len(regression_check.CHECKS),
+                             "%s:%d states %d" % (rel, line, stated))
+
+    def test_a_brief_set_stating_no_count_stops_the_check(self):
+        # A reader that finds no count settles nothing, and the extractor is
+        # then the thing to fix. AGENTS.md is read too, so the source list is
+        # emptied rather than the briefs.
+        old = _patched(AGENTS_DIR=self.brief("# Probe\n\nNo command here.\n"))
+        try:
+            with self.assertRaises(regression_check.CheckInput) as caught:
+                regression_check.check_count_sources_ = None
+                original = regression_check.check_count_sources
+                regression_check.check_count_sources = lambda: []
+                try:
+                    regression_check.check_agents()
+                finally:
+                    regression_check.check_count_sources = original
+            self.assertIn("no count of these checks is stated", str(
+                caught.exception))
+        finally:
+            _restore(old)
+
+
+class TestTheMapKeyIsCheckedAgainstTheRenderedRequest(CheckSetFixtures):
+    """`names` compared the value of each map entry and never its key.
+
+    tools/trace2seed.py picks the call by the whole request number, with no
+    mask, so one edited digit converts a traced request to another variant and
+    every later measurement joins on that name. All 78 committed keys equal
+    the const their call renders.
+    """
+
+    def map_file(self, mapping):
+        return self.write(self.tempdir(), "ioctl_map.json",
+                          json.dumps(mapping, indent=1))
+
+    def a_call(self):
+        self.committed()
+        requests = regression_check.read_call_requests()
+        calls, _structs = regression_check.read_descriptions()
+        name = sorted(n for n in calls if n in requests)[0]
+        return name, regression_check.const_value(requests[name])
+
+    def test_a_key_equal_to_the_rendered_request_passes(self):
+        name, value = self.a_call()
+        code, out = self.check("names", IOCTL_MAP=self.map_file(
+            {"0x%08x" % value: "ioctl$" + name}))
+        self.assertEqual(code, 0, out)
+        self.assertIn("keyed on the request number their call renders", out)
+
+    def test_one_edited_digit_is_reported_with_the_rendered_value(self):
+        name, value = self.a_call()
+        code, out = self.check("names", IOCTL_MAP=self.map_file(
+            {"0x%08x" % (value ^ 0x1): "ioctl$" + name}))
+        self.assertEqual(code, 1)
+        self.assertIn("the call renders request 0x%08x" % value, out)
+
+    def test_a_key_that_is_not_a_number_is_reported(self):
+        name, _value = self.a_call()
+        code, out = self.check("names", IOCTL_MAP=self.map_file(
+            {"not-a-number": "ioctl$" + name}))
+        self.assertEqual(code, 1)
+        self.assertIn("does not read as a request number", out)
+
+    def test_the_committed_map_is_keyed_on_what_its_calls_render(self):
+        self.committed()
+        entries = regression_check.read_ioctl_map()
+        requests = regression_check.read_call_requests()
+        for key, name in entries:
+            self.assertIn(name, requests, key)
+            self.assertEqual(
+                int(key, 0),
+                regression_check.const_value(requests[name]), name)
+
+
+class TestOneNameIsDeclaredInOneDescriptionFile(CheckSetFixtures):
+    """read_descriptions merged with dict.update, so a name declared twice
+    lost one declaration and nothing reported it."""
+
+    def test_a_name_declared_in_two_files_raises(self):
+        source = regression_check._description_files()[0]
+        directory = self.tempdir()
+        with open(source, encoding="utf-8") as handle:
+            body = handle.read()
+        self.write(directory, "one.txt", body)
+        self.write(directory, "two.txt", body)
+        old = _patched(DESC_DIR=directory)
+        try:
+            with self.assertRaises(regression_check.CheckInput) as caught:
+                regression_check.read_descriptions()
+        finally:
+            _restore(old)
+        message = str(caught.exception)
+        self.assertIn("one.txt", message)
+        self.assertIn("two.txt", message)
+        self.assertIn("one declaration wins", message)
+
+    def test_the_committed_set_declares_every_name_once(self):
+        self.committed()
+        calls, structs = regression_check.read_descriptions()
+        self.assertTrue(calls and structs)
+
+
+class TestPinsRequiresOneLeafPerCommandAndHandle(CheckSetFixtures):
+    """`check_pins` built the cmd-value map and printed only len(seen).
+
+    It reported "531 control cmd(s) ... over 521 distinct value(s)" and exited
+    OK, and those 10 were 10 control variants reaching a handler they are not
+    named for. The cmd value is not required to be unique: the driver exports
+    one command number from three owning classes, and that is the real
+    surface. The pair of the value and the resource hObject renders as names
+    one leaf.
+    """
+
+    def collided(self):
+        """A copy of the committed set with one owning class retyped back."""
+        directory = os.path.join(self.tempdir(), "desc")
+        shutil.copytree(regression_check.DESC_DIR, directory)
+        path = os.path.join(directory, "nvidia_structs.txt")
+        with open(path, encoding="utf-8") as handle:
+            body = handle.read()
+        body, count = re.subn(r"\bnvh_kernel_graphics_context\b",
+                              "nvh_any_kernelchannel", body)
+        self.assertTrue(count, "no graphics-context handle to retype")
+        self.write(directory, "nvidia_structs.txt", body)
+        return directory
+
+    def test_the_committed_set_gives_every_control_command_its_own_pair(self):
+        self.committed()
+        calls, structs = regression_check.read_descriptions()
+        pairs = {}
+        for variant in calls:
+            if regression_check._group_of(variant) != "control":
+                continue
+            fields = structs.get(calls[variant]) or {}
+            rendered = fields.get("cmd", "")
+            if not rendered.startswith("const["):
+                continue
+            key = (regression_check.const_value(rendered),
+                   fields.get("hObject"))
+            pairs.setdefault(key, []).append(variant)
+        shared = {k: v for k, v in pairs.items() if len(v) > 1}
+        self.assertEqual(shared, {},
+                         "control variants sharing a cmd and a handle")
+
+    def test_a_shared_cmd_value_alone_is_not_an_offence(self):
+        # Requiring the value to be unique would refuse the surface the driver
+        # exports. The property asserted is that a shared value exists and the
+        # check passes over it. The distinct-value count is not asserted: it
+        # moves whenever the driver exports a command from one more owning
+        # class, which is a surface change and not a defect.
+        self.committed()
+        calls, structs = regression_check.read_descriptions()
+        by_value = {}
+        for variant in calls:
+            if regression_check._group_of(variant) != "control":
+                continue
+            rendered = (structs.get(calls[variant]) or {}).get("cmd", "")
+            if rendered.startswith("const["):
+                value = regression_check.const_value(rendered)
+                by_value.setdefault(value, []).append(variant)
+        shared = sorted(v for v in by_value.values() if len(v) > 1)
+        self.assertTrue(shared, "no control cmd value is carried twice, so "
+                                "this test no longer covers the case")
+        code, out = self.check("pins")
+        self.assertEqual(code, 0, out)
+        self.assertIn("distinct value(s)", out)
+
+    def test_two_variants_sharing_a_cmd_and_a_handle_are_reported(self):
+        code, out = self.check("pins", DESC_DIR=self.collided())
+        self.assertEqual(code, 1)
+        self.assertIn("so the pair names no single leaf", out)
+
+
+class TestPinsCountsWhatReachesNoAuthority(CheckSetFixtures):
+    """The no-authority count was reported and left out of the pass
+    condition, so the check printed its own evidence and exited OK."""
+
+    def test_every_pair_reaching_no_authority_is_declared(self):
+        code, out = self.check("pins")
+        self.assertEqual(code, 0, out)
+        self.assertIn("reach no authority over %d declared pair(s)"
+                      % len(regression_check.PIN_NO_AUTHORITY), out)
+
+    def test_every_declared_pair_carries_a_reason(self):
+        for pair, reason in regression_check.PIN_NO_AUTHORITY.items():
+            self.assertEqual(len(pair), 2, pair)
+            self.assertTrue(reason.strip(), pair)
+
+    def test_a_family_that_stops_being_checked_is_reported(self):
+        # Dropping a VALUE_CHECKED row is a family no longer compared against
+        # anything, which is what the pair set exists to report. The count
+        # rises too, and the count alone would also rise on a driver bump
+        # that adds an allocation class, which is not a defect.
+        code, out = self.check(
+            "pins", VALUE_CHECKED=[row for row in
+                                   regression_check.VALUE_CHECKED
+                                   if row[0] != "modeset"])
+        self.assertEqual(code, 1)
+        self.assertIn("PIN_NO_AUTHORITY declares no such pair", out)
+        self.assertIn("modeset cmd", out)
+
+    def test_an_added_allocation_class_is_not_an_offence(self):
+        # The pair is declared, so an alloc variant beyond the 205 measured
+        # today reports under it and does not fail the check.
+        pairs = {pair for pair in regression_check.PIN_NO_AUTHORITY}
+        self.assertIn(("alloc", "hClass"), pairs)
+
+    def test_the_allowance_is_separate_from_the_unpinned_allowlist(self):
+        # The four UNPINNED_BY_DESIGN fields render free, so they never reach
+        # the authority lookup and are counted on their own line.
+        self.assertEqual(len(regression_check.UNPINNED_BY_DESIGN), 4)
+        code, out = self.check("pins")
+        self.assertEqual(code, 0, out)
+        self.assertIn("4 field(s) unpinned by design", out)
+
+
+class TestFamiliesComparesTheValuesAndNotOnlyTheName(CheckSetFixtures):
+    """`check_families` compared the set name a field renders against and
+    never the set's members, so editing a value list left twelve of twelve
+    green and pointed the fuzzer at a value the driver does not take."""
+
+    SET_RE = r"^nvb0b5_allocation_parameters_version = .*$"
+
+    def edited(self, replacement):
+        directory = os.path.join(self.tempdir(), "desc")
+        shutil.copytree(regression_check.DESC_DIR, directory)
+        path = os.path.join(directory, "nvidia.txt")
+        with open(path, encoding="utf-8") as handle:
+            body = handle.read()
+        body, count = re.subn(self.SET_RE, replacement, body, count=1,
+                              flags=re.M)
+        self.assertEqual(count, 1, "the probed flags set moved")
+        self.write(directory, "nvidia.txt", body)
+        return directory
+
+    def test_every_committed_set_carries_the_derived_values(self):
+        code, out = self.check("families")
+        self.assertEqual(code, 0, out)
+        self.assertIn("compared against the derivation's own value list", out)
+
+    def test_an_edited_value_list_is_reported_with_both_lists(self):
+        code, out = self.check("families", DESC_DIR=self.edited(
+            "nvb0b5_allocation_parameters_version = 0x999999"))
+        self.assertEqual(code, 1)
+        self.assertIn("and the derivation carries", out)
+        self.assertIn("nvb0b5_allocation_parameters_version", out)
+
+    def test_a_dropped_member_is_reported(self):
+        code, out = self.check("families", DESC_DIR=self.edited(
+            "nvb0b5_allocation_parameters_version = 0x0"))
+        self.assertEqual(code, 1)
+        self.assertIn("nvb0b5_allocation_parameters_version", out)
+
+    def test_the_reader_takes_the_members_in_the_emitted_order(self):
+        self.committed()
+        values = regression_check.read_flags_values()
+        self.assertIn("nvb0b5_allocation_parameters_version", values)
+        _file, _line, members = values[
+            "nvb0b5_allocation_parameters_version"]
+        self.assertEqual(members, [0x0, 0x1])
+
+
+class TestHarnessExclusionsCoverOnlyTheirOwnSources(CheckSetFixtures):
+    """go_cudacompat_elf was dropped from all four sources while its reason
+    accounts for two, so the target was compared against nothing."""
+
+    def test_the_go_target_is_still_compared_against_two_sources(self):
+        self.assertEqual(
+            set(regression_check.HARNESS_EXCLUSION_SOURCES[
+                "go_cudacompat_elf"][0]), {"config", "run"})
+
+    def test_every_exclusion_declares_the_sources_it_covers(self):
+        for name in regression_check.HARNESS_EXCLUSIONS:
+            self.assertIn(name, regression_check.HARNESS_EXCLUSION_SOURCES,
+                          name)
+            sources, scope = \
+                regression_check.HARNESS_EXCLUSION_SOURCES[name]
+            self.assertTrue(sources, name)
+            self.assertTrue(scope.strip(), name)
+            for key in sources:
+                self.assertIn(key, regression_check.HARNESS_SOURCE_KEYS)
+
+    def test_an_unscoped_exclusion_stops_the_check(self):
+        old = _patched(HARNESS_EXCLUSIONS=dict(
+            regression_check.HARNESS_EXCLUSIONS, fuzz_probe="a probe"))
+        try:
+            with self.assertRaises(regression_check.CheckInput) as caught:
+                regression_check.excluded_from("config")
+        finally:
+            _restore(old)
+        self.assertIn("gives no scope for it", str(caught.exception))
+
+    def test_the_go_target_losing_its_doc_row_is_reported(self):
+        with open(regression_check.TARGETS_DOC, encoding="utf-8") as handle:
+            doc = handle.read()
+        stripped = "\n".join(line for line in doc.splitlines()
+                             if "go_cudacompat_elf" not in line) + "\n"
+        code, out = self.check("harnesses", TARGETS_DOC=self.write(
+            self.tempdir(), "TARGETS.md", stripped))
+        self.assertEqual(code, 1)
+        self.assertIn("go_cudacompat_elf", out)
+
+
+class TestCitationExclusionsApplyWhereNothingResolves(CheckSetFixtures):
+    """CITATION_EXCLUSIONS matched on basename before resolution, so a
+    vendored file named run_all.sh, build_all.sh, measure_sizes.sh or repro.c
+    was excluded in any tree, wider than every stated reason."""
+
+    # A path the exclusion set declares and no tree resolves, so the fixtures
+    # below reach the exclusion branch on any checkout.
+    LINUX_CITE = "kernel/kcov.c"
+
+    def page(self, body):
+        directory = self.tempdir()
+        self.write(directory, "page.md",
+                   "---\ntitle: Probe\n---\n\n%s\n" % body)
+        return directory
+
+    def tree(self, *lines):
+        """-> (vendored tree root, tree-relative path of one source file).
+
+        artifacts/ is gitignored, so a clean checkout carries no vendored tree
+        and check_citations refuses on it. A case that reads the machine's own
+        tree therefore asserts against whatever that machine happens to hold,
+        and asserts nothing at all where there is none. A tree of its own
+        makes the case read the same file on every checkout.
+        """
+        vendor = self.tempdir()
+        self.write(os.path.join(vendor, "probe-driver", "src"),
+                   "probe_cited.c", "".join("%s\n" % line for line in lines))
+        return vendor, "src/probe_cited.c"
+
+    def test_a_reversed_range_is_reported_and_does_not_raise(self):
+        vendor, cited = self.tree("first", "second", "third")
+        code, out = self.check("citations", VENDOR_DIR=vendor,
+                               DOC_ROOT=self.page("See `%s:3-1`." % cited))
+        self.assertEqual(code, 1)
+        self.assertIn("the range ends at 1 and starts at 3", out)
+
+    def test_an_excluded_basename_that_resolves_is_still_checked(self):
+        # The subject is constructed and not taken from the declared set. Both
+        # entries that used to supply one, run_all.sh and build_all.sh, were
+        # deleted for resolving, so a set with nothing resolvable left in it
+        # is the end state this test has to keep covering.
+        vendor, cited = self.tree("first", "second")
+        declared = dict(regression_check.CITATION_EXCLUSIONS)
+        declared[os.path.basename(cited)] = "declared here to be ignored"
+        code, out = self.check(
+            "citations", VENDOR_DIR=vendor,
+            DOC_ROOT=self.page("See `%s:999999`." % cited),
+            CITATION_EXCLUSIONS=declared)
+        self.assertEqual(code, 1)
+        self.assertIn("fewer than 999999 lines", out)
+
+    def test_the_declared_count_reports_declarations_not_instances(self):
+        # One declared exclusion cited three times, against a set of six
+        # declarations, so a summary reporting instances and one reporting
+        # declarations cannot print the same number.
+        self.assertIn(self.LINUX_CITE, regression_check.CITATION_EXCLUSIONS)
+        vendor, _cited = self.tree("first")
+        code, out = self.check("citations", VENDOR_DIR=vendor,
+                               DOC_ROOT=self.page(
+                                   "See `%s:1`, `%s:2` and `%s:3`."
+                                   % (self.LINUX_CITE, self.LINUX_CITE,
+                                      self.LINUX_CITE)))
+        self.assertEqual(code, 0, out)
+        self.assertIn("%d declared exclusion(s)"
+                      % len(regression_check.CITATION_EXCLUSIONS), out)
+        self.assertIn("3 citation instance(s) matched a declared exclusion",
+                      out)
+
+    def test_every_declared_exclusion_still_excludes_something(self):
+        # Narrowing the matcher to consult the set only where nothing resolves
+        # left three entries matching nothing, and they were deleted. Two of
+        # them named files the tree commits, so their stated reason was false.
+        #
+        # This asserts over the committed set and the committed pages, so a
+        # fixture cannot carry it and a checkout with no vendored tree cannot
+        # settle it. The exit code alone passes on the refusal, which is why
+        # the tree is required by name here.
+        if not regression_check._vendored_trees():
+            self.skipTest("no vendored source tree on this machine")
+        code, out = self.check("citations")
+        self.assertEqual(code, 0, out)
+        for name in regression_check.CITATION_EXCLUSIONS:
+            self.assertNotIn("CITATION_EXCLUSIONS[%r]" % name, out)
+
+    def test_an_exclusion_matching_nothing_is_reported(self):
+        # The report runs over the committed pages only, so the fixture page
+        # is pinned as the committed one for this case. The live entry beside
+        # the dead one holds the report to the entry that matched nothing.
+        vendor, _cited = self.tree("first")
+        pages = self.page("See `%s:1`." % self.LINUX_CITE)
+        code, out = self.check(
+            "citations", VENDOR_DIR=vendor, DOC_ROOT=pages,
+            COMMITTED_DOC_ROOT=pages,
+            CITATION_EXCLUSIONS={
+                self.LINUX_CITE: "Linux, which this repository does not "
+                                 "vendor",
+                "no-page-cites-this.c": "a path written to be dead"})
+        self.assertEqual(code, 1)
+        self.assertIn("CITATION_EXCLUSIONS['no-page-cites-this.c']", out)
+        self.assertIn("excludes nothing over the committed pages", out)
+        self.assertNotIn("CITATION_EXCLUSIONS[%r]" % self.LINUX_CITE, out)
+
+    def test_a_dead_exclusion_is_tolerated_off_the_committed_pages(self):
+        # A caller pointing the check at one page leaves every exclusion
+        # unmatched, which is the fixture case and not a defect.
+        code, out = self.check("citations",
+                               DOC_ROOT=self.page("No citation here."))
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("excludes nothing", out)
+
+
+class TestCommandsReadsInlineCodeSpans(CheckSetFixtures):
+    """`check_commands` read fenced blocks only. Measured over the committed
+    pages: 128 invocations in fenced blocks and another 39 in inline spans,
+    among them the tools/crash_ctl.py line the CI comment cites."""
+
+    def page(self, body):
+        directory = self.tempdir()
+        self.write(directory, "page.md",
+                   "---\ntitle: Probe\n---\n\n%s\n" % body)
+        return directory
+
+    def test_an_invocation_in_a_span_is_read(self):
+        code, out = self.check("commands", DOC_ROOT=self.page(
+            "Run `python3 tools/surface_cov.py --not-a-flag` for it."))
+        self.assertEqual(code, 1)
+        self.assertIn("no such flag --not-a-flag", out)
+
+    def test_a_span_inside_a_fence_is_counted_once(self):
+        code, out = self.check("commands", DOC_ROOT=self.page(
+            "```sh\npython3 tools/surface_cov.py modelled\n```"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 invocation(s)", out)
+        self.assertIn("1 in a fenced block, 0 in an inline code span", out)
+
+    def test_both_sources_are_counted_and_reported_apart(self):
+        code, out = self.check("commands", DOC_ROOT=self.page(
+            "```sh\npython3 tools/surface_cov.py modelled\n```\n\n"
+            "Also `python3 tools/surface_cov.py gaps --stage corpus`."))
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 in a fenced block, 1 in an inline code span", out)
+
+    def test_a_metavariable_subcommand_is_counted_and_not_resolved(self):
+        code, out = self.check("commands", DOC_ROOT=self.page(
+            "Run `python3 tools/regression_check.py <check>` for one."))
+        self.assertEqual(code, 0, out)
+        self.assertIn("1 naming its subcommand as a metavariable", out)
+
+
+class TestASubcommandTakesItsOwnFlags(CheckSetFixtures):
+    """_resolve_command merged the main parser's flags into the subcommand's,
+    and argparse binds a main-only flag before the subcommand and refuses it
+    after, so both checks passed a command line that exits 2."""
+
+    def test_a_main_only_flag_after_a_subcommand_is_reported(self):
+        faults = regression_check._resolve_command(
+            "tools/syzlang_gen.py", ["emit", "-v"], {})
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("no such flag -v", faults[0])
+
+    def test_a_flag_the_subcommand_declares_still_resolves(self):
+        # regression_check.py declares -v on the main parser and on every
+        # subparser through a parent, so `names -v` runs and resolves.
+        self.assertEqual(regression_check._resolve_command(
+            "tools/regression_check.py", ["names", "-v"], {}), [])
+
+    def test_a_metavariable_subcommand_is_recorded_and_yields_no_fault(self):
+        shapes = []
+        self.assertEqual(regression_check._resolve_command(
+            "tools/regression_check.py", ["<check>", "--anything"], {},
+            shapes), [])
+        self.assertEqual(shapes, [("tools/regression_check.py", "<check>")])
+
+    def test_a_validating_type_that_refuses_reports_and_does_not_raise(self):
+        # argparse.ArgumentTypeError derives from Exception and not from
+        # ValueError, so a tool declaring its own validating type let the
+        # refusal escape main() as an exit 2 traceback and a documented
+        # argument the tool rejects read as this check being broken.
+        faults = regression_check._resolve_command(
+            "tools/knowledge_ctl.py", ["show", "--last", "many"], {})
+        self.assertEqual(len(faults), 1, faults)
+        self.assertIn("_positive_int", faults[0])
+
+    def test_a_value_the_validating_type_takes_yields_no_fault(self):
+        self.assertEqual(regression_check._resolve_command(
+            "tools/knowledge_ctl.py", ["show", "--last", "5"], {}), [])
+
+
+class TestFiguresReadsEachExcludedGroup(CheckSetFixtures):
+    """The rule read the 351 total and the word "six" and never the six
+    per-group counts stated beside them, and FIGURE_PAIR ran only inside a
+    FIGURE_ENUM match, so a family figure stated alone was read by no rule."""
+
+    def brief(self, body):
+        directory = self.tempdir()
+        self.write(directory, "probe.md", "# Probe\n\n%s\n" % body)
+        return directory
+
+    def test_every_excluded_group_has_a_pattern(self):
+        _targets, excluded, _meta = surface_cov.load_targets()
+        named = {group for group, _p
+                 in regression_check.EXCLUDED_GROUP_PATTERNS}
+        self.assertEqual({r["family"] for r in excluded.values()} - named,
+                         set())
+
+    def test_a_group_figure_that_disagrees_is_reported(self):
+        code, out = self.check("figures", AGENTS_DIR=self.brief(
+            "The note names 237 control commands routed to GSP."))
+        self.assertEqual(code, 1)
+        self.assertIn("states 237 in the control_gsp group", out)
+
+    def test_a_group_figure_that_agrees_passes(self):
+        code, out = self.check("figures", AGENTS_DIR=self.brief(
+            "The note names 236 control commands routed to GSP."))
+        self.assertEqual(code, 0, out)
+
+    def test_a_standalone_family_total_that_disagrees_is_reported(self):
+        code, out = self.check("figures", AGENTS_DIR=self.brief(
+            "The campaign reaches all 99 drm commands."))
+        self.assertEqual(code, 1)
+        self.assertIn("states 99 drm targets against 24 counted", out)
+
+    def test_a_bare_pair_stating_a_subset_is_left_alone(self):
+        # 16 control commands carry an in-handler capability check, and 2 drm
+        # commands carry DRM_MASTER. Neither is a claim about a denominator,
+        # and 13 of the 28 bare pairs in the tree are of that shape.
+        code, out = self.check("figures", AGENTS_DIR=self.brief(
+            "16 control commands carry a capability check inside the "
+            "handler, and 2 drm commands carry DRM_MASTER."))
+        self.assertEqual(code, 0, out)
+
+    def test_a_surface_error_is_reported_as_a_condition_not_a_traceback(self):
+        class _Raiser(object):
+            def __getattr__(self, name):
+                return getattr(surface_cov, name)
+
+            def load_targets(self, *args, **kwargs):
+                raise surface_cov.SurfaceError("probe: inventory absent")
+
+        old = _patched(surface_cov=_Raiser())
+        try:
+            with self.assertRaises(regression_check.CheckInput) as caught:
+                regression_check.check_figures()
+        finally:
+            _restore(old)
+        self.assertIn("cannot load the surface inventories",
+                      str(caught.exception))
+
+
+class TestDerivedReportsWhatItCompared(CheckSetFixtures):
+    """Every assertion in rank_consistency and chains_consistency is gated on
+    the field being present, so a field absent from every record leaves that
+    assertion silent while the command set is still compared.
+
+    The check degrades from strong to weak and does not go vacuous, so the
+    tolerance for a minimal artefact stands. The defect is that the
+    degradation was silent. It is reported on every run, and it fails against
+    the committed artefact, which carries all eight fields today.
+    """
+
+    def test_the_restated_count_is_reported_on_a_passing_run(self):
+        code, out = self.check("derived")
+        self.assertEqual(code, 0, out)
+        self.assertIn("restated", out)
+        self.assertIn("4 of 4", out)
+
+    def test_the_uncompared_fields_are_named(self):
+        problems = regression_check._uncompared_fields(
+            [{"chain": 1}, {"chain": 2}],
+            regression_check.CHAIN_RESTATEMENTS)
+        self.assertEqual(problems, ["chain_length", "target_external_class",
+                                    "command_count"])
+
+    def test_a_field_on_every_record_is_not_named(self):
+        self.assertEqual(regression_check._uncompared_fields(
+            [{"a": 1}], ("a",)), [])
+
+    def test_an_empty_array_names_nothing(self):
+        self.assertEqual(regression_check._uncompared_fields([], ("a",)), [])
+
+    def test_a_file_that_is_not_the_committed_artefact_is_tolerated(self):
+        # A minimal fixture, and a producer whose schema predates a field,
+        # both still pass on the command set alone.
+        self.assertEqual(regression_check._absent_fields(
+            os.path.join(self.tempdir(), "probe.json"), "chains",
+            [{"chain": 1}], regression_check.CHAIN_RESTATEMENTS,
+            regression_check.CHAINS), [])
+
+    def test_the_committed_artefact_is_held_to_what_it_carries(self):
+        self.committed()
+        with open(regression_check.CHAINS, encoding="utf-8") as handle:
+            records = json.load(handle)["chains"]
+        stripped = [{k: v for k, v in r.items() if k != "chain_length"}
+                    for r in records]
+        problems = regression_check._absent_fields(
+            regression_check.CHAINS, "chains", stripped,
+            regression_check.CHAIN_RESTATEMENTS, regression_check.CHAINS)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("chain_length", problems[0])
+        self.assertIn("this is the committed artefact", problems[0])
+
+    def test_the_declared_tuple_is_the_floor_and_is_not_read_back(self):
+        # Reading the required set out of the reference made the assertion
+        # vacuous: on a real run the reference is the file under test, so a
+        # producer that stopped writing a field dropped it from both sides at
+        # once and the check reported 4 of 4. The declared tuple is the floor.
+        self.committed()
+        self.assertEqual(
+            regression_check._committed_fields(
+                regression_check.CHAINS, "chains",
+                regression_check.CHAIN_RESTATEMENTS),
+            tuple(regression_check.CHAIN_RESTATEMENTS))
+        self.assertEqual(
+            regression_check._committed_fields(
+                regression_check.CTRL_RANK, "commands",
+                regression_check.RANK_RESTATEMENTS),
+            tuple(regression_check.RANK_RESTATEMENTS))
+
+    def test_a_field_no_record_carries_is_still_required(self):
+        self.assertEqual(regression_check._committed_fields(
+            regression_check.CHAINS, "chains", ("not_a_field",)),
+            ("not_a_field",))
+
+    def test_the_committed_artefact_fails_on_a_dropped_field(self):
+        # The end-to-end shape of the same defect, through check_derived and
+        # not through the helper, with the artefact under test pinned as the
+        # committed one.
+        with open(regression_check.CHAINS, encoding="utf-8") as handle:
+            doc = json.load(handle)
+        for record in doc["chains"]:
+            record.pop("command_count", None)
+        scratch = os.path.join(self.tempdir(), "rm-chains.json")
+        with open(scratch, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(doc, handle, indent=1)
+        derived = [(row[0], scratch if row[0] == "rm-chains.json" else row[1])
+                   + row[2:] for row in regression_check.DERIVED]
+        code, out = self.check("derived", DERIVED=derived, CHAINS=scratch)
+        self.assertEqual(code, 1, out)
+        self.assertIn("carries `command_count` on none of its", out)
+
+
+class TestKnowledgeNotesCheckEveryRecordedArgument(CheckSetFixtures):
+    """_check_disclosure read the note text only. cmd_note concatenates the
+    tags into the same block, so `--tags crash-0007` wrote a crash identifier
+    into the committed public knowledge/learnings.md."""
+
+    def test_a_tag_naming_a_crash_is_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            knowledge_ctl._check_disclosure("crash-0007", "--tags entry")
+        self.assertIn("--tags entry", str(caught.exception))
+        self.assertIn("crash-0007", str(caught.exception))
+
+    def test_a_tag_naming_an_artefact_path_is_refused(self):
+        with self.assertRaises(ValueError):
+            knowledge_ctl._check_disclosure("artifacts/pocs/", "--tags entry")
+
+    def test_an_ordinary_tag_passes(self):
+        self.assertIsNone(knowledge_ctl._check_disclosure("nvidia_uvm",
+                                                          "--tags entry"))
+
+    def test_the_field_the_reference_came_from_is_named(self):
+        with self.assertRaises(ValueError) as caught:
+            knowledge_ctl._check_disclosure("see crash-0001", "text")
+        self.assertIn("whose text names", str(caught.exception))
+
+
+class TestKnowledgeLastTakesACountAboveZero(CheckSetFixtures):
+    """`if a.last:` read --last 0 as unset and showed every entry, and
+    --last -3 sliced rows[3:] and dropped entries from the front."""
+
+    def test_zero_is_refused(self):
+        with self.assertRaises(
+                knowledge_ctl.argparse.ArgumentTypeError) as caught:
+            knowledge_ctl._positive_int("0")
+        self.assertIn("above zero", str(caught.exception))
+
+    def test_a_negative_count_is_refused(self):
+        with self.assertRaises(knowledge_ctl.argparse.ArgumentTypeError):
+            knowledge_ctl._positive_int("-3")
+
+    def test_a_non_numeric_value_is_refused(self):
+        with self.assertRaises(
+                knowledge_ctl.argparse.ArgumentTypeError) as caught:
+            knowledge_ctl._positive_int("all")
+        self.assertIn("whole number", str(caught.exception))
+
+    def test_a_count_above_zero_is_taken(self):
+        self.assertEqual(knowledge_ctl._positive_int("3"), 3)
+
+    def test_the_parser_declares_the_validating_type(self):
+        parser = knowledge_ctl.build_parser()
+        # argparse writes its usage to stderr before exiting, and that is the
+        # tool's own output rather than a fault of this case.
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["show", "--last", "0"])
+
+
+class TestStaleChecksTheOutputsAndNotOnlyTheInputs(CheckSetFixtures):
+    """`check_stale` compared the recorded input digests and read nothing of
+    the emitted set, so a description file edited by hand after the run that
+    produced it passed. generation.json records an output digest per emitted
+    file and both sides are compared."""
+
+    def scratch_root(self):
+        """A root of symlinks with one real descriptions/, so every recorded
+        input still resolves and the outputs can be edited."""
+        root = os.path.join(self.tempdir(), "root")
+        os.makedirs(root)
+        for name in os.listdir(regression_check.REPO_ROOT):
+            if name != "descriptions":
+                os.symlink(os.path.join(regression_check.REPO_ROOT, name),
+                           os.path.join(root, name))
+        shutil.copytree(regression_check.DESC_DIR,
+                        os.path.join(root, "descriptions"))
+        return root
+
+    def generation_at(self, root):
+        return os.path.join(root, "descriptions", "generation.json")
+
+    def test_every_recorded_output_is_compared(self):
+        code, out = self.check("stale")
+        self.assertEqual(code, 0, out)
+        recorded = regression_check.recorded_outputs(
+            regression_check.read_generation()[0])
+        self.assertTrue(recorded)
+        self.assertIn("%d of %d recorded output(s)"
+                      % (len(recorded), len(recorded)), out)
+        for path, _digest, _size in recorded:
+            self.assertIn(path, out)
+
+    def test_the_generated_block_is_mandatory(self):
+        root = self.scratch_root()
+        generation = self.generation_at(root)
+        with open(generation, encoding="utf-8") as handle:
+            raw = json.load(handle)
+        del raw["generated"]
+        with open(generation, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(raw, handle, indent=1)
+        old = _patched(GENERATION=generation)
+        try:
+            with self.assertRaises(regression_check.CheckInput) as caught:
+                regression_check.recorded_outputs(
+                    regression_check.read_generation()[0])
+        finally:
+            _restore(old)
+        self.assertIn("syzlang_gen.py emit", str(caught.exception))
+
+    def test_an_output_edited_after_the_run_is_reported(self):
+        root = self.scratch_root()
+        edited = os.path.join(root, "descriptions", "nvidia_uvm.txt")
+        with open(edited, encoding="utf-8") as handle:
+            body = handle.read()
+        with open(edited, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(body + "\n# edited by hand after the run\n")
+        code, out = self.check("stale", GENERATION=self.generation_at(root))
+        self.assertEqual(code, 1)
+        self.assertIn("descriptions/nvidia_uvm.txt", out)
+
+    def test_a_committed_file_with_no_recorded_digest_is_reported(self):
+        root = self.scratch_root()
+        with open(os.path.join(root, "descriptions", "nvidia_probe.txt"), "w",
+                  encoding="utf-8", newline="\n") as handle:
+            handle.write("# a description file no run recorded\n")
+        code, out = self.check("stale", GENERATION=self.generation_at(root))
+        self.assertEqual(code, 1)
+        self.assertIn("nvidia_probe.txt", out)
+
+
+def _graph_record(external, internal, ancestors=(),
+                  privilege="RS_FLAGS_ALLOC_NON_PRIV"):
+    """One rm-object-graph.json record in the shape object_graph.py emits.
+
+    internal_ancestors is the NVOC ancestor chain of internal_class, base
+    first and excluding the class itself.
+    """
+    return {"external_class": external, "internal_class": internal,
+            "internal_ancestors": list(ancestors),
+            "alloc_privilege": privilege, "depth": 1,
+            "alloc_param_kind": "optional", "alloc_param_struct": "NvHandle",
+            "parents": [syzlang_gen.ROOT_SENTINEL]}
+
+
+class TestControlHandleComesFromTheOwningClass(unittest.TestCase):
+    """hObject was typed from class_id, the SDK namespace number in the
+    command id, and is typed from the command's owning class.
+
+    The two agree wherever a namespace belongs to one class and disagree
+    wherever it is shared. NV0090 is exported by kchannel, kchangrpapi and
+    kgrctx alike, so all three variants took the KernelGraphicsContext
+    resource, fifteen control variants came out byte-identical and ten named
+    a handler no object of that class reaches.
+    """
+
+    GRAPH = {"records": [
+        _graph_record("NV01_ROOT", "RmClientResource", ["RsResource"]),
+        _graph_record("NV01_ROOT_CLIENT", "RmClientResource",
+                      ["RsResource"]),
+        _graph_record("KEPLER_CHANNEL_GROUP_A", "KernelChannelGroupApi",
+                      ["RsResource", "GpuResource"]),
+        # A subclass of Memory, which owns commands and appears in no
+        # RS_ENTRY row of its own.
+        _graph_record("NV01_MEMORY_SYSTEM", "SystemMemory",
+                      ["RsResource", "Memory", "StandardMemory"]),
+        _graph_record("NV01_MEMORY_LOCAL_USER", "VideoMemory",
+                      ["RsResource", "Memory", "StandardMemory"]),
+    ]}
+    CLASS_MAP = {"NV01_ROOT": 0x0, "NV01_ROOT_CLIENT": 0x41,
+                 "KEPLER_CHANNEL_GROUP_A": 0xa06c,
+                 "NV01_MEMORY_SYSTEM": 0x13, "NV01_MEMORY_LOCAL_USER": 0xc0}
+    OWNING = {"RmClientResource", "KernelChannelGroupApi", "Memory",
+              "ProfilerBase"}
+
+    def resources(self):
+        return syzlang_gen.emit_resources(self.GRAPH, self.CLASS_MAP, True,
+                                          self.OWNING)
+
+    def test_one_external_class_takes_its_own_resource(self):
+        _text, by_internal, families = self.resources()
+        self.assertEqual(
+            syzlang_gen.control_object_resource(
+                "KernelChannelGroupApi", by_internal, families),
+            ("nvh_kepler_channel_group_a", "KEPLER_CHANNEL_GROUP_A"))
+
+    def test_several_external_classes_take_the_family_resource(self):
+        _text, by_internal, families = self.resources()
+        resource, cls = syzlang_gen.control_object_resource(
+            "RmClientResource", by_internal, families)
+        self.assertEqual(resource, "nvh_any_rmclientresource")
+        # No single external class is named, because any of the two satisfies
+        # the field and naming one would refuse the other.
+        self.assertIsNone(cls)
+
+    def test_an_unallocatable_owning_class_falls_back_to_nv_handle(self):
+        _text, by_internal, families = self.resources()
+        self.assertEqual(
+            syzlang_gen.control_object_resource("ProfilerBase", by_internal,
+                                                families),
+            ("nv_handle", None))
+
+    def test_the_family_resource_is_declared_above_its_members(self):
+        text, _by_internal, _families = self.resources()
+        lines = text.splitlines()
+        self.assertIn("resource nvh_any_rmclientresource[nv_handle]", lines)
+        self.assertIn("resource nvh_nv01_root[nvh_any_rmclientresource]",
+                      lines)
+        self.assertIn(
+            "resource nvh_nv01_root_client[nvh_any_rmclientresource]", lines)
+        # A class alone under its internal class keeps nv_handle as its base:
+        # a tier above one class would widen nothing.
+        self.assertIn("resource nvh_kepler_channel_group_a[nv_handle]", lines)
+        self.assertLess(lines.index("resource nvh_any_rmclientresource"
+                                    "[nv_handle]"),
+                        lines.index("resource nvh_nv01_root"
+                                    "[nvh_any_rmclientresource]"))
+
+    def test_a_base_class_covers_its_subclasses(self):
+        # Memory owns six control commands and appears in no RS_ENTRY row, so
+        # without the NVOC ancestor edge it covers nothing and those commands
+        # fall back to nv_handle. resource_list.h names one internal class per
+        # allocatable class and never a base.
+        _text, covered, families = self.resources()
+        self.assertEqual(sorted(covered["Memory"]),
+                         ["NV01_MEMORY_LOCAL_USER", "NV01_MEMORY_SYSTEM"])
+        self.assertEqual(
+            syzlang_gen.control_object_resource("Memory", covered, families),
+            ("nvh_any_memory", None))
+
+    def test_a_base_class_no_command_names_carries_no_family(self):
+        # RsResource sits above every class here. A family for it would
+        # re-base every external resource to express a relation nothing reads.
+        _text, covered, families = self.resources()
+        self.assertEqual(len(covered["RsResource"]), 5)
+        self.assertNotIn("RsResource", families)
+
+    def test_a_subclass_resource_derives_from_the_base_family(self):
+        text, _covered, _families = self.resources()
+        lines = text.splitlines()
+        self.assertIn("resource nvh_any_memory[nv_handle]", lines)
+        # StandardMemory covers the same two classes as Memory and is named by
+        # no command, so Memory is the one family and both external resources
+        # hang directly under it.
+        self.assertIn("resource nvh_nv01_memory_system[nvh_any_memory]", lines)
+        self.assertIn("resource nvh_nv01_memory_local_user[nvh_any_memory]",
+                      lines)
+
+    def test_a_missing_ancestor_field_stops_the_run(self):
+        record = dict(self.GRAPH["records"][0])
+        record.pop("internal_ancestors")
+        with self.assertRaises(SystemExit) as caught:
+            syzlang_gen.emit_resources({"records": [record]},
+                                       self.CLASS_MAP, True, self.OWNING)
+        self.assertIn("internal_ancestors", str(caught.exception))
+        self.assertIn("object_graph.py extract", str(caught.exception))
+
+
+class TestTheNvocHierarchyIsReadFromTheGeneratedHeaders(unittest.TestCase):
+    """resource_list.h names one internal class per allocatable class and
+    never a base class, so every RS_ENTRY internal class is a leaf.
+
+    A control command names the class its handler is compiled into, which is a
+    base for fifteen of the 531 targetable commands: six memCtrlCmd commands
+    on Memory and nine profilerBaseCtrlCmd commands on ProfilerBase, neither
+    of which appears in resource_list.h. NVOC states the edge itself, one
+    __nvoc_pbase_<Ancestor> member per ancestor inside each generated struct,
+    base first and ending with the class.
+    """
+
+    HEADER = """
+struct StandardMemory {
+    struct Memory __nvoc_base_Memory;
+    struct Object *__nvoc_pbase_Object;
+    struct Memory *__nvoc_pbase_Memory;
+    struct StandardMemory *__nvoc_pbase_StandardMemory;
+};
+
+struct Unrelated {
+    NvU32 field;
+};
+"""
+
+    def tree(self, header=None):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        generated = os.path.join(directory, "src", "nvidia", "generated")
+        os.makedirs(generated)
+        with open(os.path.join(generated, "g_x_nvoc.h"), "w",
+                  encoding="utf-8", newline="\n") as handle:
+            handle.write(self.HEADER if header is None else header)
+        return directory
+
+    def test_the_chain_is_read_base_first_and_ends_with_the_class(self):
+        chains = object_graph.nvoc_ancestors(self.tree())
+        self.assertEqual(chains["StandardMemory"],
+                         ["Object", "Memory", "StandardMemory"])
+
+    def test_a_struct_with_no_ancestor_member_is_not_recorded(self):
+        chains = object_graph.nvoc_ancestors(self.tree())
+        self.assertNotIn("Unrelated", chains)
+
+    def test_proper_ancestors_drops_the_class_itself(self):
+        chains = object_graph.nvoc_ancestors(self.tree())
+        self.assertEqual(
+            object_graph.proper_ancestors(chains, "StandardMemory"),
+            ["Object", "Memory"])
+        self.assertIsNone(object_graph.proper_ancestors(chains, "Absent"))
+
+    def test_a_chain_not_ending_at_its_own_class_is_refused(self):
+        # The position carries the meaning, so a shifted list would record a
+        # sibling as a base rather than being read as an ordinary chain.
+        shifted = self.HEADER.replace(
+            "struct StandardMemory *__nvoc_pbase_StandardMemory;",
+            "struct Sibling *__nvoc_pbase_Sibling;")
+        chains = object_graph.nvoc_ancestors(self.tree(shifted))
+        with self.assertRaises(SystemExit) as caught:
+            object_graph.proper_ancestors(chains, "StandardMemory")
+        self.assertIn("Sibling", str(caught.exception))
+
+    def test_a_checkout_with_no_generated_headers_is_refused(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        with self.assertRaises(SystemExit) as caught:
+            object_graph.nvoc_ancestors(directory)
+        self.assertIn("generated NVOC headers not found",
+                      str(caught.exception))
+
+    def test_every_committed_record_carries_a_chain(self):
+        path = os.path.join(os.path.dirname(HERE), "surface",
+                            "rm-object-graph.json")
+        if not os.path.isfile(path):
+            self.skipTest("committed object graph not present")
+        with open(path, encoding="utf-8") as handle:
+            graph = json.load(handle)
+        for record in graph["records"]:
+            self.assertIn("internal_ancestors", record,
+                          record["external_class"])
+            self.assertNotIn(record["internal_class"],
+                             record["internal_ancestors"],
+                             record["external_class"])
+        bases = {name for record in graph["records"]
+                 for name in record["internal_ancestors"]}
+        # The two base classes whose commands the edge exists to reach.
+        self.assertIn("Memory", bases)
+        self.assertIn("ProfilerBase", bases)
+
+
+class TestCommittedControlVariantsAreDistinguishable(unittest.TestCase):
+    """Over the control group, the pair of the pinned cmd value and the
+    resource type hObject renders as is unique across variants.
+
+    This is the condition a tightened check_pins requires. It failed on the
+    committed set while hObject was typed from class_id: five cmd values
+    carried three variants each, all three rendering nvh_kernel_graphics_
+    context, so fifteen descriptions were byte-identical apart from their
+    name. The cmd value itself is not required to be unique, because the
+    driver exports one command number from three classes and that is the real
+    surface.
+    """
+
+    CMD = re.compile(r"^\tcmd[ ]*\tconst\[(0x[0-9a-fA-F]+|\d+), int32\]$",
+                     re.M)
+    OBJECT = re.compile(r"^\thObject[ ]*\t(\S+)$", re.M)
+
+    def blocks(self):
+        path = os.path.join(os.path.dirname(HERE), "descriptions",
+                            "nvidia_structs.txt")
+        if not os.path.isfile(path):
+            self.skipTest("committed description set not present")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        return [b for b in text.split("\n\n")
+                if b.startswith("nvos54_ctrl_")]
+
+    def test_every_control_variant_pins_cmd_and_types_hobject(self):
+        for block in self.blocks():
+            name = block.split(" ", 1)[0]
+            self.assertIsNotNone(self.CMD.search(block), name)
+            self.assertIsNotNone(self.OBJECT.search(block), name)
+
+    def test_the_cmd_and_handle_pair_is_unique(self):
+        seen = {}
+        for block in self.blocks():
+            name = block.split(" ", 1)[0]
+            key = (int(self.CMD.search(block).group(1), 0),
+                   self.OBJECT.search(block).group(1))
+            self.assertNotIn(
+                key, seen,
+                "%s renders the same cmd value and hObject resource as %s, so "
+                "the two descriptions are byte-identical apart from their "
+                "name and at most one of them reaches its handler"
+                % (name, seen.get(key)))
+            seen[key] = name
+
+    def test_the_shared_command_numbers_carry_three_resource_types(self):
+        # The five values the driver exports from kchannel, kchangrpapi and
+        # kgrctx alike. Named here so the count is checked and not inferred.
+        shared = [0x00900101, 0x00900103, 0x00900105, 0x00900107, 0x0090010b]
+        types = {value: set() for value in shared}
+        for block in self.blocks():
+            value = int(self.CMD.search(block).group(1), 0)
+            if value in types:
+                types[value].add(self.OBJECT.search(block).group(1))
+        for value in shared:
+            self.assertEqual(len(types[value]), 3, "0x%08x" % value)
+
+
+class TestAnOverrideNamingNoFieldIsRefused(unittest.TestCase):
+    """render_struct applied an override by field name and dropped one the
+    layout does not declare.
+
+    require_pinned and require_pointer cover cmd, paramsSize, hClass, size and
+    ptr. Every other override names a handle, a descriptor or a value family
+    and has no such check, so a renamed field left hObject, hClient, params,
+    status, hRoot, hObjectParent, hObjectNew or pAllocParms rendering as a
+    plain integer with nothing reporting it. NVOS41_PARAMETERS carried an
+    hClient override against a struct declaring pEvent, MoreEvents and status,
+    which this check found and which is deleted.
+    """
+
+    def layout(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "p.h")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("typedef struct { NvU32 hClient; NvU32 cmd; } P;\n")
+        index = syzlang_gen.TypeIndex()
+        index.scan_file(path, "p.h")
+        return index.layout("P")
+
+    def test_an_undeclared_override_raises_and_names_the_field(self):
+        with self.assertRaises(SystemExit) as caught:
+            syzlang_gen.render_struct("P", self.layout(),
+                                      {"hObject": "nv_handle"})
+        message = str(caught.exception)
+        self.assertIn("hObject", message)
+        self.assertIn("hClient", message)
+
+    def test_a_declared_override_still_applies(self):
+        text = syzlang_gen.render_struct("P", self.layout(),
+                                         {"hClient": "nvh_nv01_root"})
+        self.assertIn("nvh_nv01_root", text)
+
+
+class TestValueFamiliesBindOnlyScalarFields(unittest.TestCase):
+    """value_overrides read field.size, which is the whole-array byte count
+    for an array member and the total for a nested struct.
+
+    An accepted family naming an array of four NvU8 therefore rebound four
+    elements to one flags[set, int32]. The width matched, so the emitted
+    struct kept its size and the description compiled.
+    """
+
+    def layout(self, declaration):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "p.h")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("typedef struct { %s } P;\n" % declaration)
+        index = syzlang_gen.TypeIndex()
+        index.scan_file(path, "p.h")
+        return index.layout("P")
+
+    FAMILY = {"P": [{"struct": "P", "field": "f", "set_name": "p_f"}]}
+
+    def test_a_four_byte_array_is_not_bound(self):
+        bound, unbound = syzlang_gen.value_overrides(
+            "P", self.layout("NvU8 f[4];"), self.FAMILY)
+        self.assertEqual(bound, {})
+        self.assertEqual([(r["field"], w) for r, w in unbound], [("f", None)])
+
+    def test_a_scalar_of_the_same_width_is_bound(self):
+        bound, unbound = syzlang_gen.value_overrides(
+            "P", self.layout("NvU32 f;"), self.FAMILY)
+        self.assertEqual(bound, {"f": "flags[p_f, int32]"})
+        self.assertEqual(unbound, [])
+
+
+class TestTheConstantEvaluatorRefusesAComparison(unittest.TestCase):
+    """The permitted character class admitted `<` and `>`, so `(A > B)`
+    evaluated to True, isinstance(True, int) accepted it, and the macro was
+    recorded as 1. The same class admitted `1<<(1<<30)`, which eval computes
+    unbounded.
+    """
+
+    def test_arithmetic_still_evaluates(self):
+        self.assertEqual(syzlang_gen.eval_c_constant("(1 << 4) | 3"), 19)
+        self.assertEqual(syzlang_gen.eval_c_constant("-(2 * 3)"), -6)
+
+    def test_a_comparison_is_refused(self):
+        for expr in ("(4 > 3)", "(3 < 4)", "1 > 0 | 2"):
+            self.assertIsNone(syzlang_gen.eval_c_constant(expr), expr)
+
+    def test_a_shift_wider_than_a_driver_integer_is_refused(self):
+        self.assertIsNone(syzlang_gen.eval_c_constant("1<<(1<<30)"))
+        self.assertIsNone(syzlang_gen.eval_c_constant("1 << 64"))
+        self.assertEqual(syzlang_gen.eval_c_constant("1 << 63"),
+                         1 << 63)
+
+    def test_const_records_no_value_for_a_comparison(self):
+        index = syzlang_gen.TypeIndex()
+        index.defines["A"] = "4"
+        index.defines["B"] = "3"
+        self.assertIsNone(index.const("(A > B)"))
+
+
+class TestAnEnumStopsAtAnUnevaluatedInitialiser(unittest.TestCase):
+    """_record_enumerators skipped an enumerator whose initialiser did not
+    evaluate and advanced the counter from the previous value.
+
+    C continues its implicit numbering from the value the initialiser
+    produced, so every later enumerator in that enum carried a number the
+    compiler never assigns, and an enumerator is a legal array bound.
+    """
+
+    def index_for(self, body):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "e.h")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("enum E { %s };\n" % body)
+        index = syzlang_gen.TypeIndex()
+        index.scan_file(path, "e.h")
+        return index
+
+    def test_enumerators_after_an_unevaluated_initialiser_are_not_recorded(
+            self):
+        index = self.index_for("A, B = NOT_A_MACRO(0), C")
+        self.assertEqual(index.defines.get("A"), "0")
+        self.assertNotIn("B", index.defines)
+        self.assertNotIn("C", index.defines)
+        self.assertEqual([name for name, _ in index.unevaluated_enums], ["B"])
+
+    def test_an_enum_that_evaluates_throughout_is_recorded_whole(self):
+        index = self.index_for("A, B = 7, C")
+        self.assertEqual(
+            [index.defines.get(n) for n in ("A", "B", "C")],
+            ["0", "7", "8"])
+        self.assertEqual(index.unevaluated_enums, [])
+
+
+class TestAnAlternateSizeCarriesItsProvenance(unittest.TestCase):
+    """merged_sizes gated the primary struct size on size_source == measured
+    and gated the alternate size on nothing.
+
+    Emitter.ensure treats every entry as ground truth and renders a struct
+    opaque wherever the parsed layout disagrees, so an alternate size with no
+    recorded provenance would override a layout derived from the driver's own
+    headers.
+    """
+
+    def inventory(self, source):
+        return {"nodes": [{"commands": [
+            {"name": "NV_ESC_RM_ALLOC", "param_struct": "NVOS64_PARAMETERS",
+             "param_size": 64, "size_source": source,
+             "param_struct_alt": "NVOS21_PARAMETERS", "param_size_alt": 32}]}]}
+
+    def test_a_measured_command_contributes_both_sizes(self):
+        sizes = syzlang_gen.merged_sizes(self.inventory("measured"), [])
+        self.assertEqual(sizes, {"NVOS64_PARAMETERS": 64,
+                                 "NVOS21_PARAMETERS": 32})
+
+    def test_an_unmeasured_command_contributes_neither(self):
+        sizes = syzlang_gen.merged_sizes(self.inventory("parsed"), [])
+        self.assertEqual(sizes, {})
+
+
+class TestTheAllocEscapeMustCarryARequestNumber(unittest.TestCase):
+    """emit_alloc recorded emitted: True for every class while writing no
+    ioctl line, where the escape carried no computed request number.
+    emit_control raises on the same condition.
+    """
+
+    def test_no_request_number_raises(self):
+        inventory = {"nodes": [{"commands": [
+            {"name": syzlang_gen.ALLOC_ESCAPE, "requests": []}]}]}
+        with self.assertRaises(SystemExit) as caught:
+            syzlang_gen.emit_alloc(None, inventory, {"records": []}, {}, True)
+        self.assertIn("no computed request number",
+                      str(caught.exception))
+
+
+class TestATimeoutEnvironmentVariableIsValidatedAtImport(unittest.TestCase):
+    """Three int(os.environ.get(...)) calls ran at module import, so a
+    non-numeric override raised ValueError before any subcommand parsed and
+    took selftest.py's own import down with a traceback naming no variable.
+    """
+
+    def test_a_non_numeric_value_names_the_variable(self):
+        os.environ["GSPWN_TEST_TIMEOUT"] = "soon"
+        self.addCleanup(os.environ.pop, "GSPWN_TEST_TIMEOUT", None)
+        with self.assertRaises(SystemExit) as caught:
+            syzlang_gen._timeout_from_env("GSPWN_TEST_TIMEOUT", 900)
+        self.assertIn("GSPWN_TEST_TIMEOUT", str(caught.exception))
+        self.assertIn("soon", str(caught.exception))
+
+    def test_a_non_positive_value_is_refused(self):
+        os.environ["GSPWN_TEST_TIMEOUT"] = "0"
+        self.addCleanup(os.environ.pop, "GSPWN_TEST_TIMEOUT", None)
+        with self.assertRaises(SystemExit):
+            syzlang_gen._timeout_from_env("GSPWN_TEST_TIMEOUT", 900)
+
+    def test_an_unset_variable_takes_the_default(self):
+        os.environ.pop("GSPWN_TEST_TIMEOUT", None)
+        self.assertEqual(
+            syzlang_gen._timeout_from_env("GSPWN_TEST_TIMEOUT", 900), 900)
+
+
+class TestTheTotalRowSumsTheFamilyRows(unittest.TestCase):
+    """Each family's exercised count was the intersection of exercised and
+    modelled and the total was exercised alone, so the columns stopped summing
+    wherever a target was exercised and not modelled, and lost_corpus, printed
+    as modelled minus exercised, could go negative.
+    """
+
+    def report(self, targets, modelled, exercised):
+        def measure(desc, corpus=None, run_id=None, with_corpus=True):
+            return (targets, {}, {"driver_version": "610.57.04",
+                                  "corpus": "/tmp/corpus.db",
+                                  "corpus_mtime": "now",
+                                  "corpus_programs": 3},
+                    modelled, exercised)
+
+        self.addCleanup(setattr, surface_cov, "measure", surface_cov.measure)
+        self.addCleanup(setattr, surface_cov, "report_entry_points",
+                        surface_cov.report_entry_points)
+        self.addCleanup(setattr, surface_cov, "report_uvm_ordering",
+                        surface_cov.report_uvm_ordering)
+        surface_cov.measure = measure
+        surface_cov.report_entry_points = lambda: None
+        surface_cov.report_uvm_ordering = lambda corpus: None
+        args = types.SimpleNamespace(desc="descriptions", corpus=None,
+                                     run_id=None, json=False)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            surface_cov.cmd_report(args)
+        return out.getvalue()
+
+    def rows(self, text):
+        found = {}
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) == 5 and parts[0] in surface_cov.FAMILIES + \
+                    ["total"]:
+                found[parts[0]] = (int(parts[1]), int(parts[2]),
+                                   int(parts[3]))
+        return found
+
+    def test_an_exercised_and_unmodelled_target_keeps_the_columns_summing(
+            self):
+        targets = {"a": {"family": "control"}, "b": {"family": "control"},
+                   "c": {"family": "alloc"}}
+        text = self.report(targets, {"a", "c"}, {"a", "b", "c"})
+        rows = self.rows(text)
+        for column in range(3):
+            self.assertEqual(
+                sum(rows[f][column] for f in surface_cov.FAMILIES),
+                rows["total"][column], text)
+
+    def test_the_unmodelled_target_is_named_rather_than_dropped(self):
+        targets = {"a": {"family": "control"}, "b": {"family": "control"}}
+        text = self.report(targets, {"a"}, {"a", "b"})
+        self.assertIn("1 targetable command(s) appear in the corpus and "
+                      "carry no description", text)
+        self.assertIn("b", text)
+
+    def test_the_corpus_line_never_reports_a_negative_count(self):
+        targets = {"a": {"family": "control"}, "b": {"family": "control"}}
+        text = self.report(targets, {"a"}, {"a", "b"})
+        self.assertNotIn("-1 modelled command(s)", text)
+        self.assertIn("0 modelled command(s) never appear", text)
+
+
+class TestRowCapsAndTimeoutsAreValidated(unittest.TestCase):
+    """--top slices a sorted list, so a negative value dropped rows from the
+    end while the more-rows message printed a count taken from the whole list.
+    GSPWN_UNPACK_TIMEOUT_SEC reached subprocess.run, which treats a
+    non-positive timeout as already expired and produced "did not finish
+    within -5s".
+    """
+
+    def test_a_row_cap_below_one_is_refused(self):
+        for text in ("0", "-3"):
+            with self.assertRaises(surface_cov.argparse.ArgumentTypeError):
+                surface_cov.positive_int(text)
+
+    def test_a_row_cap_of_one_is_accepted(self):
+        self.assertEqual(surface_cov.positive_int("1"), 1)
+
+    def test_a_non_integer_row_cap_is_refused(self):
+        with self.assertRaises(surface_cov.argparse.ArgumentTypeError):
+            surface_cov.positive_int("many")
+
+    def test_a_negative_unpack_timeout_is_refused(self):
+        os.environ["GSPWN_UNPACK_TIMEOUT_SEC"] = "-5"
+        self.addCleanup(os.environ.pop, "GSPWN_UNPACK_TIMEOUT_SEC", None)
+        with self.assertRaises(surface_cov.SurfaceError) as caught:
+            surface_cov.unpack_timeout_sec()
+        self.assertIn("has to be positive", str(caught.exception))
+
+
+class TestTheCompiledOutRowCountsCompiledOutHandlers(unittest.TestCase):
+    """page_control printed gsp under the handler_compiled_out field, computed
+    as reach["non_privileged"] - len(commands): a difference of two other
+    counts that holds only while the rank set is exactly the non-privileged
+    commands whose handler is present.
+
+    It is counted from the inventory rows, restricted to non_privileged so the
+    five rows stay disjoint, and the page refuses to render where they stop
+    summing to the exported total.
+    """
+
+    def docs(self, methods, commands):
+        return {
+            "ctrl": {"methods": methods,
+                     "summary": {"methods": len(methods),
+                                 "by_reachability": collections.Counter(
+                                     m["reachability"] for m in methods)}},
+            "rank": {"commands": commands, "weighting": {}, "counts": {}},
+            "graph": {"records": []},
+        }
+
+    def methods(self):
+        out = []
+        for reach, compiled_out, count in (
+                ("non_privileged", False, 2), ("non_privileged", True, 3),
+                ("internal", True, 1), ("privileged", False, 1)):
+            for i in range(count):
+                out.append({"reachability": reach,
+                            "handler_compiled_out": compiled_out,
+                            "owning_class": "C", "method_id": "0x%x" % i})
+        return out
+
+    def commands(self):
+        return [{"owning_class": "C", "chain_length": 1,
+                 "no_chain_reason": None, "rank": i + 1,
+                 "handler": "cCtrlCmd%d" % i, "class_id": "0x0000",
+                 "method_id": "0x%08x" % i, "param_struct": "P",
+                 "param_size": 8, "rank_score": 0.5,
+                 "rank_components": {"cve": 0.0, "depth": 0.5, "size": 0.5}}
+                for i in range(2)]
+
+    def test_the_row_counts_the_non_privileged_compiled_out_handlers(self):
+        page, _links = refgen.page_control(
+            self.docs(self.methods(), self.commands()))
+        self.assertIn("| Routed to GSP, so the CPU-side handler is compiled "
+                      "out | 3 | ", page)
+
+    def test_rows_that_stop_summing_refuse_to_render(self):
+        # One targetable command against two non-privileged, handler-present
+        # methods: the rows total 6 against 7 exported.
+        with self.assertRaises(refgen.RefgenError) as caught:
+            refgen.page_control(self.docs(self.methods(),
+                                          self.commands()[:1]))
+        self.assertIn("no longer disjoint", str(caught.exception))
+
+    def test_the_committed_page_states_a_table_that_sums(self):
+        path = os.path.join(os.path.dirname(HERE), "docs", "src", "content",
+                            "docs", "reference", "surface",
+                            "control-commands.md")
+        if not os.path.isfile(path):
+            self.skipTest("reference pages not present")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        counts = [int(m) for m in re.findall(
+            r"^\| [^|]+ \| (\d+) \| `?[^|]*\|$", text, re.M)]
+        self.assertGreaterEqual(len(counts), 6)
+        exported, rest = counts[0], counts[1:6]
+        self.assertEqual(sum(rest), exported, counts[:6])
+
+
+# ANCHOR-PHASE-5-SEEDS
+
+
+class TestTraceReassembly(unittest.TestCase):
+    """A syscall strace -f split across `<unfinished ...>` and
+    `<... resumed>` is rejoined before the matchers run.
+
+    OPEN_RE requires the path and `= N` on one line, so a split openat used to
+    bind no fd and every later ioctl on it was dropped from the program and
+    from both sides of the mapped-to-unmapped ratio.
+    """
+
+    MAP = {"0xc020462a": "ioctl$NV_ESC_RM_ALLOC_MEMORY",
+           "0xc0204629": "ioctl$NV_ESC_RM_FREE",
+           "0xc020462b": "ioctl$NV_ESC_RM_MAP"}
+
+    def calls(self, prog):
+        """-> the emitted calls, dropping comment and blank lines."""
+        return [ln for ln in prog.splitlines()
+                if ln and not ln.startswith("#")]
+
+    def convert(self, lines):
+        return trace2seed.convert_report("\n".join(lines), self.MAP)
+
+    def test_a_split_openat_keeps_every_later_ioctl(self):
+        """The defect: three ioctls on an fd bound by a split openat."""
+        prog, counts = self.convert([
+            '[pid  1200] openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR '
+            '<unfinished ...>',
+            '[pid  1201] futex(0x7f0000000000, FUTEX_WAIT, 0, NULL) = 0',
+            '[pid  1200] <... openat resumed>)       = 5',
+            '[pid  1200] ioctl(5, 0xc020462a, 0x7ffd0000) = 0',
+            '[pid  1200] ioctl(5, 0xc0204629, 0x7ffd0000) = 0',
+            '[pid  1200] ioctl(5, 0xc020462b, 0x7ffd0000) = 0',
+        ])
+        self.assertEqual(counts, {"reassembled": 1, "dangling": 0})
+        emitted = self.calls(prog)
+        self.assertTrue(emitted[0].startswith("r0 = openat$nvidiactl("))
+        self.assertEqual(
+            emitted[1:],
+            ["ioctl$NV_ESC_RM_ALLOC_MEMORY(r0, 0xc020462a, &AUTO)",
+             "ioctl$NV_ESC_RM_FREE(r0, 0xc0204629, &AUTO)",
+             "ioctl$NV_ESC_RM_MAP(r0, 0xc020462b, &AUTO)"])
+
+    def test_an_unpaired_head_at_end_of_file_is_counted_and_not_raised(self):
+        """A trace cut mid-syscall. The rest of the program is still emitted."""
+        prog, counts = self.convert([
+            '[pid  1200] openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR) = 5',
+            '[pid  1200] ioctl(5, 0xc020462a, 0x7ffd0000) = 0',
+            '[pid  1201] read(9, <unfinished ...>',
+        ])
+        self.assertEqual(counts, {"reassembled": 0, "dangling": 1})
+        self.assertEqual(len(self.calls(prog)), 2)
+
+    def test_a_split_ioctl_is_rejoined(self):
+        """The request number sits on the head and the return on the tail."""
+        prog, counts = self.convert([
+            '[pid  1200] openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR) = 5',
+            '[pid  1200] ioctl(5, 0xc020462a <unfinished ...>',
+            '[pid  1201] write(1, "x", 1)            = 1',
+            '[pid  1200] <... ioctl resumed>, 0x7ffd0000) = 0',
+        ])
+        self.assertEqual(counts, {"reassembled": 1, "dangling": 0})
+        self.assertIn("ioctl$NV_ESC_RM_ALLOC_MEMORY(r0, 0xc020462a, &AUTO)",
+                      self.calls(prog))
+
+    def test_a_tail_naming_another_syscall_leaves_both_halves_dangling(self):
+        """One syscall is in flight per thread, so a disagreement means the
+        two lines describe different calls and neither is trusted."""
+        prog, counts = self.convert([
+            '[pid  1200] openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR '
+            '<unfinished ...>',
+            '[pid  1200] <... read resumed>)         = 5',
+        ])
+        self.assertEqual(counts, {"reassembled": 0, "dangling": 2})
+        self.assertEqual(self.calls(prog), [])
+
+    def test_a_tail_with_no_head_is_counted(self):
+        """What the head of a trace truncated at the front looks like."""
+        _prog, counts = self.convert([
+            '[pid  1200] <... openat resumed>)       = 5',
+        ])
+        self.assertEqual(counts, {"reassembled": 0, "dangling": 1})
+
+    def test_two_threads_split_at_once_resume_to_their_own_fds(self):
+        """The hold is keyed on pid, so the two openats do not cross.
+
+        The joined line takes the position of the tail, which is where the
+        syscall returned and the first point the fd exists. pid 1201 resumes
+        first here, so its open is r0 and the later one is r1.
+        """
+        prog, counts = self.convert([
+            '[pid  1200] openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR '
+            '<unfinished ...>',
+            '[pid  1201] openat(AT_FDCWD, "/dev/nvidia-uvm", O_RDWR '
+            '<unfinished ...>',
+            '[pid  1201] <... openat resumed>)       = 7',
+            '[pid  1200] <... openat resumed>)       = 5',
+            '[pid  1201] ioctl(7, 0xc0204629, 0x7ffd0000) = 0',
+            '[pid  1200] ioctl(5, 0xc020462a, 0x7ffd0000) = 0',
+        ])
+        self.assertEqual(counts, {"reassembled": 2, "dangling": 0})
+        emitted = self.calls(prog)
+        self.assertIn("/dev/nvidia-uvm", emitted[0])
+        self.assertIn("/dev/nvidiactl", emitted[1])
+        self.assertEqual(emitted[2],
+                         "ioctl$NV_ESC_RM_FREE(r0, 0xc0204629, &AUTO)")
+        self.assertEqual(
+            emitted[3],
+            "ioctl$NV_ESC_RM_ALLOC_MEMORY(r1, 0xc020462a, &AUTO)")
+
+    def test_a_trace_with_no_pid_column_is_joined_too(self):
+        """strace splits a syscall without -f when a signal interrupts it."""
+        prog, counts = self.convert([
+            'openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR <unfinished ...>',
+            '<... openat resumed>)                   = 5',
+            'ioctl(5, 0xc020462a, 0x7ffd0000)        = 0',
+        ])
+        self.assertEqual(counts, {"reassembled": 1, "dangling": 0})
+        self.assertEqual(len(self.calls(prog)), 2)
+
+    def test_an_unsplit_trace_reports_nothing_reassembled(self):
+        """The stage is invisible to a trace that carries no split."""
+        prog, counts = self.convert([
+            '[pid  1200] openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR) = 5',
+            '[pid  1200] ioctl(5, 0xc020462a, 0x7ffd0000) = 0',
+            '[pid  1200] close(5)                    = 0',
+        ])
+        self.assertEqual(counts, {"reassembled": 0, "dangling": 0})
+        self.assertEqual(len(self.calls(prog)), 3)
+
+    def test_convert_still_returns_the_program_text_alone(self):
+        """Every other caller reads the text and not the counts."""
+        text = trace2seed.convert(
+            'openat(AT_FDCWD, "/dev/nvidiactl", O_RDWR) = 5\n', self.MAP)
+        self.assertIsInstance(text, str)
+        self.assertIn("openat$nvidiactl", text)
+
+    def test_reassemble_leaves_every_other_line_untouched(self):
+        """Signal and exit lines carry no syscall and pass through."""
+        lines, joined, dangling = trace2seed.reassemble(
+            "--- SIGCHLD {si_signo=SIGCHLD} ---\n"
+            "+++ exited with 0 +++\n")
+        self.assertEqual((joined, dangling), (0, 0))
+        self.assertEqual(lines, ["--- SIGCHLD {si_signo=SIGCHLD} ---",
+                                 "+++ exited with 0 +++"])
+
+
+class TestTraceLoadBoundaries(unittest.TestCase):
+    """A malformed map or artefact fails as SeedError naming the path and the
+    field, and never as an AttributeError from inside a comprehension."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="trace2seed-boundary-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def write(self, name, document):
+        path = os.path.join(self.dir, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(document, handle)
+        return path
+
+    def test_a_map_holding_a_list_names_the_file(self):
+        path = self.write("map.json", ["0xc020462a"])
+        with self.assertRaises(trace2seed.SeedError) as caught:
+            trace2seed.load_map(path)
+        self.assertIn(path, str(caught.exception))
+        self.assertIn("list", str(caught.exception))
+
+    def test_a_call_name_that_is_not_a_string_names_the_request(self):
+        path = self.write("map.json", {"0xc020462a": 17})
+        with self.assertRaises(trace2seed.SeedError) as caught:
+            trace2seed.load_map(path)
+        self.assertIn("0xc020462a", str(caught.exception))
+
+    def test_a_multiplexer_section_that_is_not_an_object_is_refused(self):
+        path = self.write("map.json",
+                          {trace2seed.MULTIPLEXER_KEY: ["requests"]})
+        with self.assertRaises(trace2seed.SeedError) as caught:
+            trace2seed.load_map(path)
+        self.assertIn(trace2seed.MULTIPLEXER_KEY, str(caught.exception))
+
+    def test_a_multiplexer_record_missing_a_field_names_the_field(self):
+        """multiplexer_note prints all four, so all four are checked on load
+        and not as a KeyError raised while a seed is half written."""
+        path = self.write("map.json", {trace2seed.MULTIPLEXER_KEY: {
+            "requests": {"0xc020462a": {"escape": "NV_ESC_RM_CONTROL"}}}})
+        with self.assertRaises(trace2seed.SeedError) as caught:
+            trace2seed.load_map(path)
+        message = str(caught.exception)
+        for field in ("param_struct", "selector_field", "variant_prefix"):
+            self.assertIn(field, message)
+
+    def test_the_committed_map_loads(self):
+        names, multiplexers = trace2seed.load_map(trace2seed.DEFAULT_MAP)
+        self.assertTrue(names)
+        self.assertTrue(multiplexers)
+
+    def test_an_artefact_holding_a_list_names_the_file(self):
+        path = self.write("chains.json", [])
+        with self.assertRaises(trace2seed.SeedError) as caught:
+            trace2seed.load_json(path, "the chain artefact")
+        self.assertIn(path, str(caught.exception))
+        self.assertIn("the chain artefact", str(caught.exception))
+
+
+class TestValueFamilyLoadBoundary(unittest.TestCase):
+    """value_families.load_json is the door regression_check and syzlang_gen
+    read both family artefacts through."""
+
+    def test_a_document_that_is_not_an_object_names_the_file(self):
+        directory = tempfile.mkdtemp(prefix="value-families-boundary-")
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = os.path.join(directory, "families.json")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump([{"struct": "S"}], handle)
+        with self.assertRaises(value_families.SourceError) as caught:
+            value_families.load_json(path, "the derived value families")
+        self.assertIn(path, str(caught.exception))
+        self.assertIn("list", str(caught.exception))
+
+
+class TestMechanicalVerdictReason(unittest.TestCase):
+    """An accepted family's reason states what the mechanical rules
+    established and claims no header read.
+
+    Acceptance is the default branch of mechanical_verdict, so a claim placed
+    there lands on every accepted family: the committed audit records 53
+    accepted families and every one carries verdict_source "mechanical".
+    """
+
+    def record(self, rule, defines, values):
+        return {
+            "struct": "NV_X_PARAMS", "field": "mode", "rule": rule,
+            "defines": sorted(defines), "values": sorted(values),
+            "define_sites": [{"define": name, "value": value, "header": "x.h",
+                              "line": 1, "bitfield_stem": None}
+                             for name, value in zip(sorted(defines),
+                                                    sorted(values))],
+        }
+
+    def test_an_anchored_family_names_both_mechanical_tests(self):
+        verdict, reason = value_families.mechanical_verdict(
+            self.record(value_families.RULE_ANCHORED,
+                        ["NV_X_MODE_A", "NV_X_MODE_B", "NV_X_MODE_C"],
+                        [0, 1, 2]))
+        self.assertEqual(verdict, "accepted")
+        self.assertIn("anchored on the struct name", reason)
+        self.assertIn("bit-range decomposition test", reason)
+        self.assertIn("boolean-pair test", reason)
+
+    def test_no_accepted_reason_claims_a_header_was_read(self):
+        """The defect: the old text asserted the defines were read against
+        the header named in the evidence, and nobody read one."""
+        for rule in (value_families.RULE_ANCHORED,
+                     value_families.RULE_SWITCH,
+                     "%s+%s" % (value_families.RULE_ANCHORED,
+                                value_families.RULE_SWITCH)):
+            _verdict, reason = value_families.mechanical_verdict(
+                self.record(rule,
+                            ["NV_X_MODE_A", "NV_X_MODE_B", "NV_X_MODE_C"],
+                            [0, 1, 2]))
+            self.assertIn("No header was read for this family", reason)
+            self.assertNotIn("read against the header", reason)
+
+    def test_a_switch_family_claims_no_anchoring(self):
+        """The switch rule reads a handler comparing the field, and those
+        define names carry no anchor on the struct."""
+        _verdict, reason = value_families.mechanical_verdict(
+            self.record(value_families.RULE_SWITCH,
+                        ["FOO_A", "FOO_B", "FOO_C"], [0, 1, 2]))
+        self.assertIn("A control handler switches on this field", reason)
+        self.assertNotIn("anchored on the struct name", reason)
+
+    def test_a_switch_family_says_the_bit_range_test_did_not_run(self):
+        """is_bitfield_family declines a family the switch rule derived, so
+        claiming it passed that test would be a second unearned assertion."""
+        _verdict, reason = value_families.mechanical_verdict(
+            self.record(value_families.RULE_SWITCH,
+                        ["FOO_A", "FOO_B", "FOO_C"], [0, 1, 2]))
+        self.assertIn("is not applied to a family the switch rule derived",
+                      reason)
+
+    def test_the_committed_audit_carries_no_unearned_header_claim(self):
+        """Every accepted entry, measured on the artefact CI hashes."""
+        with open(value_families.DEFAULT_AUDIT_OUT, encoding="utf-8") as fh:
+            entries = json.load(fh)["audit"]
+        accepted = [e for e in entries if e["verdict"] == "accepted"]
+        self.assertEqual(len(accepted), 53)
+        for entry in accepted:
+            self.assertEqual(entry["verdict_source"], "mechanical")
+            self.assertIn("No header was read for this family",
+                          entry["reason"])
+        read = [e for e in entries if e["verdict_source"] == "read"]
+        self.assertEqual(len(read), 2)
+        for entry in read:
+            self.assertEqual(entry["verdict"], "rejected")
+
+
+# ANCHOR-PHASE-6-SUITE
+
+
+# The synthetic nvidia-drm tree. Every TestDrm* class above this point reads
+# the committed artefact, so all of them pass against a stubbed module. These
+# read the two files drm_inventory.py parses and exercise the header scrape,
+# the dispatch scrape, the reconciliation and every refusal.
+#
+# name, number, direction macro, parameter struct, handler, flag word. The
+# fixture declares five commands and dispatches four, so the real 28/24
+# constants stay out of it while the same code path runs. NVIDIA_FENCE_-
+# SUPPORTED is a DRM_IO command carrying no struct, and it is written last so
+# a declaration following it in the header is outside its macro span.
+DRM_FIXTURE_COMMANDS = (
+    ("NVIDIA_GET_DEV_INFO", 0x00, "DRM_IOWR",
+     "drm_nvidia_get_dev_info_params", "nv_drm_get_dev_info_ioctl",
+     "DRM_RENDER_ALLOW|DRM_UNLOCKED"),
+    ("NVIDIA_GRANT_PERMISSIONS", 0x01, "DRM_IOWR",
+     "drm_nvidia_grant_permissions_params", "nv_drm_grant_permissions_ioctl",
+     "DRM_MASTER|DRM_UNLOCKED"),
+    ("NVIDIA_GET_CLIENT_CAPABILITY", 0x02, "DRM_IOWR",
+     "drm_nvidia_get_client_capability_params",
+     "nv_drm_get_client_capability_ioctl", "0"),
+    ("NVIDIA_REGISTER_ROI", 0x03, "DRM_IOWR",
+     "drm_nvidia_register_roi_params", None, None),
+    ("NVIDIA_FENCE_SUPPORTED", 0x04, "DRM_IO", None,
+     "nv_drm_fence_supported_ioctl", "DRM_RENDER_ALLOW|DRM_UNLOCKED"),
+)
+
+# A struct declared after the last request macro and before the closing
+# guard. The header scrape must not reach it: it belongs to no command, and a
+# search bounded by the next directive rather than by the macro's own
+# parentheses reports it as NVIDIA_FENCE_SUPPORTED's parameter struct.
+DRM_TRAILING_DECLARATION = (
+    "struct drm_nvidia_trailing_params {\n"
+    "    NvU32 unrelated;\n"
+    "};\n")
+
+DRM_C_HEAD = '''#include "nvidia-drm-priv.h"
+
+static const struct drm_ioctl_desc nv_drm_ioctls[] = {
+'''
+
+DRM_C_TAIL = '''};
+
+static struct drm_driver nv_drm_driver = {
+    .ioctls     = nv_drm_ioctls,
+    .num_ioctls = ARRAY_SIZE(nv_drm_ioctls),
+};
+'''
+
+
+def drm_header_text(commands=DRM_FIXTURE_COMMANDS,
+                    trailing=DRM_TRAILING_DECLARATION, extra=()):
+    """A stand-in nv_drm_common_ioctl.h carrying declares and request macros.
+
+    Every request macro wraps across continuation lines the way the driver
+    header writes them, because the scrape has to read across the wrap.
+    `extra` appends raw lines after the macros, for the malformed cases.
+    """
+    lines = ["#ifndef _NV_DRM_COMMON_IOCTL_H_",
+             "#define _NV_DRM_COMMON_IOCTL_H_", ""]
+    for name, nr, _direction, _struct, _handler, _flags in commands:
+        lines.append("#define DRM_%s 0x%02x" % (name, nr))
+    lines.append("")
+    for name, _nr, direction, struct, _handler, _flags in commands:
+        lines.append("#define DRM_IOCTL_%s                         \\" % name)
+        if struct is None:
+            lines.append("    %s(DRM_COMMAND_BASE + DRM_%s)"
+                         % (direction, name))
+        else:
+            lines.append("    %s((DRM_COMMAND_BASE + DRM_%s),       \\"
+                         % (direction, name))
+            lines.append("             struct %s)" % struct)
+        lines.append("")
+    lines.extend(extra)
+    lines.append(trailing)
+    lines.append("#endif /* _NV_DRM_COMMON_IOCTL_H_ */")
+    return "\n".join(lines) + "\n"
+
+
+def drm_source_text(commands=DRM_FIXTURE_COMMANDS, drop=(), extra=()):
+    """A stand-in nvidia-drm-drv.c carrying one nv_drm_ioctls[] initialiser.
+
+    Each entry wraps across three lines, as every entry in the real table
+    does. `drop` names commands to leave out while the header still declares
+    them, and `extra` appends raw table lines for the malformed cases.
+    """
+    body = []
+    for name, _nr, _direction, _struct, handler, flags in commands:
+        if handler is None or name in drop:
+            continue
+        body.append("    DRM_IOCTL_DEF_DRV(%s,\n"
+                    "                      %s,\n"
+                    "                      %s)," % (name, handler, flags))
+    body.extend("    %s" % line for line in extra)
+    return DRM_C_HEAD + "\n".join(body) + "\n" + DRM_C_TAIL
+
+
+def write_drm_tree(root, header=None, source=None, version="610.57.04"):
+    """Lay the two scraped files out the way the driver checkout does."""
+    nvidia_drm = os.path.join(root, "kernel-open", "nvidia-drm")
+    os.makedirs(nvidia_drm, exist_ok=True)
+    with open(os.path.join(nvidia_drm, "nv_drm_common_ioctl.h"), "w") as f:
+        f.write(drm_header_text() if header is None else header)
+    with open(os.path.join(nvidia_drm, "nvidia-drm-drv.c"), "w") as f:
+        f.write(drm_source_text() if source is None else source)
+    if version is not None:
+        with open(os.path.join(root, "version.mk"), "w") as f:
+            f.write("NVIDIA_VERSION = %s\n" % version)
+    return root
+
+
+class DrmFixtureTree(unittest.TestCase):
+    """A driver tree holding only the two files drm_inventory.py reads."""
+
+    DECLARED = len(DRM_FIXTURE_COMMANDS)
+    DISPATCHED = sum(1 for c in DRM_FIXTURE_COMMANDS if c[4])
+    FLAGS = {"DRM_RENDER_ALLOW": 2, "DRM_MASTER": 1}
+
+    @classmethod
+    def setUpClass(cls):
+        import drm_inventory
+        cls.mod = drm_inventory
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        write_drm_tree(self.root)
+
+    def path(self, name):
+        return os.path.join(self.root, "kernel-open", "nvidia-drm", name)
+
+    def rewrite_header(self, text):
+        with open(self.path("nv_drm_common_ioctl.h"), "w") as f:
+            f.write(text)
+
+    def rewrite_source(self, text):
+        with open(self.path("nvidia-drm-drv.c"), "w") as f:
+            f.write(text)
+
+    def header(self):
+        with open(self.path("nv_drm_common_ioctl.h")) as f:
+            return f.read()
+
+    def source(self):
+        with open(self.path("nvidia-drm-drv.c")) as f:
+            return f.read()
+
+    def collect(self, declared=None, dispatched=None, flags=None):
+        return self.mod.collect(
+            self.root,
+            expect_declared=self.DECLARED if declared is None else declared,
+            expect_dispatched=(self.DISPATCHED if dispatched is None
+                               else dispatched),
+            expect_flags=self.FLAGS if flags is None else flags)
+
+
+class TestDrmHeaderScrape(DrmFixtureTree):
+    """parse_declared and parse_request_macros read the ioctl header."""
+
+    def test_every_declared_number_is_read_in_number_order(self):
+        declared = self.mod.parse_declared(self.header())
+        self.assertEqual([(r["command"], r["nr"]) for r in declared],
+                         sorted([(c[0], c[1]) for c in DRM_FIXTURE_COMMANDS],
+                                key=lambda pair: pair[1]))
+
+    def test_a_declaration_records_the_line_it_was_read_from(self):
+        declared = self.mod.parse_declared(self.header())
+        lines = self.header().splitlines()
+        for record in declared:
+            self.assertIn("DRM_%s" % record["command"],
+                          lines[record["line"] - 1])
+
+    def test_a_commented_out_declaration_is_not_read_as_a_command(self):
+        self.rewrite_header(self.header().replace(
+            "#define DRM_NVIDIA_REGISTER_ROI 0x03",
+            "/* #define DRM_NVIDIA_RETIRED 0x09 */\n"
+            "#define DRM_NVIDIA_REGISTER_ROI 0x03"))
+        self.assertEqual(len(self.mod.parse_declared(self.header())),
+                         self.DECLARED)
+
+    def test_two_names_sharing_a_number_are_refused(self):
+        self.rewrite_header(self.header().replace(
+            "#define DRM_NVIDIA_REGISTER_ROI 0x03",
+            "#define DRM_NVIDIA_REGISTER_ROI 0x02"))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_declared(self.header())
+        self.assertIn("both declare number 0x02", str(caught.exception))
+
+    def test_a_header_declaring_no_command_number_is_refused(self):
+        self.rewrite_header("#define _NV_DRM_COMMON_IOCTL_H_\n")
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_declared(self.header())
+        self.assertIn("no `#define DRM_NVIDIA_`", str(caught.exception))
+
+    def test_the_direction_and_struct_come_from_the_request_macro(self):
+        macros = self.mod.parse_request_macros(self.header())
+        self.assertEqual(
+            {name: (macros[name][0], macros[name][1]) for name in macros},
+            {c[0]: (c[2], c[3]) for c in DRM_FIXTURE_COMMANDS})
+
+    def test_a_declaration_after_the_last_macro_is_outside_its_span(self):
+        """DRM_IOCTL_NVIDIA_FENCE_SUPPORTED is a DRM_IO macro taking no
+        struct, and DRM_TRAILING_DECLARATION follows it with no `#define`
+        between the two. A search bounded by the next directive reaches it and
+        reports a parameter struct for a command that has none."""
+        self.assertIn("struct drm_nvidia_trailing_params", self.header())
+        macros = self.mod.parse_request_macros(self.header())
+        self.assertIsNone(macros["NVIDIA_FENCE_SUPPORTED"][1])
+
+    def test_a_struct_declared_between_two_macros_is_not_bound_to_either(self):
+        self.rewrite_header(self.header().replace(
+            "#define DRM_IOCTL_NVIDIA_GET_CLIENT_CAPABILITY",
+            "struct drm_nvidia_interleaved_params {\n"
+            "    NvU32 unrelated;\n"
+            "};\n\n"
+            "#define DRM_IOCTL_NVIDIA_GET_CLIENT_CAPABILITY"))
+        macros = self.mod.parse_request_macros(self.header())
+        self.assertEqual(macros["NVIDIA_GRANT_PERMISSIONS"][1],
+                         "drm_nvidia_grant_permissions_params")
+        self.assertEqual(macros["NVIDIA_GET_CLIENT_CAPABILITY"][1],
+                         "drm_nvidia_get_client_capability_params")
+
+    def test_an_unbalanced_macro_span_is_refused(self):
+        self.rewrite_header(self.header().replace(
+            "    DRM_IOWR((DRM_COMMAND_BASE + DRM_NVIDIA_GET_DEV_INFO),       \\\n"
+            "             struct drm_nvidia_get_dev_info_params)",
+            "    DRM_IOWR((DRM_COMMAND_BASE + DRM_NVIDIA_GET_DEV_INFO),       \\\n"
+            "             struct drm_nvidia_get_dev_info_params"))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_request_macros(self.header())
+        message = str(caught.exception)
+        self.assertIn("NVIDIA_GET_DEV_INFO", message)
+        self.assertIn("never closes", message)
+
+    def test_two_direction_macros_for_one_command_are_refused(self):
+        self.rewrite_header(self.header() + drm_header_text(
+            commands=DRM_FIXTURE_COMMANDS[:1], trailing=""))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_request_macros(self.header())
+        message = str(caught.exception)
+        self.assertIn("NVIDIA_GET_DEV_INFO", message)
+        self.assertIn("two direction macros", message)
+
+    def test_a_header_carrying_no_request_macro_is_refused(self):
+        self.rewrite_header(drm_header_text(commands=(), trailing=""))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_request_macros(self.header())
+        self.assertIn("no `#define DRM_IOCTL_NVIDIA_`",
+                      str(caught.exception))
+
+    def test_a_solaris_arm_defining_the_name_as_zero_is_skipped(self):
+        """The NV_LINUX conditional redefines two request macros as a bare 0.
+        That arm carries no direction macro, so the Linux definition is the
+        only reading, and a scrape matching the name alone finds two."""
+        self.rewrite_header(self.header().replace(
+            "#endif /* _NV_DRM_COMMON_IOCTL_H_ */",
+            "#define DRM_IOCTL_NVIDIA_FENCE_SUPPORTED 0\n"
+            "#endif /* _NV_DRM_COMMON_IOCTL_H_ */"))
+        macros = self.mod.parse_request_macros(self.header())
+        self.assertEqual(macros["NVIDIA_FENCE_SUPPORTED"][0], "DRM_IO")
+
+
+class TestDrmDispatchScrape(DrmFixtureTree):
+    """parse_table reads nv_drm_ioctls[] and the flag word of each entry."""
+
+    def test_every_dispatched_command_is_read_in_table_order(self):
+        entries = self.mod.parse_table(self.source())
+        self.assertEqual([e["command"] for e in entries],
+                         [c[0] for c in DRM_FIXTURE_COMMANDS if c[4]])
+
+    def test_the_handler_and_flag_word_are_read_across_the_wrap(self):
+        entries = {e["command"]: e for e in self.mod.parse_table(self.source())}
+        self.assertEqual(entries["NVIDIA_GET_DEV_INFO"]["handler"],
+                         "nv_drm_get_dev_info_ioctl")
+        self.assertEqual(entries["NVIDIA_GET_DEV_INFO"]["flags"],
+                         ["DRM_RENDER_ALLOW", "DRM_UNLOCKED"])
+
+    def test_an_entry_records_the_line_it_was_read_from(self):
+        entries = self.mod.parse_table(self.source())
+        lines = self.source().splitlines()
+        for entry in entries:
+            self.assertIn(entry["command"], lines[entry["line"] - 1])
+
+    def test_a_zero_flag_word_is_read_as_a_flag_and_not_as_empty(self):
+        entries = {e["command"]: e for e in self.mod.parse_table(self.source())}
+        self.assertEqual(entries["NVIDIA_GET_CLIENT_CAPABILITY"]["flags"],
+                         ["0"])
+
+    def test_an_entry_carrying_an_empty_flag_word_is_refused(self):
+        self.rewrite_source(drm_source_text(
+            extra=["DRM_IOCTL_DEF_DRV(NVIDIA_GET_DEV_INFO,\n"
+                   "                      nv_drm_get_dev_info_ioctl,\n"
+                   "                      ),"]))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_table(self.source())
+        self.assertIn("empty flag word", str(caught.exception))
+
+    def test_a_source_carrying_no_dispatch_table_is_refused(self):
+        self.rewrite_source("int nv_drm_probe(void) { return 0; }\n")
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_table(self.source())
+        self.assertIn("nv_drm_ioctls[]", str(caught.exception))
+
+    def test_a_table_that_never_closes_is_refused(self):
+        self.rewrite_source(DRM_C_HEAD + "    DRM_IOCTL_DEF_DRV(A, b, 0),\n")
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_table(self.source())
+        self.assertIn("never closes", str(caught.exception))
+
+    def test_a_table_built_by_an_unrecognised_macro_is_refused(self):
+        self.rewrite_source(DRM_C_HEAD + "    NV_DEF(A, b, 0),\n" + DRM_C_TAIL)
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.mod.parse_table(self.source())
+        self.assertIn("no DRM_IOCTL_DEF_DRV use", str(caught.exception))
+
+
+class TestDrmReconciliation(DrmFixtureTree):
+    """cross_check reads the header and the table as two sources."""
+
+    def test_the_fixture_tree_passes_its_own_counts(self):
+        summary = self.collect()["summary"]
+        self.assertEqual(summary["declared"], self.DECLARED)
+        self.assertEqual(summary["dispatched"], self.DISPATCHED)
+        self.assertEqual(summary["undispatched"],
+                         self.DECLARED - self.DISPATCHED)
+
+    def test_the_summary_carries_the_two_totals_it_publishes(self):
+        summary = self.collect()["summary"]
+        self.assertEqual(summary["render_allow"], 2)
+        self.assertEqual(summary["master"], 1)
+        self.assertEqual(summary["flagless"], 1)
+
+    def test_the_flag_split_covers_all_four_permission_flags(self):
+        entries = self.mod.parse_table(self.source())
+        checked = self.mod.cross_check(
+            self.mod.parse_declared(self.header()), entries,
+            self.DECLARED, self.DISPATCHED, self.FLAGS)
+        self.assertEqual(checked["render_allow"], 2)
+        self.assertEqual(checked["master"], 1)
+        self.assertEqual(checked["root_only"], 0)
+        self.assertEqual(checked["auth"], 0)
+        self.assertEqual(checked["flagless"], 1)
+
+    def test_a_changed_dispatched_count_is_refused(self):
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect(dispatched=self.DISPATCHED - 1)
+        self.assertIn("expected %d" % (self.DISPATCHED - 1),
+                      str(caught.exception))
+
+    def test_a_declared_command_losing_its_entry_is_named(self):
+        self.rewrite_source(drm_source_text(drop=("NVIDIA_GET_DEV_INFO",)))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect()
+        self.assertIn("NVIDIA_GET_DEV_INFO", str(caught.exception))
+
+    def test_a_command_dispatched_twice_is_refused(self):
+        self.rewrite_source(drm_source_text(
+            extra=["DRM_IOCTL_DEF_DRV(NVIDIA_GET_DEV_INFO,\n"
+                   "                      nv_drm_get_dev_info_ioctl,\n"
+                   "                      DRM_RENDER_ALLOW),"]))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect()
+        self.assertIn("dispatched twice", str(caught.exception))
+
+    def test_an_undeclared_command_in_the_table_is_refused(self):
+        self.rewrite_source(drm_source_text(
+            extra=["DRM_IOCTL_DEF_DRV(NVIDIA_NOT_DECLARED,\n"
+                   "                      nv_drm_absent_ioctl,\n"
+                   "                      DRM_RENDER_ALLOW),"]))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect()
+        self.assertIn("NVIDIA_NOT_DECLARED", str(caught.exception))
+
+    def test_an_entry_gaining_root_only_moves_a_pinned_total(self):
+        """DRM_ROOT_ONLY and DRM_AUTH gate a node the same way DRM_MASTER
+        does. Reading only the two flags the table sets today lets an entry
+        gain either one and record itself as plainly reachable."""
+        self.rewrite_source(drm_source_text().replace(
+            "                      DRM_MASTER|DRM_UNLOCKED),",
+            "                      DRM_MASTER|DRM_ROOT_ONLY|DRM_UNLOCKED),"))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect()
+        message = str(caught.exception)
+        self.assertIn("1 DRM_ROOT_ONLY", message)
+        self.assertIn("0 DRM_ROOT_ONLY", message)
+
+    def test_an_entry_gaining_auth_moves_a_pinned_total(self):
+        self.rewrite_source(drm_source_text().replace(
+            "                      DRM_MASTER|DRM_UNLOCKED),",
+            "                      DRM_MASTER|DRM_AUTH|DRM_UNLOCKED),"))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect()
+        self.assertIn("DRM_AUTH", str(caught.exception))
+
+    def test_a_command_setting_render_allow_and_master_is_refused(self):
+        self.rewrite_source(drm_source_text().replace(
+            "                      DRM_MASTER|DRM_UNLOCKED),",
+            "                      DRM_MASTER|DRM_RENDER_ALLOW),"))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect()
+        self.assertIn("set both", str(caught.exception))
+
+    def test_a_declared_command_with_no_request_macro_is_refused(self):
+        self.rewrite_header(self.header().replace(
+            "#define DRM_IOCTL_NVIDIA_REGISTER_ROI", "#define UNUSED_MACRO"))
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect()
+        message = str(caught.exception)
+        self.assertIn("NVIDIA_REGISTER_ROI", message)
+        self.assertIn("no DRM_IOCTL_NVIDIA_ request macro", message)
+
+    def test_a_flag_the_permit_function_does_not_read_is_refused(self):
+        with self.assertRaises(self.mod.SourceError) as caught:
+            self.collect(flags={"DRM_UNLOCKED": 3})
+        self.assertIn("DRM_UNLOCKED", str(caught.exception))
+
+    def test_the_driver_version_is_read_from_the_tree(self):
+        self.assertEqual(self.collect()["source"]["driver_version"],
+                         "610.57.04")
+
+
+class TestDrmReachabilityFlags(DrmFixtureTree):
+    """reachability() reads all four flags drm_ioctl_permit() tests."""
+
+    def test_a_render_allow_command_is_plainly_reachable_on_both_nodes(self):
+        reach = self.mod.reachability(["DRM_RENDER_ALLOW", "DRM_UNLOCKED"])
+        for node in ("card", "render"):
+            self.assertTrue(reach[node]["reachable"])
+            self.assertIsNone(reach[node]["condition"])
+
+    def test_a_command_without_render_allow_is_refused_on_the_render_node(self):
+        reach = self.mod.reachability(["0"])
+        self.assertTrue(reach["card"]["reachable"])
+        self.assertFalse(reach["render"]["reachable"])
+        self.assertIn("omits DRM_RENDER_ALLOW", reach["render"]["reason"])
+
+    def test_a_master_command_is_conditional_on_the_card_node(self):
+        reach = self.mod.reachability(["DRM_MASTER"])
+        self.assertEqual(reach["card"]["condition"],
+                         self.mod.MASTER_CONDITION)
+        self.assertFalse(reach["render"]["reachable"])
+
+    def test_a_root_only_command_is_conditional_on_both_nodes(self):
+        reach = self.mod.reachability(["DRM_ROOT_ONLY", "DRM_RENDER_ALLOW"])
+        for node in ("card", "render"):
+            self.assertEqual(reach[node]["condition"],
+                             self.mod.ROOT_ONLY_CONDITION)
+
+    def test_an_auth_command_is_conditional_on_the_card_node_alone(self):
+        """drm_is_render_client() satisfies the DRM_AUTH test, so the render
+        node is unaffected and the primary node carries the condition."""
+        reach = self.mod.reachability(["DRM_AUTH", "DRM_RENDER_ALLOW"])
+        self.assertEqual(reach["card"]["condition"], self.mod.AUTH_CONDITION)
+        self.assertTrue(reach["render"]["reachable"])
+        self.assertIsNone(reach["render"]["condition"])
+
+    def test_two_gates_on_one_command_are_both_recorded(self):
+        reach = self.mod.reachability(["DRM_ROOT_ONLY", "DRM_MASTER"])
+        self.assertIn(self.mod.ROOT_ONLY_CONDITION, reach["card"]["condition"])
+        self.assertIn(self.mod.MASTER_CONDITION, reach["card"]["condition"])
+
+
+class TestNvkmsMacroSplitPin(unittest.TestCase):
+    """EXPECTED_PLAIN and EXPECTED_CUSTOM_USER are absolute counts of the
+    610.57.04 table, so they apply to that table and to nothing else. The
+    condition reads the declared and dispatched totals the caller is
+    asserting, and a tree carrying any other pair is read on its own terms."""
+
+    def table(self, plain, custom, declared_total=None):
+        """A declared list and an entry list of the given macro split.
+
+        The undispatched commands sit inside the array and never past its
+        end, because the real table leaves two slots zero-initialised in the
+        middle and the array bound is checked before the split.
+        """
+        if declared_total is None:
+            declared_total = nvkms_inventory.EXPECTED_DECLARED
+        gaps = set(range(1, 1 + declared_total - plain - custom))
+        declared, entries, dispatched = [], [], 0
+        for index in range(declared_total):
+            name = "NVKMS_IOCTL_CMD_%02d" % index
+            declared.append({"command": name, "ordinal": index,
+                             "line": index + 1})
+            if index in gaps:
+                continue
+            entries.append({
+                "command": name, "proc": "Cmd%02d" % index,
+                "macro": (nvkms_inventory.PLAIN_MACRO if dispatched < plain
+                          else nvkms_inventory.CUSTOM_USER_MACRO),
+                "line": index + 1})
+            dispatched += 1
+        return declared, entries
+
+    def check(self, declared, entries, expect_declared, expect_dispatched):
+        return nvkms_inventory.cross_check(declared, entries, expect_declared,
+                                           expect_dispatched)
+
+    def test_the_pinned_checkout_passes_at_the_split_it_carries(self):
+        declared, entries = self.table(nvkms_inventory.EXPECTED_PLAIN,
+                                       nvkms_inventory.EXPECTED_CUSTOM_USER)
+        checked = self.check(declared, entries,
+                             nvkms_inventory.EXPECTED_DECLARED,
+                             nvkms_inventory.EXPECTED_DISPATCHED)
+        self.assertEqual(checked["plain"], nvkms_inventory.EXPECTED_PLAIN)
+        self.assertEqual(checked["custom_user"],
+                         nvkms_inventory.EXPECTED_CUSTOM_USER)
+
+    def test_a_scrape_counting_a_define_as_a_use_moves_the_split(self):
+        """The dispatched total stays at 64 and only the split moves, which
+        is the reading a total-only check passes."""
+        declared, entries = self.table(nvkms_inventory.EXPECTED_PLAIN + 1,
+                                       nvkms_inventory.EXPECTED_CUSTOM_USER - 1)
+        with self.assertRaises(nvkms_inventory.SourceError) as caught:
+            self.check(declared, entries, nvkms_inventory.EXPECTED_DECLARED,
+                       nvkms_inventory.EXPECTED_DISPATCHED)
+        message = str(caught.exception)
+        self.assertIn("the macro split reads 60 ENTRY", message)
+        self.assertIn("expected 59 and 5", message)
+
+    def test_a_tree_of_another_shape_is_read_on_its_own_terms(self):
+        declared, entries = self.table(3, 2, declared_total=6)
+        checked = self.check(declared, entries, 6, 5)
+        self.assertEqual((checked["plain"], checked["custom_user"]), (3, 2))
+
+    def test_no_argument_reaches_the_condition_without_the_pinned_totals(self):
+        """A caller cannot assert 66 and 64 and skip the split: the condition
+        takes no argument of its own, so switching it off takes abandoning the
+        two totals above it."""
+        signature = inspect.signature(nvkms_inventory.cross_check)
+        self.assertEqual(list(signature.parameters),
+                         ["declared", "entries", "expect_declared",
+                          "expect_dispatched"])
+
+
+# ANCHOR-PHASE-7-HYGIENE
+
+
+@contextlib.contextmanager
+def raising_os_call(name, error):
+    """Replace os.<name> with a callable that raises, then restore it.
+
+    The atomic writer's failure paths are unreachable from a test that only
+    passes bad arguments: mkstemp, fsync and replace succeed on a healthy
+    filesystem. Substituting one of them is what puts the writer part way
+    through a write and lets the cleanup be observed.
+    """
+    original = getattr(os, name)
+
+    def fail(*args, **kwargs):
+        raise error
+
+    setattr(os, name, fail)
+    try:
+        yield
+    finally:
+        setattr(os, name, original)
+
+
+def temporaries_left(directory):
+    """Every staging temporary still in `directory`, in sorted order."""
+    return sorted(n for n in os.listdir(directory) if n.endswith(".tmp"))
+
+
+class TestTheAtomicWriterCleansUpAfterItself(unittest.TestCase):
+    """A generator that fails part way through a write used to leave
+    <path>.tmp behind, and the next run renamed whatever was in it. The writer
+    removes its temporary on every failure path, so a failed run leaves the
+    directory holding exactly the files it held before."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="atomicwrite-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.target = os.path.join(self.dir, "artefact.json")
+        with open(self.target, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("previous\n")
+
+    def read_target(self):
+        with open(self.target, encoding="utf-8", newline="") as fh:
+            return fh.read()
+
+    def test_a_write_that_succeeds_replaces_the_file(self):
+        atomic_write.atomic_write_text(self.target, "current\n")
+        self.assertEqual(self.read_target(), "current\n")
+        self.assertEqual(temporaries_left(self.dir), [])
+
+    def test_a_failure_during_the_write_leaves_no_temporary(self):
+        with raising_os_call("fsync", OSError(5, "simulated I/O error")):
+            with self.assertRaises(OSError):
+                atomic_write.atomic_write_text(self.target, "current\n")
+        self.assertEqual(temporaries_left(self.dir), [])
+        self.assertEqual(self.read_target(), "previous\n")
+
+    def test_a_failure_at_the_rename_leaves_no_temporary(self):
+        with raising_os_call("replace", OSError(13, "simulated denial")):
+            with self.assertRaises(OSError):
+                atomic_write.atomic_write_text(self.target, "current\n")
+        self.assertEqual(temporaries_left(self.dir), [])
+        self.assertEqual(self.read_target(), "previous\n")
+
+    def test_a_keyboard_interrupt_part_way_leaves_no_temporary(self):
+        """The cleanup catches BaseException, so an interrupted regeneration
+        is as clean as a failed one. KeyboardInterrupt is not an OSError and
+        an except OSError cleanup would miss it."""
+        with raising_os_call("fsync", KeyboardInterrupt()):
+            with self.assertRaises(KeyboardInterrupt):
+                atomic_write.atomic_write_text(self.target, "current\n")
+        self.assertEqual(temporaries_left(self.dir), [])
+        self.assertEqual(self.read_target(), "previous\n")
+
+    def test_text_is_written_with_lf_on_every_platform(self):
+        """Commit e6b045d records a Windows regeneration writing CRLF into an
+        LF tree. The writer pins newline so the platform default cannot reach
+        an artefact."""
+        atomic_write.atomic_write_text(self.target, "one\ntwo\n")
+        with open(self.target, "rb") as fh:
+            self.assertEqual(fh.read(), b"one\ntwo\n")
+
+    def test_bytes_are_refused_by_name(self):
+        with self.assertRaises(TypeError) as caught:
+            atomic_write.atomic_write_text(self.target, b"current\n")
+        self.assertIn("bytes", str(caught.exception))
+        self.assertIn(self.target, str(caught.exception))
+        self.assertEqual(temporaries_left(self.dir), [])
+
+    @unittest.skipUnless(os.name == "posix", "file modes are POSIX")
+    def test_a_regeneration_keeps_the_artefact_mode(self):
+        """mkstemp creates a file readable by its owner alone. Renaming that
+        onto a committed artefact would narrow its permissions on every
+        regeneration, so the target's own mode is copied first."""
+        os.chmod(self.target, 0o644)
+        atomic_write.atomic_write_text(self.target, "current\n")
+        self.assertEqual(os.stat(self.target).st_mode & 0o777, 0o644)
+
+    @unittest.skipUnless(os.name == "posix", "file modes are POSIX")
+    def test_a_new_file_takes_the_declared_default_mode(self):
+        fresh = os.path.join(self.dir, "fresh.json")
+        atomic_write.atomic_write_text(fresh, "{}\n")
+        self.assertEqual(os.stat(fresh).st_mode & 0o777,
+                         atomic_write.DEFAULT_FILE_MODE)
+
+
+class TestTwoWritersInOneDirectoryDoNotCollide(unittest.TestCase):
+    """Every generator used to stage at <path>.tmp, one fixed name per target.
+    Two runs against one output directory therefore wrote the same temporary,
+    and whichever renamed second published bytes the other had produced. The
+    temporary is now named by mkstemp, so no two stagings share a name."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="atomicwrite-race-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def test_two_stagings_of_one_target_get_different_temporaries(self):
+        target = os.path.join(self.dir, "artefact.json")
+        first = atomic_write._stage_file(target, "first\n")
+        second = atomic_write._stage_file(target, "second\n")
+        self.addCleanup(atomic_write._discard, first)
+        self.addCleanup(atomic_write._discard, second)
+        self.assertNotEqual(first, second)
+        for path, expected in ((first, "first\n"), (second, "second\n")):
+            with open(path, encoding="utf-8", newline="") as fh:
+                self.assertEqual(fh.read(), expected)
+
+    def test_concurrent_writers_each_publish_their_own_bytes(self):
+        """Sixteen threads, eight targets, two writers per target, all in one
+        directory. Each target ends up holding one writer's text whole. A
+        shared temporary name would let a target hold the other writer's
+        payload, or a splice of both."""
+        targets = [os.path.join(self.dir, "artefact-%d.json" % i)
+                   for i in range(8)]
+        texts = {t: ["%s from writer %d\n" % (os.path.basename(t), w)
+                     for w in range(2)] for t in targets}
+        start = threading.Barrier(len(targets) * 2)
+        failures = []
+
+        def write(target, text):
+            try:
+                start.wait(timeout=30)
+                atomic_write.atomic_write_text(target, text)
+            except BaseException as e:            # reported, never swallowed
+                failures.append("%s: %s" % (target, e))
+
+        threads = [threading.Thread(target=write, args=(t, text))
+                   for t in targets for text in texts[t]]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+            self.assertFalse(t.is_alive(), "a writer thread did not finish")
+        self.assertEqual(failures, [])
+
+        for target in targets:
+            with open(target, encoding="utf-8", newline="") as fh:
+                self.assertIn(fh.read(), texts[target])
+        self.assertEqual(temporaries_left(self.dir), [])
+
+
+class TestAStagedWriteSetCommitsTogether(unittest.TestCase):
+    """ioctl_inventory.py emits up to three artefacts that downstream reads as
+    one set: trace2seed resolves a request number through the map and then
+    reads the inventory for the command behind it. Three independent writes
+    could publish a new map beside an old inventory. Staging every file before
+    renaming any of them removes the window in which a serialisation or a
+    write failure can do that."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="stagedwrite-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.targets = [os.path.join(self.dir, n)
+                        for n in ("map.json", "entry-points.json",
+                                  "inventory.json")]
+        for path in self.targets:
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("previous %s\n" % os.path.basename(path))
+
+    def contents(self):
+        out = []
+        for path in self.targets:
+            with open(path, encoding="utf-8", newline="") as fh:
+                out.append(fh.read())
+        return out
+
+    def previous(self):
+        return ["previous %s\n" % os.path.basename(p) for p in self.targets]
+
+    def test_a_committed_set_replaces_every_file(self):
+        with atomic_write.StagedWriteSet() as staged:
+            for path in self.targets:
+                staged.stage(path, "new %s\n" % os.path.basename(path))
+            renamed = staged.commit()
+        self.assertEqual(renamed, [os.path.abspath(p) for p in self.targets])
+        self.assertEqual(self.contents(),
+                         ["new %s\n" % os.path.basename(p)
+                          for p in self.targets])
+        self.assertEqual(temporaries_left(self.dir), [])
+
+    def test_a_staging_failure_leaves_every_file_as_it_was(self):
+        """The third payload fails to stage, so no target is touched at all.
+        This is the case the three separate writes could not give: the first
+        file was already published before the third was serialised."""
+        with self.assertRaises(TypeError):
+            with atomic_write.StagedWriteSet() as staged:
+                staged.stage(self.targets[0], "new map\n")
+                staged.stage(self.targets[1], "new entry points\n")
+                staged.stage(self.targets[2], b"not text")
+                staged.commit()
+        self.assertEqual(self.contents(), self.previous())
+        self.assertEqual(temporaries_left(self.dir), [])
+
+    def test_abandoning_a_set_leaves_every_file_as_it_was(self):
+        with atomic_write.StagedWriteSet() as staged:
+            for path in self.targets:
+                staged.stage(path, "new %s\n" % os.path.basename(path))
+            self.assertEqual(staged.pending,
+                             [os.path.abspath(p) for p in self.targets])
+        self.assertEqual(self.contents(), self.previous())
+        self.assertEqual(temporaries_left(self.dir), [])
+
+    def test_a_rename_failure_discards_every_temporary_it_has_left(self):
+        """The set is not atomic across files and the module docstring says
+        so. What it does promise on a failed commit is that no temporary
+        survives, so the next run stages into a clean directory."""
+        with raising_os_call("replace", OSError(13, "simulated denial")):
+            with self.assertRaises(OSError):
+                with atomic_write.StagedWriteSet() as staged:
+                    for path in self.targets:
+                        staged.stage(path, "new\n")
+                    staged.commit()
+        self.assertEqual(self.contents(), self.previous())
+        self.assertEqual(temporaries_left(self.dir), [])
+
+    def test_one_target_cannot_be_staged_twice_in_a_set(self):
+        """Two payloads for one path would rename twice and publish whichever
+        was staged last, silently discarding the other."""
+        with self.assertRaises(ValueError) as caught:
+            with atomic_write.StagedWriteSet() as staged:
+                staged.stage(self.targets[0], "first\n")
+                staged.stage(self.targets[0], "second\n")
+        self.assertIn("staged twice", str(caught.exception))
+        self.assertEqual(self.contents(), self.previous())
+        self.assertEqual(temporaries_left(self.dir), [])
+
+    def test_a_committed_set_refuses_further_work(self):
+        staged = atomic_write.StagedWriteSet()
+        staged.stage(self.targets[0], "new\n")
+        staged.commit()
+        with self.assertRaises(RuntimeError):
+            staged.commit()
+        with self.assertRaises(RuntimeError):
+            staged.stage(self.targets[1], "new\n")
+        self.assertEqual(temporaries_left(self.dir), [])
+
+    def test_the_three_ioctl_artefacts_go_through_one_set(self):
+        """ioctl_inventory.write_json_set is the only multi-file write path in
+        that tool, and main() routes the map, the entry-point census and the
+        inventory through it in that order."""
+        source = inspect.getsource(ioctl_inventory.main)
+        self.assertIn("write_json_set(pending)", source)
+        self.assertEqual(source.count("write_json("), 0)
+        payloads = [(self.targets[0], {"a": 1}), (self.targets[1], {"b": 2})]
+        ioctl_inventory.write_json_set(payloads)
+        self.assertEqual(self.contents()[:2],
+                         [json.dumps({"a": 1}, indent=2) + "\n",
+                          json.dumps({"b": 2}, indent=2) + "\n"])
+
+
+class TestEveryGeneratorKeepsItsOwnSerialisation(unittest.TestCase):
+    """The seven write_json functions now share one durable write path and
+    keep their own indent, key order and trailing newline. regression_check.py
+    stale hashes what six of them emit, so a parameter lost in the refactor
+    moves a committed artefact. These assertions pin each module's parameters
+    at the values its artefact carries. patch_mine.py writes only where --out
+    is given and no committed file records its output, so its row pins the
+    round trip and nothing else."""
+
+    PAYLOAD = {"b": 1, "a": [2, {"d": 4, "c": 3}]}
+
+    # (module, argument order, indent, sort_keys, trailing newline)
+    WRITERS = [
+        ("ctrl_rank", "path_first", 1, True, False),
+        ("ctrl_surface", "payload_first", 2, False, True),
+        ("drm_inventory", "payload_first", 2, False, True),
+        ("nvkms_inventory", "payload_first", 2, False, True),
+        ("ioctl_inventory", "path_first", 2, False, True),
+        ("object_graph", "path_first", 1, True, False),
+        ("patch_mine", "path_first", 2, False, True),
+    ]
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="writejson-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def test_each_module_emits_the_bytes_its_artefact_carries(self):
+        for name, order, indent, sort_keys, newline in self.WRITERS:
+            with self.subTest(module=name):
+                module = __import__(name)
+                target = os.path.join(self.dir, "%s.json" % name)
+                if order == "path_first":
+                    module.write_json(target, self.PAYLOAD)
+                else:
+                    module.write_json(self.PAYLOAD, target)
+                expected = json.dumps(self.PAYLOAD, indent=indent,
+                                      sort_keys=sort_keys)
+                if newline:
+                    expected += "\n"
+                with open(target, "rb") as fh:
+                    self.assertEqual(fh.read(), expected.encode("utf-8"))
+
+    def test_no_generator_keeps_a_private_temporary_name(self):
+        """A surviving <path>.tmp anywhere in these five is the collision the
+        shared writer exists to remove."""
+        for name, _, _, _, _ in self.WRITERS:
+            with self.subTest(module=name):
+                source = inspect.getsource(__import__(name))
+                self.assertNotIn('+ ".tmp"', source)
+                self.assertNotIn('".tmp"', source)
+
+    def test_every_generator_routes_through_the_shared_writer(self):
+        for name, _, _, _, _ in self.WRITERS:
+            with self.subTest(module=name):
+                module = __import__(name)
+                self.assertIs(module.atomic_write, atomic_write)
+                self.assertIn("atomic_write",
+                              inspect.getsource(module.write_json))
+
+
+class TestARetiredDenominatorIsNeverSelected(unittest.TestCase):
+    """A recount is a measurement taken now, so the only label it can carry is
+    the current one. Selecting a retired label would put a round's figures on
+    record against a surface two inventory expansions old, and nothing
+    downstream could tell that reading from a round that genuinely closed on
+    the smaller surface."""
+
+    def test_a_total_matching_a_retired_denominator_is_refused(self):
+        for label, total in ps.DENOMINATOR_VERSIONS[:-1]:
+            with self.assertRaises(ValueError) as cm:
+                ps.denominator_version_for_total(total)
+            msg = str(cm.exception)
+            self.assertIn("truncated", msg)
+            self.assertIn(label, msg)
+            self.assertIn(str(total), msg)
+
+    def test_a_total_matching_no_entry_is_labelled_and_not_refused(self):
+        """The refusal is on the retired totals the table names, and a total
+        the table has never held is a denominator that moved before the table
+        did. A synthetic surface smaller than the current one is measurable
+        for the same reason."""
+        for total in (21, ps.DENOMINATOR_VERSIONS[-1][1] - 1):
+            label = ps.denominator_version_for_total(total)
+            self.assertEqual(ps.denominator_total(label), total)
+
+    def test_the_current_denominator_is_the_one_label_returned(self):
+        label, total = ps.DENOMINATOR_VERSIONS[-1]
+        self.assertEqual(ps.denominator_version_for_total(total), label)
+
+    def test_a_grown_denominator_still_records_its_total(self):
+        """The table can lag the inventories in the growing direction, which
+        is the direction the surface has ever moved. The label carries the
+        total so a reader recovers it without the table."""
+        grown = ps.DENOMINATOR_VERSIONS[-1][1] + 48
+        label = ps.denominator_version_for_total(grown)
+        self.assertEqual(ps.denominator_total(label), grown)
+
+    def test_the_two_defaults_name_opposite_ends_of_the_table(self):
+        """One name for what a round closing now is stamped with, one for what
+        an unstamped old record dates to. A single name for both is the defect
+        this pair replaces."""
+        self.assertEqual(ps.DEFAULT_DENOMINATOR_VERSION,
+                         ps.DENOMINATOR_VERSIONS[-1][0])
+        self.assertEqual(ps.LEGACY_DENOMINATOR_VERSION,
+                         ps.DENOMINATOR_VERSIONS[0][0])
+        self.assertNotEqual(ps.DEFAULT_DENOMINATOR_VERSION,
+                            ps.LEGACY_DENOMINATOR_VERSION)
+
+
+class TestAnUnstampedRoundStillReadsAsTheFirstDenominator(StateTempMixin,
+                                                          unittest.TestCase):
+    """The read path the constant split must not disturb. Absence of the field
+    dates a record to the five-family surface, and moving
+    DEFAULT_DENOMINATOR_VERSION to the newest entry must not relabel it."""
+
+    PRE_FIELD_ROUND = {"round": 1, "status": "complete",
+                       "coverage_verdict": "plateaued",
+                       "surface_verdict": "incomplete",
+                       "surface_exercised": 700, "surface_accounted": 20,
+                       "surface_closed": 715, "surface_total": 764}
+
+    def test_a_record_with_no_field_reads_as_the_first_denominator(self):
+        self.assertNotIn("denominator_version", self.PRE_FIELD_ROUND)
+        self.assertEqual(ps.round_denominator_version(self.PRE_FIELD_ROUND),
+                         "v1-764")
+
+    def test_the_fill_in_normalize_applies_is_the_first_denominator(self):
+        """normalize() overlays every round record onto DEFAULT_ROUND, so the
+        entry there is read by every record that predates the field."""
+        st = ps.normalize({"version": 1,
+                           "rounds": [dict(self.PRE_FIELD_ROUND)]})
+        self.assertEqual(st["rounds"][0]["denominator_version"], "v1-764")
+        self.assertEqual(
+            ps.denominator_total(
+                ps.round_denominator_version(st["rounds"][0])),
+            764)
+
+    def test_a_stamped_record_keeps_the_version_it_was_measured_on(self):
+        for label, total in ps.DENOMINATOR_VERSIONS:
+            r = dict(self.PRE_FIELD_ROUND, denominator_version=label,
+                     surface_total=total)
+            st = ps.normalize({"version": 1, "rounds": [r]})
+            self.assertEqual(ps.round_denominator_version(st["rounds"][0]),
+                             label)
+            self.assertEqual(
+                ps.denominator_total(st["rounds"][0]["denominator_version"]),
+                total)
+
+
+class TestATruncatedInventoryStopsTheCompletionReading(unittest.TestCase):
+    """coverage_ctl recounts the denominator on every call. A count landing
+    back on a retired total is refused where an empty family is refused, and
+    by the same error class, so the reading yields 'unknown' and never a
+    stop."""
+
+    def stub_measure(self, total):
+        """surface_cov.measure returning `total` targets across every family,
+        so the empty-family refusal passes and the denominator is the only
+        thing wrong."""
+        import surface_cov
+        targets = {}
+        for i in range(total):
+            family = surface_cov.FAMILIES[i % len(surface_cov.FAMILIES)]
+            variant = "%s_T%d" % (family, i)
+            targets[variant] = {"family": family, "variant": variant,
+                                "abi_key": "%s:%d" % (family, i)}
+        meta = {"driver_version": "610.57.04", "corpus": "seeds",
+                "corpus_programs": 0, "corpus_mtime": None}
+        self.addCleanup(setattr, surface_cov, "measure", surface_cov.measure)
+        surface_cov.measure = lambda *a, **kw: (targets, [], meta, set(),
+                                                set())
+
+    def test_a_count_on_a_retired_total_yields_an_unmeasured_verdict(self):
+        self.stub_measure(ps.DENOMINATOR_VERSIONS[0][1])
+        st = coverage_ctl.completion_status()
+        self.assertEqual(st["verdict"], "unknown")
+        self.assertIn("truncated", st["detail"])
+        self.assertIn("Regenerate the inventories", st["detail"])
+        self.assertIsNone(st["denominator_version"])
+
+    def test_the_current_total_reads_normally(self):
+        """The same stub at the current size measures, so the test above fails
+        on the denominator and not on the stub."""
+        self.stub_measure(ps.DENOMINATOR_VERSIONS[-1][1])
+        st = coverage_ctl.completion_status()
+        self.assertEqual(st["denominator_version"],
+                         ps.DENOMINATOR_VERSIONS[-1][0])
+        self.assertEqual(st["total"], ps.DENOMINATOR_VERSIONS[-1][1])
+
+
+# ANCHOR-PHASE-8-RUNTIME
+#
+# Phase 8: the four runtime defects. Three of them decide whether a crash is
+# real, and the fourth decides whether a panic's only record survives the next
+# panic. Each class opens with the input the review measured.
+
+
+class TestSignatureFramesAreTheCrashsOwn(unittest.TestCase):
+    """A signature of five frames, four of which every KASAN report carries.
+
+    crash_signature took the first triage.signature_frames frames of the
+    registered report and matched_signature returned on the first of them
+    found anywhere in the dmesg delta. For a sanitizer report frames 2 to 5
+    are the sanitizer's own machinery, so an unrelated crash in the window
+    matched on dump_stack_lvl and counted as a reproduction of this crash.
+    repro_rate is the gate on disclosure, and config/campaign.yaml calls
+    signature_frames "frames a reproduction must match to count as a hit".
+    """
+
+    # The measured report: a use-after-free in nv_uvm_free, whose first five
+    # extracted frames are one driver function and four report printers.
+    REPORT = (
+        "==================================================================\n"
+        "BUG: KASAN: use-after-free in nv_uvm_free+0x1a/0x40 [nvidia_uvm]\n"
+        "Read of size 8 at addr ffff88801234abcd by task syz-executor/4210\n"
+        "Call Trace:\n"
+        " dump_stack_lvl+0x57/0x81\n"
+        " print_report+0x14c/0x21b\n"
+        " kasan_report+0x83/0xb0\n"
+        " nv_uvm_free+0x1a/0x40 [nvidia_uvm]\n"
+        " __x64_sys_ioctl+0x40/0x80\n"
+        "==================================================================\n")
+
+    # The measured delta: a different bug, in a different function, sharing
+    # nothing with the report above except the machinery every KASAN report
+    # prints.
+    OTHER_DELTA = (
+        "[   99.1] ================================================\n"
+        "[   99.1] BUG: KASAN: slab-out-of-bounds in totally_other_fn\n"
+        "[   99.1] Call Trace:\n"
+        "[   99.1]  dump_stack_lvl+0x57/0x81\n"
+        "[   99.1]  print_report+0x14c/0x21b\n"
+        "[   99.1]  kasan_report+0x83/0xb0\n"
+        "[   99.1]  totally_other_fn+0x2c/0x60\n")
+
+    TITLE = "KASAN: use-after-free Read in nv_uvm_free"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cdir = os.path.join(self.tmp.name, "crashes", "abc123")
+        os.makedirs(self.cdir)
+        with open(os.path.join(self.cdir, "report0"), "w") as f:
+            f.write(self.REPORT)
+        self.addCleanup(setattr, repro_ctl, "REPO_ROOT", repro_ctl.REPO_ROOT)
+        repro_ctl.REPO_ROOT = self.tmp.name
+        self.entry = {"track": "K", "title": self.TITLE, "dir": self.cdir}
+
+    def sig(self):
+        return repro_ctl.crash_signature(self.entry, "crash-0001")
+
+    def test_the_measured_report_yields_four_machinery_frames_of_five(self):
+        """The input, stated as the review measured it.
+
+        Nothing is asserted about the fix here. This is the raw extraction
+        the cap used to be applied to, and the three tests below are about
+        what happens to it.
+        """
+        raw = []
+        for f in (repro_ctl.FRAME_RE.findall(self.REPORT)
+                  + repro_ctl.TRACE_RE.findall(self.REPORT)):
+            f = f.strip(".~")
+            if len(f) >= 3 and f not in raw:
+                raw.append(f)
+        self.assertEqual(raw, ["nv_uvm_free", "dump_stack_lvl",
+                               "print_report", "kasan_report",
+                               "__x64_sys_ioctl"])
+
+    def test_the_machinery_frames_are_dropped_before_the_cap(self):
+        self.assertEqual(self.sig()["funcs"], ["nv_uvm_free"])
+
+    def test_an_unrelated_kasan_report_is_not_a_reproduction(self):
+        # The defect, exactly: the delta holds a slab-out-of-bounds in a
+        # function this crash never touched, and used to score a hit on
+        # dump_stack_lvl.
+        self.assertIn("dump_stack_lvl", self.OTHER_DELTA)
+        self.assertIsNone(
+            repro_ctl.matched_signature(self.OTHER_DELTA, self.sig()))
+
+    def test_this_crash_recurring_is_still_a_reproduction(self):
+        # The fix must not buy its precision by refusing real hits.
+        m = repro_ctl.matched_signature(self.REPORT, self.sig())
+        self.assertIsNotNone(m)
+        self.assertIn("nv_uvm_free", m)
+
+    def test_every_frame_is_required_not_any_one_of_them(self):
+        sig = {"funcs": ["nv_uvm_free", "uvm_release"], "phrases": []}
+        both = "x nv_uvm_free+0x1/0x2 y uvm_release+0x3/0x4 z"
+        self.assertIsNotNone(repro_ctl.matched_signature(both, sig))
+        self.assertIsNone(repro_ctl.matched_signature(
+            "x nv_uvm_free+0x1/0x2 only", sig))
+
+    def test_the_frame_count_is_the_configured_one(self):
+        # A deep stack is cut to triage.signature_frames crash-specific
+        # frames, so the number campaign.yaml states is the number required.
+        depth = gspwn_config.triage()["signature_frames"]
+        deep = "BUG: KASAN: use-after-free in nv_f0\nCall Trace:\n" + "".join(
+            " nv_f%d+0x1/0x2 [nvidia]\n" % i for i in range(depth + 4))
+        with open(os.path.join(self.cdir, "report0"), "w") as f:
+            f.write(deep)
+        self.assertEqual(len(self.sig()["funcs"]), depth)
+
+    def test_a_frameless_crash_still_scores_on_its_title(self):
+        # An NVRM line or a trace-less panic has no stack to match, and has
+        # to stay verifiable.
+        entry = {"track": "K", "dir": os.path.join(self.tmp.name, "gone"),
+                 "title": "NVRM Xid: 31, MMU Fault on channel 0x8"}
+        sig = repro_ctl.crash_signature(entry, "crash-0002")
+        self.assertEqual(sig["funcs"], [])
+        self.assertTrue(sig["phrases"])
+        self.assertIsNotNone(repro_ctl.matched_signature(
+            "[1.0] " + sig["phrases"][0] + " again", sig))
+
+    def test_a_title_token_does_not_join_a_signature_that_has_frames(self):
+        # Title tokens are the fallback for a report with no frames. Adding
+        # them to a frameful signature makes every one of them mandatory,
+        # and a token naming something the delta never prints would void a
+        # genuine reproduction.
+        entry = dict(self.entry, title="KASAN: use-after-free in nv_uvm_free "
+                                       "in module.never_printed")
+        sig = repro_ctl.crash_signature(entry, "crash-0001")
+        self.assertEqual(sig["funcs"], ["nv_uvm_free"])
+
+
+class TestNvrmTitleAndHashShareOnePolicy(unittest.TestCase):
+    """Two Xid 13 lines differing only in their ESR registered as a flag.
+
+    The NVRM title went through canon_title, which blanks hex to 0xADDR; the
+    pseudo stack hash was sha1 over the same body with the hex intact. Two
+    Graphics Exception lines differing only in the ESR value therefore shared
+    a title and differed in hash, which register() reads as "same title,
+    different stack" and records as flagged. Xid 13 is classified noise, and
+    every flagged entry blocks the triage gate, so one long dmesg blocked
+    triage once per distinct ESR value.
+    """
+
+    # Two real Xid 13 lines. Every field but the ESR pair is identical, and
+    # the ESR pair records what the GPU happened to be executing.
+    LINE_A = ("[  114.2] NVRM: Xid (PCI:0000:00:1e): 13, pid=4210, "
+              "Graphics Exception: ESR 0x504648=0x8000000f\n")
+    LINE_B = ("[  882.7] NVRM: Xid (PCI:0000:00:1e): 13, pid=5533, "
+              "Graphics Exception: ESR 0x504650=0x8000001a\n")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "dmesg.txt")
+
+    def scan(self, text):
+        with open(self.path, "w") as f:
+            f.write(text)
+        st = ps.default_state()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            crash_parse.scan_dmesg(st, self.path)
+        return st, buf.getvalue()
+
+    def test_the_two_lines_canonicalise_to_one_title(self):
+        """The input, stated as the review measured it."""
+        bodies = [crash_parse.canon_title("NVRM " + b) for b in (
+            "Xid: 13, Graphics Exception: ESR 0x504648=0x8000000f",
+            "Xid: 13, Graphics Exception: ESR 0x504650=0x8000001a")]
+        self.assertEqual(bodies[0], bodies[1])
+        self.assertEqual(bodies[0],
+                         "Xid: 13, Graphics Exception: ESR 0xADDR=0xADDR")
+
+    def test_the_hash_follows_the_title(self):
+        self.assertEqual(
+            crash_parse.title_signature(
+                "NVRM Xid: 13, Graphics Exception: ESR 0x504648=0x8000000f"),
+            crash_parse.title_signature(
+                "NVRM Xid: 13, Graphics Exception: ESR 0x504650=0x8000001a"))
+
+    def test_two_esr_values_register_one_noise_entry_and_no_flag(self):
+        st, out = self.scan(self.LINE_A + self.LINE_B)
+        self.assertEqual(len(st["crashes"]), 1, out)
+        entry = list(st["crashes"].values())[0]
+        self.assertEqual(entry["signal"], "noise")
+        self.assertEqual(entry["status"], "unique")
+        self.assertNotIn("FLAG", out)
+
+    def test_a_long_dmesg_does_not_block_triage_once_per_esr(self):
+        # The cost the defect carried: every flagged entry blocks the triage
+        # gate, and a Track K box produces these by the hundred.
+        text = "".join(
+            "[ %d.0] NVRM: Xid (PCI:0000:00:1e): 13, pid=%d, Graphics "
+            "Exception: ESR 0x50464%d=0x8000000%d\n" % (i, 4000 + i, i % 10,
+                                                        i % 8)
+            for i in range(40))
+        st, _out = self.scan(text)
+        flagged = [c for c in st["crashes"].values()
+                   if c["status"] == "flagged"]
+        self.assertEqual(flagged, [])
+        self.assertEqual(len(st["crashes"]), 1)
+
+    def test_two_different_xids_are_still_two_crashes(self):
+        # Collapsing on the volatile field must not collapse on the Xid.
+        st, _out = self.scan(
+            self.LINE_A
+            + "[ 900.0] NVRM: Xid (PCI:0000:00:1e): 31, pid=7, MMU Fault\n")
+        self.assertEqual(len(st["crashes"]), 2)
+
+    def test_the_hash_is_taken_over_the_title_the_registry_stores(self):
+        # The property, not the hazard: the hash has to be sha1 of the exact
+        # string register() stores as the title. Passing an already
+        # canonicalised title in satisfies "one policy" by inspection and
+        # still produces a hash of 0xADDRR over a title of 0xADDR.
+        raw = "NVRM Xid: 13, Graphics Exception: ESR 0x504648=0x8000000f"
+        stored = crash_parse.canon_title(raw)
+        self.assertEqual(crash_parse.title_signature(raw),
+                         hashlib.sha1(stored.encode()).hexdigest()[:16])
+        self.assertNotEqual(crash_parse.title_signature(stored),
+                            crash_parse.title_signature(raw))
+
+    def test_the_registered_hash_matches_the_registered_title(self):
+        # The same property at the call site, which is where a later edit
+        # would introduce the second canonicalisation.
+        st, _out = self.scan(self.LINE_A)
+        entry = list(st["crashes"].values())[0]
+        self.assertEqual(
+            entry["stack_hash"],
+            hashlib.sha1(entry["title"].encode()).hexdigest()[:16])
+
+    def test_canon_title_is_applied_once_and_not_twice(self):
+        # canon_title is not idempotent: HEX_RE reads the leading 0xAD of its
+        # own 0xADDR replacement. title_signature therefore takes the raw
+        # title, exactly as register() does.
+        once = crash_parse.canon_title("Xid: 13, ESR 0x504648")
+        self.assertNotEqual(crash_parse.canon_title(once), once)
+
+
+class TestVersionGuardComparesEverySource(unittest.TestCase):
+    """`target = running or declared` never read config/machine.yaml.
+
+    On the machine a campaign runs on a driver is loaded by definition, so
+    the declared branch was printed in the source table, counted in the
+    agreement line, and compared against nothing. check is a provision-phase
+    and describe-phase gate, so a disagreeing declaration passed unnoticed
+    and every later figure was measured against the wrong driver.
+    """
+
+    setUp = TestVersionGuardSourceCount.setUp
+    set_running = TestVersionGuardSourceCount.set_running
+    write_map = TestVersionGuardSourceCount.write_map
+    write_checkout = TestVersionGuardSourceCount.write_checkout
+    write_declared = TestVersionGuardSourceCount.write_declared
+    check = TestVersionGuardSourceCount.check
+
+    def test_a_declared_branch_is_compared_while_a_driver_is_loaded(self):
+        # The measured case: artefacts and running driver at 610.57.04,
+        # driver_branch "580" in the config. This printed the 580 row, then
+        # "agreement across 4 independent sources", and exited 0.
+        self.write_map("610.57.04")
+        self.write_checkout("610.57.04")
+        self.set_running("610.57.04")
+        self.write_declared("580")
+        code, out = self.check()
+        self.assertEqual(code, surface_verify.DISAGREE)
+        self.assertIn("580", out)
+        self.assertIn("driver_branch", out)
+        self.assertNotIn("agreement", out)
+
+    def test_a_checkout_is_compared_against_a_running_driver(self):
+        # With no stamped artefact, art_values was empty and the checkout and
+        # the running driver were each compared against nothing.
+        self.write_checkout("610.57.04")
+        self.set_running("610.62")
+        code, out = self.check()
+        self.assertEqual(code, surface_verify.DISAGREE)
+        self.assertIn("610.62", out)
+
+    def test_a_declared_branch_is_compared_against_a_running_driver(self):
+        self.set_running("610.57.04")
+        self.write_declared("580")
+        code, _out = self.check()
+        self.assertEqual(code, surface_verify.DISAGREE)
+
+    def test_the_stated_comparison_count_is_the_number_made(self):
+        # Three groups are three pairs. The count is printed next to the
+        # source count because the source count alone once covered sources
+        # nothing had compared.
+        self.write_map("610.57.04")
+        self.write_checkout("610.57.04")
+        self.set_running("610.57.04")
+        code, out = self.check()
+        self.assertEqual(code, 0)
+        self.assertIn("agreement across 3 independent sources over 3 "
+                      "pairwise comparison(s)", out)
+
+    def test_four_agreeing_sources_are_six_comparisons(self):
+        self.write_map("610.57.04")
+        self.write_checkout("610.57.04")
+        self.set_running("610.57.04")
+        self.write_declared("610.57.04")
+        code, out = self.check()
+        self.assertEqual(code, 0)
+        self.assertIn("4 independent sources over 6 pairwise comparison(s)",
+                      out)
+
+    def test_each_disagreeing_pair_carries_its_own_remedy(self):
+        # The two remedies differ: a stale artefact is regenerated, a
+        # declaration that contradicts the loaded driver is reconciled.
+        self.write_map("610.57.04")
+        self.set_running("610.62")
+        self.write_declared("580")
+        code, out = self.check()
+        self.assertEqual(code, surface_verify.DISAGREE)
+        self.assertIn("Check out the driver source matching", out)
+        self.assertIn("Reconcile config/machine.yaml", out)
+
+
+class HarvestTempMixin:
+    """Point crashlog_ctl at a throwaway pstore, /var/crash and harvest dir."""
+
+    def setUp(self):
+        import crashlog_ctl
+        self.mod = crashlog_ctl
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.pstore = os.path.join(self.tmp.name, "pstore")
+        self.varcrash = os.path.join(self.tmp.name, "var-crash")
+        self.harvested = os.path.join(self.tmp.name, "harvested")
+        for d in (self.pstore, self.varcrash, self.harvested):
+            os.makedirs(d)
+        self.patch(crashlog_ctl, "CRASHES_DIR", self.harvested)
+        self.patch(crashlog_ctl.os, "geteuid", lambda: 0)
+        real_glob = crashlog_ctl.glob.glob
+        roots = {"/sys/fs/pstore/*": self.pstore, "/var/crash/*": self.varcrash}
+
+        def fake_glob(pattern, **kw):
+            root = roots.get(pattern)
+            if root is not None:
+                return real_glob(os.path.join(root, "*"))
+            return real_glob(pattern, **kw)
+
+        self.patch(crashlog_ctl.glob, "glob", fake_glob)
+
+    def patch(self, obj, name, value):
+        self.addCleanup(setattr, obj, name, getattr(obj, name))
+        setattr(obj, name, value)
+
+    def pstore_record(self, name="dmesg-ramoops-0", text="KASAN: uaf\n"):
+        with open(os.path.join(self.pstore, name), "w") as f:
+            f.write(text)
+
+    def kdump(self, name, files):
+        d = os.path.join(self.varcrash, name)
+        os.makedirs(d, exist_ok=True)
+        for fname, text in files.items():
+            with open(os.path.join(d, fname), "w") as f:
+                f.write(text)
+        return d
+
+    def harvest(self, env="baremetal"):
+        """Run cmd_harvest -> (exit code, stdout)."""
+        buf = io.StringIO()
+        code = 0
+        with redirect_stdout(buf):
+            try:
+                self.mod.cmd_harvest(env)
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 1
+        return code, buf.getvalue()
+
+
+class TestPstoreHarvestSurvivesASecondPanic(HarvestTempMixin,
+                                            unittest.TestCase):
+    """A pstore record copied without a flush, then unlinked from pstore.
+
+    Between the copy and its writeback the only durable copy of the report is
+    the record that was just deleted. This host panics by design, so a second
+    panic in that window is expected, and it takes the first panic's report
+    with it. repro_ctl._atomic_copy is the fsync idiom the path did not use.
+    """
+
+    def test_the_copy_path_uses_the_atomic_copy_idiom(self):
+        body = inspect.getsource(self.mod.cmd_harvest)
+        self.assertIn("_atomic_copy(src,", body)
+        self.assertNotIn("shutil.copy(", body)
+
+    def test_a_record_is_copied_and_then_cleared(self):
+        self.pstore_record(text="KASAN: use-after-free in nv_uvm_free\n")
+        code, out = self.harvest()
+        self.assertEqual(code, 0, out)
+        dest = out.strip().splitlines()[-1]
+        with open(os.path.join(dest, "dmesg-ramoops-0")) as f:
+            self.assertIn("nv_uvm_free", f.read())
+        self.assertEqual(os.listdir(self.pstore), [])
+
+    def test_an_uncommittable_harvest_dir_keeps_the_pstore_records(self):
+        # The observable consequence of committing before deleting: when the
+        # directory entry cannot be committed, the original is not removed.
+        # pstore is a small fixed-size backend, so a record left in place
+        # costs the next panic; a record deleted before its copy is durable
+        # costs this one.
+        def refuse(path):
+            raise OSError(28, "No space left on device")
+
+        self.patch(self.mod, "_fsync_dir", refuse)
+        self.pstore_record()
+        code, out = self.harvest()
+        self.assertEqual(os.listdir(self.pstore), ["dmesg-ramoops-0"])
+        self.assertEqual(code, self.mod.HARVEST_PARTIAL, out)
+        self.assertIn("not cleared", out)
+
+
+class TestPartialKdumpsAreDeferred(HarvestTempMixin, unittest.TestCase):
+    """A dump still being written was copied and then skipped for good.
+
+    harvested_kdumps() keys on the directory name, so copying a prefix of a
+    vmcore retired that name and the finished dump was never collected.
+    """
+
+    def test_an_in_progress_dump_is_left_for_the_next_harvest(self):
+        self.pstore_record()
+        self.kdump("202609080131", {"vmcore-incomplete": "partial bytes\n"})
+        code, out = self.harvest()
+        self.assertEqual(code, self.mod.HARVEST_PARTIAL, out)
+        self.assertIn("still being written", out)
+        self.assertNotIn("202609080131", self.mod.harvested_kdumps())
+
+    def test_the_finished_dump_is_collected_on_the_next_harvest(self):
+        self.pstore_record()
+        self.kdump("202609080131", {"vmcore-incomplete": "partial\n"})
+        self.harvest()
+        os.unlink(os.path.join(self.varcrash, "202609080131",
+                               "vmcore-incomplete"))
+        with open(os.path.join(self.varcrash, "202609080131", "vmcore"),
+                  "w") as f:
+            f.write("complete dump\n")
+        self.pstore_record(name="dmesg-ramoops-1")
+        code, out = self.harvest()
+        self.assertEqual(code, 0, out)
+        self.assertIn("202609080131", self.mod.harvested_kdumps())
+
+    def test_a_dot_incomplete_suffix_is_read_as_in_progress(self):
+        # Debian's kdump-tools names the file it is writing
+        # dump.<stamp>.incomplete; kexec-tools names it vmcore-incomplete.
+        d = self.kdump("202609080200", {"dump.202609080200.incomplete": "x"})
+        self.assertEqual(self.mod.kdump_incomplete(d),
+                         "dump.202609080200.incomplete")
+
+    def test_a_copy_that_did_not_finish_is_not_counted_as_harvested(self):
+        os.makedirs(os.path.join(self.harvested, "pstore-x",
+                                 "kdump-202609080131" + self.mod.PARTIAL_SUFFIX))
+        self.assertEqual(self.mod.harvested_kdumps(), set())
+
+
+class TestHarvestReportsUnreadSources(HarvestTempMixin, unittest.TestCase):
+    """`harvest` exited 0 having failed to read a source.
+
+    Its own docstring promises non-zero for that, and the orchestrator runs
+    it unattended after every panic with only the exit code to go on.
+    """
+
+    def test_a_failed_copy_alongside_a_good_one_exits_non_zero(self):
+        self.pstore_record(name="dmesg-ramoops-0")
+        bad = os.path.join(self.pstore, "dmesg-ramoops-1")
+        with open(bad, "w") as f:
+            f.write("x\n")
+        real_copy = self.mod._atomic_copy
+
+        def copy(src, dst):
+            if src == bad:
+                raise OSError(5, "Input/output error")
+            return real_copy(src, dst)
+
+        self.patch(self.mod, "_atomic_copy", copy)
+        code, out = self.harvest()
+        self.assertEqual(code, self.mod.HARVEST_PARTIAL, out)
+        self.assertIn("could not be read", out)
+
+    def test_the_harvest_path_is_still_the_last_line(self):
+        # Callers read the last line as the artifact path, and a partial
+        # harvest still produced a directory worth reading.
+        self.pstore_record(name="dmesg-ramoops-0")
+        self.kdump("202609080131", {"vmcore-incomplete": "partial\n"})
+        _code, out = self.harvest()
+        self.assertTrue(os.path.isdir(out.strip().splitlines()[-1]))
+
+    def test_nothing_found_and_nothing_unread_is_still_zero(self):
+        # "No crash happened" must stay distinguishable from "the harvest did
+        # not work", in both directions.
+        code, out = self.harvest()
+        self.assertEqual(code, 0)
+        self.assertIn("no new crash logs found", out)
+
+
+class TestCrashlogTimeoutsAndDiskWarning(unittest.TestCase):
+    """Three unbounded or silenced paths on the unattended post-panic run."""
+
+    def setUp(self):
+        import crashlog_ctl
+        self.mod = crashlog_ctl
+
+    def patch(self, obj, name, value):
+        self.addCleanup(setattr, obj, name, getattr(obj, name))
+        setattr(obj, name, value)
+
+    def test_every_shelled_command_carries_a_timeout(self):
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(kw)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        self.patch(self.mod.subprocess, "run", fake_run)
+        self.mod.sh(["true"])
+        self.assertEqual(seen["timeout"], self.mod.CMD_TIMEOUT_SEC)
+        self.mod.sh(["true"], timeout=self.mod.CONSOLE_TIMEOUT_SEC)
+        self.assertEqual(seen["timeout"], self.mod.CONSOLE_TIMEOUT_SEC)
+
+    def test_the_console_fetch_is_bounded_under_the_callers_budget(self):
+        # orchestrator_ctl.harvest gives the whole harvest 300 seconds. A
+        # console fetch that outlives that is killed by the caller with the
+        # harvest dir half written.
+        self.assertLess(self.mod.CONSOLE_TIMEOUT_SEC, 300)
+
+    def test_a_bad_timeout_override_names_the_variable(self):
+        self.patch(self.mod.os, "environ", dict(os.environ,
+                                                GSPWN_CONSOLE_TIMEOUT_SEC="soon"))
+        with self.assertRaises(SystemExit) as e:
+            self.mod._env_int("GSPWN_CONSOLE_TIMEOUT_SEC", 120)
+        self.assertIn("GSPWN_CONSOLE_TIMEOUT_SEC", str(e.exception))
+        self.patch(self.mod.os, "environ", dict(os.environ,
+                                                GSPWN_CONSOLE_TIMEOUT_SEC="0"))
+        with self.assertRaises(SystemExit):
+            self.mod._env_int("GSPWN_CONSOLE_TIMEOUT_SEC", 120)
+
+    def test_an_override_is_read(self):
+        self.patch(self.mod.os, "environ",
+                   dict(os.environ, GSPWN_CRASHLOG_CMD_TIMEOUT_SEC="45"))
+        self.assertEqual(
+            self.mod._env_int("GSPWN_CRASHLOG_CMD_TIMEOUT_SEC", 600), 45)
+
+    def test_an_unreadable_disk_figure_is_reported_not_swallowed(self):
+        # `except Exception: pass` hid the only thing report_disk is for. A
+        # full disk stops the fuzzer, the sampler and every state write at
+        # once, and the warning that says so never printed.
+        self.addCleanup(sys.modules.__setitem__, "coverage_ctl",
+                        sys.modules.get("coverage_ctl"))
+        sys.modules["coverage_ctl"] = None
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.mod.report_disk()
+        self.assertIn("free space is not being checked", buf.getvalue())
+
+
+class TestCorpusUnpackAndLedger(unittest.TestCase):
+    """syz-db unpack ran unbounded, and the ledger shared one temp name."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = os.path.join(self.tmp.name, "corpus.db")
+        with open(self.db, "w") as f:
+            f.write("db\n")
+        fake_bin = os.path.join(self.tmp.name, "syz-db")
+        with open(fake_bin, "w") as f:
+            f.write("#!/bin/sh\n")
+        self.patch(corpus_ctl, "SYZ_DB", fake_bin)
+
+    def patch(self, obj, name, value):
+        self.addCleanup(setattr, obj, name, getattr(obj, name))
+        setattr(obj, name, value)
+
+    def test_unpack_is_bounded_by_the_configured_timeout(self):
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(kw)
+            os.makedirs(cmd[3], exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        self.patch(corpus_ctl.subprocess, "run", fake_run)
+        corpus_ctl.unpack_corpus(self.db, os.path.join(self.tmp.name, "out"))
+        self.assertEqual(seen["timeout"], surface_cov.unpack_timeout_sec())
+
+    def test_one_setting_covers_both_callers_of_syz_db(self):
+        # surface_cov.unpack_run_corpus already bounded the same binary at
+        # coverage.unpack_timeout_sec. Two settings for one operation drift.
+        self.assertEqual(surface_cov.unpack_timeout_sec(),
+                         gspwn_config.DEFAULTS["coverage"]
+                         ["unpack_timeout_sec"])
+
+    def test_a_hanging_unpack_names_the_setting_that_bounds_it(self):
+        def hang(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+
+        self.patch(corpus_ctl.subprocess, "run", hang)
+        with self.assertRaises(SystemExit) as e:
+            corpus_ctl.unpack_corpus(self.db,
+                                     os.path.join(self.tmp.name, "out"))
+        self.assertIn("unpack_timeout_sec", str(e.exception))
+
+    def test_the_ledger_leaves_no_fixed_temp_file_behind(self):
+        seeds = os.path.join(self.tmp.name, "seeds")
+        os.makedirs(seeds)
+        corpus_ctl.save_ledger(seeds, {"hashes": {"a": {"file": "a.syz"}}})
+        self.assertEqual(os.listdir(seeds), [corpus_ctl.LEDGER])
+        self.assertNotIn(corpus_ctl.LEDGER + ".tmp", os.listdir(seeds))
+
+    def test_the_ledger_is_written_with_lf_endings(self):
+        # A bank promoted under WSL and one promoted on the host must not
+        # differ in every byte of the file.
+        seeds = os.path.join(self.tmp.name, "seeds-lf")
+        os.makedirs(seeds)
+        corpus_ctl.save_ledger(seeds, {"hashes": {"a": {"file": "a.syz"}}})
+        with open(os.path.join(seeds, corpus_ctl.LEDGER), "rb") as f:
+            raw = f.read()
+        self.assertNotIn(b"\r", raw)
+        self.assertTrue(raw.endswith(b"\n"))
+        self.assertEqual(corpus_ctl.load_ledger(seeds)["hashes"]["a"]["file"],
+                         "a.syz")
+
+
+class TestATimedOutRunLeavesNothingBehind(unittest.TestCase):
+    """A timeout killed the direct child and left its children running.
+
+    A --cmd template that spawns anything orphans those processes, up to 25
+    of them under --runs 10 with poc.void_retry_factor 2, and what they print
+    to the kernel log falls inside later runs' delta windows. That is a
+    reproduction manufactured from the same campaign and attributed to the
+    wrong run.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.marker = os.path.join(self.tmp.name, "orphan-output")
+
+    def spawner(self):
+        """A template whose child outlives the process the timeout kills."""
+        return ("( while : ; do echo tick >> %s ; sleep 0.05 ; done ) & "
+                "sleep 30" % repro_ctl.shlex.quote(self.marker))
+
+    def size(self):
+        try:
+            return os.path.getsize(self.marker)
+        except OSError:
+            return 0
+
+    def test_the_children_of_a_timed_out_run_are_killed_too(self):
+        _rc, _out, timed_out = repro_ctl._run_isolated(
+            self.spawner(), timeout=1, shell=True)
+        self.assertTrue(timed_out)
+        settled = self.size()
+        time.sleep(0.4)
+        # Eight ticks would have landed in that window had the loop survived.
+        self.assertEqual(self.size(), settled)
+
+    def test_a_run_that_finishes_returns_its_code_and_output(self):
+        # The isolation must not cost the verdict its evidence.
+        rc, out, timed_out = repro_ctl._run_isolated(
+            "echo 'ERROR: AddressSanitizer: heap-use-after-free' ; exit 7",
+            timeout=30, shell=True, capture=True)
+        self.assertEqual(rc, 7)
+        self.assertFalse(timed_out)
+        self.assertIn("AddressSanitizer", out)
+
+    def test_output_printed_before_a_timeout_is_kept(self):
+        # Track U reads its verdict out of this text, and a harness that
+        # prints its sanitizer report and then hangs still reproduced.
+        _rc, out, timed_out = repro_ctl._run_isolated(
+            "echo 'SUMMARY: AddressSanitizer: bad' ; sleep 30",
+            timeout=1, shell=True, capture=True)
+        self.assertTrue(timed_out)
+        self.assertIn("SUMMARY: AddressSanitizer", out)
+
+
+class TestEachRunReadsItsOwnBaseline(StateTempMixin, unittest.TestCase):
+    """Run 1's delta held everything printed since the precondition probe.
+
+    _prepare_k took the baseline, and _verify_session then opened a state
+    transaction and called harvested_logs(), which walks up to 32 MB of
+    harvested crash logs. Every kernel message printed during that walk
+    landed inside run 1's window.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, repro_ctl, "REPO_ROOT", repro_ctl.REPO_ROOT)
+        repro_ctl.REPO_ROOT = self.tmp.name
+        for name in ("dmesg_text", "boot_id", "harvested_logs"):
+            self.addCleanup(setattr, repro_ctl, name,
+                            getattr(repro_ctl, name))
+        self.log = "quiet boot\n"
+        self.leak_pending = False
+        repro_ctl.dmesg_text = self._fake_dmesg
+        repro_ctl.boot_id = lambda: "boot-current"
+        repro_ctl.harvested_logs = self._walk_the_harvest
+        self.cid = "crash-0001"
+        pocs = os.path.join(self.tmp.name, "artifacts", "pocs", self.cid)
+        os.makedirs(pocs)
+        exe = os.path.join(pocs, "repro")
+        with open(exe, "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")   # prints nothing to the kernel
+        os.chmod(exe, 0o755)
+        st = ps.default_state()
+        ps.register_crash(st, {"track": "K", "title": "KASAN: UAF in nv_zzz",
+                               "stack_hash": "h", "status": "unique",
+                               "dir": "/tmp"})
+        ps.save(st)
+
+    def _fake_dmesg(self):
+        if self.leak_pending:
+            # Text this crash's own signature, printed after the probe and
+            # before the first run started. An orphan of an earlier session
+            # is one way it gets there.
+            self.log += "KASAN: use-after-free in nv_zzz\n"
+            self.leak_pending = False
+        return self.log
+
+    def _walk_the_harvest(self):
+        """Stand in for the 32 MB walk between the probe and run 1."""
+        self.leak_pending = True
+        return None
+
+    def test_output_printed_before_the_run_is_outside_its_delta(self):
+        with redirect_stdout(io.StringIO()) as out:
+            rc = repro_ctl.cmd_verify(self.cid, 1, False)
+        c = ps.load()["crashes"][self.cid]
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertEqual(c["repro_progress"]["hits"], 0)
+        self.assertEqual(c["repro_rate"], 0.0)
+        self.assertEqual(c["status"], "unreproducible")
+
+    def test_prepare_k_hands_back_one_callable(self):
+        # The baseline is no longer carried out of the preconditions, so
+        # there is nothing left to reuse stale.
+        c = ps.load()["crashes"][self.cid]
+        with redirect_stdout(io.StringIO()):
+            run_one = repro_ctl._prepare_k(self.cid, c)
+        self.assertTrue(callable(run_one))
+
+
+class TestTrackURefusesAReportWithNoInput(StateTempMixin, unittest.TestCase):
+    """A crash registered on its .sanlog was replayed as if it were an input.
+
+    crash_parse.track_u_pairs registers a report whose input has been deleted
+    on its own path, because losing the finding is worse than registering it
+    unreplayable. extract copied that report in as `input`, the harness
+    replayed report text, every run scored clean, and the crash was recorded
+    unreproducible. A real finding written off reads exactly like a bug that
+    does not reproduce.
+    """
+
+    REPORT = ("==12345==ERROR: AddressSanitizer: heap-use-after-free on "
+              "address 0x602000000018\n"
+              "SUMMARY: AddressSanitizer: heap-use-after-free nv_u.c:41 "
+              "in nv_replay\n")
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, repro_ctl, "REPO_ROOT", repro_ctl.REPO_ROOT)
+        repro_ctl.REPO_ROOT = self.tmp.name
+        udir = os.path.join(self.tmp.name, "u-crashes")
+        os.makedirs(udir)
+        self.report = os.path.join(udir, "crash-deadbeef"
+                                   + crash_parse.REPORT_SUFFIX)
+        with open(self.report, "w") as f:
+            f.write(self.REPORT)
+        self.cid = "crash-0001"
+        st = ps.default_state()
+        ps.register_crash(st, {
+            "track": "U", "title": "heap-use-after-free in nv_replay",
+            "stack_hash": "h", "status": "unique", "dir": self.report})
+        ps.save(st)
+
+    def test_the_pairing_registers_the_report_on_its_own_path(self):
+        """The input, stated as crash_parse produces it."""
+        pairs = crash_parse.track_u_pairs([os.path.basename(self.report)])
+        self.assertEqual(pairs, [(os.path.basename(self.report),
+                                  os.path.basename(self.report))])
+
+    def test_extract_refuses_and_writes_no_input(self):
+        with self.assertRaises(SystemExit) as e:
+            with redirect_stdout(io.StringIO()):
+                repro_ctl.cmd_extract(self.cid)
+        msg = str(e.exception)
+        self.assertIn("sanitizer report", msg)
+        self.assertIn("nothing to replay", msg)
+        self.assertFalse(os.path.exists(os.path.join(
+            self.tmp.name, "artifacts", "pocs", self.cid, "input")))
+
+    def test_verify_refuses_and_records_no_rate(self):
+        # "Could not be attempted" and "does not reproduce" are different
+        # verdicts, and only one of them belongs in repro_rate.
+        dest = os.path.join(self.tmp.name, "artifacts", "pocs", self.cid)
+        os.makedirs(dest)
+        shutil.copy(self.report, os.path.join(dest, "input"))
+        with self.assertRaises(SystemExit) as e:
+            with redirect_stdout(io.StringIO()):
+                repro_ctl.cmd_verify(self.cid, 1, False, cmd="/bin/true "
+                                                             "{input}")
+        self.assertIn("nothing to replay", str(e.exception))
+        c = ps.load()["crashes"][self.cid]
+        self.assertIsNone(c["repro_rate"])
+        self.assertEqual(c["status"], "unique")
+
+    def test_a_hand_written_input_is_still_replayed(self):
+        # The refusal keys on the file being that report, so an operator who
+        # restored the real input is not blocked by it.
+        dest = os.path.join(self.tmp.name, "artifacts", "pocs", self.cid)
+        os.makedirs(dest)
+        with open(os.path.join(dest, "input"), "wb") as f:
+            f.write(b"\x00the real bytes\x00")
+        c = ps.load()["crashes"][self.cid]
+        with redirect_stdout(io.StringIO()):
+            run_one = repro_ctl._prepare_u(self.cid, c, "/bin/true {input}",
+                                           None)
+        self.assertTrue(callable(run_one))
+
+    def test_an_ordinary_track_u_input_still_extracts(self):
+        inp = os.path.join(self.tmp.name, "u-crashes", "crash-cafebabe")
+        with open(inp, "wb") as f:
+            f.write(b"\xde\xad\xbe\xef")
+        with ps.transaction() as st:
+            st["crashes"][self.cid]["dir"] = inp
+        with redirect_stdout(io.StringIO()):
+            repro_ctl.cmd_extract(self.cid)
+        with open(os.path.join(self.tmp.name, "artifacts", "pocs", self.cid,
+                               "input"), "rb") as f:
+            self.assertEqual(f.read(), b"\xde\xad\xbe\xef")
+
+
+class TestTheTimeoutBreakdownAgreesWithTheRate(StateTempMixin,
+                                               unittest.TestCase):
+    """The breakdown printed a counted hit as void.
+
+    The void figure was derived as timeouts - timeout_hits, and
+    timeout_hits counts only the hits scored on the hang-class rule. A run
+    that timed out and also carried this crash's signature in its delta is a
+    hit on the dmesg-signature class, so it appeared in neither term and was
+    printed as void while counting toward the rate above it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, repro_ctl, "REPO_ROOT", repro_ctl.REPO_ROOT)
+        repro_ctl.REPO_ROOT = self.tmp.name
+        for name in ("dmesg_text", "boot_id", "harvested_logs", "_poc_cfg"):
+            self.addCleanup(setattr, repro_ctl, name,
+                            getattr(repro_ctl, name))
+        cfg = dict(gspwn_config.DEFAULTS["poc"], repro_timeout_sec=1)
+        repro_ctl._poc_cfg = lambda: cfg
+        repro_ctl.boot_id = lambda: "boot-current"
+        repro_ctl.harvested_logs = lambda: None
+        self.log = "quiet boot\n"
+        self.ran = os.path.join(self.tmp.name, "ran")
+        repro_ctl.dmesg_text = self._fake_dmesg
+        self.cid = "crash-0001"
+        pocs = os.path.join(self.tmp.name, "artifacts", "pocs", self.cid)
+        os.makedirs(pocs)
+        exe = os.path.join(pocs, "repro")
+        # Hangs past the timeout and prints this crash's signature first.
+        with open(exe, "w") as f:
+            f.write("#!/bin/sh\ntouch %s\nsleep 30\n" % self.ran)
+        os.chmod(exe, 0o755)
+        st = ps.default_state()
+        ps.register_crash(st, {"track": "K", "title": "KASAN: UAF in nv_zzz",
+                               "stack_hash": "h", "status": "unique",
+                               "dir": "/tmp"})
+        ps.save(st)
+
+    def _fake_dmesg(self):
+        if os.path.exists(self.ran):
+            os.unlink(self.ran)
+            self.log += "KASAN: use-after-free in nv_zzz\n"
+        return self.log
+
+    def test_a_timeout_that_matched_the_signature_is_not_printed_as_void(self):
+        with redirect_stdout(io.StringIO()) as buf:
+            rc = repro_ctl.cmd_verify(self.cid, 1, False)
+        out = buf.getvalue()
+        c = ps.load()["crashes"][self.cid]
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(c["repro_rate"], 1.0, out)
+        self.assertIn("1 timeout(s): 0 hang-class hit(s), 1 also matched "
+                      "the signature, 0 void", out)
+
+    def test_the_three_groups_sum_to_the_timeout_count(self):
+        with redirect_stdout(io.StringIO()):
+            repro_ctl.cmd_verify(self.cid, 1, False)
+        prog = ps.load()["crashes"][self.cid]["repro_progress"]
+        sig_hits = (prog["timeouts"] - prog["timeout_hits"]
+                    - prog["timeout_voids"])
+        self.assertEqual(prog["timeouts"],
+                         prog["timeout_hits"] + sig_hits
+                         + prog["timeout_voids"])
+
+
+class TestVersionGuardSurvivesAnUnreadableSource(unittest.TestCase):
+    """Two IndexErrors and an unguarded json.load out of a phase gate."""
+
+    setUp = TestVersionGuardSourceCount.setUp
+    set_running = TestVersionGuardSourceCount.set_running
+    write_map = TestVersionGuardSourceCount.write_map
+    write_checkout = TestVersionGuardSourceCount.write_checkout
+    check = TestVersionGuardSourceCount.check
+
+    # The inherited setUp replaces running_version with a stub, which is what
+    # keeps the other classes off this machine's driver. The two tests below
+    # are about that function's own body, so they keep the real one, captured
+    # at import before any stub is installed.
+    REAL_RUNNING_VERSION = staticmethod(surface_verify.running_version)
+
+    def close_the_proc_route(self):
+        """Make /proc/driver/nvidia/version absent, so nvidia-smi is reached.
+
+        On a host with the driver loaded running_version answers from the
+        proc file and never runs the query under test.
+        """
+        real_isfile = surface_verify.os.path.isfile
+        self.addCleanup(setattr, surface_verify.os.path, "isfile", real_isfile)
+        surface_verify.os.path.isfile = (
+            lambda p: False if p.startswith("/proc/driver/nvidia")
+            else real_isfile(p))
+
+    def stub_subprocess(self, fake_run):
+        original = surface_verify.subprocess.run
+        self.addCleanup(setattr, surface_verify.subprocess, "run", original)
+        surface_verify.subprocess.run = fake_run
+
+    def quiet(self):
+        """Suppress the WARNING an unversioned artefact logs.
+
+        The warning is part of the contract and is asserted through the
+        return value; printed to stderr during a passing run it reads as a
+        failure.
+        """
+        logging.disable(logging.WARNING)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    def test_an_empty_stamp_is_unversioned_and_not_an_indexerror(self):
+        # `stamp` writes "<version> (commit <sha>)" and the version is read
+        # back off the front. A blank value has no first word.
+        self.quiet()
+        self.write_map("")
+        self.write_checkout("610.57.04")
+        self.assertEqual(surface_verify.artefact_versions(), {})
+        code, out = self.check("--allow-single-source")
+        self.assertEqual(code, 0, out)
+
+    def test_a_whitespace_stamp_is_unversioned(self):
+        self.quiet()
+        self.write_map("   ")
+        self.assertEqual(surface_verify.artefact_versions(), {})
+
+    def test_an_unparseable_map_is_reported_and_not_raised(self):
+        # A map truncated by a panic mid-write still has to leave the guard
+        # able to say what it could and could not read.
+        with open(surface_verify.MAP_PATH, "w") as f:
+            f.write("{\"comment_driver_version\": \"610.57")
+        self.quiet()
+        self.assertEqual(surface_verify.artefact_versions(), {})
+
+    def test_nvidia_smi_listing_no_gpu_reports_no_version(self):
+        # nvidia-smi exits 0 and prints nothing where it sees no GPU, so
+        # there is not always a first line to take.
+        def fake_run(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 0, "\n", "")
+
+        self.stub_subprocess(fake_run)
+        self.close_the_proc_route()
+        self.assertIsNone(self.REAL_RUNNING_VERSION())
+
+    def test_both_queries_carry_a_bounded_timeout(self):
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append(kw.get("timeout"))
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+
+        self.stub_subprocess(fake_run)
+        self.close_the_proc_route()
+        self.REAL_RUNNING_VERSION()
+        os.makedirs(os.path.join(self.src, ".git"), exist_ok=True)
+        surface_verify.checkout_commit(self.src)
+        self.assertEqual(seen, [surface_verify.QUERY_TIMEOUT_SEC] * 2)
+
+    def test_a_bad_timeout_override_names_the_variable(self):
+        original = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(),
+                                 os.environ.update(original)))
+        os.environ[surface_verify.QUERY_TIMEOUT_ENV] = "half a minute"
+        with self.assertRaises(SystemExit) as e:
+            surface_verify._query_timeout_sec()
+        self.assertIn(surface_verify.QUERY_TIMEOUT_ENV, str(e.exception))
+
+
+class TestPromoteCountsWhatItDidNotReach(unittest.TestCase):
+    """--limit reported entries it had considered as unconsidered.
+
+    len(names) - limit - skipped counted a directory entry and an empty
+    program among the entries the loop never reached, so the note overstated
+    what promotion left behind and understated how truncated the sample is.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.seeds = os.path.join(self.tmp.name, "seeds")
+        self.db = os.path.join(self.tmp.name, "corpus.db")
+        with open(self.db, "w") as f:
+            f.write("db\n")
+        self.patch(corpus_ctl, "corpus_db", lambda run_id: self.db)
+        self.patch(corpus_ctl.gspwn_config, "load",
+                   lambda: {"loop": {"promote_seeds": True}})
+        self.patch(corpus_ctl, "unpack_corpus", self.fake_unpack)
+
+    def patch(self, obj, name, value):
+        self.addCleanup(setattr, obj, name, getattr(obj, name))
+        setattr(obj, name, value)
+
+    def fake_unpack(self, db, dest):
+        """Six entries: two programs, one directory, one empty file, two more."""
+        names = []
+        for i, text in enumerate(["prog one\n", "prog two\n", None, "",
+                                  "prog five\n", "prog six\n"]):
+            name = "p%d" % i
+            names.append(name)
+            path = os.path.join(dest, name)
+            if text is None:
+                os.makedirs(path)
+                continue
+            with open(path, "w") as f:
+                f.write(text)
+        return names
+
+    def promote(self, limit):
+        a = types.SimpleNamespace(run_id="run-1", seeds=self.seeds,
+                                  limit=limit, dry_run=False)
+        with redirect_stdout(io.StringIO()) as buf:
+            corpus_ctl.cmd_promote(a)
+        return buf.getvalue()
+
+    def test_the_note_counts_only_the_entries_the_loop_never_reached(self):
+        out = self.promote(2)
+        # Entries p0 and p1 are promoted, and the loop stops before p2, so
+        # four were never reached. The old arithmetic said 6 - 2 - 0 = 4 here
+        # by coincidence and diverged as soon as an entry was rejected.
+        self.assertIn("4 corpus entries were not considered", out)
+
+    def test_a_rejected_entry_is_not_counted_as_unconsidered(self):
+        # Promoting p0, p1, then reaching and rejecting the directory and the
+        # empty file, then promoting p4: one entry, p5, was never reached.
+        out = self.promote(3)
+        self.assertIn("1 corpus entries were not considered", out)
+
+    def test_no_limit_prints_no_note(self):
+        out = self.promote(0)
+        self.assertNotIn("not considered", out)
+
+
+class TestExecBoundsAnAttempt(unittest.TestCase):
+    """--timeout defaulted to None, so the retry runner waited without bound.
+
+    exec.py wraps the kernel build. A build that wedges on a stuck device
+    probe held the loop with no log line and no exit, and the phase it
+    belonged to reported nothing at all.
+    """
+
+    def setUp(self):
+        import importlib
+        self.mod = importlib.import_module("exec")
+
+    def test_the_default_is_a_backstop_over_a_kernel_build(self):
+        # An hour is a working limit for a build on a small instance and
+        # would fire on a legitimate one. Four hours cannot.
+        self.assertGreaterEqual(self.mod.default_timeout_sec(), 3600)
+
+    def test_an_override_is_read_and_validated(self):
+        original = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(),
+                                 os.environ.update(original)))
+        os.environ[self.mod.TIMEOUT_ENV] = "900"
+        self.assertEqual(self.mod.default_timeout_sec(), 900)
+        os.environ[self.mod.TIMEOUT_ENV] = "soon"
+        with self.assertRaises(SystemExit) as e:
+            self.mod.default_timeout_sec()
+        self.assertIn(self.mod.TIMEOUT_ENV, str(e.exception))
+
+    def test_zero_is_the_deliberate_unbounded_run(self):
+        original = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(),
+                                 os.environ.update(original)))
+        os.environ[self.mod.TIMEOUT_ENV] = "0"
+        self.assertEqual(self.mod.default_timeout_sec(), 0)
+
+
+class TestReproToolCallsAreBounded(unittest.TestCase):
+    """syz-prog2c, dmesg, gcc and systemctl ran with no bound.
+
+    Each sits on a path that ends in a recorded verdict, and a call with no
+    bound does not fail, it stops.
+    """
+
+    def test_every_bound_is_a_named_positive_constant(self):
+        for name in ("PROG2C_TIMEOUT_SEC", "DMESG_TIMEOUT_SEC",
+                     "GCC_TIMEOUT_SEC", "SYSTEMCTL_TIMEOUT_SEC",
+                     "GROUP_TERM_GRACE_SEC"):
+            value = getattr(repro_ctl, name)
+            self.assertIsInstance(value, int, name)
+            self.assertGreater(value, 0, name)
+
+    def test_a_dmesg_that_never_returns_reads_as_unreadable(self):
+        # probe_dmesg and run_one both already treat OSError as an
+        # unreadable ring buffer and refuse to score against it.
+        def hang(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+
+        original = repro_ctl.subprocess.run
+        self.addCleanup(setattr, repro_ctl.subprocess, "run", original)
+        repro_ctl.subprocess.run = hang
+        with self.assertRaises(OSError):
+            repro_ctl.dmesg_text()
+
+    def test_a_bad_override_names_the_variable(self):
+        original = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(),
+                                 os.environ.update(original)))
+        os.environ["GSPWN_GCC_TIMEOUT_SEC"] = "five minutes"
+        with self.assertRaises(SystemExit) as e:
+            repro_ctl._env_int("GSPWN_GCC_TIMEOUT_SEC", 300)
+        self.assertIn("GSPWN_GCC_TIMEOUT_SEC", str(e.exception))
 
 
 def pipeline_ctl_cmd_round_end(args):

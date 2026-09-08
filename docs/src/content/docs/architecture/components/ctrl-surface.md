@@ -11,7 +11,16 @@ class, and the parameter struct each one reads. The driver generates that
 table into `src/nvidia/generated/g_*_nvoc.c`, and this module reads it.
 
 The module runs entirely off the source tree. It reaches no device, opens no
-socket, and needs no GPU.
+socket, and needs no GPU. There are no subcommands.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--src` | `artifacts/src/open-gpu-kernel-modules` | The driver checkout to read |
+| `--out` | `surface/rm-control-inventory.json` | The inventory to write |
+| `-v` | off | Log every table found |
+
+Exit code 0 on success. Every failure, including `--src` naming something other
+than a directory, exits 2 with a message on standard error.
 
 ## Responsibility
 
@@ -24,6 +33,7 @@ file it is given.
 | Flag names come from the driver branch being read | `RMCTRL_FLAGS_*` are parsed from `control.h` at run time, and access rights from `rs_access.h` |
 | A flag definition with a trailing comment is still read | The definition pattern allows an optional `//` comment before end of line |
 | A composite flag name never becomes a bit | Only single hex literals are accepted, and a value with more than one bit set exits with a message |
+| Two names for one bit are refused | `load_flag_defs` exits naming both |
 | A branch that renames a privilege flag fails loudly | Absence of any of the seven flags the classifier reads exits with a message naming them |
 | An entry's fields belong to one entry | The `#if` gate constant must equal the entry's parsed `flags`, and `pClassInfo` must name the enclosing table's class |
 | A method with no parameter struct is distinguished from a parse failure | `paramSize` matches either `sizeof(NAME)` or a literal `0`, and anything else rejects the entry |
@@ -31,29 +41,86 @@ file it is given.
 | A table format change fails loudly | Zero parsed methods exits with a message naming the directory |
 | A flag bit the header does not name is preserved | Undecoded bits are recorded per record as `unknown_flag_bits` |
 
+## Privilege classification
+
+`classify_reachability` reads three flags in the order `control.c` tests them
+and assigns one of four values to `reachability`.
+
+| Test order | Flag | Value | Meaning for an ioctl caller |
+|---|---|---|---|
+| 1 | `INTERNAL` | `internal` | `serverControl_ValidateCookie` returns `NV_ERR_NOT_SUPPORTED` |
+| 2 | `PRIVILEGED` | `privileged` | Needs `RS_PRIV_LEVEL_USER_ROOT` |
+| 3 | `NON_PRIVILEGED` | `non_privileged` | Reachable from an open descriptor |
+| default | none of the three | `kernel_only` | Needs `RS_PRIV_LEVEL_KERNEL` |
+
+Two further gates fall outside the four classes because they resolve at run
+time, and are recorded as their own booleans: `test_only` from
+`RM_TEST_ONLY_CODE`, which depends on
+`PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE`, and
+`privileged_when_rs_access_disabled` from `PRIVILEGED_IF_RS_ACCESS_DISABLED`,
+which depends on `g_resServ.bRsAccessEnabled`.
+
 ## Output
 
 One invocation walks the generated directory and writes the inventory.
-
 Standard output carries the totals: methods, owning classes, driver version,
 the count in each privilege class, the test-only count, the count with no
-kernel-side handler, and the rejected count.
+kernel-side handler, and the rejected count. Log lines go to standard error,
+so the totals can be piped without the log.
 
-The written JSON carries `schema`, `source`, `flag_definitions`,
-`access_right_definitions`, `scan`, `summary` and `methods`. One `methods`
-record holds the command number in hex and as an integer, the SDK interface
-prefix, the owning class, the handler and export symbol, the parameter struct,
-the raw flags with their decoded names, the access rights, the privilege
-class, the test-only and routing booleans, and the source file and line.
+The written JSON carries seven top-level keys.
+
+| Key | Contents |
+|---|---|
+| `schema` | `gspwn.rm-control-inventory/1` |
+| `source` | The checkout path, the driver version, and the three source paths read |
+| `flag_definitions` | Bit to name, from `control.h` |
+| `access_right_definitions` | Bit to name, from `rs_access.h` |
+| `scan` | `files_scanned`, `files_with_table`, `tables`, `rejected_count`, and the rejection records |
+| `summary` | The counts below |
+| `methods` | One record per exported method, sorted by command number then owning class |
+
+One `methods` record holds 22 fields: the command number in hex and as an
+integer, the class id and the SDK interface prefix, the owning class, the
+handler and export symbol, the parameter struct and whether its size is zero,
+the raw flags with their decoded names and any undecoded bits, the access
+rights in the same three forms, the privilege class, the test-only,
+run-time-privilege, routing and compiled-out booleans, and the source file and
+line.
+
+## Measured on 610.57.04
+
+| Measure | Value |
+|---|---|
+| Generated `.c` files scanned | 268, of which 54 carried a table |
+| Export tables | 56 |
+| Exported methods | 1372, none rejected |
+| Distinct command numbers | 1362, so 5 numbers appear on more than one owning class |
+| `non_privileged` | 767 |
+| `privileged` | 250 |
+| `internal` | 241 |
+| `kernel_only` | 114 |
+| `routed_to_physical` | 753 |
+| `handler_compiled_out` | 679 |
+| `test_only` | 17 |
+| `param_size_zero` | 57 |
+| `privileged_when_rs_access_disabled` | 3 |
+| Carrying an access right | 5 |
+
+The four privilege classes sum to 1372.
 
 ## Callers
 
-| Direction | Modules |
-|---|---|
-| Imports this module | Nothing at run time. The `describe` phase reads the JSON it writes |
-| This module imports | Nothing in `tools/`. Standard library only |
+Nothing imports this module at run time, and the `describe` phase reads the
+JSON it writes. `ctrl_rank.py`, `cve_patch_map.py` and `surface_cov.py` all
+read `rm-control-inventory.json`. It imports nothing from `tools/` and uses
+the standard library only.
 
 ## Failure modes
+
+Sixteen conditions have a defined behaviour. A missing input file or an
+unparseable table exits 2 with a message. A single bad entry is rejected,
+counted and logged, and the scan continues.
 
 | Condition | Behaviour |
 |---|---|
@@ -62,6 +129,7 @@ class, the test-only and routing booleans, and the source file and line.
 | `control.h` or `rs_access.h` absent | Message naming the file and what it was being read for |
 | A `RMCTRL_FLAGS_*` value has more than one bit set | Message naming the flag, the file and the value |
 | `control.h` names none of the seven privilege flags the classifier reads | Message listing the missing names and stating the classification would be wrong |
+| `rs_access.h` defines no `RS_ACCESS_*` right | Message naming the file and the definition it expected |
 | The generated directory holds no `.c` files | Message stating the tree looks unpopulated |
 | Zero exported methods parsed | Message naming the directory and the expected table name |
 | The output directory cannot be created, or the file cannot be written | Message naming the path and the operating-system error |
@@ -83,24 +151,53 @@ two inventories and never a mixture of both.
 
 The parse itself is pure. `scan_file` reads a file and returns records,
 `build_record` maps one record with no state, and `summarise` reads records
-and returns counts, which makes each directly testable. Log lines go to
-standard error and the totals go to standard output, so the totals can be
-piped without the log.
+and returns counts, which makes each directly testable.
 
 ## Prohibited behaviour
 
-| Rule | Rationale |
-|---|---|
-| Never read an empty flag word as an unrestricted command | `RMCTRL_FLAGS_NONE` and `RMCTRL_FLAGS_KERNEL_PRIVILEGED` are both `0x0`. `rmControlValidateClientPrivilegeAccess` rejects a command carrying none of `NON_PRIVILEGED`, `PRIVILEGED` or `INTERNAL` for any caller below `RS_PRIV_LEVEL_KERNEL`, so an empty mask means kernel-only. Reading it as a grant inverts 114 commands |
-| Never classify by `NON_PRIVILEGED` alone | `serverControl_ValidateCookie` tests `INTERNAL` before the privilege check and returns `NV_ERR_NOT_SUPPORTED` for every caller whose `RmApi` left `bApiLockInternal` and `bGpuLockInternal` clear, which is every ioctl caller. 23 commands carry both flags, and counting them as reachable overstates the surface by that margin |
-| Never count a GSP-routed command as kernel-side surface | `NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG` compiles `pFunc` to `NULL` when a command carries `ROUTE_TO_PHYSICAL` without `PHYSICAL_IMPLEMENTED_ON_VGPU_GUEST`. 679 of 1372 methods are in that set. Their implementation is in signed GSP firmware, so a description reaching one exercises the RPC serialisation path and no code in `nvidia.ko` |
-| Never test `PRIVILEGED` after the kernel-only default | The driver tests `PRIVILEGED` first, so the one command carrying both `PRIVILEGED` and `INTERNAL` and any command carrying both `PRIVILEGED` and `NON_PRIVILEGED` resolve to the stricter outcome |
-| Never hardcode the flag values | Flag values and command numbers both move between driver branches. A hardcoded table produces an inventory that parses cleanly and describes another driver |
-| Never anchor a `#define` pattern at end of line | `RMCTRL_FLAGS_PRIVILEGED_IF_RS_ACCESS_DISABLED` carries a trailing comment, and an anchored pattern drops exactly the flag that promotes three commands to privileged |
-| Never search for the `#if` gate without multiline mode | The gate is matched against a joined entry body. Without `re.M` the anchor binds to the start of the body and every entry is rejected as gateless |
-| Never emit a record from an entry missing a field | A missing field means the line collector spanned two entries, and the record would carry one entry's command number with another's flags |
-| Never report a truncated inventory as complete | A silently dropped entry is a command the `describe` phase never models. Rejections are counted in `scan.rejected_count`, listed with their reason, and printed |
-| Never treat `RS_ACCESS_COUNT` as a right | It is the size of the enumeration. Including it would invent a fifth access right and shift the bit positions of the real four |
+Ten rules bound the module.
+
+- Never read an empty flag word as an unrestricted command.
+  `RMCTRL_FLAGS_NONE` and `RMCTRL_FLAGS_KERNEL_PRIVILEGED` are both `0x0`.
+  `rmControlValidateClientPrivilegeAccess` rejects a command carrying none of
+  `NON_PRIVILEGED`, `PRIVILEGED` or `INTERNAL` for any caller below
+  `RS_PRIV_LEVEL_KERNEL`, so an empty mask means kernel-only. Reading it as a
+  grant inverts 114 commands.
+- Never classify by `NON_PRIVILEGED` alone. `serverControl_ValidateCookie`
+  tests `INTERNAL` before the privilege check and returns
+  `NV_ERR_NOT_SUPPORTED` for every caller whose `RmApi` left
+  `bApiLockInternal` and `bGpuLockInternal` clear, which is every ioctl caller.
+  23 commands carry both flags, and counting them as reachable overstates the
+  surface by that margin.
+- Never count a GSP-routed command as kernel-side surface.
+  `NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG` compiles `pFunc` to `NULL` when a
+  command carries `ROUTE_TO_PHYSICAL` without
+  `PHYSICAL_IMPLEMENTED_ON_VGPU_GUEST`. 679 of 1372 methods are in that set.
+  Their implementation is in signed GSP firmware, so a description reaching one
+  exercises the RPC serialisation path and no code in `nvidia.ko`.
+- Never test `PRIVILEGED` after the kernel-only default. The driver tests
+  `PRIVILEGED` first, so the one command carrying both `PRIVILEGED` and
+  `INTERNAL` resolves to the stricter outcome, and so would any command
+  carrying both `PRIVILEGED` and `NON_PRIVILEGED`. None does on this release.
+- Never hardcode the flag values. Flag values and command numbers both move
+  between driver branches. A hardcoded table produces an inventory that parses
+  cleanly and describes another driver.
+- Never anchor a `#define` pattern at end of line.
+  `RMCTRL_FLAGS_PRIVILEGED_IF_RS_ACCESS_DISABLED` carries a trailing comment,
+  and an anchored pattern drops exactly the flag that promotes three commands
+  to privileged.
+- Never search for the `#if` gate without multiline mode. The gate is matched
+  against a joined entry body. Without `re.M` the anchor binds to the start of
+  the body and every entry is rejected as gateless.
+- Never emit a record from an entry missing a field. A missing field means the
+  line collector spanned two entries, and the record would carry one entry's
+  command number with another's flags.
+- Never report a truncated inventory as complete. A silently dropped entry is a
+  command the `describe` phase never models. Rejections are counted in
+  `scan.rejected_count`, listed with their reason, and printed.
+- Never treat `RS_ACCESS_COUNT` as a right. It is the size of the enumeration.
+  Including it would invent a fifth access right and shift the bit positions of
+  the real four.
 
 ## Design notes
 
@@ -115,15 +212,10 @@ Privilege classification is ordered to match the driver, `INTERNAL` first,
 then `PRIVILEGED`, then `NON_PRIVILEGED`, with kernel-only as the default. The
 flags overlap on 24 commands, and any other order changes their class.
 
-Two gates sit outside the four classes because they resolve at run time.
-`RM_TEST_ONLY_CODE` depends on `PDB_PROP_SYS_ENABLE_RM_TEST_ONLY_CODE`, and
-`PRIVILEGED_IF_RS_ACCESS_DISABLED` depends on `g_resServ.bRsAccessEnabled`.
-Both are recorded per record as booleans and left out of the class, so a
-consumer can apply either without re-deriving the classification.
-
 The `accessRight` field holds `NVBIT(RS_ACCESS_x)`, so the header's index
-becomes a bit position. Five commands carry a non-zero value, all of them
-`RS_ACCESS_NICE`.
+becomes a bit position. `rs_access.h` names four rights, `DUP_OBJECT`, `NICE`,
+`DEBUG` and `PERFMON`. Five commands carry a non-zero value, all of them
+`NICE`.
 
 The SDK interface prefix is derived from the top 16 bits of the command
 number, so `0x20800102` yields `NV2080`. That derivation needs no header

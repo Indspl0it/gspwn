@@ -18,7 +18,7 @@ file.
 
 | Invariant | Enforced by |
 |---|---|
-| A restart never runs into a condition that will recur | Four situations return `BLOCKED_EXIT`, which the unit names in `RestartPreventExitStatus` |
+| A restart never runs into a condition that will recur | Eight conditions return `BLOCKED_EXIT`, which the unit names in `RestartPreventExitStatus` |
 | Reboots and same-boot restarts are counted separately | Two limits over one window, since kernel fuzzing panics the box by design |
 | A session id exists before the agent is launched | The id is a UUID generated here and substituted into the invocation |
 | A panic cannot lose the record of the launch | The session and the resume count are written before the launch |
@@ -36,25 +36,47 @@ afterwards is lost on precisely the restarts this exists for.
 
 ```mermaid
 flowchart TD
-    U[systemd starts a supervised launch] --> H[Harvest crash logs from the last panic]
-    H --> B{Breaker tripped, command unset,<br/>phase blocked, pipeline complete,<br/>or state file corrupt?}
-    B -->|yes| STOP["Decline to launch.<br/>systemd stops on this exit status<br/>and does not restart"]
-    B -->|no| S[Resolve the session: resume or rotate]
+    U[systemd starts a supervised launch] --> G1{Config unreadable or invalid,<br/>command unset,<br/>breaker file unreadable,<br/>orchestrator blocked,<br/>or breaker tripped?}
+    G1 -->|yes| STOP["Decline to launch.<br/>systemd stops on this exit status<br/>and does not restart"]
+    G1 -->|no| S[Resolve the session: resume or rotate]
     S --> W[Record the session and the resume count]
-    W --> L[Launch the agent]
+    W --> G2{State file unreadable,<br/>phase blocked,<br/>or pipeline complete?}
+    G2 -->|yes| STOP
+    G2 -->|no| H[Harvest crash logs from the last panic]
+    H --> L[Launch the agent]
     L --> E{How did it end?}
     E -->|panic| U
-    E -->|stall past the hour bound| K[Kill the process group, restart fresh]
+    E -->|stall past the hour bound,<br/>unless max_agent_hours is "unbounded"| K[Kill the process group, restart fresh]
     E -->|resume exited non-zero| C[Clear the session id, next start is fresh]
     K --> U
     C --> U
 ```
 
-Four situations make a launch decline: a tripped breaker, an unset agent
-command, a blocked phase, and a completed pipeline. A corrupt state file
-declines too, because a relaunched agent would read the same file. The unit
-names that exit status in its restart policy, so systemd stops there and no
-restart loop forms.
+Eight conditions make a launch decline with `BLOCKED_EXIT`, which is exit status
+78. Each is cleared by a human act, so a restart reaches the same wall.
+
+| Condition | Check site |
+|---|---|
+| `config/campaign.yaml` is absent, unreadable or fails validation | `cfg`, before any state is touched |
+| `orchestrator.command` is unset in `config/campaign.yaml` | Before the breaker lock is taken |
+| The breaker state file will not open or will not parse | `_read`, inside the breaker lock |
+| An operator has blocked the orchestrator | The `blocked` key in the breaker state file |
+| The breaker has tripped | `check`, over the start history in the counted window |
+| The pipeline state file will not open or will not parse | `pipeline_stop_reason`, after the session is recorded |
+| A phase is `blocked` | `pipeline_stop_reason`, after the session is recorded |
+| The pipeline is complete | `pipeline_stop_reason`, from `next_action` |
+
+The unit names that exit status in `RestartPreventExitStatus`, so systemd stops
+there and no restart loop forms.
+
+`StartLimitIntervalSec` and `StartLimitBurst`, written under `[Unit]` and set to
+`orchestrator.window_min` minutes and four times
+`orchestrator.max_same_boot_starts`, back the breaker up for the one case it
+cannot see: a crash before its own state file has been written. They belong
+under `[Unit]`, because `systemd.service(5)` only cross-references them, and
+under `[Service]` they are an unknown key that systemd ignores while the manager
+default of five starts per ten seconds applies, which `RestartSec=60` never
+reaches.
 
 A separate check reports what an unattended run needs and nothing else
 verifies: a valid configuration, a set agent command, passwordless sudo, the
@@ -67,6 +89,9 @@ because pstore was empty costs a whole run.
 
 ## Concurrency and durability
 
+Four properties keep the breaker and the supervised process correct across
+concurrent readers, a redirected state directory and a stall.
+
 | Property | Mechanism |
 |---|---|
 | Breaker mutual exclusion | `flock(LOCK_EX)` on the breaker state file for the whole read-modify-write |
@@ -75,6 +100,9 @@ because pstore was empty costs a whole run.
 | Process control | `start_new_session=True` and `killpg`, so a stall kills the whole group |
 
 ## Prohibited behaviour
+
+Fifteen rules bound the restart policy, the breaker, the session record and the
+binaries the supervisor may resolve.
 
 | Rule | Rationale |
 |---|---|
@@ -122,16 +150,27 @@ reads differently on EC2 than on bare metal.
 can be exercised without a machine that reboots.
 
 `resolve_session` returns the session to store, which invocation to use, and a
-one-line explanation of whether a restart carried the previous context.
+one-line explanation of whether a restart carried the previous context. It reads
+five conditions in order and stops at the first that holds.
+
+| Condition | Session |
+|---|---|
+| `orchestrator.resume_command` is unset | Fresh, and `brief` carries the position |
+| No previous session id is on record | Fresh |
+| The previous transcript measures at or above `orchestrator.max_session_mb` | Fresh. The transcript is several auto-compactions in, and a resume would carry a summary of a summary |
+| The previous session has reached `orchestrator.max_resumes` | Fresh |
+| None of the above | Resume, with the resume count incremented |
 
 Rotation is primarily by transcript size, because size drives auto-compaction
 and restart count does not. A campaign that panics twenty times in an hour
 writes almost nothing, while one that panics twice in three days writes a great
-deal.
+deal. The resume count is the backstop for when `transcript_bytes` returns
+`None` and the size test cannot be applied.
 
-A transcript that cannot be resumed would fail identically every `RestartSec`
-until the breaker tripped.
-Dropping the id costs the reasoning history and preserves the campaign.
+A resume that exits non-zero clears the stored session id, so the next start
+begins fresh. An unresumable transcript would otherwise fail identically every
+`RestartSec` until the breaker tripped. Dropping the id costs the reasoning
+history and preserves the campaign.
 
 `render_command` substitutes with `str.replace`. These invocations routinely
 carry a prompt containing braces. Its anchor falls back to the module default
@@ -146,4 +185,6 @@ comes from a configuration file only root can install a unit from.
 ## See also
 
 - [Unattended operation](/gspwn/guides/unattended-operation/)
-- [orchestrator_ctl.py reference](/gspwn/architecture/components/orchestrator-ctl/)
+- [campaign_ctl.py](/gspwn/architecture/components/campaign-ctl/)
+- [crashlog_ctl.py](/gspwn/architecture/components/crashlog-ctl/)
+- [gspwn_config.py](/gspwn/architecture/components/gspwn-config/)

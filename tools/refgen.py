@@ -69,10 +69,10 @@ import logging
 import os
 import re
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import surface_cov  # noqa: E402  (path set above so the tool runs from anywhere)
+import atomic_write  # noqa: E402  (path set above so the tool runs from anywhere)
+import surface_cov  # noqa: E402
 
 logger = logging.getLogger("refgen")
 
@@ -450,8 +450,32 @@ def page_control(docs):
         reasons[command.get("no_chain_reason")] = \
             reasons.get(command.get("no_chain_reason"), 0) + 1
 
-    gsp = summary.get("methods", 0) - sum(reach.values()) if not reach else (
-        reach.get("non_privileged", 0) - len(commands))
+    # Counted from the inventory rows, not from a difference of two other
+    # counts. The earlier expression was
+    # reach["non_privileged"] - len(commands), which holds only while the rank
+    # set is exactly the non-privileged commands whose handler is present: a
+    # capped or filtered rank set would raise this row silently and the table
+    # would still sum.
+    #
+    # The restriction to non_privileged keeps the five rows disjoint.
+    # 679 of the 1372 exported commands have their handler compiled out, and
+    # 443 of those are also internal, kernel-only or privileged and are
+    # already counted on the row above. This row is the remaining 236.
+    all_methods = ctrl.get("methods") or []
+    gsp = sum(1 for m in all_methods
+              if m.get("handler_compiled_out")
+              and m.get("reachability") == "non_privileged")
+    stated = [reach.get("internal", 0), reach.get("kernel_only", 0),
+              reach.get("privileged", 0), gsp, len(commands)]
+    if sum(stated) != summary.get("methods", 0):
+        raise RefgenError(
+            "the control exclusion rows total %d against %d exported "
+            "commands, so the populations are no longer disjoint and the "
+            "page would state a table that does not sum. Rows: internal %d, "
+            "kernel-only %d, privileged %d, GSP-routed and non-privileged "
+            "%d, targetable %d."
+            % (sum(stated), summary.get("methods", 0), stated[0], stated[1],
+               stated[2], stated[3], stated[4]))
 
     parts = [
         frontmatter("Control commands",
@@ -474,8 +498,15 @@ def page_control(docs):
         "## Excluded populations",
         "",
         "Each row states a population the targetable set omits and the field "
-        "the inventory records it under. The populations are disjoint and "
-        "reduce the exported set to the targetable one.",
+        "the inventory records it under. The four exclusion rows are "
+        "disjoint and reduce the exported set to the targetable one, so they "
+        "sum with the targetable row to the exported total. The reachability "
+        "rows are taken over the exported set whatever the handler does with "
+        "them, and the GSP row is the non-privileged remainder: %d exported "
+        "commands have their handler compiled out, of which this row counts "
+        "%d and the reachability rows above already count %d."
+        % (sum(1 for m in all_methods if m.get("handler_compiled_out")), gsp,
+           sum(1 for m in all_methods if m.get("handler_compiled_out")) - gsp),
         "",
         table(["Population", "Commands", "Inventory field"],
               [["Exported by the generated `_nvoc.c` tables",
@@ -487,7 +518,9 @@ def page_control(docs):
                ["Gated on a privileged client",
                 reach.get("privileged", 0), "`reachability` = `privileged`"],
                ["Routed to GSP, so the CPU-side handler is compiled out",
-                gsp, code("handler_compiled_out")],
+                gsp,
+                "`handler_compiled_out` with `reachability` = "
+                "`non_privileged`"],
                ["Targetable", len(commands), "(the set below)"]]),
         "",
         "## Chain availability",
@@ -540,7 +573,7 @@ def page_control(docs):
         "handler symbol, because the generated `_nvoc.c` export tables carry "
         "that symbol and every later stage joins on the syzlang variant "
         "`ioctl$NV_ESC_RM_CONTROL_<handler>`. Graph depth is the shallowest "
-        "depth any external class the owning class exports sits at. Chain "
+        "depth any external class the owning class exports reaches. Chain "
         "length is the number of allocations the chain builder found. The two "
         "diverge where a class declares `<any parent>`.",
         "",
@@ -1140,7 +1173,7 @@ def page_modeset(docs):
         provenance(["surface/nvkms-command-inventory.json"]),
         "",
         "`/dev/nvidia-modeset` is created by default in a GPU container: "
-        "`lookup_devices` at `libnvidia-container/src/nvc_info.c:515` lists "
+        "`lookup_devices` at `libnvidia-container/src/nvc_info.c:517` lists "
         "it beside `/dev/nvidiactl`, `/dev/nvidia-uvm` and "
         "`/dev/nvidia-uvm-tools`, and withholds it only under "
         "`OPT_NO_MODESET`. Its commands are the sixth family of the surface "
@@ -1160,8 +1193,8 @@ def page_modeset(docs):
         "A traced call therefore carries a number that names the family and "
         "not the command. `tools/trace2seed.py` reads a kernel request "
         "number and cannot recover which of the %d commands a trace was, "
-        "because the sub-command lives in a payload the trace format does "
-        "not carry. That limit is accepted for this branch."
+        "because the trace format does not carry the payload the "
+        "sub-command travels in. That limit is accepted for this branch."
         % len(dispatched),
         "",
         table(["Quantity", "Value", "Source"],
@@ -1287,13 +1320,13 @@ def page_drm(docs):
         "",
         "## Reachability by node",
         "",
-        "The two nodes do not grant the same set. `drm_ioctl_permit` at "
-        "`drm_ioctl.c:611` refuses a render client any command whose flag "
-        "word omits `DRM_RENDER_ALLOW`, and refuses any caller a "
-        "`DRM_MASTER` command unless it is the current master. A tenant "
-        "holds both nodes, so the family denominator is the union and counts "
-        "%d; the per-node figures are carried apart because %d and %d are "
-        "true of different things."
+        "The two nodes do not grant the same set. `drm_ioctl_permit`, in "
+        "the Linux DRM core at `drivers/gpu/drm/drm_ioctl.c`, refuses a "
+        "render client any command whose flag word omits "
+        "`DRM_RENDER_ALLOW`, and refuses any caller a `DRM_MASTER` command "
+        "unless it is the current master. A tenant holds both nodes, so the "
+        "family denominator is the union and counts %d. The per-node figures "
+        "are carried apart because %d and %d are true of different things."
         % (summary["dispatched"], summary["reachable_card"],
            summary["reachable_render"]),
         "",
@@ -1307,10 +1340,10 @@ def page_drm(docs):
                 % summary["render_allow"]]]),
         "",
         "%d command(s) reach a handler on `cardN` only while the opening "
-        "file is the current DRM master. `drm_master_open` at "
-        "`drm_auth.c:326` makes the opening file the master when the device "
-        "has none, which is likely on a host running no display server and "
-        "is not guaranteed."
+        "file is the current DRM master. `drm_master_open`, in the Linux "
+        "DRM core at `drivers/gpu/drm/drm_auth.c`, makes the opening file "
+        "the master when the device has none, which is likely on a host "
+        "running no display server and is not guaranteed."
         % summary["reachable_card_conditional"],
         "",
         table(["Number", "Command", "Condition"],
@@ -1498,7 +1531,8 @@ def page_index(docs, rows):
                for name, reason in
                [("control_gsp", "the CPU-side handler is compiled out under "
                                 "GSP offload"),
-                ("uvm_test", "gated behind a build-time test switch"),
+                ("uvm_test", "compiled in and refused unless the module is "
+                             "inserted with `uvm_enable_builtin_tests=1`"),
                 ("escape_mux", "a dispatcher whose leaves are counted in the "
                                "control and allocation families"),
                 ("escape_dead", "declared in a header and dispatched by "
@@ -1532,15 +1566,6 @@ def page_index(docs, rows):
         % (docs["entry"]["counts"]["modelled_entry_points"],
            docs["entry"]["counts"]["modelled_nodes"],
            docs["entry"]["counts"]["entry_points"]),
-        "",
-        "## Staleness",
-        "",
-        "`%s` regenerates all %d pages into a temporary directory and "
-        "compares them against the committed copies, naming the page and the "
-        "first differing line when they disagree. It runs in the same offline "
-        "CI job as the other nine artefact checks, so an artefact "
-        "regenerated against a new driver release without regenerating these "
-        "pages fails the build." % (CHECK, len(BUILDERS) + 1),
         "",
         "## See also",
         "",
@@ -1576,29 +1601,29 @@ def render(docs=None):
 
 
 def write(pages, out_dir):
-    """Write each page atomically with LF endings, creating out_dir."""
+    """Write every page durably with LF endings, creating out_dir.
+
+    Staged as one set through atomic_write. The pages cross-link each other
+    and index.md counts the rows of the rest, so a run that replaced some of
+    them and not the others leaves the site stating two different surfaces.
+    Staging writes and fsyncs every temporary before the first target moves,
+    which narrows the exposure to the interval between renames; read
+    atomic_write's own docstring for what the grouping does not guarantee.
+
+    The earlier write fsynced each page and never the containing directory,
+    so a crash after a successful run could leave the directory entry pointing
+    at the previous page on ext4 and on xfs. It also left a temporary inside
+    the content directory on a failure between the write and the unlink, and
+    Starlight builds every file it finds there.
+    """
     os.makedirs(out_dir, exist_ok=True)
-    written = []
-    for name in sorted(pages):
-        target = os.path.join(out_dir, name)
-        handle = tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", newline="\n", dir=out_dir,
-            prefix=name + ".", suffix=".tmp", delete=False)
-        try:
-            with handle:
-                handle.write(pages[name])
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(handle.name, target)
-        except BaseException:
-            # Never leave a half-written page or a stray temp file behind: a
-            # temp file inside the content directory is a page Starlight
-            # would try to build.
-            if os.path.exists(handle.name):
-                os.unlink(handle.name)
-            raise
-        written.append(target)
-        logger.info("wrote %s, %d bytes", target, len(pages[name]))
+    with atomic_write.StagedWriteSet() as staged:
+        for name in sorted(pages):
+            staged.stage(os.path.join(out_dir, name), pages[name])
+        written = staged.commit()
+    for target in written:
+        logger.info("wrote %s, %d bytes", target,
+                    len(pages[os.path.basename(target)]))
     return written
 
 

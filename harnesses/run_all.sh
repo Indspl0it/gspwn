@@ -124,6 +124,16 @@ for t in "${C_TARGETS[@]}"; do
 
     # Sanitizer options were written next to the binary by its build.sh. Each
     # harness states its own leak policy there; see TARGETS.md for why.
+    #
+    # afl-fuzz parses the sanitizer's own output and refuses a custom
+    # ASAN_OPTIONS that does not carry symbolize=0, with
+    # "PROGRAM ABORT : Custom ASAN_OPTIONS set without symbolize=0". Every
+    # target aborted at startup for that reason. The value follows the
+    # consumer: it is 0 here, and replay_crashes.sh leaves the default 1,
+    # because the .sanlog a replay writes is what crash_parse.py hashes into
+    # a signature and what a human reads as a stack.
+    HARNESS_SYMBOLIZE=0
+    export HARNESS_SYMBOLIZE
     [ -f "${here}/${t}/build/env.sh" ] && . "${here}/${t}/build/env.sh"
 
     if [ "${MODE}" = "afl" ]; then

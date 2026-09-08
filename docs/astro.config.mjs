@@ -22,9 +22,13 @@ export default defineConfig({
       autoTheme: true,
       enableLog: false,
       mermaidConfig: {
-        flowchart: { curve: 'basis', useMaxWidth: true, padding: 10 },
-        sequence: { useMaxWidth: true },
-        state: { useMaxWidth: true },
+        // useMaxWidth: false renders each diagram at its natural size instead
+        // of scaling it to the content column. Scaling a 3594px flowchart into
+        // a 668px column puts its 12px type at 2.2px. The card the diagram
+        // sits in scrolls sideways, per the .mermaid rule in custom.css.
+        flowchart: { curve: 'basis', useMaxWidth: false, padding: 10 },
+        sequence: { useMaxWidth: false },
+        state: { useMaxWidth: false },
         themeVariables: {
           fontFamily:
             "ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, monospace",
@@ -84,7 +88,6 @@ export default defineConfig({
             { label: 'Overview', slug: 'knowledgebase' },
             { label: 'NVIDIA GPU stack', slug: 'knowledgebase/gpu-stack' },
             { label: 'Product lines', slug: 'knowledgebase/product-lines' },
-            { label: 'Driver and toolkit versions', slug: 'knowledgebase/driver-versions' },
             { label: 'Installed stack', slug: 'knowledgebase/installed-stack' },
             { label: 'Telemetry', slug: 'knowledgebase/telemetry' },
             { label: 'Container admission path', slug: 'knowledgebase/container-admission' },
@@ -169,7 +172,6 @@ export default defineConfig({
                 { label: 'patch_mine.py', slug: 'architecture/components/patch-mine' },
                 { label: 'gitmine.py', slug: 'architecture/components/gitmine' },
                 { label: 'refgen.py', slug: 'architecture/components/refgen' },
-                { label: 'regression_check.py', slug: 'architecture/components/regression-check' },
                 { label: 'exec.py', slug: 'architecture/components/exec' },
                 { label: 'build_kernel.sh', slug: 'architecture/components/build-kernel' },
                 { label: 'selftest.py', slug: 'architecture/components/selftest' },

@@ -1,32 +1,59 @@
 ---
 title: build_kernel.sh
-description: The instrumented kernel build, and the four checks that make its gate meaningful.
+description: The instrumented kernel and NVIDIA module build, its configuration checks, and the manifest it writes.
 ---
 
 Builds and installs an instrumented kernel and the NVIDIA open kernel modules.
-Bash, `set -euo pipefail`, root required for the install steps.
+Bash, `set -euo pipefail`. It takes no arguments and reads six environment
+variables. The install, `depmod` and GRUB steps call `sudo`.
 
-The degradation ladder has three rungs. Only the NVIDIA module CFLAGS differ
-between them: rung 1 builds the modules with KASAN and KCOV, rung 2 with KCOV
-only, rung 3 uninstrumented.
+## Inputs
 
-## Responsibility
+| Variable | Default | Effect |
+|---|---|---|
+| `LINUX_SRC` | required | Kernel source tree. The script `cd`s into it and resolves it to an absolute path |
+| `NVIDIA_SRC` | required | `open-gpu-kernel-modules` tree, resolved the same way |
+| `RUNG` | required | `1`, `2` or `3`, the instrumentation rung |
+| `JOBS` | `$(nproc)` | The `-j` argument to both `make` invocations |
+| `BASE_CONFIG` | `/boot/config-$(uname -r)` | The kernel configuration the build starts from |
+| `SKIP_KERNEL` | `0` | `1` reuses the installed kernel and rebuilds only the NVIDIA modules |
 
-The script owns the kernel configuration, the module build, the boot default and
-the build manifest. It is the sole writer of `artifacts/builds/manifest.json`.
+## The rung ladder
 
-| Invariant | Enforced by |
-|---|---|
-| The kernel can find its own root filesystem | The configuration is based on `/boot/config-$(uname -r)`, and the fallback to `defconfig` is loud |
-| Instrumentation is present in the built kernel | `.config` is grepped for every instrumentation symbol after `olddefconfig`, and a missing one exits 1 |
-| A symbol disabled on purpose stayed disabled | The same check greps for every symbol in `REQUIRED_DISABLED`, and a surviving one exits 1 |
-| A reused kernel carries the same guarantees as a built one | `SKIP_KERNEL=1` runs the identical check against `$LINUX_SRC/.config` |
-| Stacks are comparable across boots | `CONFIG_RANDOMIZE_BASE` is disabled, which makes the dedup hashes stable |
-| Out-of-tree modules can load | `CONFIG_MODULE_SIG_FORCE` and `CONFIG_SECURITY_LOCKDOWN_LSM_EARLY` are disabled and the trusted-key strings cleared |
-| The machine reboots into the kernel just built | The GRUB entry is found by matching the kernel release, and `grub-editenv list` confirms the saved entry changed |
-| Earlier build facts survive | The manifest is extended in place |
+The kernel is the same at all three rungs. Only `KBUILD_EXTRA_CFLAGS` for the
+NVIDIA module build differs, so walking the ladder with `SKIP_KERNEL=1` rebuilds
+the modules alone.
 
-## Instrumentation
+| Rung | Kernel | NVIDIA module `KBUILD_EXTRA_CFLAGS` |
+|---|---|---|
+| 1 | KASAN and KCOV | `-fsanitize=kernel-address -fsanitize-coverage=trace-pc,trace-cmp` |
+| 2 | KASAN and KCOV | `-fsanitize-coverage=trace-pc,trace-cmp` |
+| 3 | KASAN and KCOV | empty |
+
+## Stages
+
+The script runs eight stages in order, each announced on stdout with a `==`
+banner. Three logs are written under `artifacts/logs/`, so a configuration
+failure and a build failure are never interleaved in one file.
+
+| Stage | Work | Log |
+|---|---|---|
+| kernel config | Copies `BASE_CONFIG` to `.config` and runs `make olddefconfig`, applies `scripts/config`, runs `make olddefconfig` again | `build-kernel-config.log` |
+| config check | Reads `.config` back and fails on a missing or a surviving symbol | none |
+| kernel build | `make -j$JOBS` | `build-kernel.log` |
+| kernel install | `sudo make modules_install` then `sudo make install` | `build-kernel.log` |
+| NVIDIA modules | `make -C kernel-open -j$JOBS SYSSRC=$LINUX_SRC`, then `modules_install` and `depmod $KVER` | `build-nvidia.log` |
+| secure boot | `mokutil --sb-state` | none |
+| grub default | `update-grub`, then `grub-set-default` on the matched entry | `build-kernel.log` |
+| manifest | Merges five keys into `artifacts/builds/manifest.json` | none |
+
+`SKIP_KERNEL=1` replaces the first four stages with the config check alone, run
+against the `.config` the installed kernel came from.
+
+## Configuration
+
+The build enables fifteen options in four groups, disables four, and clears two
+signing key strings.
 
 | Group | Options enabled |
 |---|---|
@@ -35,95 +62,142 @@ the build manifest. It is the sole writer of `artifacts/builds/manifest.json`.
 | Symbolization | `CONFIG_DEBUG_KERNEL`, `CONFIG_DEBUG_INFO`, `CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT`, `CONFIG_KALLSYMS_ALL` |
 | Crash capture | `CONFIG_PSTORE`, `CONFIG_PSTORE_RAM`, `CONFIG_PSTORE_CONSOLE`, `CONFIG_KEXEC_CORE`, `CONFIG_CRASH_DUMP` |
 
-`make olddefconfig` silently drops anything the tree does not offer, and
-`CONFIG_DEBUG_INFO` stopped being user-selectable in 5.18, so the build checks
-what actually took in both directions. Six symbols must be `=y`, one of the
-three `CONFIG_DEBUG_INFO` spellings must be `=y`, and every symbol in
-`REQUIRED_DISABLED` must not be.
+`CONFIG_SYSTEM_TRUSTED_KEYS` and `CONFIG_MODULE_SIG_KEY` are set to the empty
+string, so a distribution configuration that names a signing key stops demanding
+one.
 
-`CONFIG_KCOV_ENABLE_COMPARISONS` is not implied by `CONFIG_KCOV` and carries no
+`CONFIG_KCOV_ENABLE_COMPARISONS` is implied by nothing and carries no
 `default y`. Without it `kernel/kcov.c` compiles out every
-`__sanitizer_cov_trace_cmp*` definition, and the NVIDIA modules built at rungs
-1 and 2 with `-fsanitize-coverage=trace-cmp` reference symbols the kernel does
-not export, so `insmod` fails with `Unknown symbol
-__sanitizer_cov_trace_cmp1`. syzkaller's comparison-hint mutation reads the
-same data.
+`__sanitizer_cov_trace_cmp*` definition, and the NVIDIA modules built at rungs 1
+and 2 with `-fsanitize-coverage=trace-cmp` reference symbols the kernel does not
+export, so `insmod` fails with `Unknown symbol __sanitizer_cov_trace_cmp1`.
+syzkaller's comparison-hint mutation reads the same data.
 
-`REQUIRED_DISABLED` holds four symbols. Each fails differently and none of the
-failures names itself.
+## Configuration check
+
+`make olddefconfig` drops anything the tree does not offer without a word, and
+`CONFIG_DEBUG_INFO` stopped being user-selectable in 5.18. The check reads
+`.config` back after `olddefconfig` and covers seven of the fifteen enabled
+options and all four disabled ones. The other eight enabled options go
+unchecked.
+
+| Requirement | Symbols |
+|---|---|
+| Must be `=y` | `CONFIG_KCOV`, `CONFIG_KCOV_INSTRUMENT_ALL`, `CONFIG_KCOV_ENABLE_COMPARISONS`, `CONFIG_KASAN`, `CONFIG_KASAN_GENERIC`, `CONFIG_KALLSYMS_ALL` |
+| One spelling must be `=y` | `CONFIG_DEBUG_INFO=y`, or any `CONFIG_DEBUG_INFO_DWARF*=y` |
+| Must not be `=y` | The four symbols in `REQUIRED_DISABLED`, below |
+
+The check runs on both branches. `SKIP_KERNEL=1` runs the identical function
+against `$LINUX_SRC/.config` under the context string
+`reused kernel, SKIP_KERNEL=1`, which is the branch that would otherwise let a
+tree missing `CONFIG_KCOV_ENABLE_COMPARISONS` reach an `insmod` failure hours
+into rung 2.
+
+A symbol disabled on purpose can return through `olddefconfig` or a hand-edited
+`.config`. `REQUIRED_DISABLED` holds four of them. Each fails differently and
+none of the failures names itself.
 
 | Symbol | Cost of it surviving |
 |---|---|
-| `CONFIG_RANDOMIZE_BASE` | Every address in every report shifts. `stack_hash` strips offsets and module names and keeps function names, so the primary dedup key survives and the secondary key degrades silently |
-| `CONFIG_MODULE_SIG_FORCE` | The unsigned out-of-tree NVIDIA module does not load, and the build gate fails with `nvidia-smi` errors naming neither signing nor lockdown |
+| `CONFIG_RANDOMIZE_BASE` | Every address in every report shifts. `stack_hash` strips offsets and module names and keeps function names, so the primary dedup key survives, and the RIP symbol `crash_parse.py` reads and every unsymbolized frame do not. The secondary key degrades in silence |
+| `CONFIG_MODULE_SIG_FORCE` | The unsigned out-of-tree NVIDIA module stops loading, and the build gate fails with `nvidia-smi` errors naming neither signing nor lockdown |
 | `CONFIG_SECURITY_LOCKDOWN_LSM_EARLY` | The same |
 | `CONFIG_DEBUG_INFO_NONE` | Selecting it compiles the debug info out from under `CONFIG_DEBUG_INFO` |
 
-Three logs are written under `artifacts/logs/`, one per stage, so a
-configuration failure and a build failure are not interleaved.
+## Boot default
 
-## Callers
+The GRUB steps make the machine come back on the kernel just built.
+`GRUB_DISABLE_SUBMENU=y` makes every kernel a top-level entry with a stable,
+greppable id, and `GRUB_DEFAULT=saved` makes `grub-set-default` select it. Both
+lines are written to `/etc/default/grub`, appended when absent and rewritten by
+`sed` when present.
 
-| Direction | Modules |
+The entry id is read out of `/boot/grub/grub.cfg` by matching
+`menuentry_id_option '...'` against the kernel release and discarding recovery
+entries, so no title is guessed. After `grub-set-default`, `grub-editenv list`
+is grepped for `saved_entry=$ENTRY` and a mismatch stops the script, so an
+unattended reboot never rests on an unchecked write.
+
+## Manifest
+
+The final stage runs an inline Python program that merges five keys into
+`artifacts/builds/manifest.json`.
+
+| Key | Value |
 |---|---|
-| Invokes this script | The `build` sub-agent, through `exec.py` |
-| This script calls | `make`, `scripts/config`, `sudo`, `update-grub`, `grub-editenv`, `mokutil`, `depmod` |
+| `instrumentation_rung` | `RUNG`, as an integer |
+| `kernel_release` | `make -sC $LINUX_SRC kernelrelease` |
+| `gcc` | The first line of `gcc --version` |
+| `linux_commit` | `git -C $LINUX_SRC rev-parse HEAD` |
+| `nvidia_commit` | `git -C $NVIDIA_SRC rev-parse HEAD` |
+
+The file is read back and updated, so keys the `provision` phase wrote and this
+script does not write survive, among them the syzkaller and container source
+commits. `artifacts/builds/` is created if absent, and the write goes through
+`mkstemp` and `os.replace`, because this runs at the end of a multi-hour build
+and is the only record of what was built.
+
+The `provision` phase records the source commits and the gcc version in the same
+file, and the `build` sub-agent writes `instrumentation_rung` to it at step 5 of
+`agents/build.md`. The file has three writers.
+
+## Exit codes
+
+| Code | Conditions |
+|---|---|
+| 0 | Every stage completed |
+| 1 | An unset required variable, a missing config file, a missing or surviving configuration symbol, Secure Boot enabled, no GRUB entry for the kernel release, or `grub-set-default` failing to stick |
+| 2 | `RUNG` outside `1` to `3`, or `SKIP_KERNEL=1` with no `.config` in the source tree |
 
 ## Failure modes
 
+Eleven conditions are handled. A missing base configuration and an absent
+`mokutil` warn and continue, and the other nine stop the script.
+
 | Condition | Behaviour |
 |---|---|
-| `LINUX_SRC`, `NVIDIA_SRC` or `RUNG` unset | Parameter expansion error naming the variable |
-| `RUNG` outside 1 to 3 | Message naming the valid values |
+| `LINUX_SRC`, `NVIDIA_SRC` or `RUNG` unset | Parameter expansion error naming the variable and what to set it to |
+| `RUNG` outside 1 to 3 | `RUNG must be 1, 2 or 3` |
 | `SKIP_KERNEL=1` with no `.config` in the source tree | Message instructing that rung 1 runs first |
-| Base configuration absent | Falls back to `defconfig` with a loud warning naming the consequence |
-| An instrumentation symbol missing from `.config` after `olddefconfig` | Names every missing symbol |
+| Base configuration absent | Falls back to `make defconfig` with a warning naming the consequence and `BASE_CONFIG` as the fix |
+| No configuration file at the path checked | Message naming the path and the context |
+| A required symbol missing from `.config` after `olddefconfig` | Names every missing symbol, and states that fuzzing without them measures and symbolizes nothing |
 | A `REQUIRED_DISABLED` symbol still `=y` | Names every surviving symbol and points at `REQUIRED_DISABLED` for what each costs |
-| Either failure under `SKIP_KERNEL=1` | The same messages, with the context `reused kernel, SKIP_KERNEL=1` |
-| `mokutil` absent | Warning that Secure Boot state is unknown, with the command to install it |
-| Secure Boot enabled | Refused, since an unsigned out-of-tree module will not load |
+| `mokutil` absent | Warning that Secure Boot state is unknown, with the package to install |
+| Secure Boot enabled | Refused, with both remedies named: disable it in firmware, or enrol a MOK and sign each `nvidia*.ko` |
 | No GRUB menu entry matching the kernel release | Message naming the release and the file searched |
 | `grub-set-default` does not stick | Message naming the expected `saved_entry` |
 
+A defconfig fallback is loud because a generic x86 defconfig carries no NVMe or
+ENA driver, so on a cloud instance the resulting kernel cannot find its own root
+filesystem, and the failure arrives only after a full build and a reboot.
+
 ## Concurrency and durability
 
-The script is sequential and takes no lock; one build runs at a time on the
+The script is sequential and takes no lock. One build runs at a time on the
 machine under test. `SKIP_KERNEL=1` makes rungs 2 and 3 idempotent with respect
-to the kernel: they reuse the installed image and rebuild only the NVIDIA
-modules, after running the full configuration check against the `.config` the
-installed kernel came from. The manifest is
-appended to, so a rung that runs after `provision` keeps the
-GSP firmware version that phase recorded. The boot default is verified after it
-is set, so an unattended reboot does not depend on an unchecked write.
+to the kernel: they reuse the installed image and rebuild the NVIDIA modules
+alone, after running the full configuration check against the `.config` the
+installed kernel came from.
 
-## Prohibited behaviour
+## Callers
 
-| Rule | Rationale |
-|---|---|
-| Never start from a defconfig silently | A generic x86 defconfig has no NVMe or ENA driver, and on a cloud instance the resulting kernel cannot find its root filesystem. The failure appears only after a full build and a reboot |
-| Never trust that a configuration option took | `olddefconfig` silently drops anything the tree does not offer, and `CONFIG_DEBUG_INFO` stopped being user-selectable in 5.18. Any of the three `DEBUG_INFO` variants satisfies the check |
-| Never check only the symbols that must be on | A symbol disabled on purpose can come back through `olddefconfig` or a hand-edited `.config`, and all four cost something the failure message does not name |
-| Never skip the configuration check on the reuse path | `SKIP_KERNEL=1` was the branch that let a tree missing `CONFIG_KCOV_ENABLE_COMPARISONS` reach an `insmod` failure at rung 2 |
-| Never skip the Secure Boot check silently | An unsigned out-of-tree module refuses to load, and the build phase then fails its gate with `nvidia-smi` errors that do not mention signing |
-| Never guess a GRUB menu entry title | A guessed title such as `Advanced options>Linux $KVER` does not match what Debian generates, and an unattended build then reboots into the old kernel and fails its own gate |
-| Never rebuild an identical kernel per rung | Only the NVIDIA module CFLAGS differ between rungs |
-| Never leave the modules unsignable and unloadable | Distribution configurations sign and lock down modules |
-| Never randomise the kernel base | Stable stacks across boots make the dedup hashes comparable |
+- The `build` sub-agent invokes the script through `exec.py`, once per rung,
+  stopping at the first rung that passes its gate.
+- The script calls `make`, `scripts/config`, `sudo`, `update-grub`,
+  `grub-editenv`, `mokutil`, `depmod` and `python3`.
 
 ## Design notes
 
 `KBUILD_EXTRA_CFLAGS` carries the instrumentation flags because NVIDIA's
-`conftest.sh` strips unknown CFLAGS from the environment. When rung 1 fails for
-that reason, the `build` sub-agent patches `conftest.sh` minimally, logs the
-patch, and retries once per rung.
+`conftest.sh` strips unknown CFLAGS from the environment. When a rung fails for
+that reason, the `build` sub-agent patches `kernel-open/conftest.sh` minimally,
+logs the patch into `artifacts/builds/`, and retries once per rung.
 
-Submenus are disabled so every kernel is a top-level entry with a stable,
-greppable id, and `GRUB_DEFAULT` is set to `saved` so `grub-set-default` selects
-the kernel.
-
-The script is validated in CI by `bash -n`. Stubbing `make`, `scripts/config`,
-`sudo`, `update-grub`, `grub-editenv`, `mokutil` and `depmod` would test the
-stubs, so a real provision run is the only validation of the rest.
+CI validates the script with `bash -n tools/build_kernel.sh` in
+`.github/workflows/selftest.yml`. Stubbing `make`, `scripts/config`, `sudo`,
+`update-grub`, `grub-editenv`, `mokutil` and `depmod` would test the stubs, so a
+real provision run is the only validation of the rest.
 
 ## See also
 

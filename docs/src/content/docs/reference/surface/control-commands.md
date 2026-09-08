@@ -9,7 +9,7 @@ A control command is one leaf of `NV_ESC_RM_CONTROL`, selected by the `cmd` fiel
 
 ## Excluded populations
 
-Each row states a population the targetable set omits and the field the inventory records it under. The populations are disjoint and reduce the exported set to the targetable one.
+Each row states a population the targetable set omits and the field the inventory records it under. The four exclusion rows are disjoint and reduce the exported set to the targetable one, so they sum with the targetable row to the exported total. The reachability rows are taken over the exported set whatever the handler does with them, and the GSP row is the non-privileged remainder: 679 exported commands have their handler compiled out, of which this row counts 236 and the reachability rows above already count 443.
 
 | Population | Commands | Inventory field |
 |---|---|---|
@@ -17,7 +17,7 @@ Each row states a population the targetable set omits and the field the inventor
 | Callable only from an internal RM client | 241 | `reachability` = `internal` |
 | Callable only from kernel space | 114 | `reachability` = `kernel_only` |
 | Gated on a privileged client | 250 | `reachability` = `privileged` |
-| Routed to GSP, so the CPU-side handler is compiled out | 236 | `handler_compiled_out` |
+| Routed to GSP, so the CPU-side handler is compiled out | 236 | `handler_compiled_out` with `reachability` = `non_privileged` |
 | Targetable | 531 | (the set below) |
 
 ## Chain availability
@@ -58,7 +58,7 @@ Three counts over the same 531 commands. They differ, and a measurement quoting 
 
 ## Ranked commands
 
-Sorted by rank. The name of a control command in this project is its handler symbol, because the generated `_nvoc.c` export tables carry that symbol and every later stage joins on the syzlang variant `ioctl$NV_ESC_RM_CONTROL_<handler>`. Graph depth is the shallowest depth any external class the owning class exports sits at. Chain length is the number of allocations the chain builder found. The two diverge where a class declares `<any parent>`.
+Sorted by rank. The name of a control command in this project is its handler symbol, because the generated `_nvoc.c` export tables carry that symbol and every later stage joins on the syzlang variant `ioctl$NV_ESC_RM_CONTROL_<handler>`. Graph depth is the shallowest depth any external class the owning class exports reaches. Chain length is the number of allocations the chain builder found. The two diverge where a class declares `<any parent>`.
 
 | Rank | Handler | Class id | Method id | Owning class | Graph depth | Chain length | Parameter struct | Parameter size, bytes | Score | `cve` | `depth` | `size` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|

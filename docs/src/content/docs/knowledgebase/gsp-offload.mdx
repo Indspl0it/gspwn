@@ -19,15 +19,18 @@ sequenceDiagram
   P->>K: ioctl, allocate an object
   K->>K: validate the client handle<br/>and the parameter struct
   K->>Q: GspMsgQueueSendCommand<br/>writes the RPC message
-  K->>G: kgspSetCmdQueueHead_HAL<br/>advances the queue head
+  K->>G: kgspSetCmdQueueHead_HAL<br/>rings the doorbell register
   G->>G: perform the allocation<br/>program the hardware
   G->>Q: write the reply
-  G-->>K: interrupt
+  G-->>K: reply written to the message queue
   K->>K: read the reply,<br/>update kernel-side state
   K-->>P: return the handle
 ```
 
 ## Division of function
+
+The kernel module keeps the syscall boundary and the host-visible bookkeeping.
+The GSP takes the hardware.
 
 | Function | Side |
 | --- | --- |
@@ -44,33 +47,48 @@ sequenceDiagram
 | The display engine, where present | Kernel, through `nvidia-modeset.ko` |
 
 An operation typically validates in the kernel, executes on the GSP, and
-updates state on both sides.
+updates state on both sides. 679 of the 1372 exported control commands have
+their CPU-side handler compiled out under this arrangement, counted on
+[RM control command surface](/gspwn/knowledgebase/rm-control-surface/).
 
 ## The transport
+
+Two queues in device memory carry the RPC. A register write announces a
+command, and the kernel polls the reply queue for the response.
 
 | Element | Location |
 | --- | --- |
 | Command queue | Device memory, written by `GspMsgQueueSendCommand` and read by the GSP |
 | Reply queue | Device memory, written by the GSP and read by the kernel |
-| Queue head write | `kgspSetCmdQueueHead_HAL`, the register write that tells the GSP a message is waiting |
-| Completion | An interrupt from the GSP to the host |
+| Doorbell | `kgspSetCmdQueueHead_HAL`, the register write that tells the GSP a message is waiting |
+| Completion | `_kgspRpcRecvPoll` spins on the reply queue until the response arrives or the timeout fires |
 | Event channel | A separate path for unsolicited messages such as fault notifications |
 
-Messages are serialised structures with their own versioning. The firmware and
-the kernel module are built and shipped together for this reason: the RPC
-message layout is an internal interface with no compatibility guarantee, which
-is why the equality coupling between module version and firmware version is
-absolute.
+Messages are serialised structures with their own versioning. The RPC message
+layout is an internal interface with no compatibility guarantee, so the
+firmware and the kernel module are built and shipped together, and the module
+version and the firmware version have to be equal.
 
 ## Consequences
 
-| Consequence | Mechanism |
-| --- | --- |
-| The firmware is signed | It loads from `/lib/firmware/nvidia/<version>/` and the GPU verifies it. It cannot be replaced or modified. |
-| Coverage instrumentation stops at the queue | KCOV and KASAN are compiler-inserted and only cover code the host compiler built. The GSP runs code no host toolchain touched. |
-| Errors arrive as symptoms | A failure inside the GSP surfaces as an Xid entry in the kernel log, sometimes with no further attribution |
-| Latency changed shape | Operations that were function calls became message round trips, so a sequence of small calls now pays one round trip each |
-| The open modules became possible | Publishing the thin half discloses no hardware programming detail, because that detail moved into the firmware |
+The split has five consequences for anything analysing the driver.
+
+- The firmware is signed and verified on the GPU before it executes. The module
+  declares it as `nvidia/<version>/gsp_ga10x.bin` or `gsp_tu10x.bin` by chip
+  family, resolved under the kernel's firmware search path at
+  `/lib/firmware/` (`kernel-open/nvidia/nv.c:27`). It cannot be replaced or
+  modified.
+- Coverage instrumentation stops at the queue. KCOV and KASAN are
+  compiler-inserted and only cover code the host compiler built. The GSP runs
+  code no host toolchain touched.
+- A failure inside the GSP surfaces as an Xid entry in the kernel log,
+  sometimes with no further attribution, so the host sees a symptom and not a
+  fault site.
+- Operations that were function calls became message round trips, so a
+  sequence of small calls now pays one round trip each.
+- Publishing the kernel-side half discloses no hardware programming detail,
+  because that detail moved into the firmware. The open modules became
+  publishable on that basis.
 
 ## Xid
 
@@ -86,28 +104,6 @@ number identifies a class.
 
 `nvidia-smi -q` reports the counts. The kernel log carries the entries with the
 PID and channel where available.
-
-## Worked example: an allocation crossing the boundary
-
-A process calls the driver API to allocate device memory.
-
-1. `libcuda.so` issues an allocate ioctl on `/dev/nvidiactl` with a class
-   number, a parent handle and a parameter structure.
-2. `nvidia.ko` validates that the parent handle belongs to this client and that
-   the parameter structure's size and fields are consistent with the class.
-3. The kernel side builds an RPC message and `GspMsgQueueSendCommand` writes it
-   into the command queue in device memory.
-4. `kgspSetCmdQueueHead_HAL` advances the queue head register.
-5. The GSP reads the message, allocates the memory, programs the page tables,
-   and constructs the object in its own bookkeeping.
-6. The GSP writes a reply into the reply queue and raises an interrupt.
-7. The kernel side reads the reply, records the object in its handle table, and
-   returns the handle to userspace.
-
-Instrumentation built into `nvidia.ko` observes steps 2, 3, 4, 6 and 7. Step 5
-is invisible to it: no host compiler produced that code, so no compiler-inserted
-probe reports on it. An error introduced at step 5 appears at step 6 as a
-failure code, or later as an Xid, with nothing tying it to a line of firmware.
 
 ## See also
 

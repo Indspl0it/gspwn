@@ -84,16 +84,42 @@ def _repo_rel(path):
     return path if rel.startswith("..") else rel
 
 
+def _spent(st):
+    """-> (the spend figure as text, the remediation line or "").
+
+    Every command that prints spend prints it beside the position, the phases
+    or the round history, and the spend figure must not cost the reader any of
+    those. An absent, unparseable or unreadable ledger reaches the reader the
+    same way: the figure is unknown and the remedy is named on its own line.
+
+    `brief` is the case that costs most, because the orchestrator never reads
+    spend, so it launches a resumed agent and `resume_anchor` tells that agent
+    the brief is authoritative. `show` and `status` are the case that costs
+    most often, because an operator runs them when a campaign is behaving
+    oddly, which is when a ledger is most likely to be missing.
+    """
+    try:
+        return "%.1f" % ps.spent_hours(st), ""
+    except (ps.SpendLedgerMissing, ValueError, OSError) as e:
+        return "unknown", str(e)
+
+
 def cmd_init(a):
-    if os.path.exists(ps.STATE_PATH) and not a.force:
-        st = ps.load()
-        print("%s already exists (%d crashes, next phase: %s). "
-              "Use --force to reset."
-              % (ps.STATE_PATH, len(st["crashes"]),
-                 ps.next_phase(st) or "complete"))
-        return 0
-    ps.save(ps.default_state())
-    print("initialized " + ps.STATE_PATH)
+    # The existence test and the write are one critical section under the state
+    # lock, per the concurrency rule in pipeline_state. The lock comes from
+    # state_lock because init replaces the file and reads nothing from it:
+    # transaction's load() raises on a corrupt file, and --force is the
+    # documented way to recover from exactly that.
+    with ps.state_lock() as path:
+        if os.path.exists(path) and not a.force:
+            st = ps.load(path)
+            print("%s already exists (%d crashes, next phase: %s). "
+                  "Use --force to reset."
+                  % (path, len(st["crashes"]),
+                     ps.next_phase(st) or "complete"))
+            return 0
+        ps.save(ps.default_state(), path)
+    print("initialized " + path)
     return 0
 
 
@@ -105,9 +131,12 @@ def cmd_show(a):
         return 0
     cfg = _loop_cfg()
     print("pipeline: %s" % ps.STATE_PATH)
-    print("round %d of max %d (%.1f run-hours of %s used)"
-          % (ps.round_number(st), cfg["max_rounds"], ps.spent_hours(st),
+    spent, spend_note = _spent(st)
+    print("round %d of max %d (%s run-hours of %s used)"
+          % (ps.round_number(st), cfg["max_rounds"], spent,
              cfg["max_total_run_hours"]))
+    if spend_note:
+        print("spend: %s" % spend_note)
     for p in ps.PHASES:
         ph = st["phases"][p]
         line = "  %s %-10s %-12s" % (STATUS_MARK.get(ph["status"], "?"), p,
@@ -226,9 +255,12 @@ def cmd_round_show(a):
         json.dump(st["rounds"], sys.stdout, indent=2, sort_keys=True)
         print()
         return 0
-    print("rounds: %d of max %d   run-hours: %.1f of %s"
-          % (ps.round_number(st), cfg["max_rounds"], ps.spent_hours(st),
+    spent, spend_note = _spent(st)
+    print("rounds: %d of max %d   run-hours: %s of %s"
+          % (ps.round_number(st), cfg["max_rounds"], spent,
              cfg["max_total_run_hours"]))
+    if spend_note:
+        print("spend: %s" % spend_note)
     for r in st["rounds"]:
         edges = ""
         if r["edges_start"] is not None and r["edges_end"] is not None:
@@ -434,8 +466,12 @@ def cmd_round_end(a):
         # The generation of the surface the reading above counted against,
         # stamped on the round beside the counts it produced. A reading that
         # measured nothing leaves the counts None, so the label describes
-        # nothing and the round keeps the default. Absent from a reading taken
-        # by a caller predating this field, which is the same case.
+        # nothing and the round takes the denominator in force now, which is
+        # the surface the round ran against. Absent from a reading taken by a
+        # caller predating this field, which is the same case. The fallback is
+        # DEFAULT_DENOMINATOR_VERSION and never the fill-in
+        # LEGACY_DENOMINATOR_VERSION, which dates an unstamped old record and
+        # would put a round closing today on a surface two revisions back.
         denominator_version = (completion.get("denominator_version")
                                or ps.DEFAULT_DENOMINATOR_VERSION)
         surface = {"verdict": completion["verdict"],
@@ -1088,9 +1124,12 @@ def cmd_brief(a):
           % _repo_rel(ps.STATE_PATH))
 
     print("\n## Where the pipeline is")
-    print("round %d of max %d, %.1f of %s run-hours spent"
-          % (r["round"], cfg["max_rounds"], ps.spent_hours(st),
+    spent, spend_note = _spent(st)
+    print("round %d of max %d, %s of %s run-hours spent"
+          % (r["round"], cfg["max_rounds"], spent,
              cfg["max_total_run_hours"]))
+    if spend_note:
+        print("spend: %s" % spend_note)
     kind, val = _next_action(st)
     print("next action: %s" % {
         "phase": lambda: "run phase %s (see agents/%s.md)" % (val, val),
