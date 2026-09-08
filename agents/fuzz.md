@@ -83,12 +83,18 @@ its units and its deadline timer.
    Do not advance to triage on the strength of the smoke window. Everything
    after this phase measures the run: triage scans the workdir, refine fits
    the coverage curve, and round-end derives the verdict, the edge counts and
-   the billed hours from it. Run at half an hour into a twenty-four hour
-   campaign, all of them describe the first half hour and the round bills a
-   full campaign for it. `pipeline_ctl.py next` reports `wait` while a
-   campaign is live, and `round-end` refuses to measure one.
+   the billed hours from it. Run at the close of the 30-minute smoke window,
+   all of them describe the first half hour of a window `loop.campaign_hours`
+   sets to 1000, and the round bills a full campaign for it.
+   `pipeline_ctl.py next` reports `wait` while a campaign is live, and
+   `round-end` refuses to measure one.
 6. After any reboot, run `sudo python3 tools/crashlog_ctl.py harvest` BEFORE
    restarting the campaign, and hand the harvested paths to the triage phase.
+   Exit 2 means evidence was harvested and at least one source stayed unread
+   or deferred, so its paths reach triage the same as after exit 0. Exit 1
+   means at least one source went unread and nothing was harvested, so
+   whether the panic left a record stays unknown until the machine is fixed
+   and harvest re-run.
    The coverage sampler is a systemd timer and resumes on its own. Confirm
    that it did with `systemctl is-active gspwn-coverage.timer`.
 7. Record the campaign in state:
