@@ -21662,64 +21662,102 @@ class TestCitationExclusionsApplyWhereNothingResolves(CheckSetFixtures):
     vendored file named run_all.sh, build_all.sh, measure_sizes.sh or repro.c
     was excluded in any tree, wider than every stated reason."""
 
+    # A path the exclusion set declares and no tree resolves, so the fixtures
+    # below reach the exclusion branch on any checkout.
+    LINUX_CITE = "kernel/kcov.c"
+
     def page(self, body):
         directory = self.tempdir()
         self.write(directory, "page.md",
                    "---\ntitle: Probe\n---\n\n%s\n" % body)
         return directory
 
+    def tree(self, *lines):
+        """-> (vendored tree root, tree-relative path of one source file).
+
+        artifacts/ is gitignored, so a clean checkout carries no vendored tree
+        and check_citations refuses on it. A case that reads the machine's own
+        tree therefore asserts against whatever that machine happens to hold,
+        and asserts nothing at all where there is none. A tree of its own
+        makes the case read the same file on every checkout.
+        """
+        vendor = self.tempdir()
+        self.write(os.path.join(vendor, "probe-driver", "src"),
+                   "probe_cited.c", "".join("%s\n" % line for line in lines))
+        return vendor, "src/probe_cited.c"
+
     def test_a_reversed_range_is_reported_and_does_not_raise(self):
-        trees = regression_check._vendored_trees()
-        if not trees:
-            self.skipTest("no vendored source tree on this machine")
-        by_path, _by_base = regression_check._index_sources(trees)
-        cited = sorted(k for k in by_path if k.endswith(".c"))[0]
-        code, out = self.check("citations",
-                               DOC_ROOT=self.page("See `%s:50-10`." % cited))
+        vendor, cited = self.tree("first", "second", "third")
+        code, out = self.check("citations", VENDOR_DIR=vendor,
+                               DOC_ROOT=self.page("See `%s:3-1`." % cited))
         self.assertEqual(code, 1)
-        self.assertIn("the range ends at 10 and starts at 50", out)
+        self.assertIn("the range ends at 1 and starts at 3", out)
 
     def test_an_excluded_basename_that_resolves_is_still_checked(self):
         # The subject is constructed and not taken from the declared set. Both
         # entries that used to supply one, run_all.sh and build_all.sh, were
         # deleted for resolving, so a set with nothing resolvable left in it
         # is the end state this test has to keep covering.
-        trees = regression_check._vendored_trees()
-        if not trees:
-            self.skipTest("no vendored source tree on this machine")
-        by_path, _by_base = regression_check._index_sources(trees)
-        resolving = sorted(k for k in by_path if k.endswith(".c"))[0]
+        vendor, cited = self.tree("first", "second")
         declared = dict(regression_check.CITATION_EXCLUSIONS)
-        declared[os.path.basename(resolving)] = "declared here to be ignored"
+        declared[os.path.basename(cited)] = "declared here to be ignored"
         code, out = self.check(
-            "citations", DOC_ROOT=self.page("See `%s:999999`." % resolving),
+            "citations", VENDOR_DIR=vendor,
+            DOC_ROOT=self.page("See `%s:999999`." % cited),
             CITATION_EXCLUSIONS=declared)
         self.assertEqual(code, 1)
         self.assertIn("fewer than 999999 lines", out)
 
     def test_the_declared_count_reports_declarations_not_instances(self):
-        code, out = self.check("citations")
+        # One declared exclusion cited three times, against a set of six
+        # declarations, so a summary reporting instances and one reporting
+        # declarations cannot print the same number.
+        self.assertIn(self.LINUX_CITE, regression_check.CITATION_EXCLUSIONS)
+        vendor, _cited = self.tree("first")
+        code, out = self.check("citations", VENDOR_DIR=vendor,
+                               DOC_ROOT=self.page(
+                                   "See `%s:1`, `%s:2` and `%s:3`."
+                                   % (self.LINUX_CITE, self.LINUX_CITE,
+                                      self.LINUX_CITE)))
         self.assertEqual(code, 0, out)
         self.assertIn("%d declared exclusion(s)"
                       % len(regression_check.CITATION_EXCLUSIONS), out)
-        self.assertIn("citation instance(s) matched a declared exclusion", out)
+        self.assertIn("3 citation instance(s) matched a declared exclusion",
+                      out)
 
     def test_every_declared_exclusion_still_excludes_something(self):
         # Narrowing the matcher to consult the set only where nothing resolves
         # left three entries matching nothing, and they were deleted. Two of
         # them named files the tree commits, so their stated reason was false.
+        #
+        # This asserts over the committed set and the committed pages, so a
+        # fixture cannot carry it and a checkout with no vendored tree cannot
+        # settle it. The exit code alone passes on the refusal, which is why
+        # the tree is required by name here.
+        if not regression_check._vendored_trees():
+            self.skipTest("no vendored source tree on this machine")
         code, out = self.check("citations")
         self.assertEqual(code, 0, out)
         for name in regression_check.CITATION_EXCLUSIONS:
             self.assertNotIn("CITATION_EXCLUSIONS[%r]" % name, out)
 
     def test_an_exclusion_matching_nothing_is_reported(self):
-        declared = dict(regression_check.CITATION_EXCLUSIONS)
-        declared["no-page-cites-this.c"] = "a path written to be dead"
-        code, out = self.check("citations", CITATION_EXCLUSIONS=declared)
+        # The report runs over the committed pages only, so the fixture page
+        # is pinned as the committed one for this case. The live entry beside
+        # the dead one holds the report to the entry that matched nothing.
+        vendor, _cited = self.tree("first")
+        pages = self.page("See `%s:1`." % self.LINUX_CITE)
+        code, out = self.check(
+            "citations", VENDOR_DIR=vendor, DOC_ROOT=pages,
+            COMMITTED_DOC_ROOT=pages,
+            CITATION_EXCLUSIONS={
+                self.LINUX_CITE: "Linux, which this repository does not "
+                                 "vendor",
+                "no-page-cites-this.c": "a path written to be dead"})
         self.assertEqual(code, 1)
         self.assertIn("CITATION_EXCLUSIONS['no-page-cites-this.c']", out)
         self.assertIn("excludes nothing over the committed pages", out)
+        self.assertNotIn("CITATION_EXCLUSIONS[%r]" % self.LINUX_CITE, out)
 
     def test_a_dead_exclusion_is_tolerated_off_the_committed_pages(self):
         # A caller pointing the check at one page leaves every exclusion
